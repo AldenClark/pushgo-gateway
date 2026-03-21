@@ -50,9 +50,9 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
         run: |
-          cargo build --release -p pushgo-app-oss --bin ${{ env.SOURCE_BINARY_NAME }} --target x86_64-unknown-linux-gnu
-          cargo build --release -p pushgo-app-oss --bin ${{ env.SOURCE_BINARY_NAME }} --target aarch64-unknown-linux-gnu
-          cargo build --release -p pushgo-app-oss --bin ${{ env.SOURCE_BINARY_NAME }} --target armv7-unknown-linux-gnueabihf
+          cargo build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target x86_64-unknown-linux-gnu
+          cargo build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target aarch64-unknown-linux-gnu
+          cargo build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target armv7-unknown-linux-gnueabihf
 
       - name: Build release binaries (musl)
         run: |
@@ -66,9 +66,9 @@ jobs:
           [target.armv7-unknown-linux-musleabihf]
           image = "ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main"
           EOF
-          cross build --release -p pushgo-app-oss --bin ${{ env.SOURCE_BINARY_NAME }} --target x86_64-unknown-linux-musl
-          cross build --release -p pushgo-app-oss --bin ${{ env.SOURCE_BINARY_NAME }} --target aarch64-unknown-linux-musl
-          cross build --release -p pushgo-app-oss --bin ${{ env.SOURCE_BINARY_NAME }} --target armv7-unknown-linux-musleabihf
+          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target x86_64-unknown-linux-musl
+          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target aarch64-unknown-linux-musl
+          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target armv7-unknown-linux-musleabihf
 
       - name: Collect binaries for artifacts and Docker
         run: |
@@ -132,8 +132,8 @@ jobs:
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
         with:
-          context: . # includes dist/ and deploy/Dockerfile.gh
-          file: ./deploy/Dockerfile.gh
+          context: . # includes dist/ and root Dockerfile
+          file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           build-args: |

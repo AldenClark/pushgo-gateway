@@ -1,0 +1,1667 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PushGo Gateway API</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f2f4f8;
+        --panel: #ffffff;
+        --text: #111827;
+        --muted: #4b5563;
+        --accent: #0f4c81;
+        --accent-soft: #e8f2fb;
+        --border: #d9e1ec;
+        --code-bg: #0f172a;
+        --code-text: #e2e8f0;
+        --shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+      }
+      body {
+        margin: 0;
+        font-family:
+          "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", sans-serif;
+        color: var(--text);
+        background: var(--bg);
+      }
+      main {
+        max-width: 980px;
+        margin: 36px auto 80px;
+        padding: 0 20px;
+      }
+      header {
+        background: linear-gradient(
+          135deg,
+          #eef6ff 0%,
+          #f6fbff 60%,
+          #fff7ed 100%
+        );
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 30px;
+        margin-bottom: 22px;
+        box-shadow: var(--shadow);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 30px;
+        letter-spacing: 0.2px;
+      }
+      h2 {
+        margin-top: 0;
+        margin-bottom: 14px;
+        font-size: 22px;
+        color: #0b3f6b;
+      }
+      h3 {
+        margin-top: 18px;
+        margin-bottom: 8px;
+        font-size: 18px;
+      }
+      p {
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 22px 24px;
+        margin-top: 16px;
+        box-shadow: var(--shadow);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+        margin-bottom: 16px;
+        font-size: 14px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      th,
+      td {
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        padding: 10px 10px;
+        vertical-align: top;
+      }
+      th {
+        color: #334155;
+        font-weight: 600;
+        background: #f8fafc;
+      }
+      tbody tr:nth-child(even) {
+        background: #fcfdff;
+      }
+      tbody tr:hover {
+        background: #f4f8ff;
+      }
+      code,
+      pre {
+        font-family:
+          "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", "Menlo",
+          monospace;
+      }
+      pre {
+        background: var(--code-bg);
+        color: var(--code-text);
+        padding: 14px 16px;
+        border-radius: 10px;
+        overflow-x: auto;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+      }
+      .badge {
+        display: inline-block;
+        background: var(--accent-soft);
+        color: var(--accent);
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        margin-left: 8px;
+        border: 1px solid #c5dcf4;
+      }
+      .note {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        padding: 10px 12px;
+        border-radius: 10px;
+        color: #7c2d12;
+        margin-top: 10px;
+      }
+      .quick-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .quick-nav a {
+        text-decoration: none;
+        border: 1px solid #c5dcf4;
+        background: #f2f8ff;
+        color: #0f4c81;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 13px;
+      }
+      .callout {
+        margin-top: 10px;
+        padding: 11px 12px;
+        border-radius: 10px;
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        color: #1e3a8a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>PushGo Gateway API</h1>
+        <p>
+          此页面仅面向普通消息推送方，覆盖发送类接口：
+          <strong>/message</strong
+          >、<strong>/event/*</strong>、<strong>/thing/*</strong>。
+          <br />
+          This page targets message senders and documents only push endpoints:
+          <strong>/message</strong>, <strong>/event/*</strong>,
+          <strong>/thing/*</strong>.
+        </p>
+        <div class="quick-nav">
+          <a href="#global">全局格式 / Global</a>
+          <a href="#message">消息 / Message</a>
+          <a href="#event">事件 / Event</a>
+          <a href="#thing">对象 / Thing</a>
+          <a href="#markdown">Markdown</a>
+        </div>
+      </header>
+
+      <section id="global">
+        <h2>整体请求 / 响应格式<br />Global Request / Response Format</h2>
+        <p>
+          所有推送接口都使用 JSON。先看统一格式，再看每个接口的业务字段。
+          <br />
+          All push endpoints use JSON. Read global envelope first, then endpoint
+          business fields.
+        </p>
+        <p class="callout">
+          全局请求体限制：HTTP body 最大 <code>32KB</code>（<code
+            >DefaultBodyLimit::max(32 * 1024)</code
+          >）。 业务
+          ID（<code>message_id/event_id/thing_id</code>）由网关生成，当前格式为
+          32 位小写十六进制字符串。
+          <br />
+          Global request body limit: HTTP body is capped at
+          <code>32KB</code> (<code>DefaultBodyLimit::max(32 * 1024)</code>).
+          Business IDs (<code>message_id/event_id/thing_id</code>) are generated
+          by gateway and currently use 32-char lowercase hex strings.
+        </p>
+
+        <h3>请求头<br />Request headers</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>字段<br />Field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Content-Type</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                固定为 <code>application/json</code>。<br />Must be
+                <code>application/json</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>Authorization</code></td>
+              <td>按部署<br />Depends</td>
+              <td>string</td>
+              <td>
+                若网关启用鉴权，使用
+                <code>Bearer &lt;token&gt;</code>。<br />Use
+                <code>Bearer &lt;token&gt;</code> when auth is enabled.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>通用请求字段<br />Common request fields</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>字段<br />Field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>channel_id</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>目标频道 ID。<br />Target channel ID.</td>
+            </tr>
+            <tr>
+              <td><code>password</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>频道密码（8-128）。<br />Channel password (8-128 chars).</td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                调用方幂等键（1-128 字符，仅允许字母数字和
+                <code>_:-</code>）。<br />Caller idempotency key (1-128 chars;
+                letters, digits, and <code>_:-</code> only).
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>通用响应包裹<br />Common response envelope</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>字段<br />Field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>success</code></td>
+              <td>boolean</td>
+              <td>请求是否成功。<br />Whether request succeeded.</td>
+            </tr>
+            <tr>
+              <td><code>data</code></td>
+              <td>object | null</td>
+              <td>成功时为业务响应对象。<br />Business response on success.</td>
+            </tr>
+            <tr>
+              <td><code>error</code></td>
+              <td>string | null</td>
+              <td>失败时的错误信息。<br />Error message on failure.</td>
+            </tr>
+            <tr>
+              <td><code>error_code</code></td>
+              <td>string | null</td>
+              <td>
+                部分错误会返回错误码。<br />Optional machine-readable error
+                code.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>示例响应<br />Response examples</h3>
+        <pre>
+{
+  "success": true,
+  "data": {
+    "channel_id": "01HZX9G7G7JPRV4M3H5T9B3C6A",
+    "op_id": "op-message-20260219-0001",
+    "message_id": "8a1fc4b3d9f04fd2857f92f66f7cc5d1",
+    "accepted": true
+  }
+}</pre
+        >
+        <pre>
+{
+  "success": false,
+  "error": "channel not found",
+  "error_code": null,
+  "data": null
+}</pre
+        >
+      </section>
+
+      <section id="message">
+        <h2>消息推送接口<br />Message Push API</h2>
+        <p>
+          <strong>POST</strong> <code>/message</code>
+          <span class="badge">JSON</span>
+        </p>
+        <p>
+          作用：发送一条顶层消息。接口同步返回“是否受理”，下发在后台异步执行。
+          <br />
+          Purpose: send a top-level message. Response indicates acceptance only.
+        </p>
+        <p class="note">
+          发送说明（面向推送方）：单次请求体最大 32KB；<code>ttl</code> 超过 28
+          天会按 28 天处理。
+          <br />
+          Sender notes: request body is capped at 32KB; <code>ttl</code> is
+          capped at 28 days.
+        </p>
+
+        <h3>请求业务字段<br />Request business fields</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>字段<br />Field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                可选对象 ID；请直接使用网关返回的
+                <code>thing_id</code>。有值时视为对象下消息。<br />Optional
+                thing ID; use the <code>thing_id</code> returned by gateway. It
+                marks the message as thing-scoped.
+              </td>
+            </tr>
+            <tr>
+              <td><code>title</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>消息标题。<br />Message title.</td>
+            </tr>
+            <tr>
+              <td><code>body</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                消息正文（可 Markdown）。<br />Message body (Markdown allowed).
+              </td>
+            </tr>
+            <tr>
+              <td><code>url</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                可选跳转链接（空字符串会被忽略）。<br />Optional link URL (empty
+                string is ignored).
+              </td>
+            </tr>
+            <tr>
+              <td><code>ciphertext</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                可选密文透传字段（空字符串会被忽略）。<br />Optional encrypted
+                payload passthrough (empty string is ignored).
+              </td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                图片 URL 列表（最多 32 条，每条最多 2048 字符）。<br />Image URL
+                list (up to 32 items, each up to 2048 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>tags</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                标签列表（最多 32 条，每条最多 64 字符）。<br />Tag list (up to
+                32 items, each up to 64 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>severity</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                <code>critical|high|normal|low</code>，默认
+                <code>normal</code>。内部映射：APNs 为
+                <code>critical/time-sensitive/active/passive</code>，FCM 为
+                <code>HIGH/NORMAL</code>，WNS 为 <code>1/2/3</code>；未知值按
+                <code>normal</code> 处理。<br />Notification severity. Internal
+                mapping: APNs
+                <code>critical/time-sensitive/active/passive</code>, FCM
+                <code>HIGH/NORMAL</code>, WNS <code>1/2/3</code>; unknown values
+                fall back to <code>normal</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>ttl</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                Unix 秒级过期时间；最大按 28 天处理。<br />Unix epoch seconds;
+                capped to 28 days.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                自定义键值，只支持 string/number/bool；key ≤ 64，value ≤
+                512。<br />Custom key-values, scalar only (string/number/bool);
+                key ≤ 64, value ≤ 512.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>响应业务字段<br />Response business fields</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>字段<br />Field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>channel_id</code></td>
+              <td>string</td>
+              <td>规范化频道 ID。<br />Normalized channel ID.</td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>message_id</code></td>
+              <td>string</td>
+              <td>
+                网关生成，当前为 32 位小写十六进制。<br />Generated by gateway;
+                currently 32-char lowercase hex.
+              </td>
+            </tr>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string | null</td>
+              <td>
+                关联对象 ID（若存在，格式同网关返回的
+                <code>thing_id</code>）。<br />Linked thing ID if present (same
+                format as gateway-generated <code>thing_id</code>).
+              </td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="event">
+        <h2>事件推送接口<br />Event Push APIs</h2>
+        <p class="note">
+          二级事件已并入一级事件接口：都走
+          <code>/event/*</code>，是否挂在某个对象下由可选
+          <code>thing_id</code> 决定。
+          <br />
+          Thing-scoped events are merged into top-level event APIs; optional
+          <code>thing_id</code> decides whether the event belongs to a thing.
+        </p>
+
+        <h3><code>POST /event/create</code></h3>
+        <p>
+          作用：创建事件并推送。<br />Purpose: create an event.<br />
+          约束：<code>/event/create</code> 不接受
+          <code>event_id</code>，由网关生成。<br />
+          Rule: <code>/event/create</code> does not accept
+          <code>event_id</code>; gateway generates it.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>请求业务字段<br />Request business field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>title</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>事件标题。<br />Event title.</td>
+            </tr>
+            <tr>
+              <td><code>status</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>事件状态。<br />Event status.</td>
+            </tr>
+            <tr>
+              <td><code>message</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>事件内容。<br />Event message.</td>
+            </tr>
+            <tr>
+              <td><code>severity</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                <code>critical|high|normal|low</code>（不在此范围会返回
+                400）。<br /><code>critical|high|normal|low</code> only
+                (otherwise 400).
+              </td>
+            </tr>
+            <tr>
+              <td><code>description</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>补充描述。<br />Description.</td>
+            </tr>
+            <tr>
+              <td><code>tags</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                标签列表（最多 32 条，每条最多 64 字符）。<br />Tags (up to 32
+                items, each up to 64 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                图片 URL 列表（最多 32 条，每条最多 2048 字符）。<br />Image
+                URLs (up to 32 items, each up to 2048 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>started_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>开始时间（Unix 秒）。<br />Start time.</td>
+            </tr>
+            <tr>
+              <td><code>event_time</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                事件时间（Unix
+                秒）；如果比当前事件记录更早，可能不会覆盖现有内容。<br />Event
+                time in Unix seconds; older timestamps may not overwrite
+                existing event content.
+              </td>
+            </tr>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                可选对象 ID；请直接使用网关返回的
+                <code>thing_id</code>。有值时视为对象下事件。<br />Optional
+                thing ID; use the <code>thing_id</code> returned by gateway.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                本次请求的附加信息，不会改变已有事件/对象的属性。<br />Extra
+                info for this request only; it does not change existing
+                event/thing attributes.
+              </td>
+            </tr>
+            <tr>
+              <td><code>attrs</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                用于更新自定义属性；值为
+                <code>null</code> 表示删除该键；不支持数组。<br />Used to update
+                custom attributes; <code>null</code> means deleting that key;
+                arrays are not supported.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          额外约束：<code>started_at</code> 只在 create 可传；<code
+            >event_id</code
+          >
+          由网关生成；create 需要 <code>title/status/message/severity</code>。
+          <br />
+          Extra rules: <code>started_at</code> is create-only;
+          <code>event_id</code> is generated by gateway; create requires
+          <code>title/status/message/severity</code>.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>响应业务字段<br />Response business field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>event_id</code></td>
+              <td>string</td>
+              <td>
+                网关生成，当前为 32 位小写十六进制。<br />Generated by gateway;
+                currently 32-char lowercase hex.
+              </td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string | null</td>
+              <td>
+                关联对象 ID（若存在，格式同网关返回的
+                <code>thing_id</code>）。<br />Linked thing ID if present (same
+                format as gateway-generated <code>thing_id</code>).
+              </td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3><code>POST /event/update</code></h3>
+        <p>作用：更新事件并推送。<br />Purpose: update an event.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>请求业务字段<br />Request business field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>event_id</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                待更新事件 ID；请直接使用创建接口返回的
+                <code>event_id</code>。<br />Event ID to update; use the
+                <code>event_id</code> returned by create API.
+              </td>
+            </tr>
+            <tr>
+              <td><code>status</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>更新后的状态。<br />New status.</td>
+            </tr>
+            <tr>
+              <td><code>message</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>更新后的内容。<br />New message.</td>
+            </tr>
+            <tr>
+              <td><code>severity</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                <code>critical|high|normal|low</code>（不在此范围会返回
+                400）。<br /><code>critical|high|normal|low</code> only
+                (otherwise 400).
+              </td>
+            </tr>
+            <tr>
+              <td><code>event_time</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                事件时间（Unix
+                秒）；如果比当前事件记录更早，可能不会覆盖现有内容。<br />Event
+                time in Unix seconds; older timestamps may not overwrite
+                existing event content.
+              </td>
+            </tr>
+            <tr>
+              <td><code>title</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>可选更新。<br />Optional title update.</td>
+            </tr>
+            <tr>
+              <td><code>description</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>可选更新。<br />Optional description update.</td>
+            </tr>
+            <tr>
+              <td><code>tags</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                可选更新（最多 32 条，每条最多 64 字符）。<br />Optional update
+                (up to 32 items, each up to 64 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                可选更新（最多 32 条，每条最多 2048 字符）。<br />Optional
+                update (up to 32 items, each up to 2048 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                可选对象 ID；事件创建后不能改归属，也不能“后补”归属。<br />Optional
+                thing ID; event ownership cannot be changed or added later.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                本次请求的附加信息，不会改变已有事件/对象的属性。<br />Extra
+                info for this request only; it does not change existing
+                event/thing attributes.
+              </td>
+            </tr>
+            <tr>
+              <td><code>attrs</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                用于更新自定义属性；值为
+                <code>null</code> 表示删除该键；不支持数组。<br />Used to update
+                custom attributes; <code>null</code> means deleting that key;
+                arrays are not supported.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          额外约束：update 需要
+          <code>event_id/status/message/severity</code>；不允许传
+          <code>started_at</code> 或 <code>ended_at</code>。
+          <br />
+          Extra rules: update requires
+          <code>event_id/status/message/severity</code>;
+          <code>started_at</code> and <code>ended_at</code> are not allowed;
+          older <code>event_time</code> may not overwrite existing data.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>响应业务字段<br />Response business field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>event_id</code></td>
+              <td>string</td>
+              <td>事件 ID。<br />Event ID.</td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string | null</td>
+              <td>关联对象 ID（若存在）。<br />Linked thing ID if present.</td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3><code>POST /event/close</code></h3>
+        <p>作用：关闭事件并推送。<br />Purpose: close an event.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>请求业务字段<br />Request business field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>event_id</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                待关闭事件 ID；请直接使用创建接口返回的
+                <code>event_id</code>。<br />Event ID to close; use the
+                <code>event_id</code> returned by create API.
+              </td>
+            </tr>
+            <tr>
+              <td><code>status</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>关闭状态文案。<br />Close status.</td>
+            </tr>
+            <tr>
+              <td><code>message</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>关闭说明。<br />Close message.</td>
+            </tr>
+            <tr>
+              <td><code>severity</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                <code>critical|high|normal|low</code>（不在此范围会返回
+                400）。<br /><code>critical|high|normal|low</code> only
+                (otherwise 400).
+              </td>
+            </tr>
+            <tr>
+              <td><code>event_time</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                事件时间（Unix
+                秒）；如果比当前事件记录更早，可能不会覆盖现有内容。<br />Event
+                time in Unix seconds; older timestamps may not overwrite
+                existing event content.
+              </td>
+            </tr>
+            <tr>
+              <td><code>ended_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                结束时间（Unix 秒，仅 close 可传）。<br />End time in Unix
+                seconds (close-only).
+              </td>
+            </tr>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                可选对象 ID；事件创建后不能改归属，也不能“后补”归属。<br />Optional
+                thing ID; event ownership cannot be changed or added later.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                本次请求的附加信息，不会改变已有事件/对象的属性。<br />Extra
+                info for this request only; it does not change existing
+                event/thing attributes.
+              </td>
+            </tr>
+            <tr>
+              <td><code>attrs</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                用于更新自定义属性；值为
+                <code>null</code> 表示删除该键；不支持数组。<br />Used to update
+                custom attributes; <code>null</code> means deleting that key;
+                arrays are not supported.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          额外约束：close 需要
+          <code>event_id/status/message/severity</code>；<code>ended_at</code>
+          仅 close 可传，<code>started_at</code> 不允许。
+          <br />
+          Extra rules: close requires
+          <code>event_id/status/message/severity</code>;
+          <code>ended_at</code> is close-only and <code>started_at</code> is not
+          allowed.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>响应业务字段<br />Response business field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>event_id</code></td>
+              <td>string</td>
+              <td>事件 ID。<br />Event ID.</td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string | null</td>
+              <td>关联对象 ID（若存在）。<br />Linked thing ID if present.</td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="thing">
+        <h2>对象推送接口<br />Thing Push APIs</h2>
+
+        <h3><code>POST /thing/create</code></h3>
+        <p>作用：创建对象并推送。<br />Purpose: create a thing.<br /></p>
+        <table>
+          <thead>
+            <tr>
+              <th>请求业务字段<br />Request business field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>title</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象标题。<br />Thing title.</td>
+            </tr>
+            <tr>
+              <td><code>description</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象描述。<br />Thing description.</td>
+            </tr>
+            <tr>
+              <td><code>tags</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                标签（最多 32 条，每条最多 64 字符）。<br />Tags (up to 32
+                items, each up to 64 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>primary_image</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>主图 URL。<br />Primary image URL.</td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>
+                附加图片 URL（最多 32 条，每条最多 2048 字符）。<br />Extra
+                image URLs (up to 32 items, each up to 2048 chars).
+              </td>
+            </tr>
+            <tr>
+              <td><code>created_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>创建时间（Unix 秒）。<br />Create time.</td>
+            </tr>
+            <tr>
+              <td><code>external_ids</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                外部 ID 映射（value 仅支持字符串或 null）。<br />External ID map
+                (values support string or null only).
+              </td>
+            </tr>
+            <tr>
+              <td><code>location_type</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置类型；需与
+                <code>location_value</code> 成对出现。<br />Location type; must
+                be provided with <code>location_value</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>location_value</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置值；需与 <code>location_type</code> 成对出现。<br />Location
+                value; must be provided with <code>location_type</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>observed_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                观测时间（Unix
+                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
+                time in Unix seconds; older timestamps may not overwrite
+                existing thing content.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
+                this request only; it does not directly overwrite thing
+                attributes.
+              </td>
+            </tr>
+            <tr>
+              <td><code>attrs</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                用于更新对象自定义属性；值为
+                <code>null</code> 表示删除该键；不支持数组。<br />Used to update
+                thing custom attributes; <code>null</code> means deleting that
+                key; arrays are not supported.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr>
+              <th>响应业务字段<br />Response business field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string</td>
+              <td>
+                网关生成，当前为 32 位小写十六进制。<br />Generated by gateway;
+                currently 32-char lowercase hex.
+              </td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3><code>POST /thing/update</code></h3>
+        <p>作用：更新对象并推送。<br />Purpose: update a thing.<br /></p>
+        <table>
+          <thead>
+            <tr>
+              <th>请求业务字段<br />Request business field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                待更新对象 ID；请直接使用创建接口返回的
+                <code>thing_id</code>。<br />Thing ID to update; use the
+                <code>thing_id</code> returned by create API.
+              </td>
+            </tr>
+            <tr>
+              <td><code>title</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象标题更新。<br />Thing title update.</td>
+            </tr>
+            <tr>
+              <td><code>description</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象描述更新。<br />Thing description update.</td>
+            </tr>
+            <tr>
+              <td><code>tags</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>标签更新。<br />Tags update.</td>
+            </tr>
+            <tr>
+              <td><code>primary_image</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>主图 URL 更新。<br />Primary image URL update.</td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>附加图片 URL 更新。<br />Extra image URLs update.</td>
+            </tr>
+            <tr>
+              <td><code>external_ids</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>外部 ID 更新。<br />External ID update.</td>
+            </tr>
+            <tr>
+              <td><code>location_type</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置类型更新；需与
+                <code>location_value</code> 成对出现。<br />Location type
+                update; must be paired with <code>location_value</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>location_value</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置值更新；需与
+                <code>location_type</code> 成对出现。<br />Location value
+                update; must be paired with <code>location_type</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>observed_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                观测时间（Unix
+                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
+                time in Unix seconds; older timestamps may not overwrite
+                existing thing content.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
+                this request only; it does not directly overwrite thing
+                attributes.
+              </td>
+            </tr>
+            <tr>
+              <td><code>attrs</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                用于更新对象自定义属性；值为
+                <code>null</code> 表示删除该键；不支持数组。<br />Used to update
+                thing custom attributes; <code>null</code> means deleting that
+                key; arrays are not supported.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr>
+              <th>响应业务字段<br />Response business field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string</td>
+              <td>对象 ID。<br />Thing ID.</td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3><code>POST /thing/archive</code></h3>
+        <p>作用：归档对象。<br />Purpose: archive a thing.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>请求业务字段<br />Request business field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                待归档对象 ID；请直接使用创建接口返回的
+                <code>thing_id</code>。<br />Thing ID to archive; use the
+                <code>thing_id</code> returned by create API.
+              </td>
+            </tr>
+            <tr>
+              <td><code>title</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象标题更新。<br />Thing title update.</td>
+            </tr>
+            <tr>
+              <td><code>description</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象描述更新。<br />Thing description update.</td>
+            </tr>
+            <tr>
+              <td><code>tags</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>标签更新。<br />Tags update.</td>
+            </tr>
+            <tr>
+              <td><code>primary_image</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>主图 URL 更新。<br />Primary image URL update.</td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>附加图片 URL 更新。<br />Extra image URLs update.</td>
+            </tr>
+            <tr>
+              <td><code>external_ids</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>外部 ID 更新。<br />External ID update.</td>
+            </tr>
+            <tr>
+              <td><code>location_type</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置类型更新；需与
+                <code>location_value</code> 成对出现。<br />Location type
+                update; must be paired with <code>location_value</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>location_value</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置值更新；需与
+                <code>location_type</code> 成对出现。<br />Location value
+                update; must be paired with <code>location_type</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>observed_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                观测时间（Unix
+                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
+                time in Unix seconds; older timestamps may not overwrite
+                existing thing content.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
+                this request only; it does not directly overwrite thing
+                attributes.
+              </td>
+            </tr>
+            <tr>
+              <td><code>attrs</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                用于更新对象自定义属性；值为
+                <code>null</code> 表示删除该键；不支持数组。<br />Used to update
+                thing custom attributes; <code>null</code> means deleting that
+                key; arrays are not supported.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr>
+              <th>响应业务字段<br />Response business field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string</td>
+              <td>对象 ID。<br />Thing ID.</td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3><code>POST /thing/delete</code></h3>
+        <p>作用：删除对象。<br />Purpose: delete a thing.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>请求业务字段<br />Request business field</th>
+              <th>必填<br />Required</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>是<br />Yes</td>
+              <td>string</td>
+              <td>
+                待删除对象 ID；请直接使用创建接口返回的
+                <code>thing_id</code>。<br />Thing ID to delete; use the
+                <code>thing_id</code> returned by create API.
+              </td>
+            </tr>
+            <tr>
+              <td><code>title</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象标题更新。<br />Thing title update.</td>
+            </tr>
+            <tr>
+              <td><code>description</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>对象描述更新。<br />Thing description update.</td>
+            </tr>
+            <tr>
+              <td><code>tags</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>标签更新。<br />Tags update.</td>
+            </tr>
+            <tr>
+              <td><code>primary_image</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>主图 URL 更新。<br />Primary image URL update.</td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>否<br />No</td>
+              <td>string[]</td>
+              <td>附加图片 URL 更新。<br />Extra image URLs update.</td>
+            </tr>
+            <tr>
+              <td><code>external_ids</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>外部 ID 更新。<br />External ID update.</td>
+            </tr>
+            <tr>
+              <td><code>location_type</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置类型更新；需与
+                <code>location_value</code> 成对出现。<br />Location type
+                update; must be paired with <code>location_value</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>location_value</code></td>
+              <td>否<br />No</td>
+              <td>string</td>
+              <td>
+                位置值更新；需与
+                <code>location_type</code> 成对出现。<br />Location value
+                update; must be paired with <code>location_type</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>deleted_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>删除时间（Unix 秒）。<br />Delete time.</td>
+            </tr>
+            <tr>
+              <td><code>observed_at</code></td>
+              <td>否<br />No</td>
+              <td>number</td>
+              <td>
+                观测时间（Unix
+                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
+                time in Unix seconds; older timestamps may not overwrite
+                existing thing content.
+              </td>
+            </tr>
+            <tr>
+              <td><code>metadata</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
+                this request only; it does not directly overwrite thing
+                attributes.
+              </td>
+            </tr>
+            <tr>
+              <td><code>attrs</code></td>
+              <td>否<br />No</td>
+              <td>object</td>
+              <td>
+                用于更新对象自定义属性；值为
+                <code>null</code> 表示删除该键；不支持数组。<br />Used to update
+                thing custom attributes; <code>null</code> means deleting that
+                key; arrays are not supported.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr>
+              <th>响应业务字段<br />Response business field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>thing_id</code></td>
+              <td>string</td>
+              <td>对象 ID。<br />Thing ID.</td>
+            </tr>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>回传幂等键。<br />Echoed idempotency key.</td>
+            </tr>
+            <tr>
+              <td><code>accepted</code></td>
+              <td>boolean</td>
+              <td>是否被网关受理。<br />Whether request is accepted.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="markdown">
+        <h2>Markdown 支持说明<br />Markdown support</h2>
+        <p>
+          <code>body</code> 字段按客户端 Markdown
+          渲染链路处理，无需额外开关或字段；普通纯文本也可直接发送。
+          <br />
+          The <code>body</code> field goes through the client Markdown rendering
+          pipeline by default, with no extra flags required; plain text also
+          works.
+        </p>
+        <p>
+          常见 Markdown 写法在 PushGo
+          客户端总体兼容；不同平台渲染引擎存在细微差异，复杂写法可能展示略有不同。
+          <br />
+          Common Markdown authoring is broadly compatible across PushGo clients.
+          Rendering can vary slightly between platforms for complex constructs.
+        </p>
+        <p>
+          若遇到不兼容语法，客户端会尽量保留原文文本，不影响消息可读性。
+          <br />
+          For unsupported syntax, clients preserve readable plain text whenever
+          possible.
+        </p>
+        <h3>建议写法<br />Authoring guidance</h3>
+        <ul>
+          <li>
+            建议优先使用常见 Markdown
+            结构（标题、列表、引用、链接、行内代码），可获得最稳定的跨端一致性。<br />Prefer
+            common Markdown patterns for best cross-platform consistency.
+          </li>
+          <li>
+            建议正文保持简洁；通知与列表预览场景会做截断（典型为 1 行约 180
+            字符、列表约 6 行/1200 字符）。<br />Keep body concise;
+            notification/list previews are truncated (typically ~180 chars for
+            1-line notifications, ~6 lines/1200 chars for list preview).
+          </li>
+        </ul>
+
+        <h3>示例：业务通知<br />Example: Business notification</h3>
+        <pre>
+# 微信消息转发
+> 来源：@alice 在 #渠道运营
+**标题：** 新品上线通知
+*时间：* 2026-03-20 09:30
+
+[!info] 已将原消息转发到企业微信，请确认是否需要补充说明。
+
+- 重点：==首批库存 2,000== 件
+- 文档：查看 [发布说明](https://example.com/release)
+- 备注：~~延后发布~~ 改为今天 10:00
+1. 负责人：@bob
+2. 联系：ops@example.com / 400-800-1234
+
+| 字段 | 值 | 说明 |
+| --- | --- | --- |
+| 原始群 | 产品内测群 | WeChat |
+| 消息 ID | WX-98231 | `msg_id` |
+| 链接 | https://wechat.example.com/msg/98231 | 自动识别 |
+
+---
+
+这个消息包含 `inline code` 和 #转发 标签。</pre
+        >
+
+        <h3>示例：监控告警<br />Example: Monitoring alert</h3>
+        <pre>
+# 服务器监控报警
+[!warning] CPU 持续 5 分钟 > 92%，请立即处理。
+> 机器：`prod-api-03` (10.2.0.23)
+> 时间窗：2026-03-20 10:05-10:10
+
+**影响面：** *支付* 与 *结算* 服务
+- 负载：==7.8==
+- 错误率：3.2%
+- 关联工单：#incident-20260320
+
+1. 检查近期发布：`v2.18.4`
+2. 查看日志：https://grafana.example.com/d/abc
+3. 值班人：@oncall
+
+| 指标 | 当前 | 阈值 |
+| --- | --- | --- |
+| CPU | 92% | 85% |
+| Memory | 78% | 80% |
+| P95 延迟 | 680ms | 500ms |
+
+---
+
+需要升级到 [Runbook](https://example.com/runbook) 或发邮件 ops@example.com。</pre
+        >
+      </section>
+
+      <section>
+        <h2>错误与限制<br />Errors and limits</h2>
+        <ul>
+          <li>参数校验失败返回 400。<br />Validation failures return 400.</li>
+          <li>
+            请求体超过 32KB 时返回 413。<br />Requests larger than 32KB return
+            413.
+          </li>
+          <li>认证失败返回 401。<br />Authentication failures return 401.</li>
+          <li>频道不存在返回 404。<br />Missing channels return 404.</li>
+          <li>
+            分发部分失败时返回 503，且响应体
+            <code>data.accepted=false</code>。<br />Partial dispatch failures
+            return 503 with <code>data.accepted=false</code>.
+          </li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 **/.DS_Store
 /target/
 /dist/
+/scripts/
 /.cargo/
 /.env
 /.env.*
