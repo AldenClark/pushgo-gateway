@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub const WIRE_CODEC_POSTCARD: u8 = 1;
-pub const WIRE_VERSION_V1: u8 = 1;
+pub const WIRE_VERSION_V2: u8 = 2;
 pub const PRIVATE_PAYLOAD_VERSION_V1: u8 = 1;
-pub const SUPPORTED_WIRE_VERSIONS: &[u8] = &[WIRE_VERSION_V1];
+pub const SUPPORTED_WIRE_VERSIONS: &[u8] = &[WIRE_VERSION_V2];
 pub const SUPPORTED_PAYLOAD_VERSIONS: &[u8] = &[PRIVATE_PAYLOAD_VERSION_V1];
 pub const PERF_TIER_HIGH: &str = "high";
 pub const PERF_TIER_BALANCED: &str = "balanced";
@@ -26,7 +26,7 @@ pub const fn wire_version(flags: u8) -> u8 {
 }
 
 pub const fn postcard_v1_flags() -> u8 {
-    wire_flags(WIRE_CODEC_POSTCARD, WIRE_VERSION_V1)
+    wire_flags(WIRE_CODEC_POSTCARD, WIRE_VERSION_V2)
 }
 
 #[repr(u8)]
@@ -185,7 +185,7 @@ pub fn negotiate_version(
 
 pub fn normalize_client_wire_versions(versions: &[u8]) -> Vec<u8> {
     if versions.is_empty() {
-        vec![WIRE_VERSION_V1]
+        vec![WIRE_VERSION_V2]
     } else {
         versions.to_vec()
     }

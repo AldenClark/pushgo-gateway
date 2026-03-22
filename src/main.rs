@@ -4,8 +4,9 @@ use clap::Parser;
 use tokio::{net::TcpListener, signal};
 
 use pushgo_gateway::{
-    app::build_app,
+    app::{AppRuntime, build_app},
     args::Args,
+    private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
 };
 
@@ -30,7 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     print_startup_diagnostics(&args, apns_endpoint, token_service_url.as_str());
 
     let client = reqwest::Client::builder()
-        .user_agent("pushgo-gateway/0.1.0")
+        .user_agent("pushgo-gateway/1.0.23")
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|err| pushgo_gateway::Error::Internal(err.to_string()))?;
@@ -53,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let wns = Arc::new(WnsService::new(wns_token_provider)?);
 
     let docs_html = include_str!("api/docs.html");
-    let app = build_app(&args, apns, fcm, wns, docs_html).await?;
+    let AppRuntime { router, private } = build_app(&args, apns, fcm, wns, docs_html).await?;
 
     let addr: SocketAddr = args.http_addr.parse()?;
 
@@ -61,16 +62,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     eprintln!("gateway listening on {}", addr);
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        router.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown_signal(private))
     .await?;
 
     Ok(())
 }
 
 /// Wait for Ctrl+C or SIGTERM, then trigger graceful shutdown.
-async fn shutdown_signal() {
+async fn shutdown_signal(private: Option<Arc<PrivateState>>) {
     let ctrl_c = async {
         let _ = signal::ctrl_c().await;
     };
@@ -88,6 +89,10 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+
+    if let Some(private) = private {
+        private.begin_shutdown();
     }
 }
 

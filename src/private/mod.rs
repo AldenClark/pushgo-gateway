@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use tokio::time::Instant as TokioInstant;
-use warp_link::warp_link_core::{SessionControl, SessionCoordinator};
+use warp_link::warp_link_core::{SessionControl, SessionCoordinator, TransportKind};
 use warp_link_coordination::InMemoryCoordinator;
 
 use crate::{
@@ -35,6 +35,11 @@ const CLAIM_ACK_IDLE_PROCESS_BUDGET: usize = 256;
 const FALLBACK_SCHEDULER_COMPACT_MIN_HEAP: usize = 8_192;
 const FALLBACK_SCHEDULER_COMPACT_MIN_STALE: usize = 2_048;
 const FALLBACK_SCHEDULER_COMPACT_RATIO: usize = 3;
+const PRIVATE_DRAINING_DELIVERY_WINDOW_MIN: Duration = Duration::from_secs(8);
+const PRIVATE_DRAINING_DELIVERY_WINDOW_MAX: Duration = Duration::from_secs(30);
+const PRIVATE_DRAINING_DELIVERY_WINDOW_DEFAULT: Duration = Duration::from_secs(12);
+const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_MULTIPLIER: f64 = 4.0;
+const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS: f64 = 2_000.0;
 
 #[derive(Debug, Clone)]
 pub struct PrivateConfig {
@@ -112,7 +117,6 @@ impl PrivateConfig {
     }
 }
 
-#[derive(Clone)]
 pub struct PrivateState {
     pub hub: Arc<PrivateHub>,
     pub config: PrivateConfig,
@@ -125,6 +129,8 @@ pub struct PrivateState {
     revoked_devices: DashMap<DeviceId, ()>,
     session_controls: DashMap<String, SessionControl>,
     session_devices: DashMap<String, DeviceId>,
+    shutting_down: AtomicBool,
+    shutdown_notify: tokio::sync::Notify,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -180,7 +186,32 @@ impl PrivateState {
             revoked_devices: DashMap::new(),
             session_controls: DashMap::new(),
             session_devices: DashMap::new(),
+            shutting_down: AtomicBool::new(false),
+            shutdown_notify: tokio::sync::Notify::new(),
         }
+    }
+
+    pub fn begin_shutdown(&self) {
+        if self.shutting_down.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        for control in &self.session_controls {
+            control.value().expire_now();
+        }
+
+        self.shutdown_notify.notify_waiters();
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
+    }
+
+    pub async fn wait_for_shutdown(&self) {
+        if self.is_shutting_down() {
+            return;
+        }
+        self.shutdown_notify.notified().await;
     }
 
     pub fn revoke_device_key(&self, device_key: &str) {
@@ -669,9 +700,16 @@ pub struct PrivateHub {
 
 #[derive(Debug, Clone)]
 struct Presence {
-    active_id: u64,
-    active: tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>,
+    quic_active: Option<ActiveConn>,
+    tcp_active: Option<ActiveConn>,
+    wss_active: Option<ActiveConn>,
     draining: Vec<DrainingConn>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveConn {
+    conn_id: u64,
+    sender: tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>,
 }
 
 #[derive(Debug, Clone)]
@@ -679,7 +717,52 @@ struct DrainingConn {
     conn_id: u64,
     #[allow(dead_code)]
     sender: tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>,
+    delivery_until: Instant,
     drain_until: Instant,
+}
+
+impl Presence {
+    fn slot_mut(&mut self, transport: TransportKind) -> &mut Option<ActiveConn> {
+        match transport {
+            TransportKind::Quic => &mut self.quic_active,
+            TransportKind::Tcp => &mut self.tcp_active,
+            TransportKind::Wss => &mut self.wss_active,
+        }
+    }
+
+    fn active_conn_ids(&self) -> [Option<u64>; 3] {
+        [
+            self.quic_active.as_ref().map(|active| active.conn_id),
+            self.tcp_active.as_ref().map(|active| active.conn_id),
+            self.wss_active.as_ref().map(|active| active.conn_id),
+        ]
+    }
+
+    fn delivery_senders(
+        &self,
+        now: Instant,
+    ) -> Vec<tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>> {
+        let mut senders = Vec::with_capacity(3 + self.draining.len());
+        if let Some(active) = self.quic_active.as_ref() {
+            senders.push(active.sender.clone());
+        }
+        if let Some(active) = self.tcp_active.as_ref() {
+            senders.push(active.sender.clone());
+        }
+        if let Some(active) = self.wss_active.as_ref() {
+            senders.push(active.sender.clone());
+        }
+        for draining in &self.draining {
+            if draining.delivery_until > now {
+                senders.push(draining.sender.clone());
+            }
+        }
+        senders
+    }
+
+    fn has_active(&self) -> bool {
+        self.quic_active.is_some() || self.tcp_active.is_some() || self.wss_active.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -909,6 +992,23 @@ pub enum ConnectionMode {
 }
 
 impl PrivateHub {
+    fn compute_draining_delivery_window(&self, device_id: DeviceId) -> Duration {
+        let min_ms = PRIVATE_DRAINING_DELIVERY_WINDOW_MIN.as_millis() as u64;
+        let max_ms = PRIVATE_DRAINING_DELIVERY_WINDOW_MAX.as_millis() as u64;
+        let default_ms = PRIVATE_DRAINING_DELIVERY_WINDOW_DEFAULT.as_millis() as u64;
+        let computed_ms = self
+            .with_resume_state(device_id, |entry| entry.rtt_ewma_ms)
+            .flatten()
+            .map(|rtt_ms| {
+                (rtt_ms * PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_MULTIPLIER
+                    + PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS)
+                    .round() as u64
+            })
+            .unwrap_or(default_ms)
+            .clamp(min_ms, max_ms);
+        Duration::from_millis(computed_ms)
+    }
+
     pub fn new(store: Store, config: &PrivateConfig) -> Self {
         PrivateHub {
             store,
@@ -945,6 +1045,7 @@ impl PrivateHub {
         &self,
         device_id: DeviceId,
         conn_id: u64,
+        transport: TransportKind,
         sender: tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>,
     ) {
         let now = Instant::now();
@@ -952,32 +1053,71 @@ impl PrivateHub {
             .entry(device_id)
             .and_modify(|presence| {
                 presence.draining.retain(|item| item.drain_until > now);
-                let draining = DrainingConn {
-                    conn_id: presence.active_id,
-                    sender: presence.active.clone(),
-                    drain_until: now + self.grace_window,
-                };
-                presence.draining.push(draining);
-                const MAX_DRAINING_CONN: usize = 16;
-                if presence.draining.len() > MAX_DRAINING_CONN {
-                    let overflow = presence.draining.len() - MAX_DRAINING_CONN;
-                    presence.draining.drain(0..overflow);
+                let slot = presence.slot_mut(transport);
+                if let Some(previous) = slot.replace(ActiveConn {
+                    conn_id,
+                    sender: sender.clone(),
+                }) {
+                    let delivery_window = self
+                        .compute_draining_delivery_window(device_id)
+                        .min(self.grace_window);
+                    presence.draining.push(DrainingConn {
+                        conn_id: previous.conn_id,
+                        sender: previous.sender,
+                        delivery_until: now + delivery_window,
+                        drain_until: now + self.grace_window,
+                    });
+                    const MAX_DRAINING_CONN: usize = 16;
+                    if presence.draining.len() > MAX_DRAINING_CONN {
+                        let overflow = presence.draining.len() - MAX_DRAINING_CONN;
+                        presence.draining.drain(0..overflow);
+                    }
                 }
-                presence.active_id = conn_id;
-                presence.active = sender.clone();
             })
             .or_insert_with(|| Presence {
-                active_id: conn_id,
-                active: sender.clone(),
+                quic_active: matches!(transport, TransportKind::Quic).then_some(ActiveConn {
+                    conn_id,
+                    sender: sender.clone(),
+                }),
+                tcp_active: matches!(transport, TransportKind::Tcp).then_some(ActiveConn {
+                    conn_id,
+                    sender: sender.clone(),
+                }),
+                wss_active: matches!(transport, TransportKind::Wss).then_some(ActiveConn {
+                    conn_id,
+                    sender: sender.clone(),
+                }),
                 draining: Vec::new(),
             });
+    }
+
+    pub fn collapse_draining_delivery_window_if_active(&self, device_id: DeviceId, conn_id: u64) {
+        if let Some(mut presence) = self.presence.get_mut(&device_id) {
+            let is_active = presence
+                .active_conn_ids()
+                .into_iter()
+                .flatten()
+                .any(|active_id| active_id == conn_id);
+            if !is_active {
+                return;
+            }
+            let now = Instant::now();
+            for draining in &mut presence.draining {
+                draining.delivery_until = now;
+            }
+        }
     }
 
     pub fn connection_mode(&self, device_id: DeviceId, conn_id: u64) -> ConnectionMode {
         let Some(presence) = self.presence.get(&device_id) else {
             return ConnectionMode::Stale;
         };
-        if presence.active_id == conn_id {
+        if presence
+            .active_conn_ids()
+            .into_iter()
+            .flatten()
+            .any(|id| id == conn_id)
+        {
             return ConnectionMode::Active;
         }
         let now = Instant::now();
@@ -993,26 +1133,54 @@ impl PrivateHub {
     }
 
     pub fn is_online(&self, device_id: DeviceId) -> bool {
-        self.presence.contains_key(&device_id)
+        self.presence
+            .get(&device_id)
+            .map(|presence| presence.has_active())
+            .unwrap_or(false)
     }
 
     pub fn sweep_draining(&self, device_id: DeviceId) {
+        let mut remove_presence = false;
         if let Some(mut entry) = self.presence.get_mut(&device_id) {
             let now = Instant::now();
             entry.draining.retain(|item| item.drain_until > now);
+            remove_presence = !entry.has_active() && entry.draining.is_empty();
+        }
+        if remove_presence {
+            self.presence.remove(&device_id);
         }
     }
 
     pub fn unregister_connection(&self, device_id: DeviceId, conn_id: u64) {
-        let mut remove_active = false;
+        let mut remove_presence = false;
         if let Some(mut entry) = self.presence.get_mut(&device_id) {
-            if entry.active_id == conn_id {
-                remove_active = true;
-            } else {
-                entry.draining.retain(|item| item.conn_id != conn_id);
+            if entry
+                .quic_active
+                .as_ref()
+                .is_some_and(|active| active.conn_id == conn_id)
+            {
+                entry.quic_active = None;
+            }
+            if entry
+                .tcp_active
+                .as_ref()
+                .is_some_and(|active| active.conn_id == conn_id)
+            {
+                entry.tcp_active = None;
+            }
+            if entry
+                .wss_active
+                .as_ref()
+                .is_some_and(|active| active.conn_id == conn_id)
+            {
+                entry.wss_active = None;
+            }
+            entry.draining.retain(|item| item.conn_id != conn_id);
+            if !entry.has_active() && entry.draining.is_empty() {
+                remove_presence = true;
             }
         }
-        if remove_active {
+        if remove_presence {
             self.presence.remove(&device_id);
         }
     }
@@ -1195,11 +1363,15 @@ impl PrivateHub {
         envelope: protocol::DeliverEnvelope,
     ) -> bool {
         if let Some(presence) = self.presence.get(&device_id) {
-            let sender = presence.active.clone();
+            let senders = presence.delivery_senders(Instant::now());
             drop(presence);
-            if sender.send(envelope).await.is_ok() {
-                return true;
+            let mut delivered = false;
+            for sender in senders {
+                if sender.send(envelope.clone()).await.is_ok() {
+                    delivered = true;
+                }
             }
+            return delivered;
         }
         false
     }
@@ -1210,7 +1382,15 @@ impl PrivateHub {
         envelope: protocol::DeliverEnvelope,
     ) -> bool {
         if let Some(presence) = self.presence.get(&device_id) {
-            return presence.active.try_send(envelope).is_ok();
+            let senders = presence.delivery_senders(Instant::now());
+            drop(presence);
+            let mut delivered = false;
+            for sender in senders {
+                if sender.try_send(envelope.clone()).is_ok() {
+                    delivered = true;
+                }
+            }
+            return delivered;
         }
         false
     }
@@ -1620,7 +1800,13 @@ pub fn spawn_quic_if_configured(state: Arc<PrivateState>) -> Result<(), crate::E
             match quic::serve_quic(&addr, &cert_path, &key_path, Arc::clone(&state)).await {
                 Ok(()) | Err(_) => {}
             }
-            tokio::time::sleep(Duration::from_secs(restart_delay_secs)).await;
+            if state.is_shutting_down() {
+                break;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(restart_delay_secs)) => {}
+                _ = state.wait_for_shutdown() => break,
+            }
             restart_delay_secs = restart_delay_secs.saturating_mul(2).min(30);
         }
     });
@@ -1638,7 +1824,13 @@ pub fn spawn_tcp_if_configured(state: Arc<PrivateState>) -> Result<(), crate::Er
                 match tcp::serve_tcp_plain(&addr, Arc::clone(&state)).await {
                     Ok(()) | Err(_) => {}
                 }
-                tokio::time::sleep(Duration::from_secs(restart_delay_secs)).await;
+                if state.is_shutting_down() {
+                    break;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(restart_delay_secs)) => {}
+                    _ = state.wait_for_shutdown() => break,
+                }
                 restart_delay_secs = restart_delay_secs.saturating_mul(2).min(30);
             }
         });
@@ -1660,7 +1852,13 @@ pub fn spawn_tcp_if_configured(state: Arc<PrivateState>) -> Result<(), crate::Er
             match tcp::serve_tcp_tls(&addr, &cert_path, &key_path, Arc::clone(&state)).await {
                 Ok(()) | Err(_) => {}
             }
-            tokio::time::sleep(Duration::from_secs(restart_delay_secs)).await;
+            if state.is_shutting_down() {
+                break;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(restart_delay_secs)) => {}
+                _ = state.wait_for_shutdown() => break,
+            }
             restart_delay_secs = restart_delay_secs.saturating_mul(2).min(30);
         }
     });
@@ -1690,6 +1888,9 @@ pub(crate) fn spawn_persistent_fallback_worker(
         state.metrics.mark_task_queue_depth(scheduler.depth());
 
         loop {
+            if state.is_shutting_down() {
+                break;
+            }
             if engine.consume_resync_request() {
                 if let Err(_err) = resync_fallback_tasks(&state, &mut scheduler, 200_000).await {}
                 let depth = scheduler.depth();
@@ -1710,6 +1911,7 @@ pub(crate) fn spawn_persistent_fallback_worker(
                     state.metrics.mark_task_queue_depth(depth);
                 }
                 _ = engine.resync_notify.notified() => {}
+                _ = state.wait_for_shutdown() => break,
                 _ = tokio::time::sleep_until(wake_at) => {
                     let now = chrono::Utc::now().timestamp();
                     let due_tasks = scheduler.pop_due(now, 1024);

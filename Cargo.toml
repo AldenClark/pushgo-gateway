@@ -1,6 +1,6 @@
 [package]
 name = "pushgo-gateway"
-version = "1.0.0"
+version = "1.0.23"
 edition = "2024"
 license = "MIT"
 authors = ["PushGo Team <team@pushgo.dev>"]
@@ -11,7 +11,6 @@ path = "src/main.rs"
 
 [lib]
 path = "src/lib.rs"
-
 
 [profile.release]
 lto = "fat"
@@ -72,9 +71,9 @@ bytes = "1.11.1"
 rand = "0.10.0"
 hmac = "0.12.1"
 async-trait = "0.1.89"
-warp-link = { git = "https://github.com/AldenClark/warp-link" }
-warp-link-coordination = { git = "https://github.com/AldenClark/warp-link" }
-pushgo-warp-profile = { git = "https://github.com/AldenClark/warp-link" }
+warp-link = { git = "https://github.com/AldenClark/warp-link", rev = "4c11f58cd211a4baffa729996e19e40b71188221" }
+warp-link-coordination = { git = "https://github.com/AldenClark/warp-link", rev = "4c11f58cd211a4baffa729996e19e40b71188221" }
+pushgo-warp-profile = { git = "https://github.com/AldenClark/warp-link", rev = "4c11f58cd211a4baffa729996e19e40b71188221" }
 futures-util = "0.3.32"
 parking_lot = "0.12.5"
 

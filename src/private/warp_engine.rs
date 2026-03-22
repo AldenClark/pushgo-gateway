@@ -96,7 +96,7 @@ impl PushgoServerApp {
             self.state
                 .hub
                 .connection_mode(runtime.device_id, runtime.conn_id),
-            ConnectionMode::Active
+            ConnectionMode::Active | ConnectionMode::Draining
         ) {
             self.state.metrics.mark_auth_revoked();
             return Err(SessionAuthState::Revoked(
@@ -366,7 +366,9 @@ impl ServerApp for PushgoServerApp {
                 let tuning = resolve_tuning(hello.perf_tier.as_deref(), hello.app_state.as_deref());
                 let conn_id = rand::random::<u64>();
                 let (tx, rx) = tokio::sync::mpsc::channel::<DeliverEnvelope>(256);
-                self.state.hub.register_connection(device_id, conn_id, tx);
+                self.state
+                    .hub
+                    .register_connection(device_id, conn_id, peer.transport, tx);
                 let logical_partition = logical_partition_for_device(device_id);
 
                 if !prepared.bootstrap.pending.is_empty() {
@@ -389,9 +391,6 @@ impl ServerApp for PushgoServerApp {
                         bootstrap_pending: Mutex::new(prepared.bootstrap.pending),
                     }),
                 );
-                let _ = self
-                    .state
-                    .expire_other_device_sessions(device_id, session_id.as_str());
                 self.mark_connect_success(peer.transport);
 
                 Ok(AuthResponse::ConnectAccepted(SessionCtx {
@@ -523,6 +522,9 @@ impl ServerApp for PushgoServerApp {
             self.state.metrics.mark_ack_non_ok();
             return;
         };
+        self.state
+            .hub
+            .collapse_draining_delivery_window_if_active(runtime.device_id, runtime.conn_id);
         match ack.status {
             AckStatus::Ok => {
                 let Some(seq) = ack.seq else {
@@ -596,11 +598,11 @@ impl ServerApp for PushgoServerApp {
     fn session_coordinator(
         &self,
     ) -> Option<Arc<dyn warp_link::warp_link_core::SessionCoordinator>> {
-        Some(self.state.session_coordinator())
+        None
     }
 
     fn session_coord_owner(&self) -> Option<String> {
-        Some(self.state.session_coord_owner())
+        None
     }
 }
 

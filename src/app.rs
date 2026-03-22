@@ -38,13 +38,18 @@ pub(crate) struct AppState {
     pub store: Store,
 }
 
+pub struct AppRuntime {
+    pub router: Router,
+    pub private: Option<Arc<PrivateState>>,
+}
+
 pub async fn build_app(
     args: &Args,
     apns: Arc<dyn ApnsClient>,
     fcm: Arc<dyn FcmClient>,
     wns: Arc<dyn WnsClient>,
     docs_html: &'static str,
-) -> Result<Router, Box<dyn std::error::Error>> {
+) -> Result<AppRuntime, Box<dyn std::error::Error>> {
     let store = new_store(args.db_url.as_deref()).await?;
     let ingress_permits = auto_ingress_permits();
     let client_ip_resolver = Arc::new(ClientIpResolver);
@@ -120,13 +125,13 @@ pub async fn build_app(
         api_rate_limiter: Arc::new(ApiRateLimiter::default()),
         client_ip_resolver,
         device_registry,
-        private,
+        private: private.clone(),
         store,
     };
 
     let router = build_router(state.clone(), docs_html);
 
-    Ok(router)
+    Ok(AppRuntime { router, private })
 }
 
 fn auto_ingress_permits() -> usize {
