@@ -815,7 +815,14 @@ async fn cleanup_old_channel_state(
                     && let Some(token) = old_token
                 {
                     let platform = platform_from_channel_type(*old_channel_type)?;
-                    let result = state.store.retire_device_async(token, platform).await;
+                    let result = if let Some(next_token) = new_token {
+                        state
+                            .store
+                            .migrate_device_subscriptions_async(token, next_token, platform)
+                            .await
+                    } else {
+                        state.store.retire_device_async(token, platform).await
+                    };
                     match result {
                         Ok(_removed) => {}
                         Err(_err) => {}

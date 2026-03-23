@@ -11,7 +11,10 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{api::HttpResult, app::AppState};
+use crate::{
+    api::HttpResult,
+    app::{AppState, PrivateTransportProfile},
+};
 
 const PRIVATE_WS_SUBPROTOCOL: &str = "pushgo-private.v1";
 const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
@@ -44,11 +47,20 @@ struct PrivateNetworkDiagnosticsResponse {
 
 #[derive(Debug, Serialize)]
 struct PrivateTransportHints {
-    quic_port: u16,
+    quic_enabled: bool,
+    quic_port: Option<u16>,
+    tcp_enabled: bool,
     tcp_port: u16,
+    wss_enabled: bool,
     wss_port: u16,
-    wss_path: &'static str,
-    ws_subprotocol: &'static str,
+    wss_path: String,
+    ws_subprotocol: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PrivateProfileResponse {
+    private_enabled: bool,
+    transport: PrivateTransportHints,
 }
 
 pub(crate) async fn private_metrics(State(state): State<AppState>) -> HttpResult {
@@ -77,6 +89,20 @@ pub(crate) async fn private_health(State(state): State<AppState>) -> HttpResult 
                 .health_snapshot(state.private_channel_enabled)
         });
     Ok(crate::api::ok(snapshot))
+}
+
+pub(crate) async fn private_profile(State(state): State<AppState>) -> HttpResult {
+    if !state.private_channel_enabled {
+        return Ok(crate::api::err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private channel is disabled",
+        ));
+    }
+
+    Ok(crate::api::ok(PrivateProfileResponse {
+        private_enabled: true,
+        transport: transport_hints(&state.private_transport_profile),
+    }))
 }
 
 pub(crate) async fn private_network_diagnostics(
@@ -117,13 +143,7 @@ pub(crate) async fn private_network_diagnostics(
         x_forwarded_for: header_value(&headers, X_FORWARDED_FOR),
         x_real_ip: header_value(&headers, X_REAL_IP),
         forwarded: header_value(&headers, FORWARDED),
-        transport_hints: PrivateTransportHints {
-            quic_port: 443,
-            tcp_port: 5223,
-            wss_port: 443,
-            wss_path: "/private/ws",
-            ws_subprotocol: PRIVATE_WS_SUBPROTOCOL,
-        },
+        transport_hints: transport_hints(&state.private_transport_profile),
     }))
 }
 
@@ -166,6 +186,19 @@ pub(crate) async fn private_ws(
             crate::private::ws::serve_ws_socket(socket, private_state).await;
         })
         .into_response()
+}
+
+fn transport_hints(profile: &PrivateTransportProfile) -> PrivateTransportHints {
+    PrivateTransportHints {
+        quic_enabled: profile.quic_enabled,
+        quic_port: profile.quic_port,
+        tcp_enabled: profile.tcp_enabled,
+        tcp_port: profile.tcp_port,
+        wss_enabled: profile.wss_enabled,
+        wss_port: profile.wss_port,
+        wss_path: profile.wss_path.to_string(),
+        ws_subprotocol: profile.ws_subprotocol.to_string(),
+    }
 }
 
 fn client_offers_ws_subprotocol(headers: &HeaderMap, expected: &str) -> bool {

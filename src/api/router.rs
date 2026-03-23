@@ -5,7 +5,10 @@ use crate::{
         channel::{channel_exists, channel_rename},
         event::{event_close_to_channel, event_create_to_channel, event_update_to_channel},
         message::message_to_channel,
-        private::{private_health, private_metrics, private_network_diagnostics, private_ws},
+        private::{
+            private_health, private_metrics, private_network_diagnostics, private_profile,
+            private_ws,
+        },
         thing::{
             thing_archive_to_channel, thing_create_to_channel, thing_delete_to_channel,
             thing_update_to_channel,
@@ -61,6 +64,7 @@ pub fn build_router(state: AppState, docs_html: &'static str) -> Router {
         router = router
             .route("/private/metrics", get(private_metrics))
             .route("/private/health", get(private_health))
+            .route("/private/profile", get(private_profile))
             .route(
                 "/private/diagnostics/network",
                 get(private_network_diagnostics),
@@ -173,7 +177,10 @@ async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> 
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
 
     use axum::{
         body::Body,
@@ -189,10 +196,14 @@ mod tests {
         storage::{Store, new_store},
     };
 
+    static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     async fn build_test_state() -> AppState {
+        let unique_id = TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let db_url = format!(
-            "sqlite:///tmp/pushgo-router-test-{}-{}.db",
+            "sqlite:///tmp/pushgo-router-test-{}-{}-{}.db",
             std::process::id(),
+            unique_id,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system clock should be after epoch")
@@ -212,9 +223,25 @@ mod tests {
             api_rate_limiter: Arc::new(crate::rate_limit::ApiRateLimiter::default()),
             client_ip_resolver: Arc::new(crate::rate_limit::ClientIpResolver),
             device_registry: Arc::new(DeviceRegistry::new()),
+            private_transport_profile: crate::app::PrivateTransportProfile {
+                quic_enabled: true,
+                quic_port: Some(443),
+                tcp_enabled: true,
+                tcp_port: 5223,
+                wss_enabled: true,
+                wss_port: 6666,
+                wss_path: Arc::from("/private/ws"),
+                ws_subprotocol: Arc::from("pushgo-private.v1"),
+            },
             private: None,
             store,
         }
+    }
+
+    async fn build_private_test_state() -> AppState {
+        let mut state = build_test_state().await;
+        state.private_channel_enabled = true;
+        state
     }
 
     #[tokio::test]
@@ -276,5 +303,22 @@ mod tests {
                 "{path} should be routed"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn private_profile_route_returns_transport_config() {
+        let state = build_private_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/private/profile")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should handle request");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

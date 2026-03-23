@@ -549,6 +549,13 @@ pub trait StoreApi: Send + Sync {
         platform: Platform,
     ) -> StoreResult<usize>;
 
+    async fn migrate_device_subscriptions_async(
+        &self,
+        old_device_token: &str,
+        new_device_token: &str,
+        platform: Platform,
+    ) -> StoreResult<usize>;
+
     async fn delete_private_device_state_async(&self, device_id: DeviceId) -> StoreResult<()>;
 
     async fn load_event_head_async(&self, event_id: &str) -> StoreResult<Option<EventHead>>;
@@ -2153,6 +2160,139 @@ impl StoreApi for SqlxStore {
                 tx.commit().await?;
                 self.device_cache.write().remove(&device_id);
                 Ok(removed)
+            }
+        }
+    }
+
+    async fn migrate_device_subscriptions_async(
+        &self,
+        old_device_token: &str,
+        new_device_token: &str,
+        platform: Platform,
+    ) -> StoreResult<usize> {
+        let old_device_info = DeviceInfo::from_token(platform, old_device_token)?;
+        let old_device_id = device_id_for(platform, &old_device_info.token_raw);
+        let new_device_info = DeviceInfo::from_token(platform, new_device_token)?;
+        let new_device_id = device_id_for(platform, &new_device_info.token_raw);
+        let new_device_blob = new_device_info.to_bytes()?;
+
+        if old_device_id == new_device_id {
+            self.device_cache
+                .write()
+                .insert(new_device_id, new_device_info);
+            return Ok(0);
+        }
+
+        match &self.backend {
+            SqlxBackend::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                sqlx::query(
+                    "INSERT INTO devices (device_id, device_blob) VALUES ($1, $2) \
+                     ON CONFLICT (device_id) DO UPDATE SET device_blob = EXCLUDED.device_blob",
+                )
+                .bind(&new_device_id[..])
+                .bind(&new_device_blob)
+                .execute(&mut *tx)
+                .await?;
+
+                let moved = sqlx::query(
+                    "INSERT INTO subscriptions (channel_id, device_id) \
+                     SELECT channel_id, $1 FROM subscriptions WHERE device_id = $2 \
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(&new_device_id[..])
+                .bind(&old_device_id[..])
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize;
+
+                sqlx::query("DELETE FROM subscriptions WHERE device_id = $1")
+                    .bind(&old_device_id[..])
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("DELETE FROM devices WHERE device_id = $1")
+                    .bind(&old_device_id[..])
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                self.device_cache.write().remove(&old_device_id);
+                self.device_cache
+                    .write()
+                    .insert(new_device_id, new_device_info);
+                Ok(moved)
+            }
+            SqlxBackend::Mysql(pool) => {
+                let mut tx = pool.begin().await?;
+                sqlx::query(
+                    "INSERT INTO devices (device_id, device_blob) VALUES (?, ?) \
+                     ON DUPLICATE KEY UPDATE device_blob = VALUES(device_blob)",
+                )
+                .bind(&new_device_id[..])
+                .bind(&new_device_blob)
+                .execute(&mut *tx)
+                .await?;
+
+                let moved = sqlx::query(
+                    "INSERT IGNORE INTO subscriptions (channel_id, device_id) \
+                     SELECT channel_id, ? FROM subscriptions WHERE device_id = ?",
+                )
+                .bind(&new_device_id[..])
+                .bind(&old_device_id[..])
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize;
+
+                sqlx::query("DELETE FROM subscriptions WHERE device_id = ?")
+                    .bind(&old_device_id[..])
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("DELETE FROM devices WHERE device_id = ?")
+                    .bind(&old_device_id[..])
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                self.device_cache.write().remove(&old_device_id);
+                self.device_cache
+                    .write()
+                    .insert(new_device_id, new_device_info);
+                Ok(moved)
+            }
+            SqlxBackend::Sqlite(pool) => {
+                let mut tx = pool.begin().await?;
+                sqlx::query(
+                    "INSERT INTO devices (device_id, device_blob) VALUES (?, ?) \
+                     ON CONFLICT (device_id) DO UPDATE SET device_blob = excluded.device_blob",
+                )
+                .bind(&new_device_id[..])
+                .bind(&new_device_blob)
+                .execute(&mut *tx)
+                .await?;
+
+                let moved = sqlx::query(
+                    "INSERT INTO subscriptions (channel_id, device_id) \
+                     SELECT channel_id, ? FROM subscriptions WHERE device_id = ? \
+                     ON CONFLICT (channel_id, device_id) DO NOTHING",
+                )
+                .bind(&new_device_id[..])
+                .bind(&old_device_id[..])
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize;
+
+                sqlx::query("DELETE FROM subscriptions WHERE device_id = ?")
+                    .bind(&old_device_id[..])
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("DELETE FROM devices WHERE device_id = ?")
+                    .bind(&old_device_id[..])
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                self.device_cache.write().remove(&old_device_id);
+                self.device_cache
+                    .write()
+                    .insert(new_device_id, new_device_info);
+                Ok(moved)
             }
         }
     }

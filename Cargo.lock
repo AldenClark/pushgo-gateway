@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "pushgo-gateway"
-version = "1.0.25"
+version = "1.0.26"
 dependencies = [
  "arc-swap",
  "argon2",

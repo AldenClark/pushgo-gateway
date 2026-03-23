@@ -36,7 +36,7 @@ pub struct Args {
     #[arg(
         env = "PUSHGO_TOKEN_SERVICE_URL",
         long = "token-service-url",
-        default_value = "https://gateway.pushgo.dev"
+        default_value = "https://token.pushgo.dev"
     )]
     pub token_service_url: String,
 
@@ -53,25 +53,45 @@ pub struct Args {
     #[arg(env = "PUSHGO_DB_URL", long = "db-url")]
     pub db_url: Option<String>,
 
-    /// QUIC bind address for private push channel.
-    #[arg(env = "PUSHGO_QUIC_ADDR", long = "quic-addr")]
-    pub quic_addr: Option<String>,
-
-    /// TLS certificate path (PEM) for QUIC and private TCP listeners.
-    #[arg(env = "PUSHGO_QUIC_CERT", long = "quic-cert")]
-    pub quic_cert_path: Option<String>,
-
-    /// TLS private key path (PEM) for QUIC and private TCP listeners.
-    #[arg(env = "PUSHGO_QUIC_KEY", long = "quic-key")]
-    pub quic_key_path: Option<String>,
-
-    /// TCP bind address for private channel fallback transport.
+    /// QUIC bind address for the private transport listener.
     #[arg(
-        env = "PUSHGO_PRIVATE_TCP_ADDR",
-        long = "private-tcp-addr",
-        default_value = "0.0.0.0:5223"
+        env = "PUSHGO_PRIVATE_QUIC_BIND",
+        long = "private-quic-bind",
+        default_value = "127.0.0.1:5223"
     )]
-    pub private_tcp_addr: String,
+    pub private_quic_bind: String,
+
+    /// Advertised QUIC port for private channel clients.
+    #[arg(
+        env = "PUSHGO_PRIVATE_QUIC_PORT",
+        long = "private-quic-port",
+        default_value = "443"
+    )]
+    pub private_quic_port: u16,
+
+    /// TLS certificate path (PEM) shared by private QUIC and private TCP listeners.
+    #[arg(env = "PUSHGO_PRIVATE_TLS_CERT", long = "private-tls-cert")]
+    pub private_tls_cert_path: Option<String>,
+
+    /// TLS private key path (PEM) shared by private QUIC and private TCP listeners.
+    #[arg(env = "PUSHGO_PRIVATE_TLS_KEY", long = "private-tls-key")]
+    pub private_tls_key_path: Option<String>,
+
+    /// TCP bind address for the private transport listener.
+    #[arg(
+        env = "PUSHGO_PRIVATE_TCP_BIND",
+        long = "private-tcp-bind",
+        default_value = "127.0.0.1:5223"
+    )]
+    pub private_tcp_bind: String,
+
+    /// Advertised TCP port for private channel clients.
+    #[arg(
+        env = "PUSHGO_PRIVATE_TCP_PORT",
+        long = "private-tcp-port",
+        default_value = "5223"
+    )]
+    pub private_tcp_port: u16,
 
     /// If true, private TCP listener runs in plain mode for edge-terminated TLS.
     #[arg(

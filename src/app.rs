@@ -14,8 +14,20 @@ use crate::{
     storage::{DeviceRegistryRoute, Store, new_store},
 };
 use axum::Router;
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::Semaphore;
+
+#[derive(Clone)]
+pub(crate) struct PrivateTransportProfile {
+    pub quic_enabled: bool,
+    pub quic_port: Option<u16>,
+    pub tcp_enabled: bool,
+    pub tcp_port: u16,
+    pub wss_enabled: bool,
+    pub wss_port: u16,
+    pub wss_path: Arc<str>,
+    pub ws_subprotocol: Arc<str>,
+}
 
 #[derive(Clone)]
 pub(crate) enum AuthMode {
@@ -34,6 +46,7 @@ pub(crate) struct AppState {
     pub api_rate_limiter: Arc<ApiRateLimiter>,
     pub client_ip_resolver: Arc<ClientIpResolver>,
     pub device_registry: Arc<DeviceRegistry>,
+    pub private_transport_profile: PrivateTransportProfile,
     pub private: Option<Arc<PrivateState>>,
     pub store: Store,
 }
@@ -64,11 +77,11 @@ pub async fn build_app(
     };
 
     let private_config = PrivateConfig::new(
-        args.quic_addr.clone(),
-        Some(args.private_tcp_addr.clone()),
+        Some(args.private_quic_bind.clone()),
+        Some(args.private_tcp_bind.clone()),
         args.private_tcp_tls_offload,
-        args.quic_cert_path.clone(),
-        args.quic_key_path.clone(),
+        args.private_tls_cert_path.clone(),
+        args.private_tls_key_path.clone(),
         args.private_session_ttl_secs,
         args.private_grace_window_secs,
         args.private_max_pending_per_device,
@@ -115,6 +128,8 @@ pub async fn build_app(
         },
     );
 
+    let private_transport_profile = build_private_transport_profile(args);
+
     let state = AppState {
         dispatch,
         auth,
@@ -125,6 +140,7 @@ pub async fn build_app(
         api_rate_limiter: Arc::new(ApiRateLimiter::default()),
         client_ip_resolver,
         device_registry,
+        private_transport_profile,
         private: private.clone(),
         store,
     };
@@ -139,6 +155,24 @@ fn auto_ingress_permits() -> usize {
         .map(|v| v.get())
         .unwrap_or(1);
     cpu.saturating_mul(200)
+}
+
+fn build_private_transport_profile(args: &Args) -> PrivateTransportProfile {
+    let wss_port = args
+        .http_addr
+        .parse::<SocketAddr>()
+        .map(|addr| addr.port())
+        .unwrap_or(443);
+    PrivateTransportProfile {
+        quic_enabled: true,
+        quic_port: Some(args.private_quic_port),
+        tcp_enabled: true,
+        tcp_port: args.private_tcp_port,
+        wss_enabled: true,
+        wss_port,
+        wss_path: Arc::from("/private/ws"),
+        ws_subprotocol: Arc::from("pushgo-private.v1"),
+    }
 }
 
 async fn restore_device_registry(

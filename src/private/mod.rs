@@ -46,11 +46,11 @@ const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS: f64 = 2_000.0;
 
 #[derive(Debug, Clone)]
 pub struct PrivateConfig {
-    pub quic_addr: Option<String>,
-    pub tcp_addr: Option<String>,
+    pub private_quic_bind: Option<String>,
+    pub private_tcp_bind: Option<String>,
     pub tcp_tls_offload: bool,
-    pub quic_cert_path: Option<String>,
-    pub quic_key_path: Option<String>,
+    pub private_tls_cert_path: Option<String>,
+    pub private_tls_key_path: Option<String>,
     pub session_ttl_secs: i64,
     pub grace_window_secs: u64,
     pub max_pending_per_device: usize,
@@ -72,11 +72,11 @@ pub struct PrivateConfig {
 impl PrivateConfig {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        quic_addr: Option<String>,
-        tcp_addr: Option<String>,
+        private_quic_bind: Option<String>,
+        private_tcp_bind: Option<String>,
         tcp_tls_offload: bool,
-        quic_cert_path: Option<String>,
-        quic_key_path: Option<String>,
+        private_tls_cert_path: Option<String>,
+        private_tls_key_path: Option<String>,
         session_ttl_secs: i64,
         grace_window_secs: u64,
         max_pending_per_device: usize,
@@ -95,11 +95,11 @@ impl PrivateConfig {
         enable_ip_rate_limit: bool,
     ) -> Self {
         PrivateConfig {
-            quic_addr,
-            tcp_addr,
+            private_quic_bind,
+            private_tcp_bind,
             tcp_tls_offload,
-            quic_cert_path,
-            quic_key_path,
+            private_tls_cert_path,
+            private_tls_key_path,
             session_ttl_secs,
             grace_window_secs,
             max_pending_per_device,
@@ -1787,23 +1787,23 @@ impl PrivateHub {
 }
 
 pub fn spawn_quic_if_configured(state: Arc<PrivateState>) -> Result<(), crate::Error> {
-    let Some(addr) = state.config.quic_addr.clone() else {
+    let Some(bind_addr) = state.config.private_quic_bind.clone() else {
         return Ok(());
     };
-    let Some(cert_path) = state.config.quic_cert_path.clone() else {
+    let Some(cert_path) = state.config.private_tls_cert_path.clone() else {
         return Err(crate::Error::Internal(
-            "PUSHGO_QUIC_CERT is required when QUIC is enabled".to_string(),
+            "PUSHGO_PRIVATE_TLS_CERT is required when QUIC is enabled".to_string(),
         ));
     };
-    let Some(key_path) = state.config.quic_key_path.clone() else {
+    let Some(key_path) = state.config.private_tls_key_path.clone() else {
         return Err(crate::Error::Internal(
-            "PUSHGO_QUIC_KEY is required when QUIC is enabled".to_string(),
+            "PUSHGO_PRIVATE_TLS_KEY is required when QUIC is enabled".to_string(),
         ));
     };
     tokio::spawn(async move {
         let mut restart_delay_secs = 1u64;
         loop {
-            match quic::serve_quic(&addr, &cert_path, &key_path, Arc::clone(&state)).await {
+            match quic::serve_quic(&bind_addr, &cert_path, &key_path, Arc::clone(&state)).await {
                 Ok(()) | Err(_) => {}
             }
             if state.is_shutting_down() {
@@ -1820,14 +1820,14 @@ pub fn spawn_quic_if_configured(state: Arc<PrivateState>) -> Result<(), crate::E
 }
 
 pub fn spawn_tcp_if_configured(state: Arc<PrivateState>) -> Result<(), crate::Error> {
-    let Some(addr) = state.config.tcp_addr.clone() else {
+    let Some(bind_addr) = state.config.private_tcp_bind.clone() else {
         return Ok(());
     };
     if state.config.tcp_tls_offload {
         tokio::spawn(async move {
             let mut restart_delay_secs = 1u64;
             loop {
-                match tcp::serve_tcp_plain(&addr, Arc::clone(&state)).await {
+                match tcp::serve_tcp_plain(&bind_addr, Arc::clone(&state)).await {
                     Ok(()) | Err(_) => {}
                 }
                 if state.is_shutting_down() {
@@ -1842,20 +1842,20 @@ pub fn spawn_tcp_if_configured(state: Arc<PrivateState>) -> Result<(), crate::Er
         });
         return Ok(());
     }
-    let Some(cert_path) = state.config.quic_cert_path.clone() else {
+    let Some(cert_path) = state.config.private_tls_cert_path.clone() else {
         return Err(crate::Error::Internal(
-            "PUSHGO_QUIC_CERT is required when private TCP is enabled".to_string(),
+            "PUSHGO_PRIVATE_TLS_CERT is required when private TCP is enabled".to_string(),
         ));
     };
-    let Some(key_path) = state.config.quic_key_path.clone() else {
+    let Some(key_path) = state.config.private_tls_key_path.clone() else {
         return Err(crate::Error::Internal(
-            "PUSHGO_QUIC_KEY is required when private TCP is enabled".to_string(),
+            "PUSHGO_PRIVATE_TLS_KEY is required when private TCP is enabled".to_string(),
         ));
     };
     tokio::spawn(async move {
         let mut restart_delay_secs = 1u64;
         loop {
-            match tcp::serve_tcp_tls(&addr, &cert_path, &key_path, Arc::clone(&state)).await {
+            match tcp::serve_tcp_tls(&bind_addr, &cert_path, &key_path, Arc::clone(&state)).await {
                 Ok(()) | Err(_) => {}
             }
             if state.is_shutting_down() {

@@ -5,7 +5,8 @@ use flume::{Receiver, Sender, TrySendError};
 use crate::{
     private::PrivateState,
     providers::{
-        ApnsClient, FcmClient, WnsClient, apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload,
+        ApnsClient, DispatchResult, FcmClient, WnsClient, apns::ApnsPayload, fcm::FcmPayload,
+        wns::WnsPayload,
     },
     storage::{Platform, Store},
     util::encode_crockford_base32_128,
@@ -229,6 +230,17 @@ fn spawn_apns_worker(
                         )
                         .await;
                 }
+                if !dispatch.success {
+                    log_provider_dispatch_failure(
+                        "APNS",
+                        job.correlation_id.as_ref(),
+                        &channel_id,
+                        actual_path,
+                        Some(job.platform),
+                        job.device_token.as_ref(),
+                        &dispatch,
+                    );
+                }
                 if dispatch.invalid_token {
                     let _ = store_api
                         .unsubscribe_channel_async(
@@ -336,6 +348,17 @@ fn spawn_fcm_worker(
                         .send_to_device(job.device_token.as_ref(), Arc::clone(&payload), Some(body))
                         .await;
                 }
+                if !dispatch.success {
+                    log_provider_dispatch_failure(
+                        "FCM",
+                        job.correlation_id.as_ref(),
+                        &channel_id,
+                        actual_path,
+                        Some(Platform::ANDROID),
+                        job.device_token.as_ref(),
+                        &dispatch,
+                    );
+                }
                 if dispatch.invalid_token {
                     let _ = store_api
                         .unsubscribe_channel_async(
@@ -426,6 +449,17 @@ fn spawn_wns_worker(
                         .send_to_device(job.device_token.as_ref(), Arc::clone(&payload))
                         .await;
                 }
+                if !dispatch.success {
+                    log_provider_dispatch_failure(
+                        "WNS",
+                        job.correlation_id.as_ref(),
+                        &channel_id,
+                        actual_path,
+                        Some(Platform::WINDOWS),
+                        job.device_token.as_ref(),
+                        &dispatch,
+                    );
+                }
                 if dispatch.invalid_token {
                     let _ = store_api
                         .unsubscribe_channel_async(
@@ -453,9 +487,9 @@ fn spawn_wns_worker(
 async fn enqueue_private_wakeup_delivery(
     private: Option<&PrivateState>,
     delivery: &PrivateWakeupDelivery,
-    _provider: &str,
-    _correlation_id: &str,
-    _channel_id: &str,
+    provider: &str,
+    correlation_id: &str,
+    channel_id: &str,
 ) -> bool {
     let Some(private_state) = private else {
         return false;
@@ -471,8 +505,17 @@ async fn enqueue_private_wakeup_delivery(
         .await
     {
         Ok(()) => true,
-        Err(_err) => {
+        Err(err) => {
             private_state.metrics.mark_enqueue_failure();
+            eprintln!(
+                "private wakeup enqueue failed provider={} correlation_id={} channel_id={} device_id={} delivery_id={} error={}",
+                provider,
+                correlation_id,
+                channel_id,
+                encode_crockford_base32_128(&delivery.device_id),
+                delivery.delivery_id,
+                err,
+            );
             false
         }
     }
@@ -483,16 +526,25 @@ async fn cleanup_private_outbox_on_invalid_token(
     private: Option<&PrivateState>,
     platform: Platform,
     device_token: &str,
-    _provider: &str,
-    _correlation_id: &str,
-    _channel_id: &str,
+    provider: &str,
+    correlation_id: &str,
+    channel_id: &str,
 ) {
     let device_id = match store
         .lookup_private_device_async(platform, device_token)
         .await
     {
         Ok(value) => value,
-        Err(_err) => {
+        Err(err) => {
+            eprintln!(
+                "invalid token cleanup lookup failed provider={} correlation_id={} channel_id={} platform={} device_token={} error={}",
+                provider,
+                correlation_id,
+                channel_id,
+                platform_label(platform),
+                redact_device_token(device_token),
+                err,
+            );
             return;
         }
     };
@@ -509,8 +561,69 @@ async fn cleanup_private_outbox_on_invalid_token(
     };
     match cleared_result {
         Ok(_cleared) => {}
-        Err(_err) => {}
+        Err(err) => {
+            eprintln!(
+                "invalid token cleanup outbox clear failed provider={} correlation_id={} channel_id={} platform={} device_id={} error={}",
+                provider,
+                correlation_id,
+                channel_id,
+                platform_label(platform),
+                encode_crockford_base32_128(&device_id),
+                err,
+            );
+        }
     }
+}
+
+fn log_provider_dispatch_failure(
+    provider: &str,
+    correlation_id: &str,
+    channel_id: &str,
+    path: ProviderDeliveryPath,
+    platform: Option<Platform>,
+    device_token: &str,
+    dispatch: &DispatchResult,
+) {
+    let error = dispatch
+        .error
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "unknown".to_string());
+    eprintln!(
+        "provider dispatch failed provider={} correlation_id={} channel_id={} path={} platform={} device_token={} status_code={} invalid_token={} payload_too_large={} error={}",
+        provider,
+        correlation_id,
+        channel_id,
+        delivery_path_label(path),
+        platform.map(platform_label).unwrap_or("unknown"),
+        redact_device_token(device_token),
+        dispatch.status_code,
+        dispatch.invalid_token,
+        dispatch.payload_too_large,
+        error,
+    );
+}
+
+fn delivery_path_label(path: ProviderDeliveryPath) -> &'static str {
+    match path {
+        ProviderDeliveryPath::Direct => "direct",
+        ProviderDeliveryPath::WakeupPull => "wakeup_pull",
+    }
+}
+
+fn platform_label(platform: Platform) -> &'static str {
+    match platform {
+        Platform::IOS => "ios",
+        Platform::MACOS => "macos",
+        Platform::WATCHOS => "watchos",
+        Platform::ANDROID => "android",
+        Platform::WINDOWS => "windows",
+    }
+}
+
+fn redact_device_token(token: &str) -> String {
+    let visible = 8usize.min(token.len());
+    format!("...{}", &token[token.len().saturating_sub(visible)..])
 }
 
 fn auto_dispatch_worker_count() -> usize {
