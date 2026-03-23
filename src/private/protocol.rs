@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub const WIRE_CODEC_POSTCARD: u8 = 1;

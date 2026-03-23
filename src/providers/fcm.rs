@@ -1,22 +1,25 @@
-use std::collections::HashMap;
+use std::sync::Arc;
 
+use hashbrown::HashMap;
 use serde::Serialize;
+
+use crate::util::SharedStringMap;
 
 #[derive(Debug, Serialize)]
 pub struct FcmPayload {
-    data: HashMap<String, String>,
+    data: SharedStringMap,
     priority: &'static str,
     ttl_seconds: Option<u32>,
 }
 
 impl FcmPayload {
     pub fn new(
-        data: HashMap<String, String>,
+        data: impl Into<SharedStringMap>,
         priority: &'static str,
         ttl_seconds: Option<u32>,
     ) -> Self {
         Self {
-            data,
+            data: data.into(),
             priority,
             ttl_seconds,
         }
@@ -30,7 +33,7 @@ impl FcmPayload {
     }
 
     pub fn data(&self) -> &HashMap<String, String> {
-        &self.data
+        self.data.as_map()
     }
 
     pub fn priority(&self) -> &'static str {
@@ -41,8 +44,8 @@ impl FcmPayload {
         self.ttl_seconds
     }
 
-    pub fn encoded_body(&self, device_token: &str) -> Result<Vec<u8>, serde_json::Error> {
-        serde_json::to_vec(&FcmRequest {
+    pub fn encoded_body(&self, device_token: &str) -> Result<Arc<[u8]>, serde_json::Error> {
+        let encoded = serde_json::to_vec(&FcmRequest {
             message: FcmMessage {
                 token: device_token,
                 data: self.data(),
@@ -51,7 +54,8 @@ impl FcmPayload {
                     ttl: self.ttl_seconds().map(|value| format!("{value}s")),
                 },
             },
-        })
+        })?;
+        Ok(encoded.into())
     }
 
     pub fn encoded_len(&self, device_token: &str) -> Result<usize, serde_json::Error> {

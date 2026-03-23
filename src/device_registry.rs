@@ -1,8 +1,6 @@
-use std::{
-    collections::HashMap,
-    hash::{Hash, Hasher},
-};
+use std::hash::{Hash, Hasher};
 
+use hashbrown::HashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
@@ -28,12 +26,17 @@ impl DeviceChannelType {
     }
 
     pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "apns" => Some(DeviceChannelType::Apns),
-            "fcm" => Some(DeviceChannelType::Fcm),
-            "wns" => Some(DeviceChannelType::Wns),
-            "private" => Some(DeviceChannelType::Private),
-            _ => None,
+        let trimmed = raw.trim();
+        if trimmed.eq_ignore_ascii_case("apns") {
+            Some(DeviceChannelType::Apns)
+        } else if trimmed.eq_ignore_ascii_case("fcm") {
+            Some(DeviceChannelType::Fcm)
+        } else if trimmed.eq_ignore_ascii_case("wns") {
+            Some(DeviceChannelType::Wns)
+        } else if trimmed.eq_ignore_ascii_case("private") {
+            Some(DeviceChannelType::Private)
+        } else {
+            None
         }
     }
 }
@@ -81,13 +84,10 @@ impl DeviceRegistry {
     ) -> Result<String, String> {
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.write();
-        if let Some(key) = device_key
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            && state.by_device.contains_key(key.as_str())
-        {
-            return Ok(key);
+        if let Some(key) = device_key.map(str::trim).filter(|value| !value.is_empty()) {
+            if state.by_device.contains_key(key) {
+                return Ok(key.to_string());
+            }
             // Unknown device_key should be discarded. Behave as "device_key not provided":
             // issue a new one instead of accepting unknown key from client.
         }
@@ -141,26 +141,34 @@ impl DeviceRegistry {
     ) -> Result<DeviceRouteRecord, String> {
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.write();
-        let mut rec = state
+        let old_key = state
             .by_device
             .get(device_key)
-            .cloned()
             .ok_or_else(|| "device_key not found".to_string())?;
+        let old_key = ProviderTokenKey::from_route(old_key);
 
-        if let Some(old_key) = ProviderTokenKey::from_route(&rec) {
+        if let Some(old_key) = old_key {
             state.by_provider.remove(&old_key);
         }
 
-        rec.channel_type = channel_type;
-        rec.provider_token = normalized_provider_token(provider_token);
-        rec.updated_at = now;
+        let (result, new_key) = {
+            let rec = state
+                .by_device
+                .get_mut(device_key)
+                .ok_or_else(|| "device_key not found".to_string())?;
 
-        if let Some(new_key) = ProviderTokenKey::from_route(&rec) {
+            rec.channel_type = channel_type;
+            rec.provider_token = normalized_provider_token(provider_token);
+            rec.updated_at = now;
+
+            (rec.clone(), ProviderTokenKey::from_route(rec))
+        };
+
+        if let Some(new_key) = new_key {
             state.by_provider.insert(new_key, device_key.to_string());
         }
-        state.by_device.insert(device_key.to_string(), rec.clone());
 
-        Ok(rec)
+        Ok(result)
     }
 
     pub fn clear_channel(
@@ -170,20 +178,26 @@ impl DeviceRegistry {
     ) -> Result<DeviceRouteRecord, String> {
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.write();
-        let mut rec = state
+        let old_key = state
             .by_device
             .get(device_key)
-            .cloned()
             .ok_or_else(|| "device_key not found".to_string())?;
-        if let Some(old_key) = ProviderTokenKey::from_route(&rec) {
+        let old_key = ProviderTokenKey::from_route(old_key);
+        if let Some(old_key) = old_key {
             state.by_provider.remove(&old_key);
         }
-        if rec.channel_type == channel_type {
-            rec.provider_token = None;
-            rec.updated_at = now;
-        }
-        state.by_device.insert(device_key.to_string(), rec.clone());
-        Ok(rec)
+        let result = {
+            let rec = state
+                .by_device
+                .get_mut(device_key)
+                .ok_or_else(|| "device_key not found".to_string())?;
+            if rec.channel_type == channel_type {
+                rec.provider_token = None;
+                rec.updated_at = now;
+            }
+            rec.clone()
+        };
+        Ok(result)
     }
 
     pub fn get(&self, device_key: &str) -> Option<DeviceRouteRecord> {
@@ -289,10 +303,13 @@ fn generate_device_key() -> String {
 }
 
 fn default_channel_for_platform(platform: &str) -> DeviceChannelType {
-    match platform.trim().to_ascii_lowercase().as_str() {
-        "android" => DeviceChannelType::Fcm,
-        "windows" | "win" => DeviceChannelType::Wns,
-        _ => DeviceChannelType::Apns,
+    let trimmed = platform.trim();
+    if trimmed.eq_ignore_ascii_case("android") {
+        DeviceChannelType::Fcm
+    } else if trimmed.eq_ignore_ascii_case("windows") || trimmed.eq_ignore_ascii_case("win") {
+        DeviceChannelType::Wns
+    } else {
+        DeviceChannelType::Apns
     }
 }
 

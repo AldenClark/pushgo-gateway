@@ -1,24 +1,48 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
-use serde_json::Value;
+use serde::Deserialize;
 
-fn non_empty(value: Option<&str>) -> Option<String> {
+#[derive(Debug, Default, Deserialize)]
+struct WatchProfile {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    image: Option<String>,
+    #[serde(default)]
+    severity: Option<String>,
+}
+
+fn non_empty_owned(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|item| !item.is_empty())
-        .map(ToString::to_string)
+        .map(str::to_owned)
 }
 
-fn parse_profile(raw: Option<&String>) -> Option<Value> {
-    raw.and_then(|text| serde_json::from_str::<Value>(text).ok())
+fn payload_field(payload: &HashMap<String, String>, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(|value| non_empty_owned(Some(value)))
 }
 
-fn profile_field(profile: &Option<Value>, key: &str) -> Option<String> {
-    profile
-        .as_ref()
-        .and_then(|value| value.get(key))
-        .and_then(Value::as_str)
-        .and_then(|value| non_empty(Some(value)))
+fn parse_profile(raw: Option<&String>) -> Option<WatchProfile> {
+    raw.and_then(|text| serde_json::from_str::<WatchProfile>(text).ok())
+}
+
+fn profile_field(value: Option<&String>) -> Option<String> {
+    non_empty_owned(value.map(String::as_str))
+}
+
+fn insert_if_present(
+    output: &mut HashMap<String, String>,
+    key: &'static str,
+    value: Option<String>,
+) {
+    if let Some(value) = value {
+        output.insert(key.to_string(), value);
+    }
 }
 
 pub(crate) fn quantize_watch_payload(payload: &HashMap<String, String>) -> HashMap<String, String> {
@@ -30,154 +54,109 @@ pub(crate) fn quantize_watch_payload(payload: &HashMap<String, String>) -> HashM
     let mut output = match entity_type.as_str() {
         "event" => {
             let profile = parse_profile(payload.get("event_profile_json"));
-            if let Some(event_id) = payload
-                .get("event_id")
-                .and_then(|value| non_empty(Some(value)))
-                .or_else(|| {
-                    payload
-                        .get("entity_id")
-                        .and_then(|value| non_empty(Some(value)))
-                })
-            {
-                let mut output = HashMap::new();
-                output.insert("watch_light_kind".to_string(), "event".to_string());
-                output.insert("event_id".to_string(), event_id.clone());
-                output.insert(
-                    "title".to_string(),
-                    profile_field(&profile, "title")
-                        .or_else(|| {
-                            payload
-                                .get("title")
-                                .and_then(|value| non_empty(Some(value)))
-                        })
-                        .unwrap_or(event_id),
-                );
-                if let Some(summary) = profile_field(&profile, "description")
-                    .or_else(|| payload.get("body").and_then(|value| non_empty(Some(value))))
-                {
-                    output.insert("body".to_string(), summary);
-                }
-                if let Some(state) = payload
-                    .get("event_state")
-                    .and_then(|value| non_empty(Some(value)))
-                {
-                    output.insert("event_state".to_string(), state);
-                }
-                if let Some(image) = profile_field(&profile, "image").or_else(|| {
-                    payload
-                        .get("image")
-                        .and_then(|value| non_empty(Some(value)))
-                }) {
-                    output.insert("image".to_string(), image);
-                }
-                if let Some(severity) = profile_field(&profile, "severity").or_else(|| {
-                    payload
-                        .get("severity")
-                        .and_then(|value| non_empty(Some(value)))
-                }) {
-                    output.insert("severity".to_string(), severity);
-                }
-                output
-            } else {
-                HashMap::new()
-            }
+            let event_id =
+                payload_field(payload, "event_id").or_else(|| payload_field(payload, "entity_id"));
+            let Some(event_id) = event_id else {
+                return HashMap::new();
+            };
+            let mut output = HashMap::with_capacity(8);
+            output.insert("watch_light_kind".to_string(), "event".to_string());
+            output.insert("event_id".to_string(), event_id.clone());
+            output.insert(
+                "title".to_string(),
+                profile_field(profile.as_ref().and_then(|value| value.title.as_ref()))
+                    .or_else(|| payload_field(payload, "title"))
+                    .unwrap_or(event_id),
+            );
+            insert_if_present(
+                &mut output,
+                "body",
+                profile_field(
+                    profile
+                        .as_ref()
+                        .and_then(|value| value.description.as_ref()),
+                )
+                .or_else(|| payload_field(payload, "body")),
+            );
+            insert_if_present(
+                &mut output,
+                "event_state",
+                payload_field(payload, "event_state"),
+            );
+            insert_if_present(
+                &mut output,
+                "image",
+                profile_field(profile.as_ref().and_then(|value| value.image.as_ref()))
+                    .or_else(|| payload_field(payload, "image")),
+            );
+            insert_if_present(
+                &mut output,
+                "severity",
+                profile_field(profile.as_ref().and_then(|value| value.severity.as_ref()))
+                    .or_else(|| payload_field(payload, "severity")),
+            );
+            output
         }
         "thing" => {
             let profile = parse_profile(payload.get("thing_profile_json"));
-            if let Some(thing_id) = payload
-                .get("thing_id")
-                .and_then(|value| non_empty(Some(value)))
-                .or_else(|| {
-                    payload
-                        .get("entity_id")
-                        .and_then(|value| non_empty(Some(value)))
-                })
-            {
-                let mut output = HashMap::new();
-                output.insert("watch_light_kind".to_string(), "thing".to_string());
-                output.insert("thing_id".to_string(), thing_id.clone());
-                output.insert(
-                    "title".to_string(),
-                    profile_field(&profile, "title")
-                        .or_else(|| {
-                            payload
-                                .get("title")
-                                .and_then(|value| non_empty(Some(value)))
-                        })
-                        .unwrap_or(thing_id),
-                );
-                if let Some(summary) = profile_field(&profile, "description")
-                    .or_else(|| payload.get("body").and_then(|value| non_empty(Some(value))))
-                {
-                    output.insert("body".to_string(), summary);
-                }
-                if let Some(attrs_json) = payload
-                    .get("thing_attrs_json")
-                    .and_then(|value| non_empty(Some(value)))
-                {
-                    output.insert("thing_attrs_json".to_string(), attrs_json);
-                }
-                if let Some(image) = profile_field(&profile, "image")
-                    .or_else(|| {
-                        payload
-                            .get("image")
-                            .and_then(|value| non_empty(Some(value)))
-                    })
-                    .or_else(|| {
-                        payload
-                            .get("primary_image")
-                            .and_then(|value| non_empty(Some(value)))
-                    })
-                {
-                    output.insert("image".to_string(), image);
-                }
-                if let Some(observed_at) = payload
-                    .get("observed_at")
-                    .and_then(|value| non_empty(Some(value)))
-                    .or_else(|| {
-                        payload
-                            .get("sent_at")
-                            .and_then(|value| non_empty(Some(value)))
-                    })
-                {
-                    output.insert("observed_at".to_string(), observed_at);
-                }
-                output
-            } else {
-                HashMap::new()
-            }
+            let thing_id =
+                payload_field(payload, "thing_id").or_else(|| payload_field(payload, "entity_id"));
+            let Some(thing_id) = thing_id else {
+                return HashMap::new();
+            };
+            let mut output = HashMap::with_capacity(8);
+            output.insert("watch_light_kind".to_string(), "thing".to_string());
+            output.insert("thing_id".to_string(), thing_id.clone());
+            output.insert(
+                "title".to_string(),
+                profile_field(profile.as_ref().and_then(|value| value.title.as_ref()))
+                    .or_else(|| payload_field(payload, "title"))
+                    .unwrap_or(thing_id),
+            );
+            insert_if_present(
+                &mut output,
+                "body",
+                profile_field(
+                    profile
+                        .as_ref()
+                        .and_then(|value| value.description.as_ref()),
+                )
+                .or_else(|| payload_field(payload, "body")),
+            );
+            insert_if_present(
+                &mut output,
+                "thing_attrs_json",
+                payload_field(payload, "thing_attrs_json"),
+            );
+            insert_if_present(
+                &mut output,
+                "image",
+                profile_field(profile.as_ref().and_then(|value| value.image.as_ref()))
+                    .or_else(|| payload_field(payload, "image"))
+                    .or_else(|| payload_field(payload, "primary_image")),
+            );
+            insert_if_present(
+                &mut output,
+                "observed_at",
+                payload_field(payload, "observed_at").or_else(|| payload_field(payload, "sent_at")),
+            );
+            output
         }
         _ => {
-            if let Some(message_id) = payload
-                .get("message_id")
-                .and_then(|value| non_empty(Some(value)))
-            {
-                let mut output = HashMap::new();
-                output.insert("watch_light_kind".to_string(), "message".to_string());
-                output.insert("message_id".to_string(), message_id.clone());
-                output.insert(
-                    "title".to_string(),
-                    payload
-                        .get("title")
-                        .and_then(|value| non_empty(Some(value)))
-                        .unwrap_or(message_id),
-                );
-                if let Some(body) = payload.get("body").and_then(|value| non_empty(Some(value))) {
-                    output.insert("body".to_string(), body);
-                }
-                if let Some(image) = payload
-                    .get("image")
-                    .and_then(|value| non_empty(Some(value)))
-                {
-                    output.insert("image".to_string(), image);
-                }
-                if let Some(url) = payload.get("url").and_then(|value| non_empty(Some(value))) {
-                    output.insert("url".to_string(), url);
-                }
-                output
-            } else {
-                HashMap::new()
-            }
+            let Some(message_id) = payload_field(payload, "message_id") else {
+                return HashMap::new();
+            };
+            let mut output = HashMap::with_capacity(6);
+            output.insert("watch_light_kind".to_string(), "message".to_string());
+            output.insert("message_id".to_string(), message_id.clone());
+            output.insert(
+                "title".to_string(),
+                payload_field(payload, "title").unwrap_or(message_id),
+            );
+            insert_if_present(&mut output, "body", payload_field(payload, "body"));
+            insert_if_present(&mut output, "image", payload_field(payload, "image"));
+            insert_if_present(&mut output, "url", payload_field(payload, "url"));
+            output
         }
     };
 
@@ -194,7 +173,7 @@ pub(crate) fn quantize_watch_payload(payload: &HashMap<String, String>) -> HashM
         "entity_type",
         "entity_id",
     ] {
-        if let Some(value) = payload.get(key).and_then(|value| non_empty(Some(value))) {
+        if let Some(value) = payload_field(payload, key) {
             output.insert(key.to_string(), value);
         }
     }

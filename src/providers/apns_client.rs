@@ -200,7 +200,7 @@ impl ApnsService {
             request = request.header("apns-expiration", expiration.to_string());
         }
 
-        let mut response = match request.body(body.clone()).send().await {
+        let mut response = match request.body(body.as_ref().to_vec()).send().await {
             Ok(resp) => resp,
             Err(err) => {
                 return DispatchResult {
@@ -215,8 +215,8 @@ impl ApnsService {
 
         let mut status = response.status();
         let mut status_code = status.as_u16();
-        let mut body_text = response.text().await.unwrap_or_default();
-        let mut reason = parse_apns_reason(&body_text);
+        let mut response_body = response.bytes().await.unwrap_or_default();
+        let mut reason = parse_apns_reason(&response_body);
 
         // Retry once if APNs reports an expired provider token.
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
@@ -240,7 +240,7 @@ impl ApnsService {
                         request = request.header("apns-expiration", expiration.to_string());
                     }
 
-                    response = match request.body(body.clone()).send().await {
+                    response = match request.body(body.as_ref().to_vec()).send().await {
                         Ok(resp) => resp,
                         Err(err) => {
                             return DispatchResult {
@@ -255,8 +255,8 @@ impl ApnsService {
 
                     status = response.status();
                     status_code = status.as_u16();
-                    body_text = response.text().await.unwrap_or_default();
-                    reason = parse_apns_reason(&body_text);
+                    response_body = response.bytes().await.unwrap_or_default();
+                    reason = parse_apns_reason(&response_body);
                 }
                 Err(err) => {
                     return DispatchResult {
@@ -282,8 +282,8 @@ impl ApnsService {
             // Prefer APNs reason, then fall back to the raw body or status.
             let message = if let Some(r) = reason.as_deref() {
                 r.to_string()
-            } else if !body_text.is_empty() {
-                body_text.clone()
+            } else if let Some(body_text) = response_body_text(&response_body) {
+                body_text
             } else {
                 format!("APNs error, status {status_code}")
             };
@@ -342,9 +342,18 @@ struct ReasonBody {
     reason: Option<String>,
 }
 
-fn parse_apns_reason(body: &str) -> Option<String> {
-    let parsed = serde_json::from_str::<ReasonBody>(body).ok()?;
+fn parse_apns_reason(body: &[u8]) -> Option<String> {
+    let parsed = serde_json::from_slice::<ReasonBody>(body).ok()?;
     parsed.reason
+}
+
+fn response_body_text(body: &[u8]) -> Option<String> {
+    let trimmed = String::from_utf8_lossy(body).trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn is_apns_token_invalid(status: StatusCode, reason: Option<&str>) -> bool {

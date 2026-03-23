@@ -3,7 +3,8 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use async_trait::async_trait;
 use blake3::Hasher;
 use chrono::Utc;
-use dashmap::DashMap;
+use hashbrown::HashMap;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     MySqlPool, PgPool, Row, SqlitePool,
@@ -209,7 +210,7 @@ fn encode_hex_lower(bytes: &[u8]) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
-    pub token_raw: Vec<u8>,
+    pub token_raw: Arc<[u8]>,
     /// Cached token string for providers (APNs hex, FCM raw).
     pub token_str: Arc<str>,
     pub platform: Platform,
@@ -313,7 +314,7 @@ impl DeviceInfo {
             _ => encode_hex_lower(&raw),
         };
         Ok(DeviceInfo {
-            token_raw: raw,
+            token_raw: Arc::<[u8]>::from(raw),
             token_str: Arc::<str>::from(token_str),
             platform,
         })
@@ -324,7 +325,7 @@ impl DeviceInfo {
     ///
     /// Storage keeps raw bytes; string forms are rebuilt in memory.
     pub fn to_bytes(&self) -> StoreResult<Vec<u8>> {
-        let token = &self.token_raw;
+        let token = self.token_raw.as_ref();
         let token_len = token.len();
         if !token_len_valid(self.platform, token_len) {
             return Err(StoreError::BinaryError);
@@ -827,7 +828,7 @@ fn ensure_sqlite_parent_dir(db_path: &Path) -> StoreResult<()> {
 #[derive(Debug, Clone)]
 pub struct SqlxStore {
     backend: SqlxBackend,
-    device_cache: Arc<DashMap<[u8; 32], DeviceInfo>>,
+    device_cache: Arc<RwLock<HashMap<[u8; 32], DeviceInfo>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2055,7 +2056,7 @@ impl StoreApi for SqlxStore {
                 }
             }
         };
-        self.device_cache.insert(device_id, device_info);
+        self.device_cache.write().insert(device_id, device_info);
         Ok(outcome)
     }
 
@@ -2120,7 +2121,7 @@ impl StoreApi for SqlxStore {
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
-                self.device_cache.remove(&device_id);
+                self.device_cache.write().remove(&device_id);
                 Ok(removed)
             }
             SqlxBackend::Mysql(pool) => {
@@ -2135,7 +2136,7 @@ impl StoreApi for SqlxStore {
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
-                self.device_cache.remove(&device_id);
+                self.device_cache.write().remove(&device_id);
                 Ok(removed)
             }
             SqlxBackend::Sqlite(pool) => {
@@ -2150,7 +2151,7 @@ impl StoreApi for SqlxStore {
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
-                self.device_cache.remove(&device_id);
+                self.device_cache.write().remove(&device_id);
                 Ok(removed)
             }
         }
@@ -3396,7 +3397,10 @@ impl StoreApi for SqlxStore {
             if device_id.len() == 32 {
                 let mut id = [0u8; 32];
                 id.copy_from_slice(&device_id);
-                self.device_cache.insert(id, info.clone());
+                self.device_cache
+                    .write()
+                    .entry(id)
+                    .or_insert_with(|| info.clone());
             }
             devices.push(info);
         }
@@ -3670,7 +3674,6 @@ impl StoreApi for SqlxStore {
         delivery_id: &str,
         message: &PrivateMessage,
     ) -> StoreResult<()> {
-        let payload = message.payload.clone();
         let size = message.size as i64;
         let sent_at = message.sent_at;
         let expires_at = message.expires_at;
@@ -3686,7 +3689,7 @@ impl StoreApi for SqlxStore {
                        expires_at = EXCLUDED.expires_at",
                 )
                 .bind(delivery_id)
-                .bind(&payload)
+                .bind(&message.payload)
                 .bind(size)
                 .bind(sent_at)
                 .bind(expires_at)
@@ -3704,7 +3707,7 @@ impl StoreApi for SqlxStore {
                        expires_at = VALUES(expires_at)",
                 )
                 .bind(delivery_id)
-                .bind(&payload)
+                .bind(&message.payload)
                 .bind(size)
                 .bind(sent_at)
                 .bind(expires_at)
@@ -3722,7 +3725,7 @@ impl StoreApi for SqlxStore {
                        expires_at = excluded.expires_at",
                 )
                 .bind(delivery_id)
-                .bind(&payload)
+                .bind(&message.payload)
                 .bind(size)
                 .bind(sent_at)
                 .bind(expires_at)
@@ -3739,11 +3742,8 @@ impl StoreApi for SqlxStore {
         entry: &PrivateOutboxEntry,
     ) -> StoreResult<()> {
         let device_id = device_id.to_vec();
-        let delivery_id = entry.delivery_id.clone();
-        let status = entry.status.clone();
         let attempts = entry.attempts as i64;
         let next_attempt_at = entry.next_attempt_at;
-        let last_error_code = entry.last_error_code.clone();
         let updated_at = entry.updated_at;
         match &self.backend {
             SqlxBackend::Postgres(pool) => {
@@ -3758,11 +3758,11 @@ impl StoreApi for SqlxStore {
                          updated_at = EXCLUDED.updated_at",
                 )
                 .bind(&device_id)
-                .bind(&delivery_id)
-                .bind(&status)
+                .bind(&entry.delivery_id)
+                .bind(&entry.status)
                 .bind(attempts)
                 .bind(next_attempt_at)
-                .bind(last_error_code)
+                .bind(entry.last_error_code.as_deref())
                 .bind(updated_at)
                 .execute(pool)
                 .await?;
@@ -3779,11 +3779,11 @@ impl StoreApi for SqlxStore {
                          updated_at = VALUES(updated_at)",
                 )
                 .bind(&device_id)
-                .bind(&delivery_id)
-                .bind(&status)
+                .bind(&entry.delivery_id)
+                .bind(&entry.status)
                 .bind(attempts)
                 .bind(next_attempt_at)
-                .bind(last_error_code)
+                .bind(entry.last_error_code.as_deref())
                 .bind(updated_at)
                 .execute(pool)
                 .await?;
@@ -3800,11 +3800,11 @@ impl StoreApi for SqlxStore {
                          updated_at = excluded.updated_at",
                 )
                 .bind(&device_id)
-                .bind(&delivery_id)
-                .bind(&status)
+                .bind(&entry.delivery_id)
+                .bind(&entry.status)
                 .bind(attempts)
                 .bind(next_attempt_at)
-                .bind(last_error_code)
+                .bind(entry.last_error_code.as_deref())
                 .bind(updated_at)
                 .execute(pool)
                 .await?;
@@ -5324,7 +5324,7 @@ impl StoreApi for SqlxStore {
     }
 
     async fn automation_reset_async(&self) -> StoreResult<()> {
-        self.device_cache.clear();
+        self.device_cache.write().clear();
         let statements: &[&str] = &[
             "DELETE FROM thing_event_link",
             "DELETE FROM event_log",

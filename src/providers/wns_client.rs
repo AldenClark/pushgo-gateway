@@ -93,7 +93,7 @@ impl WnsService {
     async fn retry_with_fresh_token(
         &self,
         device_token: &str,
-        body: Vec<u8>,
+        body: Arc<[u8]>,
         priority: Option<u8>,
         ttl_seconds: Option<u32>,
     ) -> DispatchResult {
@@ -135,7 +135,7 @@ impl WnsService {
         &self,
         device_token: &str,
         bearer: &str,
-        body: Vec<u8>,
+        body: Arc<[u8]>,
         priority: Option<u8>,
         ttl_seconds: Option<u32>,
     ) -> Result<DispatchResult, Error> {
@@ -145,7 +145,7 @@ impl WnsService {
             .bearer_auth(bearer)
             .header("x-wns-type", WNS_TYPE)
             .header("content-type", WNS_CONTENT_TYPE)
-            .body(body);
+            .body(body.as_ref().to_vec());
         if let Some(priority) = priority {
             request = request.header("x-wns-priority", priority.to_string());
         }
@@ -159,13 +159,13 @@ impl WnsService {
 
         let status = response.status();
         let status_code = status.as_u16();
-        let body_text = response.text().await.unwrap_or_default();
+        let body = response.bytes().await.unwrap_or_default();
 
         if !status.is_success() {
-            let message = if body_text.is_empty() {
-                format!("WNS error, status {status_code}")
+            let message = if let Some(body_text) = response_body_text(&body) {
+                body_text
             } else {
-                body_text.clone()
+                format!("WNS error, status {status_code}")
             };
             return Ok(DispatchResult {
                 success: false,
@@ -222,4 +222,13 @@ fn is_wns_token_invalid(status_code: u16) -> bool {
 
 fn is_wns_payload_too_large(status_code: u16) -> bool {
     status_code == 413
+}
+
+fn response_body_text(body: &[u8]) -> Option<String> {
+    let trimmed = String::from_utf8_lossy(body).trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }

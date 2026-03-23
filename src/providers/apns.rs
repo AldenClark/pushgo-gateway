@@ -1,7 +1,10 @@
-use std::collections::HashMap;
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
+
+use crate::util::SharedStringMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApnsPushType {
@@ -59,11 +62,11 @@ pub enum Sound {
 }
 
 /// Full APNs payload with flattened client data.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize)]
 pub struct ApnsPayload {
     pub aps: Aps,
     #[serde(flatten)]
-    data: HashMap<String, String>,
+    data: SharedStringMap,
     #[serde(skip)]
     pub expiration: Option<i64>,
     #[serde(skip)]
@@ -72,6 +75,8 @@ pub struct ApnsPayload {
     topic_override: Option<String>,
     #[serde(skip)]
     priority: u8,
+    #[serde(skip)]
+    encoded_body_cache: Mutex<Option<Arc<[u8]>>>,
 }
 
 impl ApnsPayload {
@@ -82,7 +87,7 @@ impl ApnsPayload {
         thread_id: Option<String>,
         level: String,
         expiration: Option<i64>,
-        data: HashMap<String, String>,
+        data: impl Into<SharedStringMap>,
     ) -> Self {
         let normalized_title = title
             .map(|value| value.trim().to_string())
@@ -118,18 +123,19 @@ impl ApnsPayload {
                 stale_date: None,
                 dismissal_date: None,
             },
-            data,
+            data: data.into(),
             expiration,
             push_type: ApnsPushType::Alert,
             topic_override: None,
             priority: 10,
+            encoded_body_cache: Mutex::new(None),
         }
     }
 
     pub fn wakeup(
         _thread_id: Option<String>,
         expiration: Option<i64>,
-        data: HashMap<String, String>,
+        data: impl Into<SharedStringMap>,
     ) -> Self {
         Self {
             aps: Aps {
@@ -145,11 +151,12 @@ impl ApnsPayload {
                 stale_date: None,
                 dismissal_date: None,
             },
-            data,
+            data: data.into(),
             expiration,
             push_type: ApnsPushType::Background,
             topic_override: None,
             priority: 5,
+            encoded_body_cache: Mutex::new(None),
         }
     }
 
@@ -172,8 +179,14 @@ impl ApnsPayload {
         self.priority
     }
 
-    pub fn encoded_body(&self) -> Result<Vec<u8>, serde_json::Error> {
-        serde_json::to_vec(self)
+    pub fn encoded_body(&self) -> Result<Arc<[u8]>, serde_json::Error> {
+        if let Some(body) = self.encoded_body_cache.lock().as_ref() {
+            return Ok(Arc::clone(body));
+        }
+        let encoded: Arc<[u8]> = serde_json::to_vec(self)?.into();
+        let mut cache = self.encoded_body_cache.lock();
+        let body = cache.get_or_insert_with(|| Arc::clone(&encoded));
+        Ok(Arc::clone(body))
     }
 
     pub fn encoded_len(&self) -> Result<usize, serde_json::Error> {

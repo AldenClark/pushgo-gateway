@@ -1,9 +1,12 @@
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, HashSet, VecDeque};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use flume::{Receiver, Sender};
+use hashbrown::HashMap;
+use parking_lot::{Mutex, RwLock};
 use tokio::time::Instant as TokioInstant;
 use warp_link::warp_link_core::{SessionControl, SessionCoordinator, TransportKind};
 use warp_link_coordination::InMemoryCoordinator;
@@ -16,7 +19,7 @@ use crate::{
     storage::{
         DeviceId, MaintenanceCleanupStats, Platform, PrivateMessage, PrivateOutboxEntry, Store,
     },
-    util::{build_wakeup_data, decode_lower_hex_128, encode_lower_hex_128},
+    util::{SharedStringMap, build_wakeup_data, decode_lower_hex_128, encode_lower_hex_128},
 };
 
 pub mod metrics;
@@ -126,9 +129,9 @@ pub struct PrivateState {
     fallback_tasks: Option<Arc<FallbackTaskEngine>>,
     session_coordinator: Arc<InMemoryCoordinator>,
     session_coord_owner: String,
-    revoked_devices: DashMap<DeviceId, ()>,
-    session_controls: DashMap<String, SessionControl>,
-    session_devices: DashMap<String, DeviceId>,
+    revoked_devices: RwLock<HashMap<DeviceId, ()>>,
+    session_controls: RwLock<HashMap<String, SessionControl>>,
+    session_devices: RwLock<HashMap<String, DeviceId>>,
     shutting_down: AtomicBool,
     shutdown_notify: tokio::sync::Notify,
 }
@@ -138,6 +141,11 @@ pub struct PrivateAutomationStats {
     pub revoked_device_count: usize,
     pub session_count: usize,
     pub device_bound_session_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RegisterConnectionOutcome {
+    pub superseded_conn_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,9 +191,9 @@ impl PrivateState {
             fallback_tasks,
             session_coordinator: Arc::new(InMemoryCoordinator::new()),
             session_coord_owner: owner,
-            revoked_devices: DashMap::new(),
-            session_controls: DashMap::new(),
-            session_devices: DashMap::new(),
+            revoked_devices: RwLock::new(HashMap::new()),
+            session_controls: RwLock::new(HashMap::new()),
+            session_devices: RwLock::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             shutdown_notify: tokio::sync::Notify::new(),
         }
@@ -196,8 +204,8 @@ impl PrivateState {
             return;
         }
 
-        for control in &self.session_controls {
-            control.value().expire_now();
+        for control in self.session_controls.read().values() {
+            control.expire_now();
         }
 
         self.shutdown_notify.notify_waiters();
@@ -216,17 +224,17 @@ impl PrivateState {
 
     pub fn revoke_device_key(&self, device_key: &str) {
         let device_id = DeviceRegistry::derive_private_device_id(device_key);
-        self.revoked_devices.insert(device_id, ());
+        self.revoked_devices.write().insert(device_id, ());
         let _ = self.set_device_auth_expiry_by_id(device_id, Some(0), 0, None);
     }
 
     pub fn unrevoke_device_key(&self, device_key: &str) {
         let device_id = DeviceRegistry::derive_private_device_id(device_key);
-        self.revoked_devices.remove(&device_id);
+        self.revoked_devices.write().remove(&device_id);
     }
 
     pub fn is_device_revoked(&self, device_id: DeviceId) -> bool {
-        self.revoked_devices.contains_key(&device_id)
+        self.revoked_devices.read().contains_key(&device_id)
     }
 
     pub fn register_session_control(
@@ -236,14 +244,16 @@ impl PrivateState {
         control: SessionControl,
     ) {
         self.session_controls
+            .write()
             .insert(session_id.to_string(), control);
         self.session_devices
+            .write()
             .insert(session_id.to_string(), device_id);
     }
 
     pub fn unregister_session_control(&self, session_id: &str) {
-        self.session_controls.remove(session_id);
-        self.session_devices.remove(session_id);
+        self.session_controls.write().remove(session_id);
+        self.session_devices.write().remove(session_id);
     }
 
     pub fn expire_other_device_sessions(
@@ -275,7 +285,7 @@ impl PrivateState {
         auth_expires_at_unix_secs: Option<i64>,
         auth_refresh_before_secs: u16,
     ) -> bool {
-        let Some(control) = self.session_controls.get(session_id) else {
+        let Some(control) = self.session_controls.read().get(session_id).cloned() else {
             return false;
         };
         control.set_auth_expiry(auth_expires_at_unix_secs, auth_refresh_before_secs);
@@ -292,16 +302,16 @@ impl PrivateState {
 
     pub fn automation_reset(&self) {
         self.metrics.reset();
-        self.revoked_devices.clear();
-        self.session_controls.clear();
-        self.session_devices.clear();
+        self.revoked_devices.write().clear();
+        self.session_controls.write().clear();
+        self.session_devices.write().clear();
     }
 
     pub fn automation_stats(&self) -> PrivateAutomationStats {
         PrivateAutomationStats {
-            revoked_device_count: self.revoked_devices.len(),
-            session_count: self.session_controls.len(),
-            device_bound_session_count: self.session_devices.len(),
+            revoked_device_count: self.revoked_devices.read().len(),
+            session_count: self.session_controls.read().len(),
+            device_bound_session_count: self.session_devices.read().len(),
         }
     }
 
@@ -536,19 +546,24 @@ impl PrivateState {
         skip_session_id: Option<&str>,
     ) -> usize {
         let mut target_sessions = Vec::new();
-        for entry in &self.session_devices {
-            if *entry.value() != device_id {
+        let session_devices = self.session_devices.read();
+        for (session_id, bound_device_id) in session_devices.iter() {
+            if *bound_device_id != device_id {
                 continue;
             }
-            if skip_session_id.is_some_and(|skip| skip == entry.key().as_str()) {
+            if skip_session_id.is_some_and(|skip| skip == session_id.as_str()) {
                 continue;
             }
-            target_sessions.push(entry.key().clone());
+            target_sessions.push(session_id.clone());
         }
+        drop(session_devices);
         let mut affected = 0usize;
+        let session_controls = self.session_controls.read();
         for session_id in target_sessions {
-            if let Some(control) = self.session_controls.get(session_id.as_str()) {
-                control.set_auth_expiry(auth_expires_at_unix_secs, auth_refresh_before_secs);
+            if let Some(control) = session_controls.get(session_id.as_str()) {
+                control
+                    .clone()
+                    .set_auth_expiry(auth_expires_at_unix_secs, auth_refresh_before_secs);
                 affected = affected.saturating_add(1);
             }
         }
@@ -558,8 +573,8 @@ impl PrivateState {
 
 #[derive(Debug)]
 struct FallbackTaskEngine {
-    tx: tokio::sync::mpsc::Sender<FallbackTaskCommand>,
-    rx: Mutex<Option<tokio::sync::mpsc::Receiver<FallbackTaskCommand>>>,
+    tx: Sender<FallbackTaskCommand>,
+    rx: Mutex<Option<Receiver<FallbackTaskCommand>>>,
     depth: AtomicUsize,
     resync_requested: AtomicBool,
     resync_notify: tokio::sync::Notify,
@@ -567,7 +582,7 @@ struct FallbackTaskEngine {
 
 impl FallbackTaskEngine {
     fn new() -> Arc<Self> {
-        let (tx, rx) = tokio::sync::mpsc::channel(FALLBACK_TASK_COMMAND_CAPACITY);
+        let (tx, rx) = flume::bounded(FALLBACK_TASK_COMMAND_CAPACITY);
         Arc::new(Self {
             tx,
             rx: Mutex::new(Some(rx)),
@@ -577,11 +592,8 @@ impl FallbackTaskEngine {
         })
     }
 
-    fn take_receiver(&self) -> Option<tokio::sync::mpsc::Receiver<FallbackTaskCommand>> {
-        self.rx
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+    fn take_receiver(&self) -> Option<Receiver<FallbackTaskCommand>> {
+        self.rx.lock().take()
     }
 
     fn schedule(&self, device_id: DeviceId, delivery_id: String, due_at_unix_secs: i64) -> bool {
@@ -709,14 +721,14 @@ struct Presence {
 #[derive(Debug, Clone)]
 struct ActiveConn {
     conn_id: u64,
-    sender: tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>,
+    sender: Sender<protocol::DeliverEnvelope>,
 }
 
 #[derive(Debug, Clone)]
 struct DrainingConn {
     conn_id: u64,
     #[allow(dead_code)]
-    sender: tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>,
+    sender: Sender<protocol::DeliverEnvelope>,
     delivery_until: Instant,
     drain_until: Instant,
 }
@@ -738,10 +750,7 @@ impl Presence {
         ]
     }
 
-    fn delivery_senders(
-        &self,
-        now: Instant,
-    ) -> Vec<tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>> {
+    fn delivery_senders(&self, now: Instant) -> Vec<Sender<protocol::DeliverEnvelope>> {
         let mut senders = Vec::with_capacity(3 + self.draining.len());
         if let Some(active) = self.quic_active.as_ref() {
             senders.push(active.sender.clone());
@@ -1041,14 +1050,15 @@ impl PrivateHub {
         decode_lower_hex_128(raw)
     }
 
-    pub fn register_connection(
+    pub(crate) fn register_connection(
         &self,
         device_id: DeviceId,
         conn_id: u64,
         transport: TransportKind,
-        sender: tokio::sync::mpsc::Sender<protocol::DeliverEnvelope>,
-    ) {
+        sender: Sender<protocol::DeliverEnvelope>,
+    ) -> RegisterConnectionOutcome {
         let now = Instant::now();
+        let mut superseded_conn_id = None;
         self.presence
             .entry(device_id)
             .and_modify(|presence| {
@@ -1067,6 +1077,7 @@ impl PrivateHub {
                         delivery_until: now + delivery_window,
                         drain_until: now + self.grace_window,
                     });
+                    superseded_conn_id = Some(previous.conn_id);
                     const MAX_DRAINING_CONN: usize = 16;
                     if presence.draining.len() > MAX_DRAINING_CONN {
                         let overflow = presence.draining.len() - MAX_DRAINING_CONN;
@@ -1089,6 +1100,7 @@ impl PrivateHub {
                 }),
                 draining: Vec::new(),
             });
+        RegisterConnectionOutcome { superseded_conn_id }
     }
 
     pub fn collapse_draining_delivery_window_if_active(&self, device_id: DeviceId, conn_id: u64) {
@@ -1367,7 +1379,7 @@ impl PrivateHub {
             drop(presence);
             let mut delivered = false;
             for sender in senders {
-                if sender.send(envelope.clone()).await.is_ok() {
+                if sender.send_async(envelope.clone()).await.is_ok() {
                     delivered = true;
                 }
             }
@@ -1718,10 +1730,7 @@ impl PrivateHub {
     pub fn compact_hot_cache(&self, target_capacity: usize) {
         let target_capacity = target_capacity.clamp(1, self.hot_cache_capacity);
         let retained_ids = {
-            let mut order = self
-                .hot_order
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut order = self.hot_order.lock();
             if order.len() > 1 {
                 let mut seen = HashSet::with_capacity(order.len());
                 let mut deduped = VecDeque::with_capacity(order.len());
@@ -1763,10 +1772,7 @@ impl PrivateHub {
         if !inserted {
             return;
         }
-        let mut order = self
-            .hot_order
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut order = self.hot_order.lock();
         order.push_back(delivery_id.to_string());
         self.trim_hot_cache_locked(&mut order, self.hot_cache_capacity);
     }
@@ -1872,7 +1878,7 @@ pub(crate) fn spawn_persistent_fallback_worker(
     let Some(engine) = state.fallback_tasks.clone() else {
         return;
     };
-    let Some(mut rx) = engine.take_receiver() else {
+    let Some(rx) = engine.take_receiver() else {
         return;
     };
 
@@ -1901,8 +1907,8 @@ pub(crate) fn spawn_persistent_fallback_worker(
                 unix_secs_to_tokio_instant(scheduler.next_due_unix_secs().unwrap_or(i64::MAX));
 
             tokio::select! {
-                maybe_cmd = rx.recv() => {
-                    let Some(cmd) = maybe_cmd else {
+                maybe_cmd = rx.recv_async() => {
+                    let Ok(cmd) = maybe_cmd else {
                         break;
                     };
                     scheduler.apply(cmd);
@@ -2209,14 +2215,24 @@ async fn run_claimed_fallback_task(
     let sent = match target.platform {
         Platform::ANDROID => {
             let correlation_id: Arc<str> = Arc::from(outbox.delivery_id.clone());
-            let payload = Arc::new(FcmPayload::new(wakeup_data.clone(), "HIGH", ttl_seconds));
+            let payload = Arc::new(FcmPayload::new(
+                SharedStringMap::from(wakeup_data.clone()),
+                "HIGH",
+                ttl_seconds,
+            ));
+            let body = match payload.encoded_body(target.token.as_ref()) {
+                Ok(body) => body,
+                Err(_) => return Ok(()),
+            };
             dispatch
                 .try_send_fcm(FcmJob {
                     channel_id,
                     correlation_id,
                     device_token: target.token,
                     direct_payload: Arc::clone(&payload),
+                    direct_body: Arc::clone(&body),
                     wakeup_payload: Some(Arc::clone(&payload)),
+                    wakeup_body: Some(body),
                     initial_path: crate::dispatch::ProviderDeliveryPath::WakeupPull,
                     wakeup_payload_within_limit: true,
                     private_wakeup: None,
@@ -2226,7 +2242,11 @@ async fn run_claimed_fallback_task(
         }
         Platform::WINDOWS => {
             let correlation_id: Arc<str> = Arc::from(outbox.delivery_id.clone());
-            let payload = Arc::new(WnsPayload::new(wakeup_data.clone(), "high", ttl_seconds));
+            let payload = Arc::new(WnsPayload::new(
+                SharedStringMap::from(wakeup_data.clone()),
+                "high",
+                ttl_seconds,
+            ));
             dispatch
                 .try_send_wns(WnsJob {
                     channel_id,
@@ -2247,7 +2267,7 @@ async fn run_claimed_fallback_task(
             let payload = Arc::new(ApnsPayload::wakeup(
                 Some(channel_id_raw.to_string()),
                 ttl,
-                wakeup_data.clone(),
+                SharedStringMap::from(wakeup_data.clone()),
             ));
             dispatch
                 .try_send_apns(ApnsJob {

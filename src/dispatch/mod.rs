@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use async_channel::{Receiver, Sender, TrySendError};
+use flume::{Receiver, Sender, TrySendError};
 
 use crate::{
     private::PrivateState,
@@ -45,7 +45,9 @@ pub(crate) struct FcmJob {
     pub correlation_id: Arc<str>,
     pub device_token: Arc<str>,
     pub direct_payload: Arc<FcmPayload>,
+    pub direct_body: Arc<[u8]>,
     pub wakeup_payload: Option<Arc<FcmPayload>>,
+    pub wakeup_body: Option<Arc<[u8]>>,
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
     pub private_wakeup: Option<PrivateWakeupDelivery>,
@@ -82,7 +84,7 @@ impl DispatchChannels {
         match self.apns_tx.try_send(job) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(DispatchError::QueueFull),
-            Err(TrySendError::Closed(_)) => Err(DispatchError::ChannelClosed),
+            Err(TrySendError::Disconnected(_)) => Err(DispatchError::ChannelClosed),
         }
     }
 
@@ -90,7 +92,7 @@ impl DispatchChannels {
         match self.fcm_tx.try_send(job) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(DispatchError::QueueFull),
-            Err(TrySendError::Closed(_)) => Err(DispatchError::ChannelClosed),
+            Err(TrySendError::Disconnected(_)) => Err(DispatchError::ChannelClosed),
         }
     }
 
@@ -98,7 +100,7 @@ impl DispatchChannels {
         match self.wns_tx.try_send(job) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(DispatchError::QueueFull),
-            Err(TrySendError::Closed(_)) => Err(DispatchError::ChannelClosed),
+            Err(TrySendError::Disconnected(_)) => Err(DispatchError::ChannelClosed),
         }
     }
 }
@@ -110,9 +112,9 @@ pub(crate) fn create_dispatch_channels() -> (
     Receiver<WnsJob>,
 ) {
     let capacity = auto_dispatch_queue_capacity();
-    let (apns_tx, apns_rx) = async_channel::bounded(capacity);
-    let (fcm_tx, fcm_rx) = async_channel::bounded(capacity);
-    let (wns_tx, wns_rx) = async_channel::bounded(capacity);
+    let (apns_tx, apns_rx) = flume::bounded(capacity);
+    let (fcm_tx, fcm_rx) = flume::bounded(capacity);
+    let (wns_tx, wns_rx) = flume::bounded(capacity);
     (
         DispatchChannels {
             apns_tx,
@@ -163,7 +165,7 @@ fn spawn_apns_worker(
         let store = Arc::clone(&store);
         let private = private.clone();
         tokio::spawn(async move {
-            while let Ok(job) = apns_rx.recv().await {
+            while let Ok(job) = apns_rx.recv_async().await {
                 let apns_client = Arc::clone(&apns);
                 let store_api = Arc::clone(&store);
                 let private_state = private.clone();
@@ -263,7 +265,7 @@ fn spawn_fcm_worker(
         let store = Arc::clone(&store);
         let private = private.clone();
         tokio::spawn(async move {
-            while let Ok(job) = fcm_rx.recv().await {
+            while let Ok(job) = fcm_rx.recv_async().await {
                 let fcm_client = Arc::clone(&fcm);
                 let store_api = Arc::clone(&store);
                 let private_state = private.clone();
@@ -275,6 +277,14 @@ fn spawn_fcm_worker(
                         job.wakeup_payload
                             .as_ref()
                             .expect("wakeup payload required for wakeup path"),
+                    ),
+                };
+                let mut body = match actual_path {
+                    ProviderDeliveryPath::Direct => Arc::clone(&job.direct_body),
+                    ProviderDeliveryPath::WakeupPull => Arc::clone(
+                        job.wakeup_body
+                            .as_ref()
+                            .expect("wakeup body required for wakeup path"),
                     ),
                 };
                 let mut private_wakeup_enqueued = job.private_wakeup_enqueued;
@@ -292,7 +302,11 @@ fn spawn_fcm_worker(
                     .await;
                 }
                 let mut dispatch = fcm_client
-                    .send_to_device(job.device_token.as_ref(), Arc::clone(&payload))
+                    .send_to_device(
+                        job.device_token.as_ref(),
+                        Arc::clone(&payload),
+                        Some(Arc::clone(&body)),
+                    )
                     .await;
                 if !dispatch.success
                     && actual_path == ProviderDeliveryPath::Direct
@@ -301,6 +315,11 @@ fn spawn_fcm_worker(
                     && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                 {
                     payload = Arc::clone(wakeup_payload);
+                    body = Arc::clone(
+                        job.wakeup_body
+                            .as_ref()
+                            .expect("wakeup body required when wakeup payload exists"),
+                    );
                     if !private_wakeup_enqueued
                         && let Some(private_meta) = job.private_wakeup.as_ref()
                     {
@@ -314,7 +333,7 @@ fn spawn_fcm_worker(
                         .await;
                     }
                     dispatch = fcm_client
-                        .send_to_device(job.device_token.as_ref(), Arc::clone(&payload))
+                        .send_to_device(job.device_token.as_ref(), Arc::clone(&payload), Some(body))
                         .await;
                 }
                 if dispatch.invalid_token {
@@ -353,7 +372,7 @@ fn spawn_wns_worker(
         let store = Arc::clone(&store);
         let private = private.clone();
         tokio::spawn(async move {
-            while let Ok(job) = wns_rx.recv().await {
+            while let Ok(job) = wns_rx.recv_async().await {
                 let wns_client = Arc::clone(&wns);
                 let store_api = Arc::clone(&store);
                 let private_state = private.clone();

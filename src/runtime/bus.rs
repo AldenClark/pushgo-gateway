@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
+use flume::{Receiver, Sender};
 
 use crate::runtime::types::{AckEvent, FallbackCmd, NotificationIntent, ProviderJob, SessionCmd};
 
@@ -32,30 +32,30 @@ impl RuntimeCapacity {
 
 #[derive(Debug)]
 pub struct RuntimeBus {
-    pub intent_tx: mpsc::Sender<NotificationIntent>,
-    pub plan_tx: mpsc::Sender<NotificationIntent>,
-    pub session_tx: mpsc::Sender<SessionCmd>,
-    pub provider_tx: mpsc::Sender<ProviderJob>,
-    pub fallback_tx: mpsc::Sender<FallbackCmd>,
-    pub ack_tx: mpsc::Sender<AckEvent>,
+    pub intent_tx: Sender<NotificationIntent>,
+    pub plan_tx: Sender<NotificationIntent>,
+    pub session_tx: Sender<SessionCmd>,
+    pub provider_tx: Sender<ProviderJob>,
+    pub fallback_tx: Sender<FallbackCmd>,
+    pub ack_tx: Sender<AckEvent>,
 }
 
 pub struct RuntimeReceivers {
-    pub intent_rx: mpsc::Receiver<NotificationIntent>,
-    pub plan_rx: mpsc::Receiver<NotificationIntent>,
-    pub session_rx: mpsc::Receiver<SessionCmd>,
-    pub provider_rx: mpsc::Receiver<ProviderJob>,
-    pub fallback_rx: mpsc::Receiver<FallbackCmd>,
-    pub ack_rx: mpsc::Receiver<AckEvent>,
+    pub intent_rx: Receiver<NotificationIntent>,
+    pub plan_rx: Receiver<NotificationIntent>,
+    pub session_rx: Receiver<SessionCmd>,
+    pub provider_rx: Receiver<ProviderJob>,
+    pub fallback_rx: Receiver<FallbackCmd>,
+    pub ack_rx: Receiver<AckEvent>,
 }
 
 pub fn build_runtime_bus(capacity: RuntimeCapacity) -> (Arc<RuntimeBus>, RuntimeReceivers) {
-    let (intent_tx, intent_rx) = mpsc::channel(capacity.ingress);
-    let (plan_tx, plan_rx) = mpsc::channel(capacity.planner);
-    let (session_tx, session_rx) = mpsc::channel(capacity.session);
-    let (provider_tx, provider_rx) = mpsc::channel(capacity.provider);
-    let (fallback_tx, fallback_rx) = mpsc::channel(capacity.fallback);
-    let (ack_tx, ack_rx) = mpsc::channel(capacity.ack);
+    let (intent_tx, intent_rx) = flume::bounded(capacity.ingress);
+    let (plan_tx, plan_rx) = flume::bounded(capacity.planner);
+    let (session_tx, session_rx) = flume::bounded(capacity.session);
+    let (provider_tx, provider_rx) = flume::bounded(capacity.provider);
+    let (fallback_tx, fallback_rx) = flume::bounded(capacity.fallback);
+    let (ack_tx, ack_rx) = flume::bounded(capacity.ack);
 
     (
         Arc::new(RuntimeBus {

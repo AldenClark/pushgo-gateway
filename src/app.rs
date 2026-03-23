@@ -138,7 +138,7 @@ fn auto_ingress_permits() -> usize {
     let cpu = std::thread::available_parallelism()
         .map(|v| v.get())
         .unwrap_or(1);
-    cpu.saturating_mul(100)
+    cpu.saturating_mul(200)
 }
 
 async fn restore_device_registry(

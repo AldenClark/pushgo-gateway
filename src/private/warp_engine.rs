@@ -1,13 +1,15 @@
 use std::collections::VecDeque;
+use std::future::pending;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use flume::{Receiver, Sender};
+use parking_lot::Mutex;
 use pushgo_warp_profile::{PushgoWireProfile, negotiate_hello_versions};
-use subtle::ConstantTimeEq;
-use tokio::sync::Mutex;
 use tokio::time::timeout;
 use warp_link::warp_link_core::{
     AckMsg, AckStatus, AuthCheckPhase, AuthError, AuthRequest, AuthResponse, DisconnectReason,
@@ -26,6 +28,7 @@ use crate::{
     },
     rate_limit::parse_peer_remote_ip,
     storage::DeviceId,
+    util::constant_time_eq,
 };
 
 pub struct PushgoServerApp {
@@ -72,11 +75,7 @@ impl PushgoServerApp {
             return Ok(());
         };
         let provided_token = provided.unwrap_or("").trim();
-        let token_ok = provided_token
-            .as_bytes()
-            .ct_eq(required_token.as_bytes())
-            .unwrap_u8()
-            == 1;
+        let token_ok = constant_time_eq(provided_token.as_bytes(), required_token.as_bytes());
         if provided_token.is_empty() || !token_ok {
             self.state.metrics.mark_auth_failure();
             return Err(AuthError::Unauthorized("gateway token invalid".to_string()));
@@ -140,7 +139,7 @@ impl PushgoServerApp {
                 .mark_retransmit_exhausted(retransmit.exhausted_count);
         }
 
-        if let Some((seq, envelope)) = runtime.bootstrap_inflight.lock().await.pop_front() {
+        if let Some((seq, envelope)) = runtime.bootstrap_inflight.lock().pop_front() {
             self.state.hub.mark_delivery_sent(runtime.device_id, seq);
             self.state.metrics.mark_deliver_retransmit_sent();
             return Some(OutboundMsg {
@@ -150,7 +149,7 @@ impl PushgoServerApp {
             });
         }
 
-        if let Some(envelope) = runtime.bootstrap_pending.lock().await.pop_front() {
+        if let Some(envelope) = runtime.bootstrap_pending.lock().pop_front() {
             return Some(self.track_new_outbound(runtime.device_id, envelope));
         }
 
@@ -163,10 +162,10 @@ impl PushgoServerApp {
             });
         }
 
-        match runtime.receiver.lock().await.try_recv() {
+        match runtime.receiver.try_recv() {
             Ok(envelope) => Some(self.track_new_outbound(runtime.device_id, envelope)),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
+            Err(flume::TryRecvError::Empty) => None,
+            Err(flume::TryRecvError::Disconnected) => None,
         }
     }
 
@@ -181,15 +180,55 @@ impl PushgoServerApp {
     }
 }
 
-#[derive(Debug)]
 struct SessionRuntime {
     device_id: DeviceId,
     conn_id: u64,
     client_ip: Option<String>,
     ip_slot_acquired: bool,
-    receiver: Mutex<tokio::sync::mpsc::Receiver<DeliverEnvelope>>,
+    terminate_requested: AtomicBool,
+    control: Mutex<Option<SessionControl>>,
+    receiver: Receiver<DeliverEnvelope>,
     bootstrap_inflight: Mutex<VecDeque<(u64, DeliverEnvelope)>>,
     bootstrap_pending: Mutex<VecDeque<DeliverEnvelope>>,
+}
+
+impl SessionRuntime {
+    fn request_termination(&self) {
+        let already_requested = self.terminate_requested.swap(true, Ordering::SeqCst);
+        if already_requested {
+            return;
+        }
+        let control = self.control.lock().clone();
+        if let Some(control) = control {
+            control.expire_now();
+        }
+    }
+
+    fn attach_control(&self, control: SessionControl) {
+        let terminate_now = self.terminate_requested.load(Ordering::SeqCst);
+        {
+            let mut slot = self.control.lock();
+            *slot = Some(control.clone());
+        }
+        if terminate_now {
+            control.expire_now();
+        }
+    }
+
+    fn detach_control(&self) {
+        let mut slot = self.control.lock();
+        *slot = None;
+    }
+
+    fn is_terminating(&self) -> bool {
+        self.terminate_requested.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SessionConnKey {
+    device_id: DeviceId,
+    conn_id: u64,
 }
 
 const SESSION_REGISTRY_SHARDS: usize = 64;
@@ -197,6 +236,7 @@ const LOGICAL_PARTITION_COUNT: u16 = 4096;
 
 struct SessionRegistry {
     shards: Vec<DashMap<String, Arc<SessionRuntime>>>,
+    by_conn: DashMap<SessionConnKey, String>,
 }
 
 impl SessionRegistry {
@@ -205,11 +245,21 @@ impl SessionRegistry {
         for _ in 0..SESSION_REGISTRY_SHARDS {
             shards.push(DashMap::new());
         }
-        Self { shards }
+        Self {
+            shards,
+            by_conn: DashMap::new(),
+        }
     }
 
     fn insert(&self, session_id: String, runtime: Arc<SessionRuntime>) {
         let index = self.shard_for_session(session_id.as_str());
+        self.by_conn.insert(
+            SessionConnKey {
+                device_id: runtime.device_id,
+                conn_id: runtime.conn_id,
+            },
+            session_id.clone(),
+        );
         self.shards[index].insert(session_id, runtime);
     }
 
@@ -222,9 +272,45 @@ impl SessionRegistry {
 
     fn remove(&self, session_id: &str) -> Option<Arc<SessionRuntime>> {
         let index = self.shard_for_session(session_id);
-        self.shards[index]
+        let runtime = self.shards[index]
             .remove(session_id)
-            .map(|(_, runtime)| runtime)
+            .map(|(_, runtime)| runtime);
+        if let Some(runtime) = runtime.as_ref() {
+            self.by_conn.remove(&SessionConnKey {
+                device_id: runtime.device_id,
+                conn_id: runtime.conn_id,
+            });
+        }
+        runtime
+    }
+
+    fn request_termination(&self, device_id: DeviceId, conn_id: u64) -> bool {
+        let Some(session_id) = self
+            .by_conn
+            .get(&SessionConnKey { device_id, conn_id })
+            .map(|entry| entry.value().clone())
+        else {
+            return false;
+        };
+        let Some(runtime) = self.get(session_id.as_str()) else {
+            return false;
+        };
+        runtime.request_termination();
+        true
+    }
+
+    fn attach_control(&self, session_id: &str, control: SessionControl) -> bool {
+        let Some(runtime) = self.get(session_id) else {
+            return false;
+        };
+        runtime.attach_control(control);
+        true
+    }
+
+    fn detach_control(&self, session_id: &str) {
+        if let Some(runtime) = self.get(session_id) {
+            runtime.detach_control();
+        }
     }
 
     fn shard_for_session(&self, session_id: &str) -> usize {
@@ -365,10 +451,12 @@ impl ServerApp for PushgoServerApp {
                 };
                 let tuning = resolve_tuning(hello.perf_tier.as_deref(), hello.app_state.as_deref());
                 let conn_id = rand::random::<u64>();
-                let (tx, rx) = tokio::sync::mpsc::channel::<DeliverEnvelope>(256);
-                self.state
-                    .hub
-                    .register_connection(device_id, conn_id, peer.transport, tx);
+                let (tx, rx): (Sender<DeliverEnvelope>, Receiver<DeliverEnvelope>) =
+                    flume::bounded(256);
+                let registration =
+                    self.state
+                        .hub
+                        .register_connection(device_id, conn_id, peer.transport, tx);
                 let logical_partition = logical_partition_for_device(device_id);
 
                 if !prepared.bootstrap.pending.is_empty() {
@@ -386,11 +474,17 @@ impl ServerApp for PushgoServerApp {
                         conn_id,
                         client_ip,
                         ip_slot_acquired,
-                        receiver: Mutex::new(rx),
+                        terminate_requested: AtomicBool::new(false),
+                        control: Mutex::new(None),
+                        receiver: rx,
                         bootstrap_inflight: Mutex::new(prepared.bootstrap.inflight),
                         bootstrap_pending: Mutex::new(prepared.bootstrap.pending),
                     }),
                 );
+                if let Some(superseded_conn_id) = registration.superseded_conn_id {
+                    self.sessions
+                        .request_termination(device_id, superseded_conn_id);
+                }
                 self.mark_connect_success(peer.transport);
 
                 Ok(AuthResponse::ConnectAccepted(SessionCtx {
@@ -472,13 +566,19 @@ impl ServerApp for PushgoServerApp {
 
     async fn wait_outbound(&self, session: &SessionCtx, max_wait_ms: u64) -> Option<OutboundMsg> {
         let runtime = self.sessions.get(session.session_id.as_str())?.clone();
+        if runtime.is_terminating() {
+            return pending::<Option<OutboundMsg>>().await;
+        }
 
         match self
             .state
             .hub
             .connection_mode(runtime.device_id, runtime.conn_id)
         {
-            ConnectionMode::Stale => return None,
+            ConnectionMode::Stale => {
+                runtime.request_termination();
+                return pending::<Option<OutboundMsg>>().await;
+            }
             ConnectionMode::Active | ConnectionMode::Draining => {}
         }
 
@@ -497,20 +597,17 @@ impl ServerApp for PushgoServerApp {
         let wait_ms = retransmit_wait
             .as_millis()
             .min(u128::from(max_wait_ms.max(1))) as u64;
-        if wait_ms == 0 {
-            return self
-                .take_outbound_ready(runtime.as_ref(), ack_timeout)
-                .await;
-        }
+        let wait_ms = wait_ms.max(1);
 
-        let result = {
-            let mut receiver = runtime.receiver.lock().await;
-            timeout(Duration::from_millis(wait_ms), receiver.recv()).await
-        };
+        let result = timeout(
+            Duration::from_millis(wait_ms),
+            runtime.receiver.recv_async(),
+        )
+        .await;
 
         match result {
-            Ok(Some(envelope)) => Some(self.track_new_outbound(runtime.device_id, envelope)),
-            Ok(None) | Err(_) => {
+            Ok(Ok(envelope)) => Some(self.track_new_outbound(runtime.device_id, envelope)),
+            Ok(Err(_)) | Err(_) => {
                 self.take_outbound_ready(runtime.as_ref(), ack_timeout)
                     .await
             }
@@ -556,6 +653,7 @@ impl ServerApp for PushgoServerApp {
     }
 
     async fn on_disconnect(&self, session: &SessionCtx, reason: DisconnectReason) {
+        self.sessions.detach_control(session.session_id.as_str());
         if let Some(runtime) = self.sessions.remove(session.session_id.as_str()) {
             if runtime.ip_slot_acquired {
                 self.state
@@ -591,6 +689,9 @@ impl ServerApp for PushgoServerApp {
 
     fn on_session_control(&self, session: &SessionCtx, control: SessionControl) {
         let device_id = DeviceRegistry::derive_private_device_id(session.identity.as_str());
+        let _ = self
+            .sessions
+            .attach_control(session.session_id.as_str(), control.clone());
         self.state
             .register_session_control(session.session_id.as_str(), device_id, control);
     }
@@ -643,37 +744,37 @@ fn resolve_tuning(perf_tier: Option<&str>, app_state: Option<&str>) -> SessionTu
             heartbeat_secs: 12,
             ping_interval_secs: 6,
             idle_timeout_secs: 48,
-            max_backoff_secs: 15,
+            max_backoff_secs: 8,
         },
         (PERF_TIER_HIGH, true) => SessionTuning {
             heartbeat_secs: 18,
             ping_interval_secs: 9,
             idle_timeout_secs: 72,
-            max_backoff_secs: 20,
+            max_backoff_secs: 10,
         },
         (PERF_TIER_LOW, false) => SessionTuning {
             heartbeat_secs: 24,
             ping_interval_secs: 12,
             idle_timeout_secs: 84,
-            max_backoff_secs: 45,
+            max_backoff_secs: 16,
         },
         (PERF_TIER_LOW, true) => SessionTuning {
             heartbeat_secs: 40,
             ping_interval_secs: 20,
             idle_timeout_secs: 120,
-            max_backoff_secs: 90,
+            max_backoff_secs: 24,
         },
         (_, true) => SessionTuning {
             heartbeat_secs: 28,
             ping_interval_secs: 14,
             idle_timeout_secs: 96,
-            max_backoff_secs: 45,
+            max_backoff_secs: 14,
         },
         _ => SessionTuning {
             heartbeat_secs: 18,
             ping_interval_secs: 9,
             idle_timeout_secs: 72,
-            max_backoff_secs: 30,
+            max_backoff_secs: 10,
         },
     }
 }

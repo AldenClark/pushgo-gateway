@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use reqwest::Client;
+use serde::Deserialize;
 
 use crate::{
     Error,
@@ -37,6 +38,7 @@ impl FcmService {
         &self,
         device_token: &str,
         payload: Arc<FcmPayload>,
+        prepared_body: Option<Arc<[u8]>>,
     ) -> DispatchResult {
         let access = match self.token_provider.token_info().await {
             Ok(access) => access,
@@ -51,17 +53,20 @@ impl FcmService {
             }
         };
 
-        let body = match payload.encoded_body(device_token) {
-            Ok(body) => body,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::Internal(err.to_string())),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
+        let body = match prepared_body {
+            Some(body) => body,
+            None => match payload.encoded_body(device_token) {
+                Ok(body) => body,
+                Err(err) => {
+                    return DispatchResult {
+                        success: false,
+                        status_code: 0,
+                        error: Some(Error::Internal(err.to_string())),
+                        invalid_token: false,
+                        payload_too_large: false,
+                    };
+                }
+            },
         };
 
         let endpoint = format!(
@@ -74,7 +79,7 @@ impl FcmService {
             .post(&endpoint)
             .bearer_auth(access.token.token.as_ref())
             .header("content-type", "application/json")
-            .body(body)
+            .body(body.as_ref().to_vec())
             .send()
             .await
         {
@@ -92,14 +97,11 @@ impl FcmService {
 
         let status = response.status();
         let status_code = status.as_u16();
-        let body_text = response.text().await.unwrap_or_default();
+        let body = response.bytes().await.unwrap_or_default();
 
         if !status.is_success() {
-            let message = if body_text.is_empty() {
-                format!("FCM error, status {status_code}")
-            } else {
-                body_text.clone()
-            };
+            let message =
+                body_message(&body).unwrap_or_else(|| format!("FCM error, status {status_code}"));
             return DispatchResult {
                 success: false,
                 status_code,
@@ -108,8 +110,8 @@ impl FcmService {
                     status: status_code,
                     message,
                 }),
-                invalid_token: is_fcm_token_invalid(status_code, &body_text),
-                payload_too_large: is_fcm_payload_too_large(status_code, &body_text),
+                invalid_token: is_fcm_token_invalid(status_code, &body),
+                payload_too_large: is_fcm_payload_too_large(status_code, &body),
             };
         }
 
@@ -133,29 +135,24 @@ impl FcmService {
     }
 }
 
-fn is_fcm_payload_too_large(status_code: u16, body_text: &str) -> bool {
+fn is_fcm_payload_too_large(status_code: u16, body: &[u8]) -> bool {
     if status_code != 400 {
         return false;
     }
-    let value: serde_json::Value = match serde_json::from_str(body_text) {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    let error = match value.get("error") {
-        Some(error) => error,
-        None => return false,
+    let Some(error) = parse_fcm_error(body).and_then(|value| value.error) else {
+        return false;
     };
     let invalid_argument = error
-        .get("status")
-        .and_then(|status| status.as_str())
+        .status
+        .as_deref()
         .map(|status| status.eq_ignore_ascii_case("INVALID_ARGUMENT"))
         .unwrap_or(false);
     if !invalid_argument {
         return false;
     }
     let message = error
-        .get("message")
-        .and_then(|msg| msg.as_str())
+        .message
+        .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
     message.contains("message too big")
@@ -165,8 +162,12 @@ impl FcmClient for FcmService {
         &'a self,
         device_token: &'a str,
         payload: Arc<FcmPayload>,
+        prepared_body: Option<Arc<[u8]>>,
     ) -> BoxFuture<'a, DispatchResult> {
-        Box::pin(async move { self.send_to_device(device_token, payload).await })
+        Box::pin(async move {
+            self.send_to_device(device_token, payload, prepared_body)
+                .await
+        })
     }
 
     fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>> {
@@ -178,37 +179,30 @@ impl FcmClient for FcmService {
     }
 }
 
-fn is_fcm_token_invalid(status_code: u16, body_text: &str) -> bool {
+fn is_fcm_token_invalid(status_code: u16, body: &[u8]) -> bool {
     if status_code == 404 {
         return true;
     }
-    let value: serde_json::Value = match serde_json::from_str(body_text) {
-        Ok(value) => value,
-        Err(_) => {
-            let haystack = body_text.to_ascii_lowercase();
-            return haystack.contains("unregistered")
-                || haystack.contains("not registered")
-                || haystack.contains("invalid registration token")
-                || (haystack.contains("registration token") && haystack.contains("invalid"));
-        }
-    };
-    let error = match value.get("error") {
-        Some(error) => error,
-        None => return false,
+    let Some(error) = parse_fcm_error(body).and_then(|value| value.error) else {
+        let haystack = String::from_utf8_lossy(body).to_ascii_lowercase();
+        return haystack.contains("unregistered")
+            || haystack.contains("not registered")
+            || haystack.contains("invalid registration token")
+            || (haystack.contains("registration token") && haystack.contains("invalid"));
     };
     if error
-        .get("status")
-        .and_then(|status| status.as_str())
+        .status
+        .as_deref()
         .map(|status| status.eq_ignore_ascii_case("NOT_FOUND"))
         .unwrap_or(false)
     {
         return true;
     }
-    if let Some(details) = error.get("details").and_then(|details| details.as_array()) {
+    if let Some(details) = error.details.as_deref() {
         for detail in details {
             if detail
-                .get("errorCode")
-                .and_then(|code| code.as_str())
+                .error_code
+                .as_deref()
                 .map(|code| code.eq_ignore_ascii_case("UNREGISTERED"))
                 .unwrap_or(false)
             {
@@ -216,7 +210,7 @@ fn is_fcm_token_invalid(status_code: u16, body_text: &str) -> bool {
             }
         }
     }
-    if let Some(message) = error.get("message").and_then(|msg| msg.as_str()) {
+    if let Some(message) = error.message.as_deref() {
         let haystack = message.to_ascii_lowercase();
         return haystack.contains("unregistered")
             || haystack.contains("not registered")
@@ -232,4 +226,36 @@ fn normalize_base_url(raw: &str) -> Result<String, Error> {
         return Err(Error::validation("fcm-base-url must not be empty"));
     }
     Ok(trimmed.to_string())
+}
+
+fn body_message(body: &[u8]) -> Option<String> {
+    let trimmed = String::from_utf8_lossy(body).trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn parse_fcm_error(body: &[u8]) -> Option<FcmErrorEnvelope> {
+    serde_json::from_slice(body).ok()
+}
+
+#[derive(Deserialize)]
+struct FcmErrorEnvelope {
+    error: Option<FcmErrorBody>,
+}
+
+#[derive(Deserialize)]
+struct FcmErrorBody {
+    status: Option<String>,
+    message: Option<String>,
+    #[serde(default)]
+    details: Option<Vec<FcmErrorDetail>>,
+}
+
+#[derive(Deserialize)]
+struct FcmErrorDetail {
+    #[serde(rename = "errorCode")]
+    error_code: Option<String>,
 }

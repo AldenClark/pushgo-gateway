@@ -184,12 +184,10 @@ async fn get_wns_access_token(client: &Client, auth: &WnsAuth) -> Result<AccessT
     let status = response.status();
     if !status.is_success() {
         let status_code = status.as_u16();
-        let body = response.text().await.unwrap_or_default();
-        let message = if body.is_empty() {
+        let body = response.bytes().await.unwrap_or_default();
+        let message = parse_error_body(&body).unwrap_or_else(|| {
             format!("Azure AD OAuth error, status {status_code}")
-        } else {
-            body
-        };
+        });
         return Err(Error::Upstream {
             provider: "Azure AD",
             status: status_code,
@@ -197,10 +195,12 @@ async fn get_wns_access_token(client: &Client, auth: &WnsAuth) -> Result<AccessT
         });
     }
 
-    let token: AccessTokenResponse = response
-        .json()
+    let body = response
+        .bytes()
         .await
         .map_err(|err| Error::Internal(err.to_string()))?;
+    let token: AccessTokenResponse =
+        serde_json::from_slice(&body).map_err(|err| Error::Internal(err.to_string()))?;
     let value = token.access_token.ok_or_else(|| Error::Upstream {
         provider: "Azure AD",
         status: status.as_u16(),
@@ -225,6 +225,15 @@ fn normalize_scope(raw: &str) -> String {
         return "https://wns.windows.com/.default".to_string();
     }
     trimmed.to_string()
+}
+
+fn parse_error_body(body: &[u8]) -> Option<String> {
+    let trimmed = String::from_utf8_lossy(body).trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 #[derive(Deserialize)]

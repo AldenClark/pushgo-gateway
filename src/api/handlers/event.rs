@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -298,7 +298,7 @@ async fn event_to_channel_with_action(
         &normalized_severity,
     )?;
 
-    let mut custom_data = HashMap::new();
+    let mut custom_data = HashMap::with_capacity(1);
     if !payload.payload.metadata.is_empty() {
         custom_data.insert(
             "metadata".to_string(),
@@ -332,20 +332,20 @@ async fn event_to_channel_with_action(
         .as_deref()
         .and_then(|raw| serde_json::from_str::<EventProfile>(raw).ok())
         .unwrap_or_default();
-    if let Some(title) = payload.payload.title.clone() {
-        merged_profile.title = Some(title);
+    if let Some(title) = payload.payload.title.as_ref() {
+        merged_profile.title = Some(title.clone());
     }
-    if let Some(description) = payload.payload.description.clone() {
-        merged_profile.description = Some(description);
+    if let Some(description) = payload.payload.description.as_ref() {
+        merged_profile.description = Some(description.clone());
     }
-    if let Some(status) = normalized_status.clone() {
-        merged_profile.status = Some(status);
+    if let Some(status) = normalized_status.as_ref() {
+        merged_profile.status = Some(status.clone());
     }
-    if let Some(message) = normalized_message.clone() {
-        merged_profile.message = Some(message);
+    if let Some(message) = normalized_message.as_ref() {
+        merged_profile.message = Some(message.clone());
     }
-    if let Some(severity) = normalized_severity.clone() {
-        merged_profile.severity = Some(severity);
+    if let Some(severity) = normalized_severity.as_ref() {
+        merged_profile.severity = Some(severity.clone());
     }
     if let Some(tags) = normalized_tags {
         merged_profile.tags = tags;
@@ -417,7 +417,8 @@ async fn event_to_channel_with_action(
     }
 
     let resolved_thing_id = thing_id
-        .clone()
+        .as_ref()
+        .cloned()
         .or_else(|| existing.as_ref().and_then(|head| head.thing_id.clone()));
     let resolved_scoped_thing_id = resolved_thing_id
         .as_deref()
@@ -428,13 +429,7 @@ async fn event_to_channel_with_action(
         .and_then(|head| head.attrs_json.as_deref())
         .and_then(|raw| parse_attrs_json(raw).ok())
         .unwrap_or_default();
-    for (key, value) in &payload.payload.attrs {
-        if value.is_null() {
-            final_attrs.remove(key);
-        } else {
-            final_attrs.insert(key.clone(), value.clone());
-        }
-    }
+    apply_attrs_patch(&mut final_attrs, &payload.payload.attrs);
     let final_attrs_json = if final_attrs.is_empty() {
         None
     } else {
@@ -452,10 +447,7 @@ async fn event_to_channel_with_action(
         )
     };
 
-    let event_meta_json = serde_json::to_string(&EventMetaPayload {
-        profile_json: resolved_profile_json.clone(),
-    })
-    .map_err(|err| Error::validation(err.to_string()))?;
+    let event_meta_json = encode_event_meta(resolved_profile_json.as_deref())?;
 
     let default_title = event_profile_title(merged_profile.as_ref(), &event_id);
     let default_body = event_profile_body(merged_profile.as_ref());
@@ -492,13 +484,7 @@ async fn event_to_channel_with_action(
                 .as_ref()
                 .and_then(|head| parse_attrs_json(&head.attrs_json).ok())
                 .unwrap_or_default();
-            for (key, value) in &payload.payload.attrs {
-                if value.is_null() {
-                    thing_attrs.remove(key);
-                } else {
-                    thing_attrs.insert(key.clone(), value.clone());
-                }
-            }
+            apply_attrs_patch(&mut thing_attrs, &payload.payload.attrs);
             let thing_attrs_json = serde_json::to_string(&thing_attrs)
                 .map_err(|err| Error::validation(err.to_string()))?;
 
@@ -549,7 +535,7 @@ async fn event_to_channel_with_action(
     state.store.append_event_log_async(&log_entry).await?;
 
     let dispatch_summary = if applied {
-        let mut extra = HashMap::new();
+        let mut extra = HashMap::with_capacity(7);
         extra.insert("event_id".to_string(), event_id.clone());
         extra.insert(
             "event_state".to_string(),
@@ -783,8 +769,7 @@ fn scoped_entity_key(channel_scope: &str, id: &str) -> String {
 }
 
 fn parse_attrs_json(raw: &str) -> Result<JsonMap<String, JsonValue>, serde_json::Error> {
-    let parsed = serde_json::from_str::<JsonValue>(raw)?;
-    Ok(parsed.as_object().cloned().unwrap_or_default())
+    serde_json::from_str::<JsonMap<String, JsonValue>>(raw)
 }
 
 fn parse_event_meta(raw: Option<&str>) -> Result<EventMetaPayload, serde_json::Error> {
@@ -805,6 +790,27 @@ fn event_profile_title(profile: Option<&EventProfile>, event_id: &str) -> String
 
 fn event_profile_body(profile: Option<&EventProfile>) -> Option<String> {
     profile.and_then(|value| value.message.clone().or_else(|| value.description.clone()))
+}
+
+fn apply_attrs_patch(target: &mut JsonMap<String, JsonValue>, patch: &JsonMap<String, JsonValue>) {
+    for (key, value) in patch {
+        if value.is_null() {
+            target.remove(key);
+        } else {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn encode_event_meta(profile_json: Option<&str>) -> Result<String, Error> {
+    #[derive(Serialize)]
+    struct EventMetaPayloadRef<'a> {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_json: Option<&'a str>,
+    }
+
+    serde_json::to_string(&EventMetaPayloadRef { profile_json })
+        .map_err(|err| Error::validation(err.to_string()))
 }
 
 fn normalize_tags(values: &[String], field: &str) -> Result<Vec<String>, Error> {

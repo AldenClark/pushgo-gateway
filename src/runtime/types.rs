@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use crate::storage::Platform;
+use hashbrown::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct NotificationIntent {

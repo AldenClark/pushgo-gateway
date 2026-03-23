@@ -230,14 +230,14 @@ impl GatewayTokenCache {
             .await
             .map_err(|err| Error::Internal(err.to_string()))?;
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|err| Error::Internal(err.to_string()))?;
 
         if !status.is_success() {
-            let message = if body.trim().is_empty() {
-                format!("token service error, status {}", status.as_u16())
-            } else {
-                body
-            };
+            let message = parse_error_body(&body)
+                .unwrap_or_else(|| format!("token service error, status {}", status.as_u16()));
             return Err(Error::Upstream {
                 provider: "PushGo Token Service",
                 status: status.as_u16(),
@@ -246,7 +246,7 @@ impl GatewayTokenCache {
         }
 
         let parsed: GatewayResponse<GatewayTokenData> =
-            serde_json::from_str(&body).map_err(|err| Error::Internal(err.to_string()))?;
+            serde_json::from_slice(&body).map_err(|err| Error::Internal(err.to_string()))?;
         if !parsed.success {
             return Err(Error::Upstream {
                 provider: "PushGo Token Service",
@@ -271,6 +271,15 @@ impl GatewayTokenCache {
             data.project_id
                 .map(|value| Arc::from(value.into_boxed_str())),
         ))
+    }
+}
+
+fn parse_error_body(body: &[u8]) -> Option<String> {
+    let trimmed = String::from_utf8_lossy(body).trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
     }
 }
 

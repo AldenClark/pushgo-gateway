@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::Utc;
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -322,7 +323,7 @@ async fn thing_to_channel_with_action(
         .and_then(|head| parse_thing_meta(head.meta_json.as_deref()).ok())
         .unwrap_or_default();
 
-    let mut custom_data = HashMap::new();
+    let mut custom_data = HashMap::with_capacity(1);
     if !payload.payload.mutable.metadata.is_empty() {
         custom_data.insert(
             "metadata".to_string(),
@@ -431,10 +432,7 @@ async fn thing_to_channel_with_action(
     let final_attrs_json =
         serde_json::to_string(&final_attrs).map_err(|err| Error::validation(err.to_string()))?;
 
-    let thing_meta_json = serde_json::to_string(&ThingMetaPayload {
-        profile_json: resolved_profile_json.clone(),
-    })
-    .map_err(|err| Error::validation(err.to_string()))?;
+    let thing_meta_json = encode_thing_meta(resolved_profile_json.as_deref())?;
 
     let (notification_title, notification_body) =
         build_thing_notification_content(route_action, &payload, merged_profile.as_ref());
@@ -458,12 +456,12 @@ async fn thing_to_channel_with_action(
     }
 
     let dispatch_summary = if applied {
-        let mut extra = HashMap::new();
+        let mut extra = HashMap::with_capacity(4);
         extra.insert("occurred_at".to_string(), observed_at.to_string());
         extra.insert("thing_id".to_string(), thing_id.clone());
         extra.insert("thing_attrs_json".to_string(), final_attrs_json.clone());
-        if let Some(value) = resolved_profile_json.as_deref() {
-            extra.insert("thing_profile_json".to_string(), value.to_string());
+        if let Some(value) = resolved_profile_json.as_ref() {
+            extra.insert("thing_profile_json".to_string(), value.clone());
         }
 
         Some(
@@ -557,8 +555,7 @@ pub(crate) async fn thing_delete_to_channel(
 }
 
 fn parse_attrs_json(raw: &str) -> Result<JsonMap<String, JsonValue>, serde_json::Error> {
-    let parsed = serde_json::from_str::<JsonValue>(raw)?;
-    Ok(parsed.as_object().cloned().unwrap_or_default())
+    serde_json::from_str::<JsonMap<String, JsonValue>>(raw)
 }
 
 fn parse_thing_meta(raw: Option<&str>) -> Result<ThingMetaPayload, serde_json::Error> {
@@ -630,7 +627,7 @@ fn attrs_summary_lines(attrs: &JsonMap<String, JsonValue>) -> Option<String> {
     }
     let mut keys: Vec<&String> = attrs.keys().collect();
     keys.sort();
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(attrs.len());
     for key in keys {
         let Some(value) = attrs.get(key) else {
             continue;
@@ -654,6 +651,17 @@ fn attr_value_text(value: &JsonValue) -> String {
             serde_json::to_string(value).unwrap_or_default()
         }
     }
+}
+
+fn encode_thing_meta(profile_json: Option<&str>) -> Result<String, Error> {
+    #[derive(Serialize)]
+    struct ThingMetaPayloadRef<'a> {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_json: Option<&'a str>,
+    }
+
+    serde_json::to_string(&ThingMetaPayloadRef { profile_json })
+        .map_err(|err| Error::validation(err.to_string()))
 }
 
 fn normalize_entity_id(raw: &str, field: &str) -> Result<String, Error> {

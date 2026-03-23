@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
 use axum::http::header::HeaderName;
-use dashmap::DashMap;
+use hashbrown::HashMap;
+use parking_lot::Mutex;
 
 const CLEANUP_EVERY_OPS: usize = 2048;
 const MAX_KEY_LEN: usize = 256;
@@ -21,7 +21,7 @@ const PRIVATE_CONNECT_IP_CONCURRENT_MAX: usize = 64;
 struct SlidingWindowLimiter {
     window: Duration,
     max_keys: usize,
-    buckets: DashMap<String, Arc<Mutex<VecDeque<Instant>>>>,
+    buckets: Mutex<HashMap<String, VecDeque<Instant>>>,
     op_counter: AtomicUsize,
 }
 
@@ -30,7 +30,7 @@ impl SlidingWindowLimiter {
         Self {
             window,
             max_keys,
-            buckets: DashMap::new(),
+            buckets: Mutex::new(HashMap::new()),
             op_counter: AtomicUsize::new(0),
         }
     }
@@ -42,18 +42,10 @@ impl SlidingWindowLimiter {
         let Some(key) = normalize_key(raw_key) else {
             return true;
         };
-        let bucket = self
-            .buckets
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(VecDeque::new())))
-            .clone();
         let now = Instant::now();
         let cutoff = now.checked_sub(self.window).unwrap_or(now);
-
-        let mut queue = match bucket.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut buckets = self.buckets.lock();
+        let queue = buckets.entry(key).or_insert_with(VecDeque::new);
         while queue.front().is_some_and(|ts| *ts <= cutoff) {
             let _ = queue.pop_front();
         }
@@ -61,7 +53,7 @@ impl SlidingWindowLimiter {
             return false;
         }
         queue.push_back(now);
-        drop(queue);
+        drop(buckets);
 
         let ops = self.op_counter.fetch_add(1, Ordering::Relaxed) + 1;
         if ops.is_multiple_of(CLEANUP_EVERY_OPS) {
@@ -71,30 +63,26 @@ impl SlidingWindowLimiter {
     }
 
     fn cleanup(&self) {
-        if self.buckets.len() <= self.max_keys {
+        let mut buckets = self.buckets.lock();
+        if buckets.len() <= self.max_keys {
             return;
         }
         let now = Instant::now();
         let cutoff = now.checked_sub(self.window).unwrap_or(now);
-        let mut stale_keys = Vec::new();
-        for entry in &self.buckets {
-            let bucket = entry.value();
-            let mut queue = match bucket.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+        let mut stale_keys = Vec::with_capacity(self.max_keys.min(buckets.len()));
+        for (key, queue) in buckets.iter_mut() {
             while queue.front().is_some_and(|ts| *ts <= cutoff) {
                 let _ = queue.pop_front();
             }
             if queue.is_empty() {
-                stale_keys.push(entry.key().clone());
+                stale_keys.push(key.clone());
             }
             if stale_keys.len() >= self.max_keys {
                 break;
             }
         }
         for key in stale_keys {
-            self.buckets.remove(&key);
+            buckets.remove(&key);
         }
     }
 }
@@ -251,7 +239,7 @@ impl ApiRateLimiter {
         let Some(ip) = normalize_key(ip.unwrap_or("")) else {
             return true;
         };
-        let key = format!("api:ip:{ip}");
+        let key = build_prefixed_key(&["api:ip:", ip.as_str()]);
         self.limiter.allow(key.as_str(), 1200)
     }
 
@@ -261,7 +249,14 @@ impl ApiRateLimiter {
         };
         let method = normalize_key(method).unwrap_or_else(|| "unknown".to_string());
         let route = normalize_key(route).unwrap_or_else(|| "unknown".to_string());
-        let key = format!("api:ip:{ip}:method:{method}:route:{route}");
+        let key = build_prefixed_key(&[
+            "api:ip:",
+            ip.as_str(),
+            ":method:",
+            method.as_str(),
+            ":route:",
+            route.as_str(),
+        ]);
         self.limiter.allow(key.as_str(), 800)
     }
 
@@ -269,7 +264,7 @@ impl ApiRateLimiter {
         let Some(channel_id) = normalize_key(channel_id) else {
             return true;
         };
-        let key = format!("api:channel:{channel_id}");
+        let key = build_prefixed_key(&["api:channel:", channel_id.as_str()]);
         self.limiter.allow(key.as_str(), 1600)
     }
 
@@ -277,7 +272,7 @@ impl ApiRateLimiter {
         let Some(device_key) = normalize_key(device_key) else {
             return true;
         };
-        let key = format!("api:device:{device_key}");
+        let key = build_prefixed_key(&["api:device:", device_key.as_str()]);
         self.limiter.allow(key.as_str(), 1200)
     }
 }
@@ -285,7 +280,7 @@ impl ApiRateLimiter {
 #[derive(Debug)]
 pub struct PrivateRateLimiter {
     limiter: SlidingWindowLimiter,
-    connect_concurrency: DashMap<String, usize>,
+    connect_concurrency: Mutex<HashMap<String, usize>>,
 }
 
 impl Default for PrivateRateLimiter {
@@ -295,7 +290,7 @@ impl Default for PrivateRateLimiter {
                 Duration::from_secs(PRIVATE_CONNECT_IP_WINDOW_SECS),
                 100_000,
             ),
-            connect_concurrency: DashMap::new(),
+            connect_concurrency: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -305,7 +300,7 @@ impl PrivateRateLimiter {
         let Some(ip) = normalize_key(ip.unwrap_or("")) else {
             return true;
         };
-        let key = format!("private:ws:ip:{ip}");
+        let key = build_prefixed_key(&["private:ws:ip:", ip.as_str()]);
         self.limiter.allow(key.as_str(), 480)
     }
 
@@ -313,7 +308,7 @@ impl PrivateRateLimiter {
         let Some(device_key) = normalize_key(device_key) else {
             return true;
         };
-        let key = format!("private:connect:device:{device_key}");
+        let key = build_prefixed_key(&["private:connect:device:", device_key.as_str()]);
         self.limiter.allow(key.as_str(), 180)
     }
 
@@ -321,7 +316,7 @@ impl PrivateRateLimiter {
         let Some(ip) = normalize_key(ip.unwrap_or("")) else {
             return true;
         };
-        let key = format!("private:connect:ip:{ip}");
+        let key = build_prefixed_key(&["private:connect:ip:", ip.as_str()]);
         self.limiter
             .allow(key.as_str(), PRIVATE_CONNECT_IP_RATE_LIMIT)
     }
@@ -330,7 +325,8 @@ impl PrivateRateLimiter {
         let Some(ip) = normalize_key(ip.unwrap_or("")) else {
             return true;
         };
-        let mut entry = self.connect_concurrency.entry(ip).or_insert(0);
+        let mut concurrency = self.connect_concurrency.lock();
+        let entry = concurrency.entry(ip).or_insert(0);
         if *entry >= PRIVATE_CONNECT_IP_CONCURRENT_MAX {
             return false;
         }
@@ -342,17 +338,27 @@ impl PrivateRateLimiter {
         let Some(ip) = normalize_key(ip.unwrap_or("")) else {
             return;
         };
+        let mut concurrency = self.connect_concurrency.lock();
         let mut should_remove = false;
-        if let Some(mut count) = self.connect_concurrency.get_mut(&ip) {
+        if let Some(count) = concurrency.get_mut(&ip) {
             if *count > 0 {
                 *count -= 1;
             }
             should_remove = *count == 0;
         }
         if should_remove {
-            self.connect_concurrency.remove(&ip);
+            concurrency.remove(&ip);
         }
     }
+}
+
+fn build_prefixed_key(parts: &[&str]) -> String {
+    let capacity = parts.iter().map(|part| part.len()).sum();
+    let mut out = String::with_capacity(capacity);
+    for part in parts {
+        out.push_str(part);
+    }
+    out
 }
 
 #[cfg(test)]

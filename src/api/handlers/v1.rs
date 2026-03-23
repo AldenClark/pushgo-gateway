@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use axum::{extract::State, http::StatusCode};
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{

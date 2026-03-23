@@ -72,6 +72,7 @@ pub trait FcmClient: Send + Sync {
         &'a self,
         device_token: &'a str,
         payload: Arc<fcm::FcmPayload>,
+        prepared_body: Option<Arc<[u8]>>,
     ) -> BoxFuture<'a, DispatchResult>;
 
     fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>>;

@@ -1,8 +1,41 @@
 use std::{
-    collections::HashMap,
     fmt,
+    sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
 };
+
+use hashbrown::HashMap;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Default)]
+pub struct SharedStringMap(Arc<HashMap<String, String>>);
+
+impl SharedStringMap {
+    pub fn as_map(&self) -> &HashMap<String, String> {
+        self.0.as_ref()
+    }
+}
+
+impl From<HashMap<String, String>> for SharedStringMap {
+    fn from(value: HashMap<String, String>) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl From<Arc<HashMap<String, String>>> for SharedStringMap {
+    fn from(value: Arc<HashMap<String, String>>) -> Self {
+        Self(value)
+    }
+}
+
+impl Serialize for SharedStringMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Base32DecodeError {
@@ -98,6 +131,17 @@ pub fn redact_debug<T: ?Sized + fmt::Debug>(value: &T) -> String {
         return format!("{value:?}");
     }
     "<redacted>".to_string()
+}
+
+pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&lhs, &rhs) in left.iter().zip(right.iter()) {
+        diff |= lhs ^ rhs;
+    }
+    diff == 0
 }
 
 pub fn build_wakeup_data(base: &HashMap<String, String>) -> HashMap<String, String> {

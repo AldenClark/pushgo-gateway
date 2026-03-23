@@ -1,24 +1,11 @@
 use std::net::SocketAddr;
 
-use axum::extract::DefaultBodyLimit;
-use axum::http::StatusCode;
-use axum::http::header::{AUTHORIZATION, RETRY_AFTER};
-use axum::{
-    Router,
-    extract::connect_info::ConnectInfo,
-    extract::{Request, State},
-    middleware::{Next, from_fn_with_state},
-    response::{Html, IntoResponse},
-    routing::{get, post},
-};
-use subtle::ConstantTimeEq;
-
 use crate::{
     api::handlers::{
         channel::{channel_exists, channel_rename},
         event::{event_close_to_channel, event_create_to_channel, event_update_to_channel},
         message::message_to_channel,
-        private::{private_health, private_metrics, private_ws},
+        private::{private_health, private_metrics, private_network_diagnostics, private_ws},
         thing::{
             thing_archive_to_channel, thing_create_to_channel, thing_delete_to_channel,
             thing_update_to_channel,
@@ -31,6 +18,18 @@ use crate::{
     },
     api::{Error, HttpResult},
     app::{AppState, AuthMode},
+    util::constant_time_eq,
+};
+use axum::extract::DefaultBodyLimit;
+use axum::http::StatusCode;
+use axum::http::header::{AUTHORIZATION, RETRY_AFTER};
+use axum::{
+    Router,
+    extract::connect_info::ConnectInfo,
+    extract::{Request, State},
+    middleware::{Next, from_fn_with_state},
+    response::{Html, IntoResponse},
+    routing::{get, post},
 };
 
 pub fn build_router(state: AppState, docs_html: &'static str) -> Router {
@@ -62,6 +61,10 @@ pub fn build_router(state: AppState, docs_html: &'static str) -> Router {
         router = router
             .route("/private/metrics", get(private_metrics))
             .route("/private/health", get(private_health))
+            .route(
+                "/private/diagnostics/network",
+                get(private_network_diagnostics),
+            )
             .route("/private/ws", get(private_ws));
     }
 
@@ -124,7 +127,7 @@ async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> 
     }
 
     fn constant_time_equals(a: &str, b: &str) -> bool {
-        a.as_bytes().ct_eq(b.as_bytes()).into()
+        constant_time_eq(a.as_bytes(), b.as_bytes())
     }
     if let AuthMode::SharedToken(token) = &state.auth {
         match extract_bearer_token(&req) {
@@ -165,7 +168,6 @@ async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> 
             return Ok(resp);
         }
     };
-
     Ok(next.run(req).await)
 }
 

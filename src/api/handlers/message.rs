@@ -1,10 +1,8 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use axum::{extract::State, http::StatusCode};
 use chrono::Utc;
+use hashbrown::HashMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 use serde_json::{Map as JsonMap, Value};
@@ -18,10 +16,10 @@ use crate::{
     dispatch::{
         ApnsJob, DispatchError, FcmJob, PrivateWakeupDelivery, ProviderDeliveryPath, WnsJob,
     },
-    private::protocol::{PRIVATE_PAYLOAD_VERSION_V1, PrivatePayloadEnvelope},
+    private::protocol::PRIVATE_PAYLOAD_VERSION_V1,
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
     storage::{Platform, StoreError},
-    util::{build_wakeup_data, generate_hex_id_128},
+    util::{SharedStringMap, build_wakeup_data, generate_hex_id_128},
 };
 
 use super::dispatch_lifecycle::{
@@ -228,7 +226,7 @@ async fn dispatch_message_intent(
     )
     .await?
     .semantic_id;
-    let mut custom_data = HashMap::new();
+    let mut custom_data = HashMap::with_capacity(4);
     if let Some(url) = normalize_optional_string(url) {
         custom_data.insert("url".to_string(), url);
     }
@@ -249,7 +247,7 @@ async fn dispatch_message_intent(
         let encoded = encode_metadata(&metadata)?;
         custom_data.insert("metadata".to_string(), encoded);
     }
-    let mut extra_fields = HashMap::new();
+    let mut extra_fields = HashMap::with_capacity(3);
     extra_fields.insert("message_id".to_string(), message_id.clone());
     if !normalized_tags.is_empty() {
         let encoded = serde_json::to_string(&normalized_tags)
@@ -391,9 +389,10 @@ pub(super) async fn dispatch_entity_notification(
         for (key, value) in extra_fields {
             custom_data.insert(key, value);
         }
-        let wakeup_data = build_wakeup_data(&custom_data);
+        let custom_data = Arc::new(custom_data);
+        let wakeup_data = Arc::new(build_wakeup_data(custom_data.as_ref()));
         let private_payload = if private_state.is_some() {
-            Some(encode_private_payload(&custom_data).map_err(|err| {
+            Some(encode_private_payload(custom_data.as_ref()).map_err(|err| {
                 Error::Internal(format!("private payload encoding failed: {err}"))
             })?)
         } else {
@@ -482,7 +481,7 @@ pub(super) async fn dispatch_entity_notification(
                 Some(channel_id_value.clone()),
                 normalized_severity.clone(),
                 ttl,
-                custom_data.clone(),
+                SharedStringMap::from(Arc::clone(&custom_data)),
             )))
         } else {
             None
@@ -495,7 +494,7 @@ pub(super) async fn dispatch_entity_notification(
                 Some(channel_id_value.clone()),
                 normalized_severity.clone(),
                 ttl,
-                quantize_watch_payload(&custom_data),
+                quantize_watch_payload(custom_data.as_ref()),
             )))
         } else {
             None
@@ -507,7 +506,7 @@ pub(super) async fn dispatch_entity_notification(
         };
         let fcm_payload = if has_android {
             Some(Arc::new(FcmPayload::new(
-                custom_data.clone(),
+                SharedStringMap::from(Arc::clone(&custom_data)),
                 priority,
                 ttl_seconds,
             )))
@@ -516,7 +515,7 @@ pub(super) async fn dispatch_entity_notification(
         };
         let fcm_wakeup_payload = if has_android {
             Some(Arc::new(FcmPayload::new(
-                wakeup_data.clone(),
+                SharedStringMap::from(Arc::clone(&wakeup_data)),
                 "HIGH",
                 ttl_seconds,
             )))
@@ -525,7 +524,7 @@ pub(super) async fn dispatch_entity_notification(
         };
         let wns_payload = if has_wns {
             Some(Arc::new(WnsPayload::new(
-                custom_data.clone(),
+                SharedStringMap::from(Arc::clone(&custom_data)),
                 normalized_severity.as_str(),
                 ttl_seconds,
             )))
@@ -534,7 +533,7 @@ pub(super) async fn dispatch_entity_notification(
         };
         let wns_wakeup_payload = if has_wns {
             Some(Arc::new(WnsPayload::new(
-                wakeup_data.clone(),
+                SharedStringMap::from(Arc::clone(&wakeup_data)),
                 "high",
                 ttl_seconds,
             )))
@@ -545,7 +544,7 @@ pub(super) async fn dispatch_entity_notification(
             Some(Arc::new(ApnsPayload::wakeup(
                 Some(channel_id_value.clone()),
                 ttl,
-                wakeup_data.clone(),
+                SharedStringMap::from(Arc::clone(&wakeup_data)),
             )))
         } else {
             None
@@ -596,14 +595,16 @@ pub(super) async fn dispatch_entity_notification(
                     let wakeup_payload = fcm_wakeup_payload
                         .clone()
                         .ok_or(Error::Internal("missing FCM wakeup payload".to_string()))?;
+                    let direct_body = direct_payload
+                        .encoded_body(device.token_str())
+                        .map_err(|err| Error::Internal(err.to_string()))?;
+                    let wakeup_body = wakeup_payload
+                        .encoded_body(device.token_str())
+                        .map_err(|err| Error::Internal(err.to_string()))?;
                     let selection = select_provider_delivery_path(
                         device.platform,
-                        direct_payload
-                            .encoded_len(device.token_str())
-                            .map_err(|err| Error::Internal(err.to_string()))?,
-                        wakeup_payload
-                            .encoded_len(device.token_str())
-                            .map_err(|err| Error::Internal(err.to_string()))?,
+                        direct_body.len(),
+                        wakeup_body.len(),
                     )?;
                     if selection.initial_path == ProviderDeliveryPath::WakeupPull
                         && let Some(private_state) = private_state
@@ -638,7 +639,9 @@ pub(super) async fn dispatch_entity_notification(
                         correlation_id: Arc::clone(&correlation_id),
                         device_token: Arc::from(device.token_str()),
                         direct_payload: Arc::clone(&direct_payload),
+                        direct_body,
                         wakeup_payload: Some(Arc::clone(&wakeup_payload)),
+                        wakeup_body: Some(wakeup_body),
                         initial_path: selection.initial_path,
                         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
                         private_wakeup: private_wakeup_delivery.clone(),
@@ -811,9 +814,15 @@ pub(super) async fn dispatch_entity_notification(
 }
 
 fn encode_private_payload(data: &HashMap<String, String>) -> Result<Vec<u8>, postcard::Error> {
-    postcard::to_allocvec(&PrivatePayloadEnvelope {
+    #[derive(Serialize)]
+    struct BorrowedPrivatePayloadEnvelope<'a> {
+        payload_version: u8,
+        data: &'a HashMap<String, String>,
+    }
+
+    postcard::to_allocvec(&BorrowedPrivatePayloadEnvelope {
         payload_version: PRIVATE_PAYLOAD_VERSION_V1,
-        data: data.clone(),
+        data,
     })
 }
 
