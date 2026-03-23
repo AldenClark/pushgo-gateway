@@ -128,7 +128,16 @@ pub async fn build_app(
         },
     );
 
-    let private_transport_profile = build_private_transport_profile(args);
+    let private_transport_profile = PrivateTransportProfile {
+        quic_enabled: true,
+        quic_port: Some(args.private_quic_port),
+        tcp_enabled: true,
+        tcp_port: args.private_tcp_port,
+        wss_enabled: true,
+        wss_port: 443,
+        wss_path: Arc::from("/private/ws"),
+        ws_subprotocol: Arc::from("pushgo-private.v1"),
+    };
 
     let state = AppState {
         dispatch,
@@ -155,24 +164,6 @@ fn auto_ingress_permits() -> usize {
         .map(|v| v.get())
         .unwrap_or(1);
     cpu.saturating_mul(200)
-}
-
-fn build_private_transport_profile(args: &Args) -> PrivateTransportProfile {
-    let wss_port = args
-        .http_addr
-        .parse::<SocketAddr>()
-        .map(|addr| addr.port())
-        .unwrap_or(443);
-    PrivateTransportProfile {
-        quic_enabled: true,
-        quic_port: Some(args.private_quic_port),
-        tcp_enabled: true,
-        tcp_port: args.private_tcp_port,
-        wss_enabled: true,
-        wss_port,
-        wss_path: Arc::from("/private/ws"),
-        ws_subprotocol: Arc::from("pushgo-private.v1"),
-    }
 }
 
 async fn restore_device_registry(
