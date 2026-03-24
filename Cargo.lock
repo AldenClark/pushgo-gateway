@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "pushgo-gateway"
-version = "1.0.26"
+version = "1.0.27"
 dependencies = [
  "arc-swap",
  "argon2",
@@ -1940,6 +1940,7 @@ dependencies = [
  "pushgo-warp-profile",
  "rand 0.10.0",
  "reqwest",
+ "scc",
  "serde",
  "serde_json",
  "sqlx",
@@ -2334,12 +2335,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "saa"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16c7f49c9d5caa3bf4b3106900484b447b9253fe99670ceb81cb6cb5027855e1"
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "scc"
+version = "3.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6e0fa9801e22430b9ddd8f10b981e42fed14367508a07b5cb713cab979b1d51"
+dependencies = [
+ "saa",
+ "sdd",
 ]
 
 [[package]]
@@ -2356,6 +2373,12 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sdd"
+version = "4.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6ca0e33fc1ae39e36b2d1fdfc8ee470b26397b642ff87572a59a36ff4f2340b"
 
 [[package]]
 name = "sec1"

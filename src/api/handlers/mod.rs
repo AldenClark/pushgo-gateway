@@ -4,5 +4,6 @@ pub mod event;
 pub mod message;
 pub mod private;
 pub mod thing;
+pub(crate) mod url_safety;
 pub mod v1;
 pub(crate) mod watch_light;

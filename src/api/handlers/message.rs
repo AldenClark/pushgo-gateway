@@ -26,6 +26,9 @@ use super::dispatch_lifecycle::{
     DispatchOpGuard, DispatchOpGuardStart, NotificationDispatchSummary,
     dispatch_failure_error_message,
 };
+use super::url_safety::{
+    rewrite_visible_urls_in_text, sanitize_image_urls, sanitize_optional_open_url,
+};
 use super::watch_light::quantize_watch_payload;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -213,6 +216,14 @@ async fn dispatch_message_intent(
         metadata,
         ..
     } = payload;
+    let normalized_body = body
+        .as_deref()
+        .map(rewrite_visible_urls_in_text)
+        .and_then(|value| normalize_optional_string(Some(value)));
+    let normalized_url =
+        sanitize_optional_open_url(url.as_deref(), "url").map_err(Error::validation)?;
+    let normalized_images = sanitize_image_urls(&images, "images").map_err(Error::validation)?;
+
     let op_id = normalize_op_id(&op_id)?;
     let message_id = resolve_create_semantic_id(
         state,
@@ -227,13 +238,9 @@ async fn dispatch_message_intent(
     .await?
     .semantic_id;
     let mut custom_data = HashMap::with_capacity(4);
-    if let Some(url) = normalize_optional_string(url) {
+    if let Some(url) = normalized_url {
         custom_data.insert("url".to_string(), url);
     }
-    let normalized_images: Vec<String> = images
-        .into_iter()
-        .filter_map(|item| normalize_optional_string(Some(item)))
-        .collect();
     if !normalized_images.is_empty() {
         let encoded = serde_json::to_string(&normalized_images)
             .map_err(|_| Error::validation("images format is invalid"))?;
@@ -263,7 +270,7 @@ async fn dispatch_message_intent(
         channel_id,
         op_id,
         Some(title),
-        body,
+        normalized_body,
         severity,
         ttl,
         custom_data,
@@ -347,14 +354,18 @@ pub(super) async fn dispatch_entity_notification(
 
         let normalized_severity = normalize_severity(severity);
         let priority = FcmPayload::priority_for_level(normalized_severity.as_str());
-        let ttl_seconds = ttl.map(|expires_at| ttl_seconds_remaining(sent_at, expires_at));
+        let effective_ttl =
+            ttl.map(|expires_at| expires_at.min(sent_at + MAX_PROVIDER_TTL_SECONDS));
+        let ttl_seconds =
+            effective_ttl.map(|expires_at| ttl_seconds_remaining(sent_at, expires_at));
         let devices = state.store.list_channel_devices_async(channel_id).await?;
 
         let private_state = state.private.as_ref();
         let private_enabled = state.private_channel_enabled && private_state.is_some();
         let private_default_ttl_secs = private_state
             .map(|private| private.config.default_ttl_secs)
-            .unwrap_or(7 * 24 * 60 * 60);
+            .unwrap_or(MAX_PROVIDER_TTL_SECONDS)
+            .clamp(0, MAX_PROVIDER_TTL_SECONDS);
 
         let private_subscribers = if private_enabled {
             state
@@ -381,7 +392,7 @@ pub(super) async fn dispatch_entity_notification(
                 op_id: &op_id,
                 delivery_id: &delivery_id,
                 sent_at,
-                ttl,
+                ttl: effective_ttl,
                 entity_type,
                 entity_id: &entity_id,
             },
@@ -409,7 +420,7 @@ pub(super) async fn dispatch_entity_notification(
                     "private payload unavailable while private channel is enabled".to_string(),
                 ));
             };
-            let private_expires_at = ttl.unwrap_or(sent_at + private_default_ttl_secs);
+            let private_expires_at = effective_ttl.unwrap_or(sent_at + private_default_ttl_secs);
             for device_id in private_subscribers {
                 match private_state
                     .enqueue_private_delivery(
@@ -480,7 +491,7 @@ pub(super) async fn dispatch_entity_notification(
                 provider_fallback_body.clone(),
                 Some(channel_id_value.clone()),
                 normalized_severity.clone(),
-                ttl,
+                effective_ttl,
                 SharedStringMap::from(Arc::clone(&custom_data)),
             )))
         } else {
@@ -493,7 +504,7 @@ pub(super) async fn dispatch_entity_notification(
                 provider_fallback_body.clone(),
                 Some(channel_id_value.clone()),
                 normalized_severity.clone(),
-                ttl,
+                effective_ttl,
                 quantize_watch_payload(custom_data.as_ref()),
             )))
         } else {
@@ -543,7 +554,7 @@ pub(super) async fn dispatch_entity_notification(
         let apns_wakeup_payload = if has_apns {
             Some(Arc::new(ApnsPayload::wakeup(
                 Some(channel_id_value.clone()),
-                ttl,
+                effective_ttl,
                 SharedStringMap::from(Arc::clone(&wakeup_data)),
             )))
         } else {
@@ -553,7 +564,8 @@ pub(super) async fn dispatch_entity_notification(
         let total = devices.len();
         let mut rejected = 0usize;
         let mut dispatch_closed = false;
-        let provider_private_expires_at = ttl.unwrap_or(sent_at + private_default_ttl_secs);
+        let provider_private_expires_at =
+            effective_ttl.unwrap_or(sent_at + private_default_ttl_secs);
         for (index, device) in devices.into_iter().enumerate() {
             let private_delivery_target = if let Some(private_state) = private_state {
                 private_state
@@ -1030,7 +1042,7 @@ fn normalize_thing_id(raw: &str) -> Result<&str, Error> {
 
 const PAYLOAD_VERSION: &str = "1";
 const SCHEMA_VERSION: &str = "1";
-const MAX_PROVIDER_TTL_SECONDS: i64 = 2_419_200;
+const MAX_PROVIDER_TTL_SECONDS: i64 = 2_592_000;
 
 async fn reserve_new_delivery_id(state: &AppState, created_at: i64) -> Result<String, Error> {
     const MAX_ATTEMPTS: usize = 4;

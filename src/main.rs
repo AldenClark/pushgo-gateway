@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     print_startup_diagnostics(&args, apns_endpoint, token_service_url.as_str());
 
     let client = reqwest::Client::builder()
-        .user_agent("pushgo-gateway/1.0.26")
+        .user_agent("pushgo-gateway/1.0.27")
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|err| pushgo_gateway::Error::Internal(err.to_string()))?;

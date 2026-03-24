@@ -23,6 +23,7 @@ use super::{
         build_semantic_create_dedupe_key, deserialize_metadata_map, dispatch_entity_notification,
         encode_metadata, normalize_op_id, resolve_create_semantic_id, validate_metadata_entries,
     },
+    url_safety::{rewrite_visible_urls_in_text, sanitize_image_urls, sanitize_optional_open_url},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -293,6 +294,16 @@ async fn thing_to_channel_with_action(
         payload.payload.mutable.primary_image.as_deref(),
         "primary_image",
     )?;
+    let normalized_description = payload
+        .payload
+        .mutable
+        .description
+        .as_deref()
+        .map(rewrite_visible_urls_in_text)
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        });
     validate_extension_object(&payload.payload.mutable.attrs, "attrs")?;
     validate_manufacturer_attrs(&payload.payload.mutable.attrs)?;
     validate_external_id_patch(&payload.payload.mutable.external_ids)?;
@@ -339,7 +350,7 @@ async fn thing_to_channel_with_action(
     if let Some(title) = payload.payload.mutable.title.clone() {
         merged_profile.title = Some(title);
     }
-    if let Some(description) = payload.payload.mutable.description.clone() {
+    if let Some(description) = normalized_description.clone() {
         merged_profile.description = Some(description);
     }
     if let Some(tags) = normalized_tags {
@@ -434,8 +445,12 @@ async fn thing_to_channel_with_action(
 
     let thing_meta_json = encode_thing_meta(resolved_profile_json.as_deref())?;
 
-    let (notification_title, notification_body) =
-        build_thing_notification_content(route_action, &payload, merged_profile.as_ref());
+    let (notification_title, notification_body) = build_thing_notification_content(
+        route_action,
+        &payload,
+        merged_profile.as_ref(),
+        normalized_description,
+    );
 
     if applied {
         let existing_latest_event_id = existing
@@ -572,6 +587,7 @@ fn build_thing_notification_content(
     route_action: ThingRouteAction,
     payload: &ThingIntent,
     profile: Option<&ThingProfile>,
+    normalized_description: Option<String>,
 ) -> (Option<String>, Option<String>) {
     let operation = thing_operation_label(route_action);
     let requested_title = payload
@@ -582,14 +598,7 @@ fn build_thing_notification_content(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let requested_body = payload
-        .payload
-        .mutable
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let requested_body = normalized_description;
     let fallback_title = profile
         .and_then(|current| current.title.as_deref())
         .map(str::trim)
@@ -716,17 +725,7 @@ fn thing_state_api_text(state: ThingState) -> &'static str {
 }
 
 fn normalize_optional_url(raw: Option<&str>, field: &str) -> Result<Option<String>, Error> {
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    if trimmed.len() > 2048 {
-        return Err(Error::validation(format!("{field} contains oversized url")));
-    }
-    Ok(Some(trimmed.to_string()))
+    sanitize_optional_open_url(raw, field).map_err(Error::validation)
 }
 
 fn push_unique_image(profile: &mut ThingProfile, value: &str) {
@@ -752,25 +751,7 @@ fn thing_profile_is_empty(profile: &ThingProfile) -> bool {
 }
 
 fn normalize_image_urls(images: &[String], field: &str) -> Result<Vec<String>, Error> {
-    const MAX_IMAGES: usize = 32;
-    const MAX_URL_LEN: usize = 2048;
-    if images.len() > MAX_IMAGES {
-        return Err(Error::validation(format!("{field} exceeds max length")));
-    }
-    let mut out = Vec::with_capacity(images.len());
-    for value in images {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Err(Error::validation(format!("{field} contains empty url")));
-        }
-        if trimmed.len() > MAX_URL_LEN {
-            return Err(Error::validation(format!("{field} contains oversized url")));
-        }
-        if !out.iter().any(|item| item == trimmed) {
-            out.push(trimmed.to_string());
-        }
-    }
-    Ok(out)
+    sanitize_image_urls(images, field).map_err(Error::validation)
 }
 
 fn validate_extension_object(

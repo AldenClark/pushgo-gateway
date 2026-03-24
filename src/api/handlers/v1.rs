@@ -187,6 +187,7 @@ pub(crate) async fn v1_channel_sync(
         .get(device_key)
         .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
     let mut channels = Vec::with_capacity(payload.channels.len());
+    let mut desired_channels = HashSet::with_capacity(payload.channels.len());
     let mut success = 0usize;
 
     for item in payload.channels {
@@ -246,6 +247,7 @@ pub(crate) async fn v1_channel_sync(
         match sync_single_channel(&state, device_key, &route, channel_id, password).await {
             Ok((channel_name, created)) => {
                 success += 1;
+                desired_channels.insert(channel_id);
                 channels.push(V1ChannelSyncResult {
                     channel_id: channel_id_text,
                     channel_name: Some(channel_name),
@@ -269,6 +271,9 @@ pub(crate) async fn v1_channel_sync(
     }
 
     let failed = channels.len().saturating_sub(success);
+    if failed == 0 {
+        reconcile_synced_channels(&state, device_key, &route, &desired_channels).await?;
+    }
 
     Ok(crate::api::ok(V1ChannelSyncResponse {
         total: channels.len(),
@@ -276,6 +281,72 @@ pub(crate) async fn v1_channel_sync(
         failed,
         channels,
     }))
+}
+
+async fn reconcile_synced_channels(
+    state: &AppState,
+    device_key: &str,
+    route: &DeviceRouteRecord,
+    desired_channels: &HashSet<[u8; 16]>,
+) -> Result<(), Error> {
+    match route.channel_type {
+        DeviceChannelType::Private => {
+            let device_id = DeviceRegistry::derive_private_device_id(device_key);
+            let existing_channels = state
+                .store
+                .list_private_subscribed_channels_for_device_async(device_id)
+                .await
+                .map_err(|err| Error::Internal(err.to_string()))?;
+            let mut removed_channels = HashSet::new();
+            for channel_id in existing_channels {
+                if desired_channels.contains(&channel_id) {
+                    continue;
+                }
+                state
+                    .store
+                    .private_unsubscribe_channel_async(channel_id, device_id)
+                    .await
+                    .map_err(|err| Error::Internal(err.to_string()))?;
+                removed_channels.insert(channel_id);
+            }
+            if let Some(private_state) = state.private.as_ref()
+                && !removed_channels.is_empty()
+            {
+                clear_private_pending_for_channels(
+                    state,
+                    private_state,
+                    device_id,
+                    &removed_channels,
+                )
+                .await
+                .map_err(|err| Error::Internal(err.to_string()))?;
+            }
+        }
+        DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns => {
+            let provider_token = route
+                .provider_token
+                .as_deref()
+                .filter(|token| !token.trim().is_empty())
+                .ok_or_else(|| Error::validation("provider channel requires provider_token"))?;
+            let platform = platform_from_str(route.platform.as_str())?;
+            let existing_channels = state
+                .store
+                .list_subscribed_channels_for_device_async(provider_token, platform)
+                .await
+                .map_err(|err| Error::Internal(err.to_string()))?;
+            for channel_id in existing_channels {
+                if desired_channels.contains(&channel_id) {
+                    continue;
+                }
+                state
+                    .store
+                    .unsubscribe_channel_async(channel_id, provider_token, platform)
+                    .await
+                    .map_err(|err| Error::Internal(err.to_string()))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn v1_device_channel_delete(
@@ -748,8 +819,22 @@ async fn clear_private_pending_for_channel(
     device_id: [u8; 16],
     channel_id: [u8; 16],
 ) -> Result<usize, Error> {
+    let mut singleton = HashSet::with_capacity(1);
+    singleton.insert(channel_id);
+    clear_private_pending_for_channels(state, private_state, device_id, &singleton).await
+}
+
+async fn clear_private_pending_for_channels(
+    state: &AppState,
+    private_state: &crate::private::PrivateState,
+    device_id: [u8; 16],
+    channel_ids: &HashSet<[u8; 16]>,
+) -> Result<usize, Error> {
+    if channel_ids.is_empty() {
+        return Ok(0);
+    }
     const MAX_PENDING_SCAN_PER_UNSUBSCRIBE: usize = 200_000;
-    let expected_channel_id = format_channel_id(&channel_id);
+    let expected_channel_ids: HashSet<String> = channel_ids.iter().map(format_channel_id).collect();
     let entries = state
         .store
         .list_private_outbox_async(device_id, MAX_PENDING_SCAN_PER_UNSUBSCRIBE)
@@ -776,7 +861,7 @@ async fn clear_private_pending_for_channel(
             .map(String::as_str)
             .map(str::trim)
             .unwrap_or_default();
-        if payload_channel_id != expected_channel_id {
+        if !expected_channel_ids.contains(payload_channel_id) {
             continue;
         }
         let _ = private_state

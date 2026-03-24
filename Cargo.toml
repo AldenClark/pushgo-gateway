@@ -1,6 +1,6 @@
 [package]
 name = "pushgo-gateway"
-version = "1.0.26"
+version = "1.0.27"
 edition = "2024"
 license = "MIT"
 authors = ["PushGo Team <team@pushgo.dev>"]
@@ -75,6 +75,7 @@ warp-link-coordination = { git = "https://github.com/AldenClark/warp-link", rev 
 pushgo-warp-profile = { git = "https://github.com/AldenClark/warp-link", rev = "4c11f58cd211a4baffa729996e19e40b71188221" }
 futures-util = "0.3.32"
 parking_lot = "0.12.5"
+scc = "3.6.11"
 
 [dev-dependencies]
 tempfile = "3.27.0"

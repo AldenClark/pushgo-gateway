@@ -5,6 +5,7 @@ use blake3::Hasher;
 use chrono::Utc;
 use hashbrown::HashMap;
 use parking_lot::RwLock;
+use scc::HashCache;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     MySqlPool, PgPool, Row, SqlitePool,
@@ -145,6 +146,10 @@ const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-02-25-gateway-v3";
 const OUTBOX_STATUS_PENDING: &str = "pending";
 const OUTBOX_STATUS_CLAIMED: &str = "claimed";
 const OUTBOX_STATUS_SENT: &str = "sent";
+const CHANNEL_INFO_CACHE_MIN_CAPACITY: usize = 1024;
+const CHANNEL_INFO_CACHE_MAX_CAPACITY: usize = 16384;
+const CHANNEL_DEVICES_CACHE_MIN_CAPACITY: usize = 2048;
+const CHANNEL_DEVICES_CACHE_MAX_CAPACITY: usize = 32768;
 
 #[inline]
 fn hex_nibble(b: u8) -> Option<u8> {
@@ -641,6 +646,17 @@ pub trait StoreApi: Send + Sync {
         channel_id: [u8; 16],
     ) -> StoreResult<Vec<DeviceInfo>>;
 
+    async fn list_subscribed_channels_for_device_async(
+        &self,
+        device_token: &str,
+        platform: Platform,
+    ) -> StoreResult<Vec<[u8; 16]>>;
+
+    async fn list_private_subscribed_channels_for_device_async(
+        &self,
+        device_id: DeviceId,
+    ) -> StoreResult<Vec<[u8; 16]>>;
+
     async fn channel_info_with_password_async(
         &self,
         channel_id: [u8; 16],
@@ -836,6 +852,8 @@ fn ensure_sqlite_parent_dir(db_path: &Path) -> StoreResult<()> {
 pub struct SqlxStore {
     backend: SqlxBackend,
     device_cache: Arc<RwLock<HashMap<[u8; 32], DeviceInfo>>>,
+    channel_info_cache: Arc<HashCache<[u8; 16], ChannelInfo>>,
+    channel_devices_cache: Arc<HashCache<[u8; 16], Vec<DeviceInfo>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -862,6 +880,14 @@ impl SqlxStore {
                 SqlxStore {
                     backend: SqlxBackend::Sqlite(pool),
                     device_cache: Default::default(),
+                    channel_info_cache: Arc::new(HashCache::with_capacity(
+                        CHANNEL_INFO_CACHE_MIN_CAPACITY,
+                        CHANNEL_INFO_CACHE_MAX_CAPACITY,
+                    )),
+                    channel_devices_cache: Arc::new(HashCache::with_capacity(
+                        CHANNEL_DEVICES_CACHE_MIN_CAPACITY,
+                        CHANNEL_DEVICES_CACHE_MAX_CAPACITY,
+                    )),
                 }
             }
             DatabaseKind::Postgres => {
@@ -872,6 +898,14 @@ impl SqlxStore {
                 SqlxStore {
                     backend: SqlxBackend::Postgres(pool),
                     device_cache: Default::default(),
+                    channel_info_cache: Arc::new(HashCache::with_capacity(
+                        CHANNEL_INFO_CACHE_MIN_CAPACITY,
+                        CHANNEL_INFO_CACHE_MAX_CAPACITY,
+                    )),
+                    channel_devices_cache: Arc::new(HashCache::with_capacity(
+                        CHANNEL_DEVICES_CACHE_MIN_CAPACITY,
+                        CHANNEL_DEVICES_CACHE_MAX_CAPACITY,
+                    )),
                 }
             }
             DatabaseKind::Mysql => {
@@ -882,11 +916,65 @@ impl SqlxStore {
                 SqlxStore {
                     backend: SqlxBackend::Mysql(pool),
                     device_cache: Default::default(),
+                    channel_info_cache: Arc::new(HashCache::with_capacity(
+                        CHANNEL_INFO_CACHE_MIN_CAPACITY,
+                        CHANNEL_INFO_CACHE_MAX_CAPACITY,
+                    )),
+                    channel_devices_cache: Arc::new(HashCache::with_capacity(
+                        CHANNEL_DEVICES_CACHE_MIN_CAPACITY,
+                        CHANNEL_DEVICES_CACHE_MAX_CAPACITY,
+                    )),
                 }
             }
         };
         store.init_schema().await?;
         Ok(store)
+    }
+
+    #[inline]
+    fn invalidate_channel_devices_cache(&self, channel_id: [u8; 16]) {
+        let _ = self.channel_devices_cache.remove_sync(&channel_id);
+    }
+
+    #[inline]
+    fn invalidate_all_channel_devices_cache(&self) {
+        self.channel_devices_cache.clear_sync();
+    }
+
+    #[inline]
+    fn cache_channel_info(&self, channel_id: [u8; 16], info: &ChannelInfo) {
+        if let Some(mut entry) = self.channel_info_cache.get_sync(&channel_id) {
+            *entry = info.clone();
+            return;
+        }
+        let _ = self.channel_info_cache.put_sync(channel_id, info.clone());
+    }
+
+    #[inline]
+    fn cached_channel_info(&self, channel_id: [u8; 16]) -> Option<ChannelInfo> {
+        self.channel_info_cache
+            .read_sync(&channel_id, |_, value| value.clone())
+    }
+
+    #[inline]
+    fn invalidate_channel_info_cache(&self, channel_id: [u8; 16]) {
+        let _ = self.channel_info_cache.remove_sync(&channel_id);
+    }
+
+    #[inline]
+    fn cache_channel_devices(&self, channel_id: [u8; 16], devices: &[DeviceInfo]) {
+        let copied = devices.to_vec();
+        if let Some(mut entry) = self.channel_devices_cache.get_sync(&channel_id) {
+            *entry = copied;
+            return;
+        }
+        let _ = self.channel_devices_cache.put_sync(channel_id, copied);
+    }
+
+    #[inline]
+    fn cached_channel_devices(&self, channel_id: [u8; 16]) -> Option<Vec<DeviceInfo>> {
+        self.channel_devices_cache
+            .read_sync(&channel_id, |_, value| value.clone())
     }
 
     async fn init_schema(&self) -> StoreResult<()> {
@@ -2064,6 +2152,13 @@ impl StoreApi for SqlxStore {
             }
         };
         self.device_cache.write().insert(device_id, device_info);
+        self.invalidate_channel_devices_cache(outcome.channel_id);
+        self.cache_channel_info(
+            outcome.channel_id,
+            &ChannelInfo {
+                alias: outcome.alias.clone(),
+            },
+        );
         Ok(outcome)
     }
 
@@ -2076,7 +2171,7 @@ impl StoreApi for SqlxStore {
         let device_info = DeviceInfo::from_token(platform, device_token)?;
         let device_id = device_id_for(platform, &device_info.token_raw);
         let channel_bytes = channel_id.to_vec();
-        match &self.backend {
+        let removed = match &self.backend {
             SqlxBackend::Postgres(pool) => {
                 let result = sqlx::query(
                     "DELETE FROM subscriptions WHERE channel_id = $1 AND device_id = $2",
@@ -2085,7 +2180,7 @@ impl StoreApi for SqlxStore {
                 .bind(&device_id[..])
                 .execute(pool)
                 .await?;
-                Ok(result.rows_affected() > 0)
+                result.rows_affected() > 0
             }
             SqlxBackend::Mysql(pool) => {
                 let result =
@@ -2094,7 +2189,7 @@ impl StoreApi for SqlxStore {
                         .bind(&device_id[..])
                         .execute(pool)
                         .await?;
-                Ok(result.rows_affected() > 0)
+                result.rows_affected() > 0
             }
             SqlxBackend::Sqlite(pool) => {
                 let result =
@@ -2103,9 +2198,13 @@ impl StoreApi for SqlxStore {
                         .bind(&device_id[..])
                         .execute(pool)
                         .await?;
-                Ok(result.rows_affected() > 0)
+                result.rows_affected() > 0
             }
+        };
+        if removed {
+            self.invalidate_channel_devices_cache(channel_id);
         }
+        Ok(removed)
     }
 
     async fn retire_device_async(
@@ -2115,9 +2214,24 @@ impl StoreApi for SqlxStore {
     ) -> StoreResult<usize> {
         let device_info = DeviceInfo::from_token(platform, device_token)?;
         let device_id = device_id_for(platform, &device_info.token_raw);
+        let mut touched_channels: Vec<[u8; 16]> = Vec::new();
         match &self.backend {
             SqlxBackend::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
+                let touched =
+                    sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = $1")
+                        .bind(&device_id[..])
+                        .fetch_all(&mut *tx)
+                        .await?;
+                for row in touched {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    touched_channels.push(channel_id);
+                }
                 let removed = sqlx::query("DELETE FROM subscriptions WHERE device_id = $1")
                     .bind(&device_id[..])
                     .execute(&mut *tx)
@@ -2129,10 +2243,27 @@ impl StoreApi for SqlxStore {
                     .await?;
                 tx.commit().await?;
                 self.device_cache.write().remove(&device_id);
+                for channel_id in touched_channels {
+                    self.invalidate_channel_devices_cache(channel_id);
+                }
                 Ok(removed)
             }
             SqlxBackend::Mysql(pool) => {
                 let mut tx = pool.begin().await?;
+                let touched =
+                    sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = ?")
+                        .bind(&device_id[..])
+                        .fetch_all(&mut *tx)
+                        .await?;
+                for row in touched {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    touched_channels.push(channel_id);
+                }
                 let removed = sqlx::query("DELETE FROM subscriptions WHERE device_id = ?")
                     .bind(&device_id[..])
                     .execute(&mut *tx)
@@ -2144,10 +2275,27 @@ impl StoreApi for SqlxStore {
                     .await?;
                 tx.commit().await?;
                 self.device_cache.write().remove(&device_id);
+                for channel_id in touched_channels {
+                    self.invalidate_channel_devices_cache(channel_id);
+                }
                 Ok(removed)
             }
             SqlxBackend::Sqlite(pool) => {
                 let mut tx = pool.begin().await?;
+                let touched =
+                    sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = ?")
+                        .bind(&device_id[..])
+                        .fetch_all(&mut *tx)
+                        .await?;
+                for row in touched {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    touched_channels.push(channel_id);
+                }
                 let removed = sqlx::query("DELETE FROM subscriptions WHERE device_id = ?")
                     .bind(&device_id[..])
                     .execute(&mut *tx)
@@ -2159,6 +2307,9 @@ impl StoreApi for SqlxStore {
                     .await?;
                 tx.commit().await?;
                 self.device_cache.write().remove(&device_id);
+                for channel_id in touched_channels {
+                    self.invalidate_channel_devices_cache(channel_id);
+                }
                 Ok(removed)
             }
         }
@@ -2183,9 +2334,24 @@ impl StoreApi for SqlxStore {
             return Ok(0);
         }
 
+        let mut touched_channels: Vec<[u8; 16]> = Vec::new();
         match &self.backend {
             SqlxBackend::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
+                let touched =
+                    sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = $1")
+                        .bind(&old_device_id[..])
+                        .fetch_all(&mut *tx)
+                        .await?;
+                for row in touched {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    touched_channels.push(channel_id);
+                }
                 sqlx::query(
                     "INSERT INTO devices (device_id, device_blob) VALUES ($1, $2) \
                      ON CONFLICT (device_id) DO UPDATE SET device_blob = EXCLUDED.device_blob",
@@ -2219,10 +2385,27 @@ impl StoreApi for SqlxStore {
                 self.device_cache
                     .write()
                     .insert(new_device_id, new_device_info);
+                for channel_id in touched_channels {
+                    self.invalidate_channel_devices_cache(channel_id);
+                }
                 Ok(moved)
             }
             SqlxBackend::Mysql(pool) => {
                 let mut tx = pool.begin().await?;
+                let touched =
+                    sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = ?")
+                        .bind(&old_device_id[..])
+                        .fetch_all(&mut *tx)
+                        .await?;
+                for row in touched {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    touched_channels.push(channel_id);
+                }
                 sqlx::query(
                     "INSERT INTO devices (device_id, device_blob) VALUES (?, ?) \
                      ON DUPLICATE KEY UPDATE device_blob = VALUES(device_blob)",
@@ -2255,10 +2438,27 @@ impl StoreApi for SqlxStore {
                 self.device_cache
                     .write()
                     .insert(new_device_id, new_device_info);
+                for channel_id in touched_channels {
+                    self.invalidate_channel_devices_cache(channel_id);
+                }
                 Ok(moved)
             }
             SqlxBackend::Sqlite(pool) => {
                 let mut tx = pool.begin().await?;
+                let touched =
+                    sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = ?")
+                        .bind(&old_device_id[..])
+                        .fetch_all(&mut *tx)
+                        .await?;
+                for row in touched {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    touched_channels.push(channel_id);
+                }
                 sqlx::query(
                     "INSERT INTO devices (device_id, device_blob) VALUES (?, ?) \
                      ON CONFLICT (device_id) DO UPDATE SET device_blob = excluded.device_blob",
@@ -2292,6 +2492,9 @@ impl StoreApi for SqlxStore {
                 self.device_cache
                     .write()
                     .insert(new_device_id, new_device_info);
+                for channel_id in touched_channels {
+                    self.invalidate_channel_devices_cache(channel_id);
+                }
                 Ok(moved)
             }
         }
@@ -2373,6 +2576,12 @@ impl StoreApi for SqlxStore {
                 .execute(&mut *tx)
                 .await?;
                 tx.commit().await?;
+                self.cache_channel_info(
+                    channel_id,
+                    &ChannelInfo {
+                        alias: alias.to_string(),
+                    },
+                );
                 Ok(())
             }
             SqlxBackend::Mysql(pool) => {
@@ -2391,6 +2600,12 @@ impl StoreApi for SqlxStore {
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
+                self.cache_channel_info(
+                    channel_id,
+                    &ChannelInfo {
+                        alias: alias.to_string(),
+                    },
+                );
                 Ok(())
             }
             SqlxBackend::Sqlite(pool) => {
@@ -2409,6 +2624,12 @@ impl StoreApi for SqlxStore {
                     .execute(&mut *tx)
                     .await?;
                 tx.commit().await?;
+                self.cache_channel_info(
+                    channel_id,
+                    &ChannelInfo {
+                        alias: alias.to_string(),
+                    },
+                );
                 Ok(())
             }
         }
@@ -2619,8 +2840,11 @@ impl StoreApi for SqlxStore {
     }
 
     async fn channel_info_async(&self, channel_id: [u8; 16]) -> StoreResult<Option<ChannelInfo>> {
+        if let Some(cached) = self.cached_channel_info(channel_id) {
+            return Ok(Some(cached));
+        }
         let channel_bytes = channel_id.to_vec();
-        match &self.backend {
+        let info = match &self.backend {
             SqlxBackend::Postgres(pool) => {
                 let row = sqlx::query("SELECT alias FROM channels WHERE channel_id = $1")
                     .bind(&channel_bytes)
@@ -2629,9 +2853,9 @@ impl StoreApi for SqlxStore {
                 match row {
                     Some(row) => {
                         let alias: String = row.try_get("alias")?;
-                        Ok(Some(ChannelInfo { alias }))
+                        Some(ChannelInfo { alias })
                     }
-                    None => Ok(None),
+                    None => None,
                 }
             }
             SqlxBackend::Mysql(pool) => {
@@ -2642,9 +2866,9 @@ impl StoreApi for SqlxStore {
                 match row {
                     Some(row) => {
                         let alias: String = row.try_get("alias")?;
-                        Ok(Some(ChannelInfo { alias }))
+                        Some(ChannelInfo { alias })
                     }
-                    None => Ok(None),
+                    None => None,
                 }
             }
             SqlxBackend::Sqlite(pool) => {
@@ -2655,12 +2879,18 @@ impl StoreApi for SqlxStore {
                 match row {
                     Some(row) => {
                         let alias: String = row.try_get("alias")?;
-                        Ok(Some(ChannelInfo { alias }))
+                        Some(ChannelInfo { alias })
                     }
-                    None => Ok(None),
+                    None => None,
                 }
             }
+        };
+        if let Some(ref info) = info {
+            self.cache_channel_info(channel_id, info);
+        } else {
+            self.invalidate_channel_info_cache(channel_id);
         }
+        Ok(info)
     }
 
     async fn channel_info_with_password_async(
@@ -2765,11 +2995,18 @@ impl StoreApi for SqlxStore {
                 tx.commit().await?;
                 let mut channel_id_arr = [0u8; 16];
                 channel_id_arr.copy_from_slice(&channel_bytes);
-                Ok(SubscribeOutcome {
+                let outcome = SubscribeOutcome {
                     channel_id: channel_id_arr,
                     alias: channel_alias,
                     created,
-                })
+                };
+                self.cache_channel_info(
+                    outcome.channel_id,
+                    &ChannelInfo {
+                        alias: outcome.alias.clone(),
+                    },
+                );
+                Ok(outcome)
             }
             SqlxBackend::Mysql(pool) => {
                 let mut tx = pool.begin().await?;
@@ -2805,11 +3042,18 @@ impl StoreApi for SqlxStore {
                 tx.commit().await?;
                 let mut channel_id_arr = [0u8; 16];
                 channel_id_arr.copy_from_slice(&channel_bytes);
-                Ok(SubscribeOutcome {
+                let outcome = SubscribeOutcome {
                     channel_id: channel_id_arr,
                     alias: channel_alias,
                     created,
-                })
+                };
+                self.cache_channel_info(
+                    outcome.channel_id,
+                    &ChannelInfo {
+                        alias: outcome.alias.clone(),
+                    },
+                );
+                Ok(outcome)
             }
             SqlxBackend::Sqlite(pool) => {
                 let mut tx = pool.begin().await?;
@@ -2845,11 +3089,18 @@ impl StoreApi for SqlxStore {
                 tx.commit().await?;
                 let mut channel_id_arr = [0u8; 16];
                 channel_id_arr.copy_from_slice(&channel_bytes);
-                Ok(SubscribeOutcome {
+                let outcome = SubscribeOutcome {
                     channel_id: channel_id_arr,
                     alias: channel_alias,
                     created,
-                })
+                };
+                self.cache_channel_info(
+                    outcome.channel_id,
+                    &ChannelInfo {
+                        alias: outcome.alias.clone(),
+                    },
+                );
+                Ok(outcome)
             }
         }
     }
@@ -3473,6 +3724,16 @@ impl StoreApi for SqlxStore {
         &self,
         channel_id: [u8; 16],
     ) -> StoreResult<Vec<DeviceInfo>> {
+        if let Some(cached) = self.cached_channel_devices(channel_id) {
+            for info in &cached {
+                let device_id = device_id_for(info.platform, &info.token_raw);
+                self.device_cache
+                    .write()
+                    .entry(device_id)
+                    .or_insert_with(|| info.clone());
+            }
+            return Ok(cached);
+        }
         let channel_bytes = channel_id.to_vec();
         let rows: Vec<(Vec<u8>, Vec<u8>)> = match &self.backend {
             SqlxBackend::Postgres(pool) => {
@@ -3544,7 +3805,134 @@ impl StoreApi for SqlxStore {
             }
             devices.push(info);
         }
+        self.cache_channel_devices(channel_id, &devices);
         Ok(devices)
+    }
+
+    async fn list_subscribed_channels_for_device_async(
+        &self,
+        device_token: &str,
+        platform: Platform,
+    ) -> StoreResult<Vec<[u8; 16]>> {
+        let device_info = DeviceInfo::from_token(platform, device_token)?;
+        let device_id = device_id_for(platform, &device_info.token_raw);
+        match &self.backend {
+            SqlxBackend::Postgres(pool) => {
+                let rows = sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = $1")
+                    .bind(&device_id[..])
+                    .fetch_all(pool)
+                    .await?;
+                let mut channels = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    channels.push(channel_id);
+                }
+                Ok(channels)
+            }
+            SqlxBackend::Mysql(pool) => {
+                let rows = sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = ?")
+                    .bind(&device_id[..])
+                    .fetch_all(pool)
+                    .await?;
+                let mut channels = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    channels.push(channel_id);
+                }
+                Ok(channels)
+            }
+            SqlxBackend::Sqlite(pool) => {
+                let rows = sqlx::query("SELECT channel_id FROM subscriptions WHERE device_id = ?")
+                    .bind(&device_id[..])
+                    .fetch_all(pool)
+                    .await?;
+                let mut channels = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    channels.push(channel_id);
+                }
+                Ok(channels)
+            }
+        }
+    }
+
+    async fn list_private_subscribed_channels_for_device_async(
+        &self,
+        device_id: DeviceId,
+    ) -> StoreResult<Vec<[u8; 16]>> {
+        let device_id = device_id.to_vec();
+        match &self.backend {
+            SqlxBackend::Postgres(pool) => {
+                let rows = sqlx::query(
+                    "SELECT channel_id FROM private_subscriptions WHERE device_id = $1",
+                )
+                .bind(&device_id)
+                .fetch_all(pool)
+                .await?;
+                let mut channels = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    channels.push(channel_id);
+                }
+                Ok(channels)
+            }
+            SqlxBackend::Mysql(pool) => {
+                let rows =
+                    sqlx::query("SELECT channel_id FROM private_subscriptions WHERE device_id = ?")
+                        .bind(&device_id)
+                        .fetch_all(pool)
+                        .await?;
+                let mut channels = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    channels.push(channel_id);
+                }
+                Ok(channels)
+            }
+            SqlxBackend::Sqlite(pool) => {
+                let rows =
+                    sqlx::query("SELECT channel_id FROM private_subscriptions WHERE device_id = ?")
+                        .bind(&device_id)
+                        .fetch_all(pool)
+                        .await?;
+                let mut channels = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let channel_bytes: Vec<u8> = row.try_get("channel_id")?;
+                    if channel_bytes.len() != 16 {
+                        continue;
+                    }
+                    let mut channel_id = [0u8; 16];
+                    channel_id.copy_from_slice(&channel_bytes);
+                    channels.push(channel_id);
+                }
+                Ok(channels)
+            }
+        }
     }
 
     async fn lookup_private_device_async(
@@ -5465,6 +5853,8 @@ impl StoreApi for SqlxStore {
 
     async fn automation_reset_async(&self) -> StoreResult<()> {
         self.device_cache.write().clear();
+        self.channel_info_cache.clear_sync();
+        self.invalidate_all_channel_devices_cache();
         let statements: &[&str] = &[
             "DELETE FROM thing_event_link",
             "DELETE FROM event_log",

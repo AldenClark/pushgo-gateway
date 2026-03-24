@@ -24,6 +24,7 @@ use super::{
         build_semantic_create_dedupe_key, deserialize_metadata_map, dispatch_entity_notification,
         encode_metadata, normalize_op_id, resolve_create_semantic_id, validate_metadata_entries,
     },
+    url_safety::{rewrite_visible_urls_in_text, sanitize_image_urls},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -282,6 +283,15 @@ async fn event_to_channel_with_action(
         .map(normalize_event_message)
         .transpose()?;
     let normalized_images = normalize_image_urls(&payload.payload.images, "images")?;
+    let normalized_description = payload
+        .payload
+        .description
+        .as_deref()
+        .map(rewrite_visible_urls_in_text)
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        });
 
     validate_extension_object(&payload.payload.attrs, "attrs")?;
     validate_metadata_entries(&payload.payload.metadata)?;
@@ -335,7 +345,7 @@ async fn event_to_channel_with_action(
     if let Some(title) = payload.payload.title.as_ref() {
         merged_profile.title = Some(title.clone());
     }
-    if let Some(description) = payload.payload.description.as_ref() {
+    if let Some(description) = normalized_description.as_ref() {
         merged_profile.description = Some(description.clone());
     }
     if let Some(status) = normalized_status.as_ref() {
@@ -456,7 +466,9 @@ async fn event_to_channel_with_action(
             .as_ref()
             .and_then(|profile| profile.title.clone())
     });
-    let notification_body = normalized_message.clone();
+    let notification_body = normalized_message
+        .clone()
+        .or(normalized_description.clone());
 
     if applied {
         let head = EventHead {
@@ -687,7 +699,8 @@ fn normalize_event_status(raw: &str) -> Result<String, Error> {
 
 fn normalize_event_message(raw: &str) -> Result<String, Error> {
     const MAX_MESSAGE_LEN: usize = 512;
-    let trimmed = raw.trim();
+    let rewritten = rewrite_visible_urls_in_text(raw);
+    let trimmed = rewritten.trim();
     if trimmed.is_empty() {
         return Err(Error::validation("message must not be empty"));
     }
@@ -836,25 +849,7 @@ fn normalize_tags(values: &[String], field: &str) -> Result<Vec<String>, Error> 
 }
 
 fn normalize_image_urls(values: &[String], field: &str) -> Result<Vec<String>, Error> {
-    const MAX_IMAGES: usize = 32;
-    const MAX_URL_LEN: usize = 2048;
-    if values.len() > MAX_IMAGES {
-        return Err(Error::validation(format!("{field} exceeds max length")));
-    }
-    let mut out = Vec::with_capacity(values.len());
-    for value in values {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Err(Error::validation(format!("{field} contains empty url")));
-        }
-        if trimmed.len() > MAX_URL_LEN {
-            return Err(Error::validation(format!("{field} contains oversized url")));
-        }
-        if !out.iter().any(|item| item == trimmed) {
-            out.push(trimmed.to_string());
-        }
-    }
-    Ok(out)
+    sanitize_image_urls(values, field).map_err(Error::validation)
 }
 
 fn event_profile_is_empty(profile: &EventProfile) -> bool {

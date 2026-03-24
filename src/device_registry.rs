@@ -84,13 +84,13 @@ impl DeviceRegistry {
     ) -> Result<String, String> {
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.write();
-        if let Some(key) = device_key.map(str::trim).filter(|value| !value.is_empty()) {
-            if state.by_device.contains_key(key) {
-                return Ok(key.to_string());
-            }
-            // Unknown device_key should be discarded. Behave as "device_key not provided":
-            // issue a new one instead of accepting unknown key from client.
+        if let Some(key) = device_key.map(str::trim).filter(|value| !value.is_empty())
+            && state.by_device.contains_key(key)
+        {
+            return Ok(key.to_string());
         }
+        // Unknown device_key should be discarded. Behave as "device_key not provided":
+        // issue a new one instead of accepting unknown key from client.
 
         let key = loop {
             let candidate = generate_device_key();

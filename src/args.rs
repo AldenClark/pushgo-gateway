@@ -209,7 +209,7 @@ pub struct Args {
     #[arg(
         env = "PUSHGO_PRIVATE_DEFAULT_TTL",
         long = "private-default-ttl",
-        default_value = "604800"
+        default_value = "2592000"
     )]
     pub private_default_ttl_secs: i64,
 }

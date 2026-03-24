@@ -183,9 +183,10 @@ mod tests {
     };
 
     use axum::{
-        body::Body,
+        body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use serde_json::{Value, json};
     use tokio::sync::Semaphore;
     use tower::ServiceExt;
 
@@ -193,7 +194,7 @@ mod tests {
         app::{AppState, AuthMode},
         device_registry::DeviceRegistry,
         dispatch::create_dispatch_channels,
-        storage::{Store, new_store},
+        storage::{Platform, Store, new_store},
     };
 
     static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -242,6 +243,38 @@ mod tests {
         let mut state = build_test_state().await;
         state.private_channel_enabled = true;
         state
+    }
+
+    async fn post_json(app: axum::Router, path: &str, payload: Value) -> (StatusCode, Value) {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should handle request");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+        (status, value)
+    }
+
+    fn response_data(body: &Value) -> &Value {
+        body.get("data")
+            .expect("response should contain data field for success path")
+    }
+
+    fn response_string_field<'a>(body: &'a Value, key: &str) -> &'a str {
+        response_data(body)
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("response.data.{key} should be a string"))
     }
 
     #[tokio::test]
@@ -320,5 +353,194 @@ mod tests {
             .await
             .expect("router should handle request");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn channel_sync_with_partial_failures_does_not_reconcile_subscriptions() {
+        let state = build_test_state().await;
+        let store = state.store.clone();
+        let app = super::build_router(state, "<html>docs</html>");
+
+        let (_status, register_body) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({ "platform": "android" }),
+        )
+        .await;
+        let device_key = response_string_field(&register_body, "device_key").to_string();
+        let provider_token = "android-token-sync-partial-0001";
+
+        let (status, _route_body) = post_json(
+            app.clone(),
+            "/channel/device",
+            json!({
+                "device_key": device_key,
+                "channel_type": "fcm",
+                "provider_token": provider_token
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, a_subscribe) = post_json(
+            app.clone(),
+            "/channel/subscribe",
+            json!({
+                "device_key": response_string_field(&register_body, "device_key"),
+                "channel_name": "sync-partial-a",
+                "password": "password-1234"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let channel_a = response_string_field(&a_subscribe, "channel_id").to_string();
+
+        let (status, b_subscribe) = post_json(
+            app.clone(),
+            "/channel/subscribe",
+            json!({
+                "device_key": response_string_field(&register_body, "device_key"),
+                "channel_name": "sync-partial-b",
+                "password": "password-1234"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let channel_b = response_string_field(&b_subscribe, "channel_id").to_string();
+
+        let (status, sync_body) = post_json(
+            app.clone(),
+            "/channel/sync",
+            json!({
+                "device_key": response_string_field(&register_body, "device_key"),
+                "channels": [
+                    {"channel_id": channel_a, "password": "password-1234"},
+                    {"channel_id": channel_b, "password": "wrong-password"}
+                ]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_data(&sync_body)
+                .get("success")
+                .and_then(Value::as_u64)
+                .expect("sync success should be u64"),
+            1
+        );
+        assert_eq!(
+            response_data(&sync_body)
+                .get("failed")
+                .and_then(Value::as_u64)
+                .expect("sync failed should be u64"),
+            1
+        );
+
+        let subscribed = store
+            .list_subscribed_channels_for_device_async(provider_token, Platform::ANDROID)
+            .await
+            .expect("list subscribed channels should succeed");
+        assert_eq!(
+            subscribed.len(),
+            2,
+            "partial failure should keep existing subscriptions unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn channel_sync_with_all_success_reconciles_extra_subscriptions() {
+        let state = build_test_state().await;
+        let store = state.store.clone();
+        let app = super::build_router(state, "<html>docs</html>");
+
+        let (_status, register_body) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({ "platform": "android" }),
+        )
+        .await;
+        let device_key = response_string_field(&register_body, "device_key").to_string();
+        let provider_token = "android-token-sync-full-0001";
+
+        let (status, _route_body) = post_json(
+            app.clone(),
+            "/channel/device",
+            json!({
+                "device_key": device_key,
+                "channel_type": "fcm",
+                "provider_token": provider_token
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, a_subscribe) = post_json(
+            app.clone(),
+            "/channel/subscribe",
+            json!({
+                "device_key": response_string_field(&register_body, "device_key"),
+                "channel_name": "sync-full-a",
+                "password": "password-1234"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let channel_a = response_string_field(&a_subscribe, "channel_id").to_string();
+
+        let (status, b_subscribe) = post_json(
+            app.clone(),
+            "/channel/subscribe",
+            json!({
+                "device_key": response_string_field(&register_body, "device_key"),
+                "channel_name": "sync-full-b",
+                "password": "password-1234"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let channel_b = response_string_field(&b_subscribe, "channel_id").to_string();
+
+        let (status, _c_subscribe) = post_json(
+            app.clone(),
+            "/channel/subscribe",
+            json!({
+                "device_key": response_string_field(&register_body, "device_key"),
+                "channel_name": "sync-full-c",
+                "password": "password-1234"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, sync_body) = post_json(
+            app.clone(),
+            "/channel/sync",
+            json!({
+                "device_key": response_string_field(&register_body, "device_key"),
+                "channels": [
+                    {"channel_id": channel_a, "password": "password-1234"},
+                    {"channel_id": channel_b, "password": "password-1234"}
+                ]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_data(&sync_body)
+                .get("failed")
+                .and_then(Value::as_u64)
+                .expect("sync failed should be u64"),
+            0
+        );
+
+        let subscribed = store
+            .list_subscribed_channels_for_device_async(provider_token, Platform::ANDROID)
+            .await
+            .expect("list subscribed channels should succeed");
+        assert_eq!(
+            subscribed.len(),
+            2,
+            "full success sync should reconcile and drop extra subscriptions"
+        );
     }
 }

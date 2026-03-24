@@ -43,6 +43,7 @@ const PRIVATE_DRAINING_DELIVERY_WINDOW_MAX: Duration = Duration::from_secs(30);
 const PRIVATE_DRAINING_DELIVERY_WINDOW_DEFAULT: Duration = Duration::from_secs(12);
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_MULTIPLIER: f64 = 4.0;
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS: f64 = 2_000.0;
+const PRIVATE_DEFAULT_TTL_SECONDS_MAX: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Debug, Clone)]
 pub struct PrivateConfig {
@@ -113,10 +114,57 @@ impl PrivateConfig {
             retransmit_max_per_tick,
             retransmit_max_retries,
             hot_cache_capacity,
-            default_ttl_secs,
+            default_ttl_secs: normalize_private_default_ttl_secs(default_ttl_secs),
             gateway_token,
             enable_ip_rate_limit,
         }
+    }
+}
+
+#[inline]
+fn normalize_private_default_ttl_secs(ttl_secs: i64) -> i64 {
+    if ttl_secs <= 0 {
+        PRIVATE_DEFAULT_TTL_SECONDS_MAX
+    } else {
+        ttl_secs.min(PRIVATE_DEFAULT_TTL_SECONDS_MAX)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PRIVATE_DEFAULT_TTL_SECONDS_MAX, normalize_private_default_ttl_secs};
+
+    #[test]
+    fn private_default_ttl_is_clamped_to_max() {
+        assert_eq!(
+            normalize_private_default_ttl_secs(PRIVATE_DEFAULT_TTL_SECONDS_MAX + 1),
+            PRIVATE_DEFAULT_TTL_SECONDS_MAX
+        );
+        assert_eq!(
+            normalize_private_default_ttl_secs(90 * 24 * 60 * 60),
+            PRIVATE_DEFAULT_TTL_SECONDS_MAX
+        );
+    }
+
+    #[test]
+    fn private_default_ttl_uses_max_for_non_positive_values() {
+        assert_eq!(
+            normalize_private_default_ttl_secs(0),
+            PRIVATE_DEFAULT_TTL_SECONDS_MAX
+        );
+        assert_eq!(
+            normalize_private_default_ttl_secs(-1),
+            PRIVATE_DEFAULT_TTL_SECONDS_MAX
+        );
+    }
+
+    #[test]
+    fn private_default_ttl_keeps_valid_small_values() {
+        assert_eq!(normalize_private_default_ttl_secs(1), 1);
+        assert_eq!(
+            normalize_private_default_ttl_secs(PRIVATE_DEFAULT_TTL_SECONDS_MAX),
+            PRIVATE_DEFAULT_TTL_SECONDS_MAX
+        );
     }
 }
 

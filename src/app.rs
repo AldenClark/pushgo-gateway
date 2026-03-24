@@ -14,7 +14,7 @@ use crate::{
     storage::{DeviceRegistryRoute, Store, new_store},
 };
 use axum::Router;
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 #[derive(Clone)]
