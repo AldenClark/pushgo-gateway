@@ -59,6 +59,8 @@ pub struct DeviceChannelUpsertRequest {
     pub device_key: String,
     pub channel_type: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    pub platform: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub provider_token: Option<String>,
 }
 
@@ -91,8 +93,12 @@ pub(crate) async fn v1_device_channel_upsert(
     let next_type = DeviceChannelType::parse(&payload.channel_type)
         .ok_or_else(|| Error::validation("invalid channel_type"))?;
 
-    let (resolved_device_key, previous) =
-        ensure_device_key_for_channel_upsert(&state, device_key).await?;
+    let (resolved_device_key, previous) = ensure_device_key_for_channel_upsert(
+        &state,
+        device_key,
+        payload.platform.as_deref(),
+    )
+    .await?;
     let next_provider_token = normalize_provider_token_for_route(
         next_type,
         previous.platform.as_str(),
@@ -1100,14 +1106,24 @@ fn normalize_provider_token_for_route(
 async fn ensure_device_key_for_channel_upsert(
     state: &AppState,
     requested_device_key: &str,
+    requested_platform: Option<&str>,
 ) -> Result<(String, DeviceRouteRecord), Error> {
     if let Some(route) = state.device_registry.get(requested_device_key) {
         return Ok((requested_device_key.to_string(), route));
     }
-    Err(Error::validation_code(
-        "device_key not found; register device first",
-        "device_key_not_found",
-    ))
+    let platform = requested_platform
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| Error::validation("platform is required when device_key is missing"))?;
+    let resolved_device_key = state
+        .device_registry
+        .register_device(platform, Some(requested_device_key))
+        .map_err(Error::Internal)?;
+    let route = state.device_registry.get(&resolved_device_key).ok_or_else(|| {
+        Error::Internal("device route missing after channel upsert auto-register".to_string())
+    })?;
+    persist_device_registry_route(state, resolved_device_key.as_str(), &route).await?;
+    Ok((resolved_device_key, route))
 }
 
 fn platform_from_channel_type(
@@ -1216,10 +1232,12 @@ mod tests {
         let raw = r#"{
             "device_key":"dev-1",
             "channel_type":"apns",
+            "platform":"ios",
             "provider_token":"token-1"
         }"#;
         let parsed = serde_json::from_str::<DeviceChannelUpsertRequest>(raw)
             .expect("upsert request should accept provider_token");
+        assert_eq!(parsed.platform.as_deref(), Some("ios"));
         assert_eq!(parsed.provider_token.as_deref(), Some("token-1"));
     }
 

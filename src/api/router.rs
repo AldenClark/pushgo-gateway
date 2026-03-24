@@ -490,6 +490,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_channel_upsert_auto_registers_missing_device_key_when_platform_present() {
+        let state = build_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+        let missing_device_key = "missing-device-key-0001";
+
+        let (status, route_body) = post_json(
+            app.clone(),
+            "/channel/device",
+            json!({
+                "device_key": missing_device_key,
+                "platform": "android",
+                "channel_type": "fcm",
+                "provider_token": "android-token-auto-register-0001"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let returned_device_key = response_string_field(&route_body, "device_key").to_string();
+        assert!(
+            !returned_device_key.is_empty(),
+            "channel/device should return an effective device_key"
+        );
+        assert_ne!(
+            returned_device_key, missing_device_key,
+            "missing device_key should be replaced with a newly issued one"
+        );
+
+        let (status, subscribe_body) = post_json(
+            app.clone(),
+            "/channel/subscribe",
+            json!({
+                "device_key": returned_device_key,
+                "channel_name": "auto-register-channel",
+                "password": "password-1234"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response_string_field(&subscribe_body, "channel_name"), "auto-register-channel");
+    }
+
+    #[tokio::test]
     async fn channel_sync_with_all_success_reconciles_extra_subscriptions() {
         let state = build_test_state().await;
         let store = state.store.clone();
