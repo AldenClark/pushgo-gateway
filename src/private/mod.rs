@@ -2275,7 +2275,8 @@ async fn run_claimed_fallback_task(
             dispatch
                 .try_send_fcm(FcmJob {
                     channel_id,
-                    correlation_id,
+                    correlation_id: correlation_id.clone(),
+                    delivery_id: correlation_id,
                     device_token: target.token,
                     direct_payload: Arc::clone(&payload),
                     direct_body: Arc::clone(&body),
@@ -2298,7 +2299,8 @@ async fn run_claimed_fallback_task(
             dispatch
                 .try_send_wns(WnsJob {
                     channel_id,
-                    correlation_id,
+                    correlation_id: correlation_id.clone(),
+                    delivery_id: correlation_id,
                     device_token: target.token,
                     direct_payload: Arc::clone(&payload),
                     wakeup_payload: Some(Arc::clone(&payload)),
@@ -2320,7 +2322,8 @@ async fn run_claimed_fallback_task(
             dispatch
                 .try_send_apns(ApnsJob {
                     channel_id,
-                    correlation_id,
+                    correlation_id: correlation_id.clone(),
+                    delivery_id: correlation_id,
                     device_token: target.token,
                     platform: target.platform,
                     direct_payload: Arc::clone(&payload),

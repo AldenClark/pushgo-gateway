@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use crate::{
     api::handlers::{
         channel::{channel_exists, channel_rename},
+        diagnostics::diagnostics_dispatch,
         event::{event_close_to_channel, event_create_to_channel, event_update_to_channel},
         message::message_to_channel,
         private::{
@@ -58,7 +59,8 @@ pub fn build_router(state: AppState, docs_html: &'static str) -> Router {
         .route("/messages/ack", post(v1_messages_ack))
         .route("/messages/ack/batch", post(v1_messages_ack_batch))
         .route("/channel/exists", get(channel_exists))
-        .route("/channel/rename", post(channel_rename));
+        .route("/channel/rename", post(channel_rename))
+        .route("/diagnostics/dispatch", get(diagnostics_dispatch));
 
     if private_channel_enabled {
         router = router
@@ -193,7 +195,10 @@ mod tests {
     use crate::{
         app::{AppState, AuthMode},
         device_registry::DeviceRegistry,
-        dispatch::create_dispatch_channels,
+        dispatch::{
+            audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog},
+            create_dispatch_channels,
+        },
         storage::{Platform, Store, new_store},
     };
 
@@ -216,6 +221,7 @@ mod tests {
         let (dispatch, _apns_rx, _fcm_rx, _wns_rx) = create_dispatch_channels();
         AppState {
             dispatch,
+            dispatch_audit: Arc::new(DispatchAuditLog::new(DEFAULT_DISPATCH_AUDIT_CAPACITY)),
             auth: AuthMode::Disabled,
             private_channel_enabled: false,
             ip_rate_limit_enabled: false,
@@ -353,6 +359,42 @@ mod tests {
             .await
             .expect("router should handle request");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn diagnostics_dispatch_route_returns_empty_entries_by_default() {
+        let state = build_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/diagnostics/dispatch")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should handle request");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+        assert_eq!(
+            response_data(&value)
+                .get("count")
+                .and_then(Value::as_u64)
+                .expect("count should be present"),
+            0
+        );
+        assert_eq!(
+            response_data(&value)
+                .get("entries")
+                .and_then(Value::as_array)
+                .expect("entries should be present")
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]

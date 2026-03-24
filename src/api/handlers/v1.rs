@@ -92,7 +92,7 @@ pub(crate) async fn v1_device_channel_upsert(
         .ok_or_else(|| Error::validation("invalid channel_type"))?;
 
     let (resolved_device_key, previous) =
-        ensure_device_key_for_channel_upsert(&state, device_key, next_type).await?;
+        ensure_device_key_for_channel_upsert(&state, device_key).await?;
     let next_provider_token = normalize_provider_token_for_route(
         next_type,
         previous.platform.as_str(),
@@ -101,6 +101,8 @@ pub(crate) async fn v1_device_channel_upsert(
     let previous_provider_token = normalized_optional_token(previous.provider_token.as_deref());
     let next_provider_token_ref = normalized_optional_token(next_provider_token.as_deref());
     if previous.channel_type == next_type && previous_provider_token == next_provider_token_ref {
+        bind_private_binding_for_provider_route(&state, resolved_device_key.as_str(), &previous)
+            .await?;
         return Ok(crate::api::ok(DeviceChannelResponse {
             device_key: resolved_device_key.to_string(),
             channel_type: previous.channel_type.as_str().to_string(),
@@ -124,6 +126,7 @@ pub(crate) async fn v1_device_channel_upsert(
         .update_channel(resolved_device_key.as_str(), next_type, next_provider_token)
         .map_err(Error::Internal)?;
     persist_device_registry_route(&state, resolved_device_key.as_str(), &updated).await?;
+    bind_private_binding_for_provider_route(&state, resolved_device_key.as_str(), &updated).await?;
 
     Ok(crate::api::ok(DeviceChannelResponse {
         device_key: resolved_device_key,
@@ -366,6 +369,12 @@ pub(crate) async fn v1_device_channel_delete(
         .device_registry
         .get(device_key)
         .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
+    if current.channel_type != current_type {
+        return Err(Error::validation_code(
+            "channel_type does not match current device route",
+            "channel_type_mismatch",
+        ));
+    }
 
     cleanup_old_channel_state(
         &state,
@@ -899,19 +908,20 @@ async fn cleanup_old_channel_state(
                     && old_token != new_token
                     && let Some(token) = old_token
                 {
-                    let platform = platform_from_channel_type(*old_channel_type)?;
-                    let result = if let Some(next_token) = new_token {
+                    let platform = platform_from_channel_type(*old_channel_type, device_platform)?;
+                    if let Some(next_token) = new_token {
                         state
                             .store
                             .migrate_device_subscriptions_async(token, next_token, platform)
                             .await
                     } else {
                         state.store.retire_device_async(token, platform).await
-                    };
-                    match result {
-                        Ok(_removed) => {}
-                        Err(_err) => {}
                     }
+                    .map_err(|err| {
+                        Error::Internal(format!(
+                            "failed to cleanup old provider channel state: {err}"
+                        ))
+                    })?;
                 }
             }
             return Ok(());
@@ -928,23 +938,28 @@ async fn cleanup_old_channel_state(
     match old_channel_type {
         DeviceChannelType::Private => {
             let device_id = DeviceRegistry::derive_private_device_id(device_key);
-            let result = state
+            state
                 .store
                 .delete_private_device_state_async(device_id)
-                .await;
-            match result {
-                Ok(()) => {}
-                Err(_err) => {}
-            }
+                .await
+                .map_err(|err| {
+                    Error::Internal(format!(
+                        "failed to cleanup old private channel state: {err}"
+                    ))
+                })?;
         }
         DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns => {
             if let Some(token) = old_provider_token {
-                let platform = platform_from_channel_type(*old_channel_type)?;
-                let result = state.store.retire_device_async(token, platform).await;
-                match result {
-                    Ok(_removed) => {}
-                    Err(_err) => {}
-                }
+                let platform = platform_from_channel_type(*old_channel_type, device_platform)?;
+                state
+                    .store
+                    .retire_device_async(token, platform)
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!(
+                            "failed to retire old provider subscriptions: {err}"
+                        ))
+                    })?;
             }
         }
     }
@@ -1085,36 +1100,34 @@ fn normalize_provider_token_for_route(
 async fn ensure_device_key_for_channel_upsert(
     state: &AppState,
     requested_device_key: &str,
-    channel_type: DeviceChannelType,
 ) -> Result<(String, DeviceRouteRecord), Error> {
     if let Some(route) = state.device_registry.get(requested_device_key) {
         return Ok((requested_device_key.to_string(), route));
     }
-
-    let bootstrap_platform = bootstrap_platform_for_channel_type(channel_type);
-    let resolved_device_key = state
-        .device_registry
-        .register_device(bootstrap_platform, Some(requested_device_key))
-        .map_err(Error::Internal)?;
-    let route = state
-        .device_registry
-        .get(&resolved_device_key)
-        .ok_or_else(|| Error::Internal("device route missing after register".to_string()))?;
-    persist_device_registry_route(state, &resolved_device_key, &route).await?;
-    Ok((resolved_device_key, route))
+    Err(Error::validation_code(
+        "device_key not found; register device first",
+        "device_key_not_found",
+    ))
 }
 
-fn bootstrap_platform_for_channel_type(channel_type: DeviceChannelType) -> &'static str {
+fn platform_from_channel_type(
+    channel_type: DeviceChannelType,
+    device_platform: &str,
+) -> Result<Platform, Error> {
     match channel_type {
-        DeviceChannelType::Apns | DeviceChannelType::Private => "ios",
-        DeviceChannelType::Fcm => "android",
-        DeviceChannelType::Wns => "windows",
-    }
-}
-
-fn platform_from_channel_type(channel_type: DeviceChannelType) -> Result<Platform, Error> {
-    match channel_type {
-        DeviceChannelType::Apns => Ok(Platform::IOS),
+        DeviceChannelType::Apns => {
+            let platform = platform_from_str(device_platform)?;
+            if matches!(
+                platform,
+                Platform::IOS | Platform::MACOS | Platform::WATCHOS
+            ) {
+                Ok(platform)
+            } else {
+                Err(Error::validation(
+                    "channel_type apns requires apple platform",
+                ))
+            }
+        }
         DeviceChannelType::Fcm => Ok(Platform::ANDROID),
         DeviceChannelType::Wns => Ok(Platform::WINDOWS),
         DeviceChannelType::Private => Err(Error::validation("private has no provider platform")),
@@ -1154,13 +1167,35 @@ async fn persist_device_registry_route(
     Ok(())
 }
 
+async fn bind_private_binding_for_provider_route(
+    state: &AppState,
+    device_key: &str,
+    route: &DeviceRouteRecord,
+) -> Result<(), Error> {
+    if route.channel_type == DeviceChannelType::Private {
+        return Ok(());
+    }
+    let Some(provider_token) = normalized_optional_token(route.provider_token.as_deref()) else {
+        return Ok(());
+    };
+    let platform = platform_from_str(route.platform.as_str())?;
+    let device_id = DeviceRegistry::derive_private_device_id(device_key);
+    state
+        .store
+        .bind_private_token_async(device_id, platform, provider_token)
+        .await
+        .map_err(|err| Error::Internal(format!("failed to bind private token mapping: {err}")))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         DeviceChannelDeleteRequest, DeviceChannelUpsertRequest, Error, V1ChannelSyncRequest,
-        ensure_private_route,
+        ensure_private_route, platform_from_channel_type,
     };
     use crate::device_registry::{DeviceChannelType, DeviceRouteRecord};
+    use crate::storage::Platform;
 
     #[test]
     fn device_channel_delete_rejects_provider_token() {
@@ -1225,6 +1260,39 @@ mod tests {
             Error::Validation {
                 code: Some(code), ..
             } => assert_eq!(code.as_ref(), "private_route_required"),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apns_platform_mapping_uses_device_platform() {
+        let ios = platform_from_channel_type(DeviceChannelType::Apns, "ios")
+            .expect("ios apns mapping should succeed");
+        let macos = platform_from_channel_type(DeviceChannelType::Apns, "macos")
+            .expect("macos apns mapping should succeed");
+        let watchos = platform_from_channel_type(DeviceChannelType::Apns, "watchos")
+            .expect("watchos apns mapping should succeed");
+        assert_eq!(ios, Platform::IOS);
+        assert_eq!(macos, Platform::MACOS);
+        assert_eq!(watchos, Platform::WATCHOS);
+    }
+
+    #[test]
+    fn fcm_wns_platform_mapping_is_stable() {
+        let fcm = platform_from_channel_type(DeviceChannelType::Fcm, "ios")
+            .expect("fcm mapping should ignore device_platform");
+        let wns = platform_from_channel_type(DeviceChannelType::Wns, "android")
+            .expect("wns mapping should ignore device_platform");
+        assert_eq!(fcm, Platform::ANDROID);
+        assert_eq!(wns, Platform::WINDOWS);
+    }
+
+    #[test]
+    fn apns_platform_mapping_rejects_non_apple_platform() {
+        let err = platform_from_channel_type(DeviceChannelType::Apns, "android")
+            .expect_err("apns mapping should reject non-apple platform");
+        match err {
+            Error::Validation { .. } => {}
             other => panic!("unexpected error variant: {other:?}"),
         }
     }

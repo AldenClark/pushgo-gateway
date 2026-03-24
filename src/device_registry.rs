@@ -178,26 +178,26 @@ impl DeviceRegistry {
     ) -> Result<DeviceRouteRecord, String> {
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.write();
-        let old_key = state
-            .by_device
-            .get(device_key)
-            .ok_or_else(|| "device_key not found".to_string())?;
-        let old_key = ProviderTokenKey::from_route(old_key);
+        let old_key = {
+            let rec = state
+                .by_device
+                .get(device_key)
+                .ok_or_else(|| "device_key not found".to_string())?;
+            if rec.channel_type != channel_type {
+                return Err("channel_type mismatch".to_string());
+            }
+            ProviderTokenKey::from_route(rec)
+        };
         if let Some(old_key) = old_key {
             state.by_provider.remove(&old_key);
         }
-        let result = {
-            let rec = state
-                .by_device
-                .get_mut(device_key)
-                .ok_or_else(|| "device_key not found".to_string())?;
-            if rec.channel_type == channel_type {
-                rec.provider_token = None;
-                rec.updated_at = now;
-            }
-            rec.clone()
-        };
-        Ok(result)
+        let rec = state
+            .by_device
+            .get_mut(device_key)
+            .ok_or_else(|| "device_key not found".to_string())?;
+        rec.provider_token = None;
+        rec.updated_at = now;
+        Ok(rec.clone())
     }
 
     pub fn get(&self, device_key: &str) -> Option<DeviceRouteRecord> {
@@ -348,5 +348,31 @@ impl Hash for ProviderTokenKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.platform.hash(state);
         self.token.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceChannelType, DeviceRegistry};
+
+    #[test]
+    fn clear_channel_rejects_mismatch_and_preserves_provider_index() {
+        let registry = DeviceRegistry::new();
+        let device_key = registry
+            .register_device("ios", None)
+            .expect("register device should succeed");
+        registry
+            .update_channel(
+                device_key.as_str(),
+                DeviceChannelType::Apns,
+                Some("token-1".to_string()),
+            )
+            .expect("update channel should succeed");
+        let err = registry
+            .clear_channel(device_key.as_str(), DeviceChannelType::Fcm)
+            .expect_err("clear with mismatched channel type should fail");
+        assert_eq!(err, "channel_type mismatch");
+        let mapped = registry.find_device_key_by_provider_token("ios", "token-1");
+        assert_eq!(mapped.as_deref(), Some(device_key.as_str()));
     }
 }

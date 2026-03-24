@@ -3,7 +3,9 @@ use crate::{
     args::Args,
     device_registry::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord},
     dispatch::{
-        DispatchChannels, DispatchWorkerDeps, create_dispatch_channels, spawn_dispatch_workers,
+        DispatchChannels, DispatchWorkerDeps,
+        audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog},
+        create_dispatch_channels, spawn_dispatch_workers,
     },
     private::{
         PrivateConfig, PrivateState, spawn_persistent_fallback_worker, spawn_quic_if_configured,
@@ -11,7 +13,7 @@ use crate::{
     },
     providers::{ApnsClient, FcmClient, WnsClient},
     rate_limit::{ApiRateLimiter, ClientIpResolver},
-    storage::{DeviceRegistryRoute, Store, new_store},
+    storage::{DeviceRegistryRoute, Platform, Store, new_store},
 };
 use axum::Router;
 use std::sync::Arc;
@@ -38,6 +40,7 @@ pub(crate) enum AuthMode {
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub dispatch: DispatchChannels,
+    pub dispatch_audit: Arc<DispatchAuditLog>,
     pub auth: AuthMode,
     pub private_channel_enabled: bool,
     pub ip_rate_limit_enabled: bool,
@@ -70,6 +73,7 @@ pub async fn build_app(
     restore_device_registry(&store, &device_registry).await?;
 
     let (dispatch, apns_rx, fcm_rx, wns_rx) = create_dispatch_channels();
+    let dispatch_audit = Arc::new(DispatchAuditLog::new(DEFAULT_DISPATCH_AUDIT_CAPACITY));
 
     let auth = match args.token.as_deref() {
         None => AuthMode::Disabled,
@@ -125,6 +129,7 @@ pub async fn build_app(
             wns: Arc::clone(&wns),
             store: Arc::clone(&store),
             private: private.clone(),
+            audit: dispatch_audit.clone(),
         },
     );
 
@@ -141,6 +146,7 @@ pub async fn build_app(
 
     let state = AppState {
         dispatch,
+        dispatch_audit,
         auth,
         private_channel_enabled: args.private_channel_enabled,
         ip_rate_limit_enabled: args.enable_ip_rate_limit,
@@ -176,8 +182,19 @@ async fn restore_device_registry(
         let Some(record) = parse_route_record(&route) else {
             continue;
         };
-        if registry.restore_route(&route.device_key, record).is_err() {
+        if registry
+            .restore_route(&route.device_key, record.clone())
+            .is_err()
+        {
             continue;
+        }
+        if let Err(err) =
+            backfill_private_binding_for_route(store, &route.device_key, &record).await
+        {
+            eprintln!(
+                "restore private binding failed device_key={} error={}",
+                route.device_key, err
+            );
         }
     }
     Ok(())
@@ -191,4 +208,31 @@ fn parse_route_record(route: &DeviceRegistryRoute) -> Option<DeviceRouteRecord> 
         provider_token: route.provider_token.clone(),
         updated_at: route.updated_at,
     })
+}
+
+async fn backfill_private_binding_for_route(
+    store: &Store,
+    device_key: &str,
+    route: &DeviceRouteRecord,
+) -> Result<(), String> {
+    if route.channel_type == DeviceChannelType::Private {
+        return Ok(());
+    }
+    let Some(token) = route
+        .provider_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let platform: Platform = route
+        .platform
+        .parse()
+        .map_err(|_| "invalid route platform".to_string())?;
+    let device_id = DeviceRegistry::derive_private_device_id(device_key);
+    store
+        .bind_private_token_async(device_id, platform, token)
+        .await
+        .map_err(|err| err.to_string())
 }

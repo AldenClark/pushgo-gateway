@@ -2,6 +2,10 @@ use std::sync::Arc;
 
 use flume::{Receiver, Sender, TrySendError};
 
+pub(crate) mod audit;
+
+use self::audit::{DispatchAuditLog, DispatchAuditRecord};
+
 use crate::{
     private::PrivateState,
     providers::{
@@ -30,6 +34,7 @@ pub(crate) struct PrivateWakeupDelivery {
 pub(crate) struct ApnsJob {
     pub channel_id: [u8; 16],
     pub correlation_id: Arc<str>,
+    pub delivery_id: Arc<str>,
     pub device_token: Arc<str>,
     pub platform: Platform,
     pub direct_payload: Arc<ApnsPayload>,
@@ -44,6 +49,7 @@ pub(crate) struct ApnsJob {
 pub(crate) struct FcmJob {
     pub channel_id: [u8; 16],
     pub correlation_id: Arc<str>,
+    pub delivery_id: Arc<str>,
     pub device_token: Arc<str>,
     pub direct_payload: Arc<FcmPayload>,
     pub direct_body: Arc<[u8]>,
@@ -58,6 +64,7 @@ pub(crate) struct FcmJob {
 pub(crate) struct WnsJob {
     pub channel_id: [u8; 16],
     pub correlation_id: Arc<str>,
+    pub delivery_id: Arc<str>,
     pub device_token: Arc<str>,
     pub direct_payload: Arc<WnsPayload>,
     pub wakeup_payload: Option<Arc<WnsPayload>>,
@@ -134,6 +141,7 @@ pub(crate) struct DispatchWorkerDeps {
     pub wns: Arc<dyn WnsClient>,
     pub store: Store,
     pub private: Option<Arc<PrivateState>>,
+    pub audit: Arc<DispatchAuditLog>,
 }
 
 pub(crate) fn spawn_dispatch_workers(
@@ -148,10 +156,23 @@ pub(crate) fn spawn_dispatch_workers(
         wns,
         store,
         private,
+        audit,
     } = deps;
-    spawn_apns_worker(apns_rx, apns, Arc::clone(&store), private.clone());
-    spawn_fcm_worker(fcm_rx, fcm, Arc::clone(&store), private.clone());
-    spawn_wns_worker(wns_rx, wns, store, private);
+    spawn_apns_worker(
+        apns_rx,
+        apns,
+        Arc::clone(&store),
+        private.clone(),
+        audit.clone(),
+    );
+    spawn_fcm_worker(
+        fcm_rx,
+        fcm,
+        Arc::clone(&store),
+        private.clone(),
+        audit.clone(),
+    );
+    spawn_wns_worker(wns_rx, wns, store, private, audit);
 }
 
 fn spawn_apns_worker(
@@ -159,12 +180,14 @@ fn spawn_apns_worker(
     apns: Arc<dyn ApnsClient>,
     store: Store,
     private: Option<Arc<PrivateState>>,
+    audit: Arc<DispatchAuditLog>,
 ) {
     for _ in 0..auto_dispatch_worker_count() {
         let apns_rx = apns_rx.clone();
         let apns = Arc::clone(&apns);
         let store = Arc::clone(&store);
         let private = private.clone();
+        let audit = audit.clone();
         tokio::spawn(async move {
             while let Ok(job) = apns_rx.recv_async().await {
                 let apns_client = Arc::clone(&apns);
@@ -230,6 +253,17 @@ fn spawn_apns_worker(
                         )
                         .await;
                 }
+                record_provider_dispatch_result(
+                    &audit,
+                    "APNS",
+                    job.correlation_id.as_ref(),
+                    job.delivery_id.as_ref(),
+                    &channel_id,
+                    actual_path,
+                    Some(job.platform),
+                    job.device_token.as_ref(),
+                    &dispatch,
+                );
                 if !dispatch.success {
                     log_provider_dispatch_failure(
                         "APNS",
@@ -270,12 +304,14 @@ fn spawn_fcm_worker(
     fcm: Arc<dyn FcmClient>,
     store: Store,
     private: Option<Arc<PrivateState>>,
+    audit: Arc<DispatchAuditLog>,
 ) {
     for _ in 0..auto_dispatch_worker_count() {
         let fcm_rx = fcm_rx.clone();
         let fcm = Arc::clone(&fcm);
         let store = Arc::clone(&store);
         let private = private.clone();
+        let audit = audit.clone();
         tokio::spawn(async move {
             while let Ok(job) = fcm_rx.recv_async().await {
                 let fcm_client = Arc::clone(&fcm);
@@ -348,6 +384,17 @@ fn spawn_fcm_worker(
                         .send_to_device(job.device_token.as_ref(), Arc::clone(&payload), Some(body))
                         .await;
                 }
+                record_provider_dispatch_result(
+                    &audit,
+                    "FCM",
+                    job.correlation_id.as_ref(),
+                    job.delivery_id.as_ref(),
+                    &channel_id,
+                    actual_path,
+                    Some(Platform::ANDROID),
+                    job.device_token.as_ref(),
+                    &dispatch,
+                );
                 if !dispatch.success {
                     log_provider_dispatch_failure(
                         "FCM",
@@ -388,12 +435,14 @@ fn spawn_wns_worker(
     wns: Arc<dyn WnsClient>,
     store: Store,
     private: Option<Arc<PrivateState>>,
+    audit: Arc<DispatchAuditLog>,
 ) {
     for _ in 0..auto_dispatch_worker_count() {
         let wns_rx = wns_rx.clone();
         let wns = Arc::clone(&wns);
         let store = Arc::clone(&store);
         let private = private.clone();
+        let audit = audit.clone();
         tokio::spawn(async move {
             while let Ok(job) = wns_rx.recv_async().await {
                 let wns_client = Arc::clone(&wns);
@@ -449,6 +498,17 @@ fn spawn_wns_worker(
                         .send_to_device(job.device_token.as_ref(), Arc::clone(&payload))
                         .await;
                 }
+                record_provider_dispatch_result(
+                    &audit,
+                    "WNS",
+                    job.correlation_id.as_ref(),
+                    job.delivery_id.as_ref(),
+                    &channel_id,
+                    actual_path,
+                    Some(Platform::WINDOWS),
+                    job.device_token.as_ref(),
+                    &dispatch,
+                );
                 if !dispatch.success {
                     log_provider_dispatch_failure(
                         "WNS",
@@ -602,6 +662,34 @@ fn log_provider_dispatch_failure(
         dispatch.payload_too_large,
         error,
     );
+}
+
+fn record_provider_dispatch_result(
+    audit: &DispatchAuditLog,
+    provider: &'static str,
+    correlation_id: &str,
+    delivery_id: &str,
+    channel_id: &str,
+    path: ProviderDeliveryPath,
+    platform: Option<Platform>,
+    device_token: &str,
+    dispatch: &DispatchResult,
+) {
+    audit.record(DispatchAuditRecord {
+        stage: "provider_send_result",
+        correlation_id,
+        delivery_id: Some(delivery_id),
+        channel_id: Some(channel_id),
+        provider: Some(provider),
+        platform,
+        path: Some(delivery_path_label(path)),
+        device_token: Some(device_token),
+        success: Some(dispatch.success),
+        status_code: Some(dispatch.status_code),
+        invalid_token: Some(dispatch.invalid_token),
+        payload_too_large: Some(dispatch.payload_too_large),
+        detail: dispatch.error.as_ref().map(|err| err.to_string().into()),
+    });
 }
 
 fn delivery_path_label(path: ProviderDeliveryPath) -> &'static str {

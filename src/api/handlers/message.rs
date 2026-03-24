@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use axum::{extract::State, http::StatusCode};
 use chrono::Utc;
@@ -15,6 +15,7 @@ use crate::{
     device_registry::DeviceRegistry,
     dispatch::{
         ApnsJob, DispatchError, FcmJob, PrivateWakeupDelivery, ProviderDeliveryPath, WnsJob,
+        audit::DispatchAuditRecord,
     },
     private::protocol::PRIVATE_PAYLOAD_VERSION_V1,
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
@@ -25,9 +26,6 @@ use crate::{
 use super::dispatch_lifecycle::{
     DispatchOpGuard, DispatchOpGuardStart, NotificationDispatchSummary,
     dispatch_failure_error_message,
-};
-use super::url_safety::{
-    rewrite_visible_urls_in_text, sanitize_image_urls, sanitize_optional_open_url,
 };
 use super::watch_light::quantize_watch_payload;
 
@@ -216,13 +214,9 @@ async fn dispatch_message_intent(
         metadata,
         ..
     } = payload;
-    let normalized_body = body
-        .as_deref()
-        .map(rewrite_visible_urls_in_text)
-        .and_then(|value| normalize_optional_string(Some(value)));
-    let normalized_url =
-        sanitize_optional_open_url(url.as_deref(), "url").map_err(Error::validation)?;
-    let normalized_images = sanitize_image_urls(&images, "images").map_err(Error::validation)?;
+    let normalized_body = normalize_optional_string(body);
+    let normalized_url = normalize_optional_string(url);
+    let normalized_images = normalize_image_values(&images, "images")?;
 
     let op_id = normalize_op_id(&op_id)?;
     let message_id = resolve_create_semantic_id(
@@ -324,6 +318,7 @@ pub(super) async fn dispatch_entity_notification(
     let sent_at = Utc::now().timestamp();
     let delivery_id = reserve_new_delivery_id(state, sent_at).await?;
     let correlation_id = Arc::<str>::from(trace_id.clone().into_boxed_str());
+    let delivery_id_ref = Arc::<str>::from(delivery_id.clone().into_boxed_str());
     let op_guard = match DispatchOpGuard::begin(
         state,
         op_dedupe_key,
@@ -411,6 +406,7 @@ pub(super) async fn dispatch_entity_notification(
         };
 
         let mut private_enqueued = HashSet::new();
+        let mut private_realtime_delivered = HashSet::new();
         let mut private_enqueue_stats = PrivateEnqueueStats::default();
         if let Some(private_state) = private_state
             && private_enabled
@@ -443,7 +439,9 @@ pub(super) async fn dispatch_entity_notification(
                                     payload: private_payload.clone(),
                                 },
                             );
-                            if !delivered {
+                            if delivered {
+                                private_realtime_delivered.insert(device_id);
+                            } else {
                                 private_state.metrics.mark_deliver_send_failure();
                             }
                         }
@@ -582,11 +580,35 @@ pub(super) async fn dispatch_entity_notification(
             } else {
                 None
             };
-            if let Some(device_id) = private_delivery_target
-                && private_state
+            let private_online = if let Some(device_id) = private_delivery_target {
+                private_state
                     .map(|private| private.hub.is_online(device_id))
                     .unwrap_or(false)
-            {
+            } else {
+                false
+            };
+            if should_skip_provider_delivery(
+                private_delivery_target,
+                private_online,
+                &private_realtime_delivered,
+            ) {
+                state.dispatch_audit.record(DispatchAuditRecord {
+                    stage: "provider_skipped_private_realtime",
+                    correlation_id: correlation_id.as_ref(),
+                    delivery_id: Some(delivery_id.as_str()),
+                    channel_id: Some(channel_id_value.as_str()),
+                    provider: Some(provider_name(device.platform)),
+                    platform: Some(device.platform),
+                    path: None,
+                    device_token: Some(device.token_str()),
+                    success: None,
+                    status_code: None,
+                    invalid_token: None,
+                    payload_too_large: None,
+                    detail: Some(Cow::Borrowed(
+                        "private realtime delivery already succeeded while device is online",
+                    )),
+                });
                 continue;
             }
             let provider_device_key =
@@ -613,11 +635,33 @@ pub(super) async fn dispatch_entity_notification(
                     let wakeup_body = wakeup_payload
                         .encoded_body(device.token_str())
                         .map_err(|err| Error::Internal(err.to_string()))?;
-                    let selection = select_provider_delivery_path(
+                    let selection = match select_provider_delivery_path(
                         device.platform,
                         direct_body.len(),
                         wakeup_body.len(),
-                    )?;
+                        private_wakeup_delivery.is_some(),
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            rejected += 1;
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_path_rejected",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("FCM"),
+                                platform: Some(device.platform),
+                                path: None,
+                                device_token: Some(device.token_str()),
+                                success: None,
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: Some(err.to_string().into()),
+                            });
+                            continue;
+                        }
+                    };
                     if selection.initial_path == ProviderDeliveryPath::WakeupPull
                         && let Some(private_state) = private_state
                         && let Some(private_meta) = private_wakeup_delivery.as_ref()
@@ -649,6 +693,7 @@ pub(super) async fn dispatch_entity_notification(
                     match state.dispatch.try_send_fcm(FcmJob {
                         channel_id,
                         correlation_id: Arc::clone(&correlation_id),
+                        delivery_id: Arc::clone(&delivery_id_ref),
                         device_token: Arc::from(device.token_str()),
                         direct_payload: Arc::clone(&direct_payload),
                         direct_body,
@@ -659,9 +704,40 @@ pub(super) async fn dispatch_entity_notification(
                         private_wakeup: private_wakeup_delivery.clone(),
                         private_wakeup_enqueued,
                     }) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_enqueued",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("FCM"),
+                                platform: Some(device.platform),
+                                path: Some(provider_path_name(selection.initial_path)),
+                                device_token: Some(device.token_str()),
+                                success: Some(true),
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: None,
+                            });
+                        }
                         Err(err) => {
                             rejected += 1;
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_enqueue_failed",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("FCM"),
+                                platform: Some(device.platform),
+                                path: Some(provider_path_name(selection.initial_path)),
+                                device_token: Some(device.token_str()),
+                                success: Some(false),
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: Some(dispatch_error_detail(&err).into()),
+                            });
                             if matches!(err, DispatchError::ChannelClosed) {
                                 dispatch_closed = true;
                             }
@@ -675,7 +751,7 @@ pub(super) async fn dispatch_entity_notification(
                     let wakeup_payload = wns_wakeup_payload
                         .clone()
                         .ok_or(Error::Internal("missing WNS wakeup payload".to_string()))?;
-                    let selection = select_provider_delivery_path(
+                    let selection = match select_provider_delivery_path(
                         device.platform,
                         direct_payload
                             .encoded_len()
@@ -683,7 +759,29 @@ pub(super) async fn dispatch_entity_notification(
                         wakeup_payload
                             .encoded_len()
                             .map_err(|err| Error::Internal(err.to_string()))?,
-                    )?;
+                        private_wakeup_delivery.is_some(),
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            rejected += 1;
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_path_rejected",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("WNS"),
+                                platform: Some(device.platform),
+                                path: None,
+                                device_token: Some(device.token_str()),
+                                success: None,
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: Some(err.to_string().into()),
+                            });
+                            continue;
+                        }
+                    };
                     if selection.initial_path == ProviderDeliveryPath::WakeupPull
                         && let Some(private_state) = private_state
                         && let Some(private_meta) = private_wakeup_delivery.as_ref()
@@ -715,6 +813,7 @@ pub(super) async fn dispatch_entity_notification(
                     match state.dispatch.try_send_wns(WnsJob {
                         channel_id,
                         correlation_id: Arc::clone(&correlation_id),
+                        delivery_id: Arc::clone(&delivery_id_ref),
                         device_token: Arc::from(device.token_str()),
                         direct_payload: Arc::clone(&direct_payload),
                         wakeup_payload: Some(Arc::clone(&wakeup_payload)),
@@ -723,9 +822,40 @@ pub(super) async fn dispatch_entity_notification(
                         private_wakeup: private_wakeup_delivery.clone(),
                         private_wakeup_enqueued,
                     }) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_enqueued",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("WNS"),
+                                platform: Some(device.platform),
+                                path: Some(provider_path_name(selection.initial_path)),
+                                device_token: Some(device.token_str()),
+                                success: Some(true),
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: None,
+                            });
+                        }
                         Err(err) => {
                             rejected += 1;
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_enqueue_failed",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("WNS"),
+                                platform: Some(device.platform),
+                                path: Some(provider_path_name(selection.initial_path)),
+                                device_token: Some(device.token_str()),
+                                success: Some(false),
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: Some(dispatch_error_detail(&err).into()),
+                            });
                             if matches!(err, DispatchError::ChannelClosed) {
                                 dispatch_closed = true;
                             }
@@ -742,7 +872,7 @@ pub(super) async fn dispatch_entity_notification(
                     let wakeup_payload = apns_wakeup_payload
                         .clone()
                         .ok_or(Error::Internal("missing APNs wakeup payload".to_string()))?;
-                    let selection = select_provider_delivery_path(
+                    let selection = match select_provider_delivery_path(
                         device.platform,
                         direct_payload
                             .encoded_len()
@@ -750,7 +880,29 @@ pub(super) async fn dispatch_entity_notification(
                         wakeup_payload
                             .encoded_len()
                             .map_err(|err| Error::Internal(err.to_string()))?,
-                    )?;
+                        private_wakeup_delivery.is_some(),
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            rejected += 1;
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_path_rejected",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("APNS"),
+                                platform: Some(device.platform),
+                                path: None,
+                                device_token: Some(device.token_str()),
+                                success: None,
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: Some(err.to_string().into()),
+                            });
+                            continue;
+                        }
+                    };
                     if selection.initial_path == ProviderDeliveryPath::WakeupPull
                         && let Some(private_state) = private_state
                         && let Some(private_meta) = private_wakeup_delivery.as_ref()
@@ -782,6 +934,7 @@ pub(super) async fn dispatch_entity_notification(
                     match state.dispatch.try_send_apns(ApnsJob {
                         channel_id,
                         correlation_id: Arc::clone(&correlation_id),
+                        delivery_id: Arc::clone(&delivery_id_ref),
                         device_token: Arc::from(device.token_str()),
                         platform: device.platform,
                         direct_payload: Arc::clone(&direct_payload),
@@ -792,9 +945,40 @@ pub(super) async fn dispatch_entity_notification(
                         private_wakeup_enqueued,
                         collapse_id: apns_collapse_id.clone(),
                     }) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_enqueued",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("APNS"),
+                                platform: Some(device.platform),
+                                path: Some(provider_path_name(selection.initial_path)),
+                                device_token: Some(device.token_str()),
+                                success: Some(true),
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: None,
+                            });
+                        }
                         Err(err) => {
                             rejected += 1;
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                                stage: "provider_enqueue_failed",
+                                correlation_id: correlation_id.as_ref(),
+                                delivery_id: Some(delivery_id.as_str()),
+                                channel_id: Some(channel_id_value.as_str()),
+                                provider: Some("APNS"),
+                                platform: Some(device.platform),
+                                path: Some(provider_path_name(selection.initial_path)),
+                                device_token: Some(device.token_str()),
+                                success: Some(false),
+                                status_code: None,
+                                invalid_token: None,
+                                payload_too_large: None,
+                                detail: Some(dispatch_error_detail(&err).into()),
+                            });
                             if matches!(err, DispatchError::ChannelClosed) {
                                 dispatch_closed = true;
                             }
@@ -845,6 +1029,28 @@ fn platform_name(platform: Platform) -> &'static str {
         Platform::IOS => "ios",
         Platform::MACOS => "macos",
         Platform::WATCHOS => "watchos",
+    }
+}
+
+fn provider_name(platform: Platform) -> &'static str {
+    match platform {
+        Platform::ANDROID => "FCM",
+        Platform::WINDOWS => "WNS",
+        _ => "APNS",
+    }
+}
+
+fn provider_path_name(path: ProviderDeliveryPath) -> &'static str {
+    match path {
+        ProviderDeliveryPath::Direct => "direct",
+        ProviderDeliveryPath::WakeupPull => "wakeup_pull",
+    }
+}
+
+fn dispatch_error_detail(error: &DispatchError) -> &'static str {
+    match error {
+        DispatchError::QueueFull => "dispatch queue is full",
+        DispatchError::ChannelClosed => "dispatch worker channel is closed",
     }
 }
 
@@ -1015,6 +1221,28 @@ fn normalize_tags(values: &[String], field: &str) -> Result<Vec<String>, Error> 
         }
         if trimmed.len() > MAX_TAG_LEN {
             return Err(Error::validation(format!("{field} contains oversized tag")));
+        }
+        if !out.iter().any(|item| item == trimmed) {
+            out.push(trimmed.to_string());
+        }
+    }
+    Ok(out)
+}
+
+fn normalize_image_values(values: &[String], field: &str) -> Result<Vec<String>, Error> {
+    const MAX_IMAGES: usize = 32;
+    const MAX_IMAGE_LEN: usize = 2048;
+    if values.len() > MAX_IMAGES {
+        return Err(Error::validation(format!("{field} exceeds max length")));
+    }
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(Error::validation(format!("{field} contains empty url")));
+        }
+        if trimmed.len() > MAX_IMAGE_LEN {
+            return Err(Error::validation(format!("{field} contains oversized url")));
         }
         if !out.iter().any(|item| item == trimmed) {
             out.push(trimmed.to_string());
@@ -1197,6 +1425,7 @@ fn select_provider_delivery_path(
     platform: Platform,
     direct_len: usize,
     wakeup_len: usize,
+    wakeup_pull_available: bool,
 ) -> Result<ProviderDeliverySelection, Error> {
     let limit = provider_payload_limit_bytes(platform);
     let within_limit = |len: usize| match platform {
@@ -1209,6 +1438,11 @@ fn select_provider_delivery_path(
             initial_path: ProviderDeliveryPath::Direct,
             wakeup_payload_within_limit,
         });
+    }
+    if !wakeup_pull_available {
+        return Err(Error::validation(
+            "provider payload exceeds size limit and wakeup path is unavailable",
+        ));
     }
     if wakeup_payload_within_limit {
         return Ok(ProviderDeliverySelection {
@@ -1252,4 +1486,109 @@ fn resolve_provider_route_device_key(
     state
         .device_registry
         .resolve_provider_route_by_token(platform, token)
+}
+
+fn should_skip_provider_delivery(
+    private_delivery_target: Option<[u8; 16]>,
+    private_online: bool,
+    private_realtime_delivered: &HashSet<[u8; 16]>,
+) -> bool {
+    private_delivery_target
+        .is_some_and(|device_id| private_online && private_realtime_delivered.contains(&device_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MessageIntent, StandardFields, add_standard_fields, select_provider_delivery_path,
+        should_skip_provider_delivery,
+    };
+    use crate::{dispatch::ProviderDeliveryPath, storage::Platform};
+    use hashbrown::HashMap;
+    use serde_json::Map as JsonMap;
+    use std::collections::HashSet;
+
+    #[test]
+    fn skip_provider_only_when_private_delivery_succeeds_while_online() {
+        let device_id = [1u8; 16];
+        let mut delivered = HashSet::new();
+        delivered.insert(device_id);
+        assert!(should_skip_provider_delivery(
+            Some(device_id),
+            true,
+            &delivered
+        ));
+        assert!(!should_skip_provider_delivery(
+            Some(device_id),
+            false,
+            &delivered
+        ));
+        assert!(!should_skip_provider_delivery(
+            Some([2u8; 16]),
+            true,
+            &delivered
+        ));
+        assert!(!should_skip_provider_delivery(None, true, &delivered));
+    }
+
+    #[test]
+    fn wakeup_pull_requires_available_private_wakeup_path() {
+        let selection = select_provider_delivery_path(Platform::ANDROID, 5_000, 1_000, false);
+        assert!(selection.is_err());
+    }
+
+    #[test]
+    fn wakeup_pull_selected_when_direct_too_large_and_available() {
+        let selection = select_provider_delivery_path(Platform::ANDROID, 5_000, 1_000, true)
+            .expect("wakeup pull should be selected");
+        assert_eq!(selection.initial_path, ProviderDeliveryPath::WakeupPull);
+        assert!(selection.wakeup_payload_within_limit);
+    }
+
+    #[test]
+    fn message_intent_accepts_markdown_link_body() {
+        let body = "[https://sway.cloud.microsoft/lNjlqkdUA7wtAxfV](https://sway.cloud.microsoft/lNjlqkdUA7wtAxfV)\n\n无论可以玩玩。有上千个，\n\n\n\n[原文链接](https://www.v2ex.com/t/1200790)";
+        let intent = MessageIntent {
+            channel_id: "06J0FZG1Y8XGG14VTQ4Y3G10MR".to_string(),
+            password: "pass-123".to_string(),
+            op_id: "op-123".to_string(),
+            thing_id: None,
+            title: "sample".to_string(),
+            body: Some(body.to_string()),
+            severity: None,
+            ttl: None,
+            url: None,
+            images: Vec::new(),
+            ciphertext: None,
+            tags: Vec::new(),
+            metadata: JsonMap::new(),
+        };
+        intent
+            .validate_payload()
+            .expect("markdown body should pass validation");
+    }
+
+    #[test]
+    fn add_standard_fields_keeps_markdown_link_body() {
+        let body = "[https://sway.cloud.microsoft/lNjlqkdUA7wtAxfV](https://sway.cloud.microsoft/lNjlqkdUA7wtAxfV)\n\n无论可以玩玩。有上千个，\n\n\n\n[原文链接](https://www.v2ex.com/t/1200790)";
+        let mut data = HashMap::new();
+        add_standard_fields(
+            &mut data,
+            StandardFields {
+                channel_id: "06J0FZG1Y8XGG14VTQ4Y3G10MR",
+                title: Some("sample"),
+                body: Some(body),
+                severity: None,
+                schema_version: "1",
+                payload_version: "1",
+                op_id: "op-123",
+                delivery_id: "d-123",
+                sent_at: 1_710_000_000,
+                ttl: None,
+                entity_type: "message",
+                entity_id: "m-123",
+            },
+        );
+        assert_eq!(data.get("body"), Some(&body.to_string()));
+    }
 }
