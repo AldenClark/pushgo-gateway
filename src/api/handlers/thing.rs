@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use chrono::Utc;
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -14,14 +13,14 @@ use crate::{
         format_channel_id, parse_channel_id, validate_channel_password,
     },
     app::AppState,
-    storage::{StoreError, ThingHead, ThingState},
+    storage::{StoreError, ThingState},
 };
 
 use super::{
     dispatch_lifecycle::dispatch_failure_error_message,
     message::{
         build_semantic_create_dedupe_key, deserialize_metadata_map, dispatch_entity_notification,
-        encode_metadata, normalize_op_id, resolve_create_semantic_id, validate_metadata_entries,
+        encode_metadata, resolve_create_semantic_id, resolve_op_id, validate_metadata_entries,
     },
 };
 
@@ -56,18 +55,13 @@ struct ThingProfile {
     location: Option<ThingLocation>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct ThingMetaPayload {
-    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    profile_json: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ThingCommonFields {
     channel_id: String,
     password: String,
-    op_id: String,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    op_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,7 +138,7 @@ struct ThingPayloadFields {
 struct ThingIntent {
     channel_id: String,
     password: String,
-    op_id: String,
+    op_id: Option<String>,
     thing_id: Option<String>,
     payload: ThingPayloadFields,
 }
@@ -231,12 +225,6 @@ async fn thing_to_channel_with_action(
     if payload.channel_id.trim().is_empty() {
         return Err(Error::validation("channel id must not be empty"));
     }
-    if !state
-        .api_rate_limiter
-        .allow_channel(payload.channel_id.as_str())
-    {
-        return Err(Error::TooBusy);
-    }
     let channel_id = parse_channel_id(&payload.channel_id)?;
     let channel_scope = format_channel_id(&channel_id);
     let password = validate_channel_password(&payload.password)?;
@@ -246,7 +234,7 @@ async fn thing_to_channel_with_action(
         .await?
         .ok_or(StoreError::ChannelNotFound)?;
 
-    let op_id = normalize_op_id(&payload.op_id)?;
+    let op_id = resolve_op_id(payload.op_id.as_deref())?;
     if route_action == ThingRouteAction::Create
         && payload
             .thing_id
@@ -274,12 +262,10 @@ async fn thing_to_channel_with_action(
                         .ok_or_else(|| Error::validation("thing_id is required"))?;
                     normalize_entity_id(raw, "thing_id")?
                 },
-                reused: false,
             }
         }
     };
     let thing_id = resolved_thing_id.semantic_id;
-    let scoped_thing_id = scoped_entity_key(&channel_scope, &thing_id);
 
     let normalized_tags = payload
         .payload
@@ -304,26 +290,10 @@ async fn thing_to_channel_with_action(
     )?;
     validate_metadata_entries(&payload.payload.mutable.metadata)?;
 
-    let now = Utc::now().timestamp();
-    let observed_at = payload.payload.mutable.observed_at.unwrap_or(now);
-    let existing = state.store.load_thing_head_async(&scoped_thing_id).await?;
-    match route_action {
-        ThingRouteAction::Create if existing.is_some() && !resolved_thing_id.reused => {
-            return Err(Error::validation("thing already exists; use /thing/update"));
-        }
-        ThingRouteAction::Update | ThingRouteAction::Archive | ThingRouteAction::Delete
-            if existing.is_none() =>
-        {
-            return Err(Error::validation(
-                "thing not found; use /thing/create first",
-            ));
-        }
-        _ => {}
-    }
-    let existing_meta = existing
-        .as_ref()
-        .and_then(|head| parse_thing_meta(head.meta_json.as_deref()).ok())
-        .unwrap_or_default();
+    let observed_at =
+        payload.payload.mutable.observed_at.ok_or_else(|| {
+            Error::validation_code("observed_at is required", "observed_at_required")
+        })?;
 
     let mut custom_data = HashMap::with_capacity(1);
     if !payload.payload.mutable.metadata.is_empty() {
@@ -333,11 +303,7 @@ async fn thing_to_channel_with_action(
         );
     }
 
-    let mut merged_profile = existing_meta
-        .profile_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<ThingProfile>(raw).ok())
-        .unwrap_or_default();
+    let mut merged_profile = ThingProfile::default();
     if let Some(title) = payload.payload.mutable.title.clone() {
         merged_profile.title = Some(title);
     }
@@ -354,13 +320,9 @@ async fn thing_to_channel_with_action(
                     "created_at is only allowed on /thing/create",
                 ));
             }
-            merged_profile.created_at
+            None
         }
-        ThingRouteAction::Create => payload
-            .payload
-            .created_at
-            .or(merged_profile.created_at)
-            .or(Some(observed_at)),
+        ThingRouteAction::Create => payload.payload.created_at.or(Some(observed_at)),
     };
     merged_profile.created_at = resolved_created_at;
     if let Some(image) = normalized_primary_image {
@@ -372,13 +334,9 @@ async fn thing_to_channel_with_action(
         }
     }
 
-    let existing_state = existing
-        .as_ref()
-        .map(|head| head.state)
-        .unwrap_or(ThingState::Active);
     let resolved_state = match route_action {
         ThingRouteAction::Create => ThingState::Active,
-        ThingRouteAction::Update => existing_state,
+        ThingRouteAction::Update => ThingState::Active,
         ThingRouteAction::Archive => ThingState::Inactive,
         ThingRouteAction::Delete => ThingState::Decommissioned,
     };
@@ -415,15 +373,7 @@ async fn thing_to_channel_with_action(
         })
         .transpose()?;
 
-    let applied = existing
-        .as_ref()
-        .map(|head| observed_at >= head.updated_at)
-        .unwrap_or(true);
-
-    let mut final_attrs = existing
-        .as_ref()
-        .and_then(|head| parse_attrs_json(&head.attrs_json).ok())
-        .unwrap_or_default();
+    let mut final_attrs = JsonMap::new();
     for (key, value) in &payload.payload.mutable.attrs {
         if value.is_null() {
             final_attrs.remove(key);
@@ -434,8 +384,6 @@ async fn thing_to_channel_with_action(
     let final_attrs_json =
         serde_json::to_string(&final_attrs).map_err(|err| Error::validation(err.to_string()))?;
 
-    let thing_meta_json = encode_thing_meta(resolved_profile_json.as_deref())?;
-
     let (notification_title, notification_body) = build_thing_notification_content(
         route_action,
         &payload,
@@ -443,25 +391,7 @@ async fn thing_to_channel_with_action(
         normalized_description,
     );
 
-    if applied {
-        let existing_latest_event_id = existing
-            .as_ref()
-            .and_then(|head| head.latest_event_id.clone());
-        let existing_latest_event_time = existing.as_ref().and_then(|head| head.latest_event_time);
-
-        let head = ThingHead {
-            thing_id: scoped_thing_id.clone(),
-            state: resolved_state,
-            attrs_json: final_attrs_json.clone(),
-            meta_json: Some(thing_meta_json),
-            updated_at: observed_at,
-            latest_event_id: existing_latest_event_id,
-            latest_event_time: existing_latest_event_time,
-        };
-        state.store.upsert_thing_head_async(&head).await?;
-    }
-
-    let dispatch_summary = if applied {
+    let dispatch_summary = {
         let mut extra = HashMap::with_capacity(4);
         extra.insert("occurred_at".to_string(), observed_at.to_string());
         extra.insert("thing_id".to_string(), thing_id.clone());
@@ -475,6 +405,7 @@ async fn thing_to_channel_with_action(
                 &state,
                 channel_id,
                 op_id.clone(),
+                observed_at,
                 notification_title,
                 notification_body,
                 None,
@@ -486,8 +417,6 @@ async fn thing_to_channel_with_action(
             )
             .await?,
         )
-    } else {
-        None
     };
 
     let mut response = ThingSummary {
@@ -558,20 +487,6 @@ pub(crate) async fn thing_delete_to_channel(
         ThingRouteAction::Delete,
     )
     .await
-}
-
-fn parse_attrs_json(raw: &str) -> Result<JsonMap<String, JsonValue>, serde_json::Error> {
-    serde_json::from_str::<JsonMap<String, JsonValue>>(raw)
-}
-
-fn parse_thing_meta(raw: Option<&str>) -> Result<ThingMetaPayload, serde_json::Error> {
-    let Some(raw) = raw else {
-        return Ok(ThingMetaPayload::default());
-    };
-    if raw.trim().is_empty() {
-        return Ok(ThingMetaPayload::default());
-    }
-    serde_json::from_str::<ThingMetaPayload>(raw)
 }
 
 fn build_thing_notification_content(
@@ -653,17 +568,6 @@ fn attr_value_text(value: &JsonValue) -> String {
     }
 }
 
-fn encode_thing_meta(profile_json: Option<&str>) -> Result<String, Error> {
-    #[derive(Serialize)]
-    struct ThingMetaPayloadRef<'a> {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        profile_json: Option<&'a str>,
-    }
-
-    serde_json::to_string(&ThingMetaPayloadRef { profile_json })
-        .map_err(|err| Error::validation(err.to_string()))
-}
-
 fn normalize_entity_id(raw: &str, field: &str) -> Result<String, Error> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -679,10 +583,6 @@ fn normalize_entity_id(raw: &str, field: &str) -> Result<String, Error> {
         return Err(Error::validation(format!("{field} format is invalid")));
     }
     Ok(trimmed.to_string())
-}
-
-fn scoped_entity_key(channel_scope: &str, id: &str) -> String {
-    format!("{channel_scope}:{id}")
 }
 
 fn normalize_tags(values: &[String], field: &str) -> Result<Vec<String>, Error> {
@@ -1131,5 +1031,16 @@ mod tests {
         }"#;
         let parsed = serde_json::from_str::<ThingDeleteRequest>(raw);
         assert!(parsed.is_ok(), "thing delete should accept deleted_at");
+    }
+
+    #[test]
+    fn thing_create_accepts_missing_op_id() {
+        let raw = r#"{
+            "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "password":"12345678",
+            "title":"name"
+        }"#;
+        let parsed = serde_json::from_str::<ThingCreateRequest>(raw);
+        assert!(parsed.is_ok(), "thing create should accept missing op_id");
     }
 }

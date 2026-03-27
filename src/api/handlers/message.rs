@@ -9,7 +9,8 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::{
     api::{
-        ApiJson, Error, HttpResult, format_channel_id, parse_channel_id, validate_channel_password,
+        ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_i64_lenient,
+        format_channel_id, parse_channel_id, validate_channel_password,
     },
     app::AppState,
     device_registry::DeviceRegistry,
@@ -19,8 +20,9 @@ use crate::{
     },
     private::protocol::PRIVATE_PAYLOAD_VERSION_V1,
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
-    storage::{Platform, StoreError},
-    util::{SharedStringMap, build_wakeup_data, generate_hex_id_128},
+    stats::{DeviceDispatchDelta, DispatchStatsEvent},
+    storage::{DeliveryAuditWrite, DeviceInfo, DispatchTarget, Platform, StoreError},
+    util::{SharedStringMap, build_wakeup_data, encode_lower_hex_128, generate_hex_id_128},
 };
 
 use super::dispatch_lifecycle::{
@@ -29,13 +31,45 @@ use super::dispatch_lifecycle::{
 };
 use super::watch_light::quantize_watch_payload;
 
+fn apple_thread_id_for_payload(
+    channel_id: &str,
+    entity_type: &str,
+    event_id: Option<&str>,
+    thing_id: Option<&str>,
+) -> String {
+    let normalized_type = entity_type.trim().to_ascii_lowercase();
+    let mut parts = vec![match normalized_type.as_str() {
+        "event" => "event".to_string(),
+        "thing" => "thing".to_string(),
+        _ => "message".to_string(),
+    }];
+    let trimmed_channel = channel_id.trim();
+    if !trimmed_channel.is_empty() {
+        parts.push(format!("channel={trimmed_channel}"));
+    }
+    if (normalized_type == "event" || normalized_type == "thing")
+        && let Some(event_id) = event_id.map(str::trim).filter(|value| !value.is_empty())
+    {
+        parts.push(format!("event={event_id}"));
+    }
+    if normalized_type == "thing"
+        && let Some(thing_id) = thing_id.map(str::trim).filter(|value| !value.is_empty())
+    {
+        parts.push(format!("thing={thing_id}"));
+    }
+    parts.join("|")
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MessageIntent {
     pub channel_id: String,
     pub password: String,
-    pub op_id: String,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    pub op_id: Option<String>,
     pub thing_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_i64_lenient")]
+    pub occurred_at: Option<i64>,
     pub title: String,
     pub body: Option<String>,
     pub severity: Option<String>,
@@ -56,7 +90,9 @@ impl MessageIntent {
             return Err(Error::validation("channel id must not be empty"));
         }
         validate_channel_password(&self.password)?;
-        normalize_op_id(&self.op_id)?;
+        if let Some(op_id) = self.op_id.as_deref() {
+            normalize_op_id(op_id)?;
+        }
         if self.title.trim().is_empty() {
             return Err(Error::validation("title must not be empty"));
         }
@@ -160,6 +196,12 @@ const PRIVATE_ENQUEUE_TOO_BUSY_MIN_CEIL: usize = 16;
 const APNS_PROVIDER_PAYLOAD_LIMIT_BYTES: usize = 4096;
 const FCM_PROVIDER_PAYLOAD_LIMIT_BYTES: usize = 4096;
 const WNS_PROVIDER_PAYLOAD_LIMIT_BYTES: usize = 5120;
+const AUDIT_PATH_PRIVATE_OUTBOX: &str = "private_outbox";
+const AUDIT_PATH_PROVIDER: &str = "provider";
+const AUDIT_STATUS_ENQUEUED: &str = "enqueued";
+const AUDIT_STATUS_ENQUEUE_FAILED: &str = "enqueue_failed";
+const AUDIT_STATUS_PATH_REJECTED: &str = "path_rejected";
+const AUDIT_STATUS_SKIPPED_PRIVATE_REALTIME: &str = "skipped_private_realtime";
 
 #[derive(Debug, Clone, Copy)]
 struct ProviderDeliverySelection {
@@ -186,12 +228,6 @@ async fn dispatch_message_intent(
     scoped_thing_id: Option<String>,
 ) -> HttpResult {
     payload.validate_payload()?;
-    if !state
-        .api_rate_limiter
-        .allow_channel(payload.channel_id.as_str())
-    {
-        return Err(Error::TooBusy);
-    }
     let channel_id = parse_channel_id(&payload.channel_id)?;
     let channel_id_value = format_channel_id(&channel_id);
     let password = validate_channel_password(&payload.password)?;
@@ -203,6 +239,7 @@ async fn dispatch_message_intent(
 
     let MessageIntent {
         op_id,
+        occurred_at,
         title,
         body,
         severity,
@@ -214,11 +251,21 @@ async fn dispatch_message_intent(
         metadata,
         ..
     } = payload;
+    let occurred_at = if scoped_thing_id.is_some() {
+        occurred_at.ok_or_else(|| {
+            Error::validation_code(
+                "occurred_at is required when message is scoped to thing_id",
+                "occurred_at_required_for_thing_scoped_message",
+            )
+        })?
+    } else {
+        occurred_at.unwrap_or_else(|| Utc::now().timestamp())
+    };
     let normalized_body = normalize_optional_string(body);
     let normalized_url = normalize_optional_string(url);
     let normalized_images = normalize_image_values(&images, "images")?;
 
-    let op_id = normalize_op_id(&op_id)?;
+    let op_id = resolve_op_id(op_id.as_deref())?;
     let message_id = resolve_create_semantic_id(
         state,
         build_semantic_create_dedupe_key(
@@ -263,6 +310,7 @@ async fn dispatch_message_intent(
         state,
         channel_id,
         op_id,
+        occurred_at,
         Some(title),
         normalized_body,
         severity,
@@ -301,6 +349,7 @@ pub(super) async fn dispatch_entity_notification(
     state: &AppState,
     channel_id: [u8; 16],
     op_id: String,
+    occurred_at: i64,
     title: Option<String>,
     body: Option<String>,
     severity: Option<String>,
@@ -353,7 +402,10 @@ pub(super) async fn dispatch_entity_notification(
             ttl.map(|expires_at| expires_at.min(sent_at + MAX_PROVIDER_TTL_SECONDS));
         let ttl_seconds =
             effective_ttl.map(|expires_at| ttl_seconds_remaining(sent_at, expires_at));
-        let devices = state.store.list_channel_devices_async(channel_id).await?;
+        let dispatch_targets = state
+            .store
+            .list_channel_dispatch_targets_async(channel_id, sent_at)
+            .await?;
 
         let private_state = state.private.as_ref();
         let private_enabled = state.private_channel_enabled && private_state.is_some();
@@ -362,15 +414,24 @@ pub(super) async fn dispatch_entity_notification(
             .unwrap_or(MAX_PROVIDER_TTL_SECONDS)
             .clamp(0, MAX_PROVIDER_TTL_SECONDS);
 
-        let private_subscribers = if private_enabled {
-            state
-                .store
-                .list_private_subscribers_async(channel_id, sent_at)
-                .await
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let mut private_subscribers = Vec::new();
+        let mut devices = Vec::new();
+        for target in dispatch_targets {
+            match target {
+                DispatchTarget::Private { device_id, .. } if private_enabled => {
+                    private_subscribers.push(device_id);
+                }
+                DispatchTarget::Provider {
+                    platform,
+                    provider_token,
+                    ..
+                } => {
+                    let info = DeviceInfo::from_token(platform, provider_token.as_str())?;
+                    devices.push(info);
+                }
+                _ => {}
+            }
+        }
         let private_subscriber_set: HashSet<[u8; 16]> =
             private_subscribers.iter().copied().collect();
 
@@ -386,6 +447,8 @@ pub(super) async fn dispatch_entity_notification(
                 payload_version: PAYLOAD_VERSION,
                 op_id: &op_id,
                 delivery_id: &delivery_id,
+                ingested_at: sent_at,
+                occurred_at,
                 sent_at,
                 ttl: effective_ttl,
                 entity_type,
@@ -395,27 +458,27 @@ pub(super) async fn dispatch_entity_notification(
         for (key, value) in extra_fields {
             custom_data.insert(key, value);
         }
+        let apple_thread_id = apple_thread_id_for_payload(
+            channel_id_value.as_str(),
+            entity_type,
+            custom_data.get("event_id").map(String::as_str),
+            custom_data.get("thing_id").map(String::as_str),
+        );
         let custom_data = Arc::new(custom_data);
         let wakeup_data = Arc::new(build_wakeup_data(custom_data.as_ref()));
-        let private_payload = if private_state.is_some() {
-            Some(encode_private_payload(custom_data.as_ref()).map_err(|err| {
-                Error::Internal(format!("private payload encoding failed: {err}"))
-            })?)
-        } else {
-            None
-        };
+        let private_payload = encode_private_payload(custom_data.as_ref())
+            .map_err(|err| Error::Internal(format!("private payload encoding failed: {err}")))?;
 
         let mut private_enqueued = HashSet::new();
         let mut private_realtime_delivered = HashSet::new();
         let mut private_enqueue_stats = PrivateEnqueueStats::default();
+        let mut provider_attempted = 0i64;
+        let mut provider_success = 0i64;
+        let mut provider_failed = 0i64;
+        let mut device_stats = HashMap::<Arc<str>, DeviceDispatchDelta>::new();
         if let Some(private_state) = private_state
             && private_enabled
         {
-            let Some(private_payload) = private_payload.as_ref() else {
-                return Err(Error::Internal(
-                    "private payload unavailable while private channel is enabled".to_string(),
-                ));
-            };
             let private_expires_at = effective_ttl.unwrap_or(sent_at + private_default_ttl_secs);
             for device_id in private_subscribers {
                 match private_state
@@ -431,6 +494,36 @@ pub(super) async fn dispatch_entity_notification(
                     Ok(()) => {
                         private_enqueue_stats.record_success();
                         private_enqueued.insert(device_id);
+                        let private_stats_key = Arc::<str>::from(
+                            format!("private:{}", encode_lower_hex_128(&device_id))
+                                .into_boxed_str(),
+                        );
+                        merge_device_dispatch_delta(
+                            &mut device_stats,
+                            private_stats_key,
+                            DeviceDispatchDelta {
+                                messages_received: 1,
+                                private_outbox_enqueued_count: 1,
+                                ..DeviceDispatchDelta::default()
+                            },
+                        );
+                        append_delivery_audit_best_effort(
+                            state,
+                            correlation_id.as_ref(),
+                            &DeliveryAuditWrite {
+                                delivery_id: delivery_id.clone(),
+                                channel_id,
+                                device_key: format!("private:{}", encode_lower_hex_128(&device_id)),
+                                entity_type: Some(entity_type.to_string()),
+                                entity_id: Some(entity_id.clone()),
+                                op_id: Some(op_id.clone()),
+                                path: AUDIT_PATH_PRIVATE_OUTBOX.to_string(),
+                                status: AUDIT_STATUS_ENQUEUED.to_string(),
+                                error_code: None,
+                                created_at: sent_at,
+                            },
+                        )
+                        .await;
                         if private_state.hub.is_online(device_id) {
                             let delivered = private_state.hub.try_deliver_to_device(
                                 device_id,
@@ -449,6 +542,23 @@ pub(super) async fn dispatch_entity_notification(
                     Err(err) => {
                         private_enqueue_stats.record_failure("private_subscriber", device_id, &err);
                         private_state.metrics.mark_enqueue_failure();
+                        append_delivery_audit_best_effort(
+                            state,
+                            correlation_id.as_ref(),
+                            &DeliveryAuditWrite {
+                                delivery_id: delivery_id.clone(),
+                                channel_id,
+                                device_key: format!("private:{}", encode_lower_hex_128(&device_id)),
+                                entity_type: Some(entity_type.to_string()),
+                                entity_id: Some(entity_id.clone()),
+                                op_id: Some(op_id.clone()),
+                                path: AUDIT_PATH_PRIVATE_OUTBOX.to_string(),
+                                status: AUDIT_STATUS_ENQUEUE_FAILED.to_string(),
+                                error_code: Some("private_enqueue_failed".to_string()),
+                                created_at: sent_at,
+                            },
+                        )
+                        .await;
                     }
                 }
             }
@@ -457,6 +567,18 @@ pub(super) async fn dispatch_entity_notification(
         if devices.is_empty() {
             let private_enqueue_too_busy = private_enqueue_stats.is_too_busy();
             let partial_failure = private_enqueue_stats.has_failures();
+            emit_dispatch_stats(
+                state,
+                channel_id,
+                sent_at,
+                1,
+                private_enqueue_stats.attempted as i64,
+                provider_attempted,
+                provider_success,
+                provider_failed,
+                private_realtime_delivered.len() as i64,
+                device_stats,
+            );
             return Ok(NotificationDispatchSummary {
                 channel_id: channel_id_value,
                 op_id,
@@ -487,7 +609,7 @@ pub(super) async fn dispatch_entity_notification(
                 resolved_title.clone(),
                 resolved_body.clone(),
                 provider_fallback_body.clone(),
-                Some(channel_id_value.clone()),
+                Some(apple_thread_id.clone()),
                 normalized_severity.clone(),
                 effective_ttl,
                 SharedStringMap::from(Arc::clone(&custom_data)),
@@ -500,7 +622,7 @@ pub(super) async fn dispatch_entity_notification(
                 resolved_title.clone(),
                 resolved_body.clone(),
                 provider_fallback_body.clone(),
-                Some(channel_id_value.clone()),
+                Some(apple_thread_id.clone()),
                 normalized_severity.clone(),
                 effective_ttl,
                 quantize_watch_payload(custom_data.as_ref()),
@@ -522,15 +644,6 @@ pub(super) async fn dispatch_entity_notification(
         } else {
             None
         };
-        let fcm_wakeup_payload = if has_android {
-            Some(Arc::new(FcmPayload::new(
-                SharedStringMap::from(Arc::clone(&wakeup_data)),
-                "HIGH",
-                ttl_seconds,
-            )))
-        } else {
-            None
-        };
         let wns_payload = if has_wns {
             Some(Arc::new(WnsPayload::new(
                 SharedStringMap::from(Arc::clone(&custom_data)),
@@ -540,24 +653,8 @@ pub(super) async fn dispatch_entity_notification(
         } else {
             None
         };
-        let wns_wakeup_payload = if has_wns {
-            Some(Arc::new(WnsPayload::new(
-                SharedStringMap::from(Arc::clone(&wakeup_data)),
-                "high",
-                ttl_seconds,
-            )))
-        } else {
-            None
-        };
-        let apns_wakeup_payload = if has_apns {
-            Some(Arc::new(ApnsPayload::wakeup(
-                Some(channel_id_value.clone()),
-                effective_ttl,
-                SharedStringMap::from(Arc::clone(&wakeup_data)),
-            )))
-        } else {
-            None
-        };
+        let apns_wakeup_title =
+            has_apns.then(|| wakeup_fallback_title(entity_type, resolved_title.as_deref()));
 
         let total = devices.len();
         let mut rejected = 0usize;
@@ -587,11 +684,36 @@ pub(super) async fn dispatch_entity_notification(
             } else {
                 false
             };
+            let provider_device_key =
+                resolve_provider_route_device_key(state, device.platform, device.token_str());
+            let provider_audit_key = provider_audit_device_key(
+                provider_device_key.as_deref(),
+                device.platform,
+                device.token_str(),
+            );
+            let provider_stats_key = Arc::<str>::from(provider_audit_key.clone().into_boxed_str());
             if should_skip_provider_delivery(
                 private_delivery_target,
                 private_online,
                 &private_realtime_delivered,
             ) {
+                append_delivery_audit_best_effort(
+                    state,
+                    correlation_id.as_ref(),
+                    &DeliveryAuditWrite {
+                        delivery_id: delivery_id.clone(),
+                        channel_id,
+                        device_key: provider_audit_key.clone(),
+                        entity_type: Some(entity_type.to_string()),
+                        entity_id: Some(entity_id.clone()),
+                        op_id: Some(op_id.clone()),
+                        path: AUDIT_PATH_PROVIDER.to_string(),
+                        status: AUDIT_STATUS_SKIPPED_PRIVATE_REALTIME.to_string(),
+                        error_code: None,
+                        created_at: sent_at,
+                    },
+                )
+                .await;
                 state.dispatch_audit.record(DispatchAuditRecord {
                     stage: "provider_skipped_private_realtime",
                     correlation_id: correlation_id.as_ref(),
@@ -611,85 +733,152 @@ pub(super) async fn dispatch_entity_notification(
                 });
                 continue;
             }
-            let provider_device_key =
-                resolve_provider_route_device_key(state, device.platform, device.token_str());
+            let provider_pull_delivery_id = derive_provider_pull_delivery_id(
+                delivery_id.as_str(),
+                device.platform,
+                device.token_str(),
+            );
+            let wakeup_data_for_device = Arc::new(wakeup_data_with_delivery_id(
+                wakeup_data.as_ref(),
+                provider_pull_delivery_id.as_str(),
+            ));
             let private_wakeup_delivery = build_private_wakeup_delivery(
                 provider_device_key.as_deref(),
-                private_payload.as_ref(),
-                &delivery_id,
+                device.platform,
+                device.token_str(),
+                &private_payload,
+                provider_pull_delivery_id.as_str(),
                 sent_at,
                 provider_private_expires_at,
             );
-            let mut private_wakeup_enqueued = false;
             match device.platform {
                 Platform::ANDROID => {
                     let direct_payload = fcm_payload
                         .clone()
                         .ok_or(Error::Internal("missing FCM payload".to_string()))?;
-                    let wakeup_payload = fcm_wakeup_payload
-                        .clone()
-                        .ok_or(Error::Internal("missing FCM wakeup payload".to_string()))?;
+                    let wakeup_payload = Arc::new(FcmPayload::new(
+                        SharedStringMap::from(Arc::clone(&wakeup_data_for_device)),
+                        "HIGH",
+                        ttl_seconds,
+                    ));
                     let direct_body = direct_payload
                         .encoded_body(device.token_str())
                         .map_err(|err| Error::Internal(err.to_string()))?;
-                    let wakeup_body = wakeup_payload
-                        .encoded_body(device.token_str())
-                        .map_err(|err| Error::Internal(err.to_string()))?;
-                    let selection = match select_provider_delivery_path(
-                        device.platform,
-                        direct_body.len(),
-                        wakeup_body.len(),
-                        private_wakeup_delivery.is_some(),
-                    ) {
-                        Ok(value) => value,
-                        Err(err) => {
+                    let mut wakeup_body = None;
+                    let selection =
+                        if provider_payload_len_within_limit(device.platform, direct_body.len()) {
+                            // Keep hot path lean: skip wakeup body encoding unless direct payload already over limit.
+                            ProviderDeliverySelection {
+                                initial_path: ProviderDeliveryPath::Direct,
+                                wakeup_payload_within_limit: false,
+                            }
+                        } else if private_wakeup_delivery.is_none() {
                             rejected += 1;
-                            state.dispatch_audit.record(DispatchAuditRecord {
-                                stage: "provider_path_rejected",
-                                correlation_id: correlation_id.as_ref(),
-                                delivery_id: Some(delivery_id.as_str()),
-                                channel_id: Some(channel_id_value.as_str()),
-                                provider: Some("FCM"),
-                                platform: Some(device.platform),
-                                path: None,
-                                device_token: Some(device.token_str()),
-                                success: None,
-                                status_code: None,
-                                invalid_token: None,
-                                payload_too_large: None,
-                                detail: Some(err.to_string().into()),
-                            });
-                            continue;
-                        }
-                    };
-                    if selection.initial_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(private_state) = private_state
-                        && let Some(private_meta) = private_wakeup_delivery.as_ref()
-                    {
-                        match private_state
-                            .enqueue_private_delivery(
-                                private_meta.device_id,
-                                private_meta.delivery_id.as_ref(),
-                                private_meta.payload.as_ref().clone(),
-                                private_meta.sent_at,
-                                private_meta.expires_at,
+                            provider_attempted += 1;
+                            provider_failed += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    provider_failure_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: AUDIT_PATH_PROVIDER.to_string(),
+                                    status: AUDIT_STATUS_PATH_REJECTED.to_string(),
+                                    error_code: Some("provider_path_rejected".to_string()),
+                                    created_at: sent_at,
+                                },
                             )
-                            .await
-                        {
-                            Ok(()) => {
-                                private_enqueue_stats.record_success();
-                                private_wakeup_enqueued = true;
-                            }
-                            Err(err) => {
-                                private_enqueue_stats.record_failure(
-                                    "provider_wakeup",
-                                    private_meta.device_id,
-                                    &err,
+                            .await;
+                            state.dispatch_audit.record(DispatchAuditRecord {
+                            stage: "provider_path_rejected",
+                            correlation_id: correlation_id.as_ref(),
+                            delivery_id: Some(delivery_id.as_str()),
+                            channel_id: Some(channel_id_value.as_str()),
+                            provider: Some("FCM"),
+                            platform: Some(device.platform),
+                            path: None,
+                            device_token: Some(device.token_str()),
+                            success: None,
+                            status_code: None,
+                            invalid_token: None,
+                            payload_too_large: None,
+                            detail: Some(
+                                "provider payload exceeds size limit and wakeup path is unavailable"
+                                    .into(),
+                            ),
+                        });
+                            continue;
+                        } else {
+                            let encoded_wakeup = wakeup_payload
+                                .encoded_body(device.token_str())
+                                .map_err(|err| Error::Internal(err.to_string()))?;
+                            if !provider_payload_len_within_limit(
+                                device.platform,
+                                encoded_wakeup.len(),
+                            ) {
+                                rejected += 1;
+                                provider_attempted += 1;
+                                provider_failed += 1;
+                                merge_device_dispatch_delta(
+                                    &mut device_stats,
+                                    Arc::clone(&provider_stats_key),
+                                    DeviceDispatchDelta {
+                                        provider_failure_count: 1,
+                                        ..DeviceDispatchDelta::default()
+                                    },
                                 );
-                                private_state.metrics.mark_enqueue_failure();
+                                append_delivery_audit_best_effort(
+                                    state,
+                                    correlation_id.as_ref(),
+                                    &DeliveryAuditWrite {
+                                        delivery_id: delivery_id.clone(),
+                                        channel_id,
+                                        device_key: provider_audit_key.clone(),
+                                        entity_type: Some(entity_type.to_string()),
+                                        entity_id: Some(entity_id.clone()),
+                                        op_id: Some(op_id.clone()),
+                                        path: AUDIT_PATH_PROVIDER.to_string(),
+                                        status: AUDIT_STATUS_PATH_REJECTED.to_string(),
+                                        error_code: Some("provider_path_rejected".to_string()),
+                                        created_at: sent_at,
+                                    },
+                                )
+                                .await;
+                                state.dispatch_audit.record(DispatchAuditRecord {
+                                    stage: "provider_path_rejected",
+                                    correlation_id: correlation_id.as_ref(),
+                                    delivery_id: Some(delivery_id.as_str()),
+                                    channel_id: Some(channel_id_value.as_str()),
+                                    provider: Some("FCM"),
+                                    platform: Some(device.platform),
+                                    path: None,
+                                    device_token: Some(device.token_str()),
+                                    success: None,
+                                    status_code: None,
+                                    invalid_token: None,
+                                    payload_too_large: None,
+                                    detail: Some("provider payload exceeds size limit".into()),
+                                });
+                                continue;
                             }
-                        }
-                    }
+                            wakeup_body = Some(encoded_wakeup);
+                            ProviderDeliverySelection {
+                                initial_path: ProviderDeliveryPath::WakeupPull,
+                                wakeup_payload_within_limit: true,
+                            }
+                        };
                     match state.dispatch.try_send_fcm(FcmJob {
                         channel_id,
                         correlation_id: Arc::clone(&correlation_id),
@@ -698,13 +887,40 @@ pub(super) async fn dispatch_entity_notification(
                         direct_payload: Arc::clone(&direct_payload),
                         direct_body,
                         wakeup_payload: Some(Arc::clone(&wakeup_payload)),
-                        wakeup_body: Some(wakeup_body),
+                        wakeup_body,
                         initial_path: selection.initial_path,
                         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
                         private_wakeup: private_wakeup_delivery.clone(),
-                        private_wakeup_enqueued,
                     }) {
                         Ok(()) => {
+                            provider_attempted += 1;
+                            provider_success += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    messages_received: 1,
+                                    provider_success_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: provider_path_name(selection.initial_path).to_string(),
+                                    status: AUDIT_STATUS_ENQUEUED.to_string(),
+                                    error_code: None,
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_enqueued",
                                 correlation_id: correlation_id.as_ref(),
@@ -723,6 +939,33 @@ pub(super) async fn dispatch_entity_notification(
                         }
                         Err(err) => {
                             rejected += 1;
+                            provider_attempted += 1;
+                            provider_failed += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    provider_failure_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: provider_path_name(selection.initial_path).to_string(),
+                                    status: AUDIT_STATUS_ENQUEUE_FAILED.to_string(),
+                                    error_code: Some(dispatch_error_code(&err).to_string()),
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_enqueue_failed",
                                 correlation_id: correlation_id.as_ref(),
@@ -748,9 +991,11 @@ pub(super) async fn dispatch_entity_notification(
                     let direct_payload = wns_payload
                         .clone()
                         .ok_or(Error::Internal("missing WNS payload".to_string()))?;
-                    let wakeup_payload = wns_wakeup_payload
-                        .clone()
-                        .ok_or(Error::Internal("missing WNS wakeup payload".to_string()))?;
+                    let wakeup_payload = Arc::new(WnsPayload::new(
+                        SharedStringMap::from(Arc::clone(&wakeup_data_for_device)),
+                        "high",
+                        ttl_seconds,
+                    ));
                     let selection = match select_provider_delivery_path(
                         device.platform,
                         direct_payload
@@ -764,6 +1009,33 @@ pub(super) async fn dispatch_entity_notification(
                         Ok(value) => value,
                         Err(err) => {
                             rejected += 1;
+                            provider_attempted += 1;
+                            provider_failed += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    provider_failure_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: AUDIT_PATH_PROVIDER.to_string(),
+                                    status: AUDIT_STATUS_PATH_REJECTED.to_string(),
+                                    error_code: Some("provider_path_rejected".to_string()),
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_path_rejected",
                                 correlation_id: correlation_id.as_ref(),
@@ -782,34 +1054,6 @@ pub(super) async fn dispatch_entity_notification(
                             continue;
                         }
                     };
-                    if selection.initial_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(private_state) = private_state
-                        && let Some(private_meta) = private_wakeup_delivery.as_ref()
-                    {
-                        match private_state
-                            .enqueue_private_delivery(
-                                private_meta.device_id,
-                                private_meta.delivery_id.as_ref(),
-                                private_meta.payload.as_ref().clone(),
-                                private_meta.sent_at,
-                                private_meta.expires_at,
-                            )
-                            .await
-                        {
-                            Ok(()) => {
-                                private_enqueue_stats.record_success();
-                                private_wakeup_enqueued = true;
-                            }
-                            Err(err) => {
-                                private_enqueue_stats.record_failure(
-                                    "provider_wakeup",
-                                    private_meta.device_id,
-                                    &err,
-                                );
-                                private_state.metrics.mark_enqueue_failure();
-                            }
-                        }
-                    }
                     match state.dispatch.try_send_wns(WnsJob {
                         channel_id,
                         correlation_id: Arc::clone(&correlation_id),
@@ -820,9 +1064,36 @@ pub(super) async fn dispatch_entity_notification(
                         initial_path: selection.initial_path,
                         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
                         private_wakeup: private_wakeup_delivery.clone(),
-                        private_wakeup_enqueued,
                     }) {
                         Ok(()) => {
+                            provider_attempted += 1;
+                            provider_success += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    messages_received: 1,
+                                    provider_success_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: provider_path_name(selection.initial_path).to_string(),
+                                    status: AUDIT_STATUS_ENQUEUED.to_string(),
+                                    error_code: None,
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_enqueued",
                                 correlation_id: correlation_id.as_ref(),
@@ -841,6 +1112,33 @@ pub(super) async fn dispatch_entity_notification(
                         }
                         Err(err) => {
                             rejected += 1;
+                            provider_attempted += 1;
+                            provider_failed += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    provider_failure_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: provider_path_name(selection.initial_path).to_string(),
+                                    status: AUDIT_STATUS_ENQUEUE_FAILED.to_string(),
+                                    error_code: Some(dispatch_error_code(&err).to_string()),
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_enqueue_failed",
                                 correlation_id: correlation_id.as_ref(),
@@ -869,9 +1167,12 @@ pub(super) async fn dispatch_entity_notification(
                         apns_payload.clone()
                     }
                     .ok_or(Error::Internal("missing APNs payload".to_string()))?;
-                    let wakeup_payload = apns_wakeup_payload
-                        .clone()
-                        .ok_or(Error::Internal("missing APNs wakeup payload".to_string()))?;
+                    let wakeup_payload = Arc::new(ApnsPayload::wakeup(
+                        apns_wakeup_title.clone(),
+                        Some(channel_id_value.clone()),
+                        effective_ttl,
+                        SharedStringMap::from(Arc::clone(&wakeup_data_for_device)),
+                    ));
                     let selection = match select_provider_delivery_path(
                         device.platform,
                         direct_payload
@@ -885,6 +1186,33 @@ pub(super) async fn dispatch_entity_notification(
                         Ok(value) => value,
                         Err(err) => {
                             rejected += 1;
+                            provider_attempted += 1;
+                            provider_failed += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    provider_failure_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: AUDIT_PATH_PROVIDER.to_string(),
+                                    status: AUDIT_STATUS_PATH_REJECTED.to_string(),
+                                    error_code: Some("provider_path_rejected".to_string()),
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_path_rejected",
                                 correlation_id: correlation_id.as_ref(),
@@ -903,34 +1231,6 @@ pub(super) async fn dispatch_entity_notification(
                             continue;
                         }
                     };
-                    if selection.initial_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(private_state) = private_state
-                        && let Some(private_meta) = private_wakeup_delivery.as_ref()
-                    {
-                        match private_state
-                            .enqueue_private_delivery(
-                                private_meta.device_id,
-                                private_meta.delivery_id.as_ref(),
-                                private_meta.payload.as_ref().clone(),
-                                private_meta.sent_at,
-                                private_meta.expires_at,
-                            )
-                            .await
-                        {
-                            Ok(()) => {
-                                private_enqueue_stats.record_success();
-                                private_wakeup_enqueued = true;
-                            }
-                            Err(err) => {
-                                private_enqueue_stats.record_failure(
-                                    "provider_wakeup",
-                                    private_meta.device_id,
-                                    &err,
-                                );
-                                private_state.metrics.mark_enqueue_failure();
-                            }
-                        }
-                    }
                     match state.dispatch.try_send_apns(ApnsJob {
                         channel_id,
                         correlation_id: Arc::clone(&correlation_id),
@@ -942,10 +1242,37 @@ pub(super) async fn dispatch_entity_notification(
                         initial_path: selection.initial_path,
                         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
                         private_wakeup: private_wakeup_delivery.clone(),
-                        private_wakeup_enqueued,
                         collapse_id: apns_collapse_id.clone(),
                     }) {
                         Ok(()) => {
+                            provider_attempted += 1;
+                            provider_success += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    messages_received: 1,
+                                    provider_success_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: provider_path_name(selection.initial_path).to_string(),
+                                    status: AUDIT_STATUS_ENQUEUED.to_string(),
+                                    error_code: None,
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_enqueued",
                                 correlation_id: correlation_id.as_ref(),
@@ -964,6 +1291,33 @@ pub(super) async fn dispatch_entity_notification(
                         }
                         Err(err) => {
                             rejected += 1;
+                            provider_attempted += 1;
+                            provider_failed += 1;
+                            merge_device_dispatch_delta(
+                                &mut device_stats,
+                                Arc::clone(&provider_stats_key),
+                                DeviceDispatchDelta {
+                                    provider_failure_count: 1,
+                                    ..DeviceDispatchDelta::default()
+                                },
+                            );
+                            append_delivery_audit_best_effort(
+                                state,
+                                correlation_id.as_ref(),
+                                &DeliveryAuditWrite {
+                                    delivery_id: delivery_id.clone(),
+                                    channel_id,
+                                    device_key: provider_audit_key.clone(),
+                                    entity_type: Some(entity_type.to_string()),
+                                    entity_id: Some(entity_id.clone()),
+                                    op_id: Some(op_id.clone()),
+                                    path: provider_path_name(selection.initial_path).to_string(),
+                                    status: AUDIT_STATUS_ENQUEUE_FAILED.to_string(),
+                                    error_code: Some(dispatch_error_code(&err).to_string()),
+                                    created_at: sent_at,
+                                },
+                            )
+                            .await;
                             state.dispatch_audit.record(DispatchAuditRecord {
                                 stage: "provider_enqueue_failed",
                                 correlation_id: correlation_id.as_ref(),
@@ -995,6 +1349,18 @@ pub(super) async fn dispatch_entity_notification(
 
         let private_enqueue_too_busy = private_enqueue_stats.is_too_busy();
         let partial_failure = rejected > 0 || private_enqueue_stats.has_failures();
+        emit_dispatch_stats(
+            state,
+            channel_id,
+            sent_at,
+            1,
+            private_enqueue_stats.attempted as i64 + provider_attempted,
+            provider_attempted,
+            provider_success,
+            provider_failed,
+            private_realtime_delivered.len() as i64,
+            device_stats,
+        );
 
         Ok(NotificationDispatchSummary {
             channel_id: channel_id_value,
@@ -1007,6 +1373,66 @@ pub(super) async fn dispatch_entity_notification(
     .await;
 
     op_guard.finish(state, dispatch_result).await
+}
+
+fn merge_device_dispatch_delta(
+    aggregates: &mut HashMap<Arc<str>, DeviceDispatchDelta>,
+    device_key: Arc<str>,
+    delta: DeviceDispatchDelta,
+) {
+    let entry = aggregates
+        .entry(device_key)
+        .or_insert_with(DeviceDispatchDelta::default);
+    entry.messages_received += delta.messages_received;
+    entry.messages_acked += delta.messages_acked;
+    entry.private_connected_count += delta.private_connected_count;
+    entry.private_pull_count += delta.private_pull_count;
+    entry.provider_success_count += delta.provider_success_count;
+    entry.provider_failure_count += delta.provider_failure_count;
+    entry.private_outbox_enqueued_count += delta.private_outbox_enqueued_count;
+}
+
+fn emit_dispatch_stats(
+    state: &AppState,
+    channel_id: [u8; 16],
+    occurred_at: i64,
+    messages_routed: i64,
+    deliveries_attempted: i64,
+    provider_attempted: i64,
+    provider_success: i64,
+    provider_failed: i64,
+    private_realtime_delivered: i64,
+    device_stats: HashMap<Arc<str>, DeviceDispatchDelta>,
+) {
+    let active_private_sessions_max = state
+        .private
+        .as_ref()
+        .map(|private| private.automation_stats().session_count as i64)
+        .unwrap_or(0);
+
+    state.stats.record_dispatch(DispatchStatsEvent {
+        channel_id,
+        occurred_at,
+        messages_routed,
+        deliveries_attempted,
+        deliveries_acked: 0,
+        private_enqueued: device_stats
+            .values()
+            .map(|value| value.private_outbox_enqueued_count)
+            .sum(),
+        provider_attempted,
+        provider_failed,
+        provider_success,
+        private_realtime_delivered,
+        active_private_sessions_max,
+        device_deltas: device_stats
+            .into_iter()
+            .map(|(device_key, delta)| DeviceDispatchDelta {
+                device_key: device_key.to_string(),
+                ..delta
+            })
+            .collect(),
+    });
 }
 
 fn encode_private_payload(data: &HashMap<String, String>) -> Result<Vec<u8>, postcard::Error> {
@@ -1054,6 +1480,42 @@ fn dispatch_error_detail(error: &DispatchError) -> &'static str {
     }
 }
 
+fn dispatch_error_code(error: &DispatchError) -> &'static str {
+    match error {
+        DispatchError::QueueFull => "queue_full",
+        DispatchError::ChannelClosed => "channel_closed",
+    }
+}
+
+fn provider_audit_device_key(
+    provider_device_key: Option<&str>,
+    platform: Platform,
+    token: &str,
+) -> String {
+    if let Some(device_key) = provider_device_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return device_key.to_string();
+    }
+    let token_hash = blake3::hash(token.as_bytes());
+    let mut short = [0u8; 16];
+    short.copy_from_slice(&token_hash.as_bytes()[..16]);
+    format!(
+        "provider:{}:{}",
+        platform_name(platform),
+        encode_lower_hex_128(&short)
+    )
+}
+
+async fn append_delivery_audit_best_effort(
+    state: &AppState,
+    correlation_id: &str,
+    entry: &DeliveryAuditWrite,
+) {
+    state.delivery_audit.enqueue(correlation_id, entry);
+}
+
 struct StandardFields<'a> {
     channel_id: &'a str,
     title: Option<&'a str>,
@@ -1063,6 +1525,8 @@ struct StandardFields<'a> {
     payload_version: &'a str,
     op_id: &'a str,
     delivery_id: &'a str,
+    ingested_at: i64,
+    occurred_at: i64,
     sent_at: i64,
     ttl: Option<i64>,
     entity_type: &'a str,
@@ -1094,7 +1558,8 @@ fn add_standard_fields(data: &mut HashMap<String, String>, fields: StandardField
     );
     data.insert("op_id".to_string(), fields.op_id.to_string());
     data.insert("delivery_id".to_string(), fields.delivery_id.to_string());
-    data.insert("occurred_at".to_string(), fields.sent_at.to_string());
+    data.insert("ingested_at".to_string(), fields.ingested_at.to_string());
+    data.insert("occurred_at".to_string(), fields.occurred_at.to_string());
     data.insert("sent_at".to_string(), fields.sent_at.to_string());
     data.insert("entity_type".to_string(), fields.entity_type.to_string());
     data.insert("entity_id".to_string(), fields.entity_id.to_string());
@@ -1115,6 +1580,7 @@ fn sanitize_custom_data(data: &mut HashMap<String, String>) {
         "payload_version",
         "op_id",
         "delivery_id",
+        "ingested_at",
         "message_id",
         "occurred_at",
         "sent_at",
@@ -1317,7 +1783,6 @@ pub(super) fn build_semantic_create_dedupe_key(
 
 pub(super) struct ResolvedSemanticId {
     pub semantic_id: String,
-    pub reused: bool,
 }
 
 pub(super) async fn resolve_create_semantic_id(
@@ -1335,16 +1800,10 @@ pub(super) async fn resolve_create_semantic_id(
             .map_err(|err| Error::Internal(err.to_string()))?
         {
             crate::storage::SemanticIdReservation::Reserved => {
-                return Ok(ResolvedSemanticId {
-                    semantic_id,
-                    reused: false,
-                });
+                return Ok(ResolvedSemanticId { semantic_id });
             }
             crate::storage::SemanticIdReservation::Existing { semantic_id } => {
-                return Ok(ResolvedSemanticId {
-                    semantic_id,
-                    reused: true,
-                });
+                return Ok(ResolvedSemanticId { semantic_id });
             }
             crate::storage::SemanticIdReservation::Collision => continue,
         }
@@ -1388,6 +1847,13 @@ pub(super) fn normalize_op_id(raw: &str) -> Result<String, Error> {
     Ok(trimmed.to_string())
 }
 
+pub(super) fn resolve_op_id(raw: Option<&str>) -> Result<String, Error> {
+    match raw {
+        Some(value) => normalize_op_id(value),
+        None => Ok(generate_hex_id_128()),
+    }
+}
+
 fn normalize_severity(value: Option<String>) -> String {
     match normalize_optional_string(value)
         .map(|level| level.to_ascii_lowercase())
@@ -1413,11 +1879,56 @@ fn default_notification_body(entity_type: &str) -> &'static str {
     }
 }
 
+fn wakeup_fallback_title(entity_type: &str, message_title: Option<&str>) -> String {
+    if entity_type == "message"
+        && let Some(trimmed_title) = message_title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        return trimmed_title.to_string();
+    }
+    "You have a new notification.".to_string()
+}
+
+fn derive_provider_pull_delivery_id(
+    dispatch_delivery_id: &str,
+    platform: Platform,
+    provider_token: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(dispatch_delivery_id.trim().as_bytes());
+    hasher.update(b"|");
+    hasher.update(platform_name(platform).as_bytes());
+    hasher.update(b"|");
+    hasher.update(provider_token.trim().as_bytes());
+    let digest = hasher.finalize();
+    let mut short = [0u8; 16];
+    short.copy_from_slice(&digest.as_bytes()[..16]);
+    encode_lower_hex_128(&short)
+}
+
+fn wakeup_data_with_delivery_id(
+    wakeup_template: &HashMap<String, String>,
+    delivery_id: &str,
+) -> HashMap<String, String> {
+    let mut data = wakeup_template.clone();
+    data.insert("delivery_id".to_string(), delivery_id.to_string());
+    data
+}
+
 fn provider_payload_limit_bytes(platform: Platform) -> usize {
     match platform {
         Platform::ANDROID => FCM_PROVIDER_PAYLOAD_LIMIT_BYTES,
         Platform::WINDOWS => WNS_PROVIDER_PAYLOAD_LIMIT_BYTES,
         _ => APNS_PROVIDER_PAYLOAD_LIMIT_BYTES,
+    }
+}
+
+fn provider_payload_len_within_limit(platform: Platform, len: usize) -> bool {
+    let limit = provider_payload_limit_bytes(platform);
+    match platform {
+        Platform::WINDOWS => len < limit,
+        _ => len <= limit,
     }
 }
 
@@ -1427,13 +1938,8 @@ fn select_provider_delivery_path(
     wakeup_len: usize,
     wakeup_pull_available: bool,
 ) -> Result<ProviderDeliverySelection, Error> {
-    let limit = provider_payload_limit_bytes(platform);
-    let within_limit = |len: usize| match platform {
-        Platform::WINDOWS => len < limit,
-        _ => len <= limit,
-    };
-    let wakeup_payload_within_limit = within_limit(wakeup_len);
-    if within_limit(direct_len) {
+    let wakeup_payload_within_limit = provider_payload_len_within_limit(platform, wakeup_len);
+    if provider_payload_len_within_limit(platform, direct_len) {
         return Ok(ProviderDeliverySelection {
             initial_path: ProviderDeliveryPath::Direct,
             wakeup_payload_within_limit,
@@ -1455,17 +1961,33 @@ fn select_provider_delivery_path(
 
 fn build_private_wakeup_delivery(
     provider_device_key: Option<&str>,
-    private_payload: Option<&Vec<u8>>,
+    platform: Platform,
+    provider_token: &str,
+    private_payload: &Vec<u8>,
     delivery_id: &str,
     sent_at: i64,
     expires_at: i64,
 ) -> Option<PrivateWakeupDelivery> {
-    let device_key = provider_device_key?;
-    let payload = private_payload?;
+    let normalized_token = provider_token.trim();
+    if normalized_token.is_empty() {
+        return None;
+    }
+    let device_id = provider_device_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(DeviceRegistry::derive_private_device_id)
+        .unwrap_or_else(|| {
+            let token_hash = blake3::hash(normalized_token.as_bytes());
+            let mut short = [0u8; 16];
+            short.copy_from_slice(&token_hash.as_bytes()[..16]);
+            short
+        });
     Some(PrivateWakeupDelivery {
-        device_id: DeviceRegistry::derive_private_device_id(device_key),
+        device_id,
+        platform,
+        provider_token: Arc::from(normalized_token.to_string().into_boxed_str()),
         delivery_id: Arc::from(delivery_id.to_string().into_boxed_str()),
-        payload: Arc::new(payload.clone()),
+        payload: Arc::new(private_payload.clone()),
         sent_at,
         expires_at,
     })
@@ -1500,7 +2022,8 @@ fn should_skip_provider_delivery(
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageIntent, StandardFields, add_standard_fields, select_provider_delivery_path,
+        MessageIntent, StandardFields, add_standard_fields, derive_provider_pull_delivery_id,
+        provider_payload_len_within_limit, resolve_op_id, select_provider_delivery_path,
         should_skip_provider_delivery,
     };
     use crate::{dispatch::ProviderDeliveryPath, storage::Platform};
@@ -1532,7 +2055,7 @@ mod tests {
     }
 
     #[test]
-    fn wakeup_pull_requires_available_private_wakeup_path() {
+    fn wakeup_pull_requires_available_wakeup_path() {
         let selection = select_provider_delivery_path(Platform::ANDROID, 5_000, 1_000, false);
         assert!(selection.is_err());
     }
@@ -1551,8 +2074,9 @@ mod tests {
         let intent = MessageIntent {
             channel_id: "06J0FZG1Y8XGG14VTQ4Y3G10MR".to_string(),
             password: "pass-123".to_string(),
-            op_id: "op-123".to_string(),
+            op_id: Some("op-123".to_string()),
             thing_id: None,
+            occurred_at: Some(1_710_000_000),
             title: "sample".to_string(),
             body: Some(body.to_string()),
             severity: None,
@@ -1583,6 +2107,8 @@ mod tests {
                 payload_version: "1",
                 op_id: "op-123",
                 delivery_id: "d-123",
+                ingested_at: 1_710_000_001,
+                occurred_at: 1_710_000_000,
                 sent_at: 1_710_000_000,
                 ttl: None,
                 entity_type: "message",
@@ -1590,5 +2116,45 @@ mod tests {
             },
         );
         assert_eq!(data.get("body"), Some(&body.to_string()));
+    }
+
+    #[test]
+    fn resolve_op_id_uses_provided_value() {
+        let resolved = resolve_op_id(Some("provided-op-id")).expect("op_id should be accepted");
+        assert_eq!(resolved, "provided-op-id");
+    }
+
+    #[test]
+    fn resolve_op_id_generates_when_absent() {
+        let resolved = resolve_op_id(None).expect("op_id should be generated");
+        assert_eq!(resolved.len(), 32);
+        assert!(resolved.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn provider_payload_limit_boundary_matches_platform_rules() {
+        // Android/APNs use <= limit.
+        assert!(provider_payload_len_within_limit(Platform::ANDROID, 4096));
+        assert!(!provider_payload_len_within_limit(Platform::ANDROID, 4097));
+        assert!(provider_payload_len_within_limit(Platform::IOS, 4096));
+        assert!(!provider_payload_len_within_limit(Platform::IOS, 4097));
+
+        // WNS uses strict < limit.
+        assert!(provider_payload_len_within_limit(Platform::WINDOWS, 5119));
+        assert!(!provider_payload_len_within_limit(Platform::WINDOWS, 5120));
+    }
+
+    #[test]
+    fn provider_pull_delivery_id_is_stable_for_same_device() {
+        let first = derive_provider_pull_delivery_id("base-delivery", Platform::IOS, "token-a");
+        let second = derive_provider_pull_delivery_id("base-delivery", Platform::IOS, "token-a");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn provider_pull_delivery_id_differs_across_devices() {
+        let ios = derive_provider_pull_delivery_id("base-delivery", Platform::IOS, "token-a");
+        let mac = derive_provider_pull_delivery_id("base-delivery", Platform::MACOS, "token-b");
+        assert_ne!(ios, mac);
     }
 }

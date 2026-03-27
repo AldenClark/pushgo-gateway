@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-
 use crate::{
     api::handlers::{
         channel::{channel_exists, channel_rename},
@@ -7,7 +5,7 @@ use crate::{
         event::{event_close_to_channel, event_create_to_channel, event_update_to_channel},
         message::message_to_channel,
         private::{
-            private_health, private_metrics, private_network_diagnostics, private_profile,
+            gateway_profile, private_health, private_metrics, private_network_diagnostics,
             private_ws,
         },
         thing::{
@@ -16,8 +14,7 @@ use crate::{
         },
         v1::{
             v1_channel_subscribe, v1_channel_sync, v1_channel_unsubscribe,
-            v1_device_channel_delete, v1_device_channel_upsert, v1_device_register,
-            v1_messages_ack, v1_messages_ack_batch, v1_messages_pull,
+            v1_device_channel_delete, v1_device_channel_upsert, v1_messages_pull,
         },
     },
     api::{Error, HttpResult},
@@ -26,10 +23,9 @@ use crate::{
 };
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
-use axum::http::header::{AUTHORIZATION, RETRY_AFTER};
+use axum::http::header::AUTHORIZATION;
 use axum::{
     Router,
-    extract::connect_info::ConnectInfo,
     extract::{Request, State},
     middleware::{Next, from_fn_with_state},
     response::{Html, IntoResponse},
@@ -49,29 +45,29 @@ pub fn build_router(state: AppState, docs_html: &'static str) -> Router {
         .route("/thing/update", post(thing_update_to_channel))
         .route("/thing/archive", post(thing_archive_to_channel))
         .route("/thing/delete", post(thing_delete_to_channel))
-        .route("/device/register", post(v1_device_register))
-        .route("/channel/device", post(v1_device_channel_upsert))
+        .route("/device/register", post(v1_device_channel_upsert))
         .route("/channel/device/delete", post(v1_device_channel_delete))
         .route("/channel/sync", post(v1_channel_sync))
         .route("/channel/subscribe", post(v1_channel_subscribe))
         .route("/channel/unsubscribe", post(v1_channel_unsubscribe))
         .route("/messages/pull", post(v1_messages_pull))
-        .route("/messages/ack", post(v1_messages_ack))
-        .route("/messages/ack/batch", post(v1_messages_ack_batch))
+        .route("/gateway/profile", get(gateway_profile))
         .route("/channel/exists", get(channel_exists))
-        .route("/channel/rename", post(channel_rename))
-        .route("/diagnostics/dispatch", get(diagnostics_dispatch));
+        .route("/channel/rename", post(channel_rename));
+
+    if state.diagnostics_api_enabled {
+        router = router
+            .route("/diagnostics/dispatch", get(diagnostics_dispatch))
+            .route("/diagnostics/private/metrics", get(private_metrics))
+            .route("/diagnostics/private/health", get(private_health))
+            .route(
+                "/diagnostics/private/network",
+                get(private_network_diagnostics),
+            );
+    }
 
     if private_channel_enabled {
-        router = router
-            .route("/private/metrics", get(private_metrics))
-            .route("/private/health", get(private_health))
-            .route("/private/profile", get(private_profile))
-            .route(
-                "/private/diagnostics/network",
-                get(private_network_diagnostics),
-            )
-            .route("/private/ws", get(private_ws));
+        router = router.route("/private/ws", get(private_ws));
     }
 
     router
@@ -112,26 +108,6 @@ fn extract_bearer_token(req: &Request) -> Result<&str, Error> {
 }
 
 async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> HttpResult {
-    if state.ip_rate_limit_enabled {
-        let peer_ip = req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|info| info.0.ip());
-        let client_ip = state.client_ip_resolver.resolve(req.headers(), peer_ip);
-        if !state.api_rate_limiter.allow_ip_global(client_ip.as_deref())
-            || !state.api_rate_limiter.allow_ip_route(
-                client_ip.as_deref(),
-                req.method().as_str(),
-                req.uri().path(),
-            )
-        {
-            let mut resp = Error::TooBusy.into_response();
-            resp.headers_mut()
-                .insert(RETRY_AFTER, axum::http::HeaderValue::from_static("2"));
-            return Ok(resp);
-        }
-    }
-
     fn constant_time_equals(a: &str, b: &str) -> bool {
         constant_time_eq(a.as_bytes(), b.as_bytes())
     }
@@ -148,32 +124,6 @@ async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> 
         }
     }
 
-    let wait_permit = match state.ingress_wait_limiter.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            let mut resp = Error::TooBusy.into_response();
-            resp.headers_mut()
-                .insert(RETRY_AFTER, axum::http::HeaderValue::from_static("1"));
-            return Ok(resp);
-        }
-    };
-    let _processing_permit = match state
-        .ingress_processing_limiter
-        .clone()
-        .acquire_owned()
-        .await
-    {
-        Ok(permit) => {
-            drop(wait_permit);
-            permit
-        }
-        Err(_) => {
-            let mut resp = Error::TooBusy.into_response();
-            resp.headers_mut()
-                .insert(RETRY_AFTER, axum::http::HeaderValue::from_static("1"));
-            return Ok(resp);
-        }
-    };
     Ok(next.run(req).await)
 }
 
@@ -189,16 +139,17 @@ mod tests {
         http::{Request, StatusCode},
     };
     use serde_json::{Value, json};
-    use tokio::sync::Semaphore;
     use tower::ServiceExt;
 
     use crate::{
         app::{AppState, AuthMode},
+        delivery_audit::DeliveryAuditCollector,
         device_registry::DeviceRegistry,
         dispatch::{
             audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog},
             create_dispatch_channels,
         },
+        stats::StatsCollector,
         storage::{Platform, Store, new_store},
     };
 
@@ -221,15 +172,23 @@ mod tests {
         let (dispatch, _apns_rx, _fcm_rx, _wns_rx) = create_dispatch_channels();
         AppState {
             dispatch,
-            dispatch_audit: Arc::new(DispatchAuditLog::new(DEFAULT_DISPATCH_AUDIT_CAPACITY)),
+            dispatch_audit: Arc::new(DispatchAuditLog::new(
+                DEFAULT_DISPATCH_AUDIT_CAPACITY,
+                false,
+            )),
+            delivery_audit: DeliveryAuditCollector::spawn(
+                false,
+                Arc::clone(&store),
+                Arc::new(DispatchAuditLog::new(
+                    DEFAULT_DISPATCH_AUDIT_CAPACITY,
+                    false,
+                )),
+            ),
             auth: AuthMode::Disabled,
             private_channel_enabled: false,
-            ip_rate_limit_enabled: false,
-            ingress_processing_limiter: Arc::new(Semaphore::new(32)),
-            ingress_wait_limiter: Arc::new(Semaphore::new(32)),
-            api_rate_limiter: Arc::new(crate::rate_limit::ApiRateLimiter::default()),
-            client_ip_resolver: Arc::new(crate::rate_limit::ClientIpResolver),
+            diagnostics_api_enabled: false,
             device_registry: Arc::new(DeviceRegistry::new()),
+            stats: StatsCollector::spawn(Arc::clone(&store)),
             private_transport_profile: crate::app::PrivateTransportProfile {
                 quic_enabled: true,
                 quic_port: Some(443),
@@ -248,6 +207,12 @@ mod tests {
     async fn build_private_test_state() -> AppState {
         let mut state = build_test_state().await;
         state.private_channel_enabled = true;
+        state
+    }
+
+    async fn build_diagnostics_test_state() -> AppState {
+        let mut state = build_test_state().await;
+        state.diagnostics_api_enabled = true;
         state
     }
 
@@ -345,7 +310,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_profile_route_returns_transport_config() {
+    async fn private_profile_route_is_not_available() {
         let state = build_private_test_state().await;
         let app = super::build_router(state, "<html>docs</html>");
         let response = app
@@ -358,12 +323,74 @@ mod tests {
             )
             .await
             .expect("router should handle request");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn gateway_profile_route_reports_private_disabled_when_private_module_off() {
+        let state = build_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/gateway/profile")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should handle request");
         assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+        assert_eq!(
+            response_data(&value)
+                .get("private_channel_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            response_data(&value).get("transport").is_none(),
+            "private disabled profile should not include transport hints"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_profile_route_reports_private_transport_when_enabled() {
+        let state = build_private_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/gateway/profile")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should handle request");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+        assert_eq!(
+            response_data(&value)
+                .get("private_channel_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            response_data(&value).get("transport").is_some(),
+            "private enabled profile should include transport hints"
+        );
     }
 
     #[tokio::test]
     async fn diagnostics_dispatch_route_returns_empty_entries_by_default() {
-        let state = build_test_state().await;
+        let state = build_diagnostics_test_state().await;
         let app = super::build_router(state, "<html>docs</html>");
         let response = app
             .oneshot(
@@ -398,6 +425,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn diagnostics_dispatch_route_is_locked_when_disabled() {
+        let state = build_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/diagnostics/dispatch")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should handle request");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn channel_device_register_compat_route_is_not_available() {
+        let state = build_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/channel/device")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "platform": "ios",
+                            "channel_type": "private"
+                        }))
+                        .expect("payload should serialize"),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should handle request");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn channel_sync_with_partial_failures_does_not_reconcile_subscriptions() {
         let state = build_test_state().await;
         let store = state.store.clone();
@@ -406,7 +474,10 @@ mod tests {
         let (_status, register_body) = post_json(
             app.clone(),
             "/device/register",
-            json!({ "platform": "android" }),
+            json!({
+                "platform": "android",
+                "channel_type": "private"
+            }),
         )
         .await;
         let device_key = response_string_field(&register_body, "device_key").to_string();
@@ -414,9 +485,10 @@ mod tests {
 
         let (status, _route_body) = post_json(
             app.clone(),
-            "/channel/device",
+            "/device/register",
             json!({
                 "device_key": device_key,
+                "platform": "android",
                 "channel_type": "fcm",
                 "provider_token": provider_token
             }),
@@ -448,7 +520,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let channel_b = response_string_field(&b_subscribe, "channel_id").to_string();
+        let _channel_b = response_string_field(&b_subscribe, "channel_id").to_string();
 
         let (status, sync_body) = post_json(
             app.clone(),
@@ -457,7 +529,7 @@ mod tests {
                 "device_key": response_string_field(&register_body, "device_key"),
                 "channels": [
                     {"channel_id": channel_a, "password": "password-1234"},
-                    {"channel_id": channel_b, "password": "wrong-password"}
+                    {"channel_id": "", "password": "password-1234"}
                 ]
             }),
         )
@@ -497,7 +569,7 @@ mod tests {
 
         let (status, route_body) = post_json(
             app.clone(),
-            "/channel/device",
+            "/device/register",
             json!({
                 "device_key": missing_device_key,
                 "platform": "android",
@@ -529,7 +601,60 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(response_string_field(&subscribe_body, "channel_name"), "auto-register-channel");
+        assert_eq!(
+            response_string_field(&subscribe_body, "channel_name"),
+            "auto-register-channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn device_channel_upsert_reissues_key_on_platform_mismatch() {
+        let state = build_test_state().await;
+        let app = super::build_router(state, "<html>docs</html>");
+
+        let (_status, register_body) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({
+                "platform": "ios",
+                "channel_type": "private"
+            }),
+        )
+        .await;
+        let original_device_key = response_string_field(&register_body, "device_key").to_string();
+
+        let (status, route_body) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({
+                "device_key": original_device_key,
+                "platform": "android",
+                "channel_type": "fcm",
+                "provider_token": "android-token-platform-mismatch-0001"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let next_device_key = response_string_field(&route_body, "device_key");
+        assert_ne!(
+            next_device_key, original_device_key,
+            "platform mismatch should issue a fresh device_key"
+        );
+        assert_eq!(
+            response_data(&route_body)
+                .get("issued_new_key")
+                .and_then(Value::as_bool),
+            Some(true),
+            "response should mark new key issuance"
+        );
+        assert_eq!(
+            response_data(&route_body)
+                .get("issue_reason")
+                .and_then(Value::as_str),
+            Some("platform_mismatch"),
+            "response should expose platform_mismatch reason"
+        );
     }
 
     #[tokio::test]
@@ -541,7 +666,10 @@ mod tests {
         let (_status, register_body) = post_json(
             app.clone(),
             "/device/register",
-            json!({ "platform": "android" }),
+            json!({
+                "platform": "android",
+                "channel_type": "private"
+            }),
         )
         .await;
         let device_key = response_string_field(&register_body, "device_key").to_string();
@@ -549,9 +677,10 @@ mod tests {
 
         let (status, _route_body) = post_json(
             app.clone(),
-            "/channel/device",
+            "/device/register",
             json!({
                 "device_key": device_key,
+                "platform": "android",
                 "channel_type": "fcm",
                 "provider_token": provider_token
             }),

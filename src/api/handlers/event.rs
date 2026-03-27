@@ -2,7 +2,6 @@ use hashbrown::HashMap;
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -13,16 +12,14 @@ use crate::{
         format_channel_id, parse_channel_id, validate_channel_password,
     },
     app::AppState,
-    storage::{
-        EventAction, EventHead, EventLogEntry, EventState, StoreError, ThingHead, ThingState,
-    },
+    storage::{EventState, StoreError},
 };
 
 use super::{
     dispatch_lifecycle::dispatch_failure_error_message,
     message::{
         build_semantic_create_dedupe_key, deserialize_metadata_map, dispatch_entity_notification,
-        encode_metadata, normalize_op_id, resolve_create_semantic_id, validate_metadata_entries,
+        encode_metadata, resolve_create_semantic_id, resolve_op_id, validate_metadata_entries,
     },
 };
 
@@ -48,18 +45,13 @@ struct EventProfile {
     ended_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct EventMetaPayload {
-    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    profile_json: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EventCommonFields {
     channel_id: String,
     password: String,
-    op_id: String,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    op_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +114,7 @@ pub(crate) struct EventCloseRequest {
 struct EventIntent {
     channel_id: String,
     password: String,
-    op_id: String,
+    op_id: Option<String>,
     event_id: Option<String>,
     thing_id: Option<String>,
     payload: EventPayloadFields,
@@ -199,12 +191,6 @@ async fn event_to_channel_with_action(
     if payload.channel_id.trim().is_empty() {
         return Err(Error::validation("channel id must not be empty"));
     }
-    if !state
-        .api_rate_limiter
-        .allow_channel(payload.channel_id.as_str())
-    {
-        return Err(Error::TooBusy);
-    }
     let channel_id = parse_channel_id(&payload.channel_id)?;
     let channel_scope = format_channel_id(&channel_id);
     let password = validate_channel_password(&payload.password)?;
@@ -214,7 +200,7 @@ async fn event_to_channel_with_action(
         .await?
         .ok_or(StoreError::ChannelNotFound)?;
 
-    let op_id = normalize_op_id(&payload.op_id)?;
+    let op_id = resolve_op_id(payload.op_id.as_deref())?;
     let thing_id = payload
         .thing_id
         .as_deref()
@@ -252,11 +238,9 @@ async fn event_to_channel_with_action(
                     .ok_or_else(|| Error::validation("event_id is required"))?;
                 normalize_entity_id(raw, "event_id")?
             },
-            reused: false,
         },
     };
     let event_id = resolved_event_id.semantic_id;
-    let scoped_event_id = scoped_entity_key(&channel_scope, &event_id);
     let normalized_tags = payload
         .payload
         .tags
@@ -308,32 +292,12 @@ async fn event_to_channel_with_action(
         );
     }
 
-    let now = Utc::now().timestamp();
-    let event_time = payload.payload.event_time.unwrap_or(now);
+    let event_time = payload
+        .payload
+        .event_time
+        .ok_or_else(|| Error::validation_code("event_time is required", "event_time_required"))?;
 
-    let existing = state.store.load_event_head_async(&scoped_event_id).await?;
-    match route_action {
-        EventRouteAction::Create if existing.is_some() && !resolved_event_id.reused => {
-            return Err(Error::validation(
-                "event already exists; use /event/update or /event/close",
-            ));
-        }
-        EventRouteAction::Update | EventRouteAction::Close if existing.is_none() => {
-            return Err(Error::validation(
-                "event not found; use /event/create first",
-            ));
-        }
-        _ => {}
-    }
-    let existing_meta = existing
-        .as_ref()
-        .and_then(|head| parse_event_meta(head.meta_json.as_deref()).ok())
-        .unwrap_or_default();
-    let mut merged_profile = existing_meta
-        .profile_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<EventProfile>(raw).ok())
-        .unwrap_or_default();
+    let mut merged_profile = EventProfile::default();
     if let Some(title) = payload.payload.title.as_ref() {
         merged_profile.title = Some(title.clone());
     }
@@ -352,18 +316,10 @@ async fn event_to_channel_with_action(
     if let Some(tags) = normalized_tags {
         merged_profile.tags = tags;
     }
-    merged_profile.started_at = resolve_started_at(
-        route_action,
-        payload.payload.started_at,
-        merged_profile.started_at,
-        event_time,
-    );
-    merged_profile.ended_at = resolve_ended_at(
-        route_action,
-        payload.payload.ended_at,
-        merged_profile.ended_at,
-        event_time,
-    );
+    merged_profile.started_at =
+        resolve_started_at(route_action, payload.payload.started_at, None, event_time);
+    merged_profile.ended_at =
+        resolve_ended_at(route_action, payload.payload.ended_at, None, event_time);
     for value in &normalized_images {
         if !merged_profile.images.iter().any(|item| item == value) {
             merged_profile.images.push(value.clone());
@@ -381,65 +337,11 @@ async fn event_to_channel_with_action(
         })
         .transpose()?;
 
-    let applied = existing
-        .as_ref()
-        .map(|head| event_time >= head.event_time)
-        .unwrap_or(true);
-    let late_update_after_closed = matches!(
-        existing.as_ref().map(|head| head.state),
-        Some(EventState::Closed)
-    ) && requested_state != EventState::Closed;
-    let effective_state = if late_update_after_closed {
-        EventState::Closed
-    } else {
-        requested_state
-    };
+    let effective_state = requested_state;
+    let resolved_thing_id = thing_id.clone();
 
-    if existing.is_some() {
-        let existing_thing_id = existing
-            .as_ref()
-            .and_then(|head| head.thing_id.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if let Some(incoming_thing_id) = thing_id.as_deref() {
-            match existing_thing_id {
-                Some(current) if current == incoming_thing_id => {}
-                Some(_) => {
-                    return Err(Error::validation(
-                        "thing_id cannot be changed once event is created",
-                    ));
-                }
-                None => {
-                    return Err(Error::validation(
-                        "thing_id cannot be set after event is created",
-                    ));
-                }
-            }
-        }
-    }
-
-    let resolved_thing_id = thing_id
-        .as_ref()
-        .cloned()
-        .or_else(|| existing.as_ref().and_then(|head| head.thing_id.clone()));
-    let resolved_scoped_thing_id = resolved_thing_id
-        .as_deref()
-        .map(|value| scoped_entity_key(&channel_scope, value));
-
-    let mut final_attrs = existing
-        .as_ref()
-        .and_then(|head| head.attrs_json.as_deref())
-        .and_then(|raw| parse_attrs_json(raw).ok())
-        .unwrap_or_default();
+    let mut final_attrs = JsonMap::new();
     apply_attrs_patch(&mut final_attrs, &payload.payload.attrs);
-    let final_attrs_json = if final_attrs.is_empty() {
-        None
-    } else {
-        Some(
-            serde_json::to_string(&final_attrs)
-                .map_err(|err| Error::validation(err.to_string()))?,
-        )
-    };
     let attrs_json_in = if payload.payload.attrs.is_empty() {
         None
     } else {
@@ -449,10 +351,6 @@ async fn event_to_channel_with_action(
         )
     };
 
-    let event_meta_json = encode_event_meta(resolved_profile_json.as_deref())?;
-
-    let default_title = event_profile_title(merged_profile.as_ref(), &event_id);
-    let default_body = event_profile_body(merged_profile.as_ref());
     let notification_title = payload.payload.title.clone().or_else(|| {
         merged_profile
             .as_ref()
@@ -462,83 +360,7 @@ async fn event_to_channel_with_action(
         .clone()
         .or(normalized_description.clone());
 
-    if applied {
-        let head = EventHead {
-            event_id: scoped_event_id.clone(),
-            thing_id: resolved_thing_id.clone(),
-            state: effective_state,
-            event_time,
-            updated_at: now,
-            title: Some(default_title.clone()),
-            body: default_body.clone(),
-            level: None,
-            ttl: None,
-            attrs_json: final_attrs_json.clone(),
-            meta_json: Some(event_meta_json.clone()),
-        };
-        state.store.upsert_event_head_async(&head).await?;
-
-        if let Some(linked_thing_id) = resolved_scoped_thing_id.as_deref() {
-            state
-                .store
-                .link_event_thing_async(linked_thing_id, &scoped_event_id, event_time)
-                .await?;
-            let existing_thing = state.store.load_thing_head_async(linked_thing_id).await?;
-            let mut thing_attrs = existing_thing
-                .as_ref()
-                .and_then(|head| parse_attrs_json(&head.attrs_json).ok())
-                .unwrap_or_default();
-            apply_attrs_patch(&mut thing_attrs, &payload.payload.attrs);
-            let thing_attrs_json = serde_json::to_string(&thing_attrs)
-                .map_err(|err| Error::validation(err.to_string()))?;
-
-            let mut thing_head = existing_thing.unwrap_or(ThingHead {
-                thing_id: linked_thing_id.to_string(),
-                state: ThingState::Active,
-                attrs_json: "{}".to_string(),
-                meta_json: None,
-                updated_at: now,
-                latest_event_id: None,
-                latest_event_time: None,
-            });
-            let should_update_latest = thing_head
-                .latest_event_time
-                .map(|latest| event_time >= latest)
-                .unwrap_or(true);
-            thing_head.attrs_json = thing_attrs_json;
-            thing_head.updated_at = event_time;
-            if should_update_latest {
-                thing_head.latest_event_id = Some(event_id.clone());
-                thing_head.latest_event_time = Some(event_time);
-            }
-            state.store.upsert_thing_head_async(&thing_head).await?;
-        }
-    }
-
-    let action = match route_action {
-        EventRouteAction::Create => EventAction::Create,
-        EventRouteAction::Update => EventAction::Update,
-        EventRouteAction::Close => EventAction::Close,
-    };
-
-    let log_entry = EventLogEntry {
-        event_id: scoped_event_id.clone(),
-        thing_id: resolved_thing_id.clone(),
-        action,
-        state: effective_state,
-        event_time,
-        received_at: now,
-        applied,
-        title: Some(default_title.clone()),
-        body: default_body.clone(),
-        level: None,
-        ttl: None,
-        attrs_json: attrs_json_in.clone(),
-        meta_json: Some(event_meta_json),
-    };
-    state.store.append_event_log_async(&log_entry).await?;
-
-    let dispatch_summary = if applied {
+    let dispatch_summary = {
         let mut extra = HashMap::with_capacity(7);
         extra.insert("event_id".to_string(), event_id.clone());
         extra.insert(
@@ -562,6 +384,7 @@ async fn event_to_channel_with_action(
                 &state,
                 channel_id,
                 op_id.clone(),
+                event_time,
                 notification_title.clone(),
                 notification_body.clone(),
                 None,
@@ -573,8 +396,6 @@ async fn event_to_channel_with_action(
             )
             .await?,
         )
-    } else {
-        None
     };
 
     let mut response = EventSummary {
@@ -768,34 +589,6 @@ fn normalize_entity_id(raw: &str, field: &str) -> Result<String, Error> {
     Ok(trimmed.to_string())
 }
 
-fn scoped_entity_key(channel_scope: &str, id: &str) -> String {
-    format!("{channel_scope}:{id}")
-}
-
-fn parse_attrs_json(raw: &str) -> Result<JsonMap<String, JsonValue>, serde_json::Error> {
-    serde_json::from_str::<JsonMap<String, JsonValue>>(raw)
-}
-
-fn parse_event_meta(raw: Option<&str>) -> Result<EventMetaPayload, serde_json::Error> {
-    let Some(raw) = raw else {
-        return Ok(EventMetaPayload::default());
-    };
-    if raw.trim().is_empty() {
-        return Ok(EventMetaPayload::default());
-    }
-    serde_json::from_str::<EventMetaPayload>(raw)
-}
-
-fn event_profile_title(profile: Option<&EventProfile>, event_id: &str) -> String {
-    profile
-        .and_then(|value| value.title.clone())
-        .unwrap_or_else(|| format!("Event {event_id}"))
-}
-
-fn event_profile_body(profile: Option<&EventProfile>) -> Option<String> {
-    profile.and_then(|value| value.message.clone().or_else(|| value.description.clone()))
-}
-
 fn apply_attrs_patch(target: &mut JsonMap<String, JsonValue>, patch: &JsonMap<String, JsonValue>) {
     for (key, value) in patch {
         if value.is_null() {
@@ -804,17 +597,6 @@ fn apply_attrs_patch(target: &mut JsonMap<String, JsonValue>, patch: &JsonMap<St
             target.insert(key.clone(), value.clone());
         }
     }
-}
-
-fn encode_event_meta(profile_json: Option<&str>) -> Result<String, Error> {
-    #[derive(Serialize)]
-    struct EventMetaPayloadRef<'a> {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        profile_json: Option<&'a str>,
-    }
-
-    serde_json::to_string(&EventMetaPayloadRef { profile_json })
-        .map_err(|err| Error::validation(err.to_string()))
 }
 
 fn normalize_tags(values: &[String], field: &str) -> Result<Vec<String>, Error> {
@@ -970,5 +752,19 @@ mod tests {
         }"#;
         let parsed = serde_json::from_str::<EventUpdateRequest>(raw);
         assert!(parsed.is_ok(), "event update should parse valid payload");
+    }
+
+    #[test]
+    fn event_create_accepts_missing_op_id() {
+        let raw = r#"{
+            "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "password":"12345678",
+            "title":"t",
+            "status":"open",
+            "message":"m",
+            "severity":"normal"
+        }"#;
+        let parsed = serde_json::from_str::<EventCreateRequest>(raw);
+        assert!(parsed.is_ok(), "event create should accept missing op_id");
     }
 }

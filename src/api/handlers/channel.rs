@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{
-        ApiJson, Error, HttpResult, format_channel_id, normalize_channel_alias, parse_channel_id,
+        ApiJson, HttpResult, format_channel_id, normalize_channel_alias, parse_channel_id,
         validate_channel_password,
     },
     app::AppState,
@@ -27,12 +27,6 @@ pub(crate) async fn channel_exists(
     State(state): State<AppState>,
     Query(query): Query<ChannelExistsQuery>,
 ) -> HttpResult {
-    if !state
-        .api_rate_limiter
-        .allow_channel(query.channel_id.as_str())
-    {
-        return Err(Error::TooBusy);
-    }
     let channel_id = parse_channel_id(&query.channel_id)?;
     let info = state.store.channel_info_async(channel_id).await?;
     Ok(crate::api::ok(ChannelExistsResponse {
@@ -60,12 +54,6 @@ pub(crate) async fn channel_rename(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ChannelRenameData>,
 ) -> HttpResult {
-    if !state
-        .api_rate_limiter
-        .allow_channel(payload.channel_id.as_str())
-    {
-        return Err(Error::TooBusy);
-    }
     let channel_id = parse_channel_id(&payload.channel_id)?;
     let channel_name = normalize_channel_alias(&payload.channel_name)?;
     let password = validate_channel_password(&payload.password)?;

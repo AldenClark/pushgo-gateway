@@ -10,7 +10,6 @@ use serde::Deserialize;
 
 use pushgo_gateway::{Error, providers::TokenInfo};
 
-const TOKEN_SERVICE_TOKEN_ENV: &str = "PUSHGO_TOKEN_SERVICE_TOKEN";
 const TOKEN_ENDPOINT_PATH: &str = "/provider/token";
 const TOKEN_SANDBOX_ENDPOINT_PATH: &str = "/provider/token/sandbox";
 const TOKEN_PRODUCTION_ENDPOINT_PATH: &str = "/provider/token/production";
@@ -44,14 +43,12 @@ pub struct GatewayTokenCache {
     client: Client,
     provider: GatewayProvider,
     base_url: Arc<str>,
-    token: Option<Arc<str>>,
     state: Arc<ArcSwap<GatewayTokenState>>,
 }
 
 impl GatewayTokenCache {
     pub fn new(client: Client, provider: GatewayProvider, base_url: &str) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
-        let token = read_token_env();
 
         let initial = GatewayTokenState {
             token: Arc::from(""),
@@ -62,7 +59,6 @@ impl GatewayTokenCache {
             client,
             provider,
             base_url: Arc::from(base_url.into_boxed_str()),
-            token,
             state: Arc::new(ArcSwap::from_pointee(initial)),
         }
     }
@@ -160,7 +156,9 @@ impl GatewayTokenCache {
             if let Some(cached_project_id) = &cached.project_id {
                 Arc::clone(cached_project_id)
             } else {
-                Arc::from("")
+                return Err(Error::Internal(
+                    "token service response missing project_id for fcm provider".to_string(),
+                ));
             }
         };
         let expires_at = Instant::now() + Duration::from_secs(info.expires_in);
@@ -220,12 +218,9 @@ impl GatewayTokenCache {
             token_path,
             self.provider.as_str()
         );
-        let mut request = self.client.get(&url);
-        if let Some(token) = &self.token {
-            request = request.bearer_auth(token.as_ref());
-        }
-
-        let response = request
+        let response = self
+            .client
+            .get(&url)
             .send()
             .await
             .map_err(|err| Error::Internal(err.to_string()))?;
@@ -281,16 +276,6 @@ fn parse_error_body(body: &[u8]) -> Option<String> {
     } else {
         Some(trimmed)
     }
-}
-
-fn read_token_env() -> Option<Arc<str>> {
-    if let Ok(value) = std::env::var(TOKEN_SERVICE_TOKEN_ENV) {
-        let value = value.trim();
-        if !value.is_empty() {
-            return Some(Arc::from(value.to_string().into_boxed_str()));
-        }
-    }
-    None
 }
 
 #[derive(Deserialize)]

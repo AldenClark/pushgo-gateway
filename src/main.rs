@@ -26,6 +26,7 @@ const FCM_SEND_BASE_URL: &str = "https://fcm.googleapis.com";
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
+    pushgo_gateway::util::set_diagnostics_mode(args.diagnostics_api_enabled);
     let apns_endpoint = apns_endpoint(args.sandbox_mode);
     let token_service_url = args.token_service_url.trim().to_string();
     print_startup_diagnostics(&args, apns_endpoint, token_service_url.as_str());
@@ -59,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let addr: SocketAddr = args.http_addr.parse()?;
 
     let listener = TcpListener::bind(addr).await?;
-    eprintln!("gateway listening on {}", addr);
+    pushgo_gateway::util::diagnostics_log(format_args!("gateway listening on {}", addr));
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -105,12 +106,13 @@ fn apns_endpoint(sandbox_mode: bool) -> &'static str {
 }
 
 fn print_startup_diagnostics(args: &Args, apns_endpoint: &str, token_service_url: &str) {
-    eprintln!(
-        "gateway startup: http_addr={} sandbox_mode={} private_channel_enabled={} apns_endpoint={} token_service_url={}",
+    pushgo_gateway::util::diagnostics_log(format_args!(
+        "gateway startup: http_addr={} sandbox_mode={} private_channel_enabled={} diagnostics_api_enabled={} apns_endpoint={} token_service_url={}",
         args.http_addr,
         args.sandbox_mode,
         args.private_channel_enabled,
+        args.diagnostics_api_enabled,
         apns_endpoint,
         token_service_url
-    );
+    ));
 }

@@ -6,57 +6,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{
-        ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_platform,
-        format_channel_id, normalize_channel_alias, parse_channel_id, validate_channel_password,
+        ApiJson, Error, HttpResult, deserialize_empty_as_none, format_channel_id,
+        normalize_channel_alias, parse_channel_id, validate_channel_password,
     },
     app::AppState,
     device_registry::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord},
-    private::protocol::{PRIVATE_PAYLOAD_VERSION_V1, PrivatePayloadEnvelope},
-    storage::{DeviceInfo, DeviceRegistryRoute, Platform, StoreError},
+    private::protocol::{
+        PRIVATE_PAYLOAD_VERSION_V1, PrivatePayloadEnvelope as ProviderPullEnvelope,
+    },
+    storage::{
+        DeviceInfo, DeviceRouteAuditWrite, DeviceRouteRecordRow, Platform, StoreError,
+        SubscriptionAuditWrite,
+    },
 };
-
-use super::watch_light::quantize_watch_payload;
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DeviceRegisterRequest {
-    #[serde(deserialize_with = "deserialize_platform")]
-    pub platform: Platform,
-    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    pub device_key: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DeviceRegisterResponse {
-    pub device_key: String,
-}
-
-pub(crate) async fn v1_device_register(
-    State(state): State<AppState>,
-    ApiJson(payload): ApiJson<DeviceRegisterRequest>,
-) -> HttpResult {
-    if let Some(device_key) = payload.device_key.as_deref()
-        && !state.api_rate_limiter.allow_device(device_key)
-    {
-        return Err(Error::TooBusy);
-    }
-    let platform = platform_str(payload.platform);
-    let device_key = state
-        .device_registry
-        .register_device(platform, payload.device_key.as_deref())
-        .map_err(Error::Internal)?;
-    let route = state
-        .device_registry
-        .get(&device_key)
-        .ok_or_else(|| Error::Internal("device route missing after register".to_string()))?;
-    persist_device_registry_route(&state, &device_key, &route).await?;
-    Ok(crate::api::ok(DeviceRegisterResponse { device_key }))
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceChannelUpsertRequest {
-    pub device_key: String,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    pub device_key: Option<String>,
     pub channel_type: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub platform: Option<String>,
@@ -77,28 +45,27 @@ pub struct DeviceChannelResponse {
     pub channel_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_token: Option<String>,
+    pub issued_new_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_reason: Option<String>,
 }
 
 pub(crate) async fn v1_device_channel_upsert(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<DeviceChannelUpsertRequest>,
 ) -> HttpResult {
-    let device_key = payload.device_key.trim();
-    if device_key.is_empty() {
-        return Err(Error::validation("device_key is required"));
-    }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
     let next_type = DeviceChannelType::parse(&payload.channel_type)
         .ok_or_else(|| Error::validation("invalid channel_type"))?;
 
-    let (resolved_device_key, previous) = ensure_device_key_for_channel_upsert(
+    let resolved = ensure_device_key_for_channel_upsert(
         &state,
-        device_key,
+        payload.device_key.as_deref(),
         payload.platform.as_deref(),
+        Some(next_type),
     )
     .await?;
+    let resolved_device_key = resolved.resolved_device_key;
+    let previous = resolved.previous;
     let next_provider_token = normalize_provider_token_for_route(
         next_type,
         previous.platform.as_str(),
@@ -113,6 +80,8 @@ pub(crate) async fn v1_device_channel_upsert(
             device_key: resolved_device_key.to_string(),
             channel_type: previous.channel_type.as_str().to_string(),
             provider_token: previous.provider_token,
+            issued_new_key: resolved.issued_new_key,
+            issue_reason: resolved.issue_reason.map(ToString::to_string),
         }));
     }
 
@@ -131,13 +100,23 @@ pub(crate) async fn v1_device_channel_upsert(
         .device_registry
         .update_channel(resolved_device_key.as_str(), next_type, next_provider_token)
         .map_err(Error::Internal)?;
-    persist_device_registry_route(&state, resolved_device_key.as_str(), &updated).await?;
+    persist_device_route(
+        &state,
+        resolved_device_key.as_str(),
+        Some(&previous),
+        &updated,
+        "route_upsert",
+        resolved.issue_reason,
+    )
+    .await?;
     bind_private_binding_for_provider_route(&state, resolved_device_key.as_str(), &updated).await?;
 
     Ok(crate::api::ok(DeviceChannelResponse {
         device_key: resolved_device_key,
         channel_type: updated.channel_type.as_str().to_string(),
         provider_token: updated.provider_token,
+        issued_new_key: resolved.issued_new_key,
+        issue_reason: resolved.issue_reason.map(ToString::to_string),
     }))
 }
 
@@ -184,9 +163,6 @@ pub(crate) async fn v1_channel_sync(
     if device_key.is_empty() {
         return Err(Error::validation("device_key is required"));
     }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
     if payload.channels.len() > 2000 {
         return Err(Error::validation("channels exceeds max limit 2000"));
     }
@@ -201,17 +177,6 @@ pub(crate) async fn v1_channel_sync(
 
     for item in payload.channels {
         let raw_channel_id = item.channel_id.trim();
-        if !state.api_rate_limiter.allow_channel(raw_channel_id) {
-            channels.push(V1ChannelSyncResult {
-                channel_id: raw_channel_id.to_string(),
-                channel_name: None,
-                subscribed: false,
-                created: false,
-                error: Some("channel is temporarily rate limited".to_string()),
-                error_code: Some("channel_rate_limited".to_string()),
-            });
-            continue;
-        }
         if raw_channel_id.is_empty() {
             channels.push(V1ChannelSyncResult {
                 channel_id: String::new(),
@@ -366,9 +331,6 @@ pub(crate) async fn v1_device_channel_delete(
     if device_key.is_empty() {
         return Err(Error::validation("device_key is required"));
     }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
     let current_type = DeviceChannelType::parse(&payload.channel_type)
         .ok_or_else(|| Error::validation("invalid channel_type"))?;
     let current = state
@@ -397,12 +359,22 @@ pub(crate) async fn v1_device_channel_delete(
         .device_registry
         .clear_channel(device_key, current_type)
         .map_err(Error::Internal)?;
-    persist_device_registry_route(&state, device_key, &updated).await?;
+    persist_device_route(
+        &state,
+        device_key,
+        Some(&current),
+        &updated,
+        "route_delete_channel",
+        None,
+    )
+    .await?;
 
     Ok(crate::api::ok(DeviceChannelResponse {
         device_key: device_key.to_string(),
         channel_type: updated.channel_type.as_str().to_string(),
         provider_token: updated.provider_token,
+        issued_new_key: false,
+        issue_reason: None,
     }))
 }
 
@@ -432,14 +404,6 @@ pub(crate) async fn v1_channel_subscribe(
     let device_key = payload.device_key.trim();
     if device_key.is_empty() {
         return Err(Error::validation("device_key is required"));
-    }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
-    if let Some(channel_id) = payload.channel_id.as_deref()
-        && !state.api_rate_limiter.allow_channel(channel_id)
-    {
-        return Err(Error::TooBusy);
     }
     let route = state
         .device_registry
@@ -504,6 +468,8 @@ pub(crate) async fn v1_channel_subscribe(
         }
     };
 
+    append_subscription_audit(&state, outcome.channel_id, device_key, "subscribe", &route).await?;
+
     Ok(crate::api::ok(V1ChannelSubscribeResponse {
         channel_id: format_channel_id(&outcome.channel_id),
         channel_name: outcome.alias,
@@ -532,15 +498,6 @@ pub(crate) async fn v1_channel_unsubscribe(
     let device_key = payload.device_key.trim();
     if device_key.is_empty() {
         return Err(Error::validation("device_key is required"));
-    }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
-    if !state
-        .api_rate_limiter
-        .allow_channel(payload.channel_id.as_str())
-    {
-        return Err(Error::TooBusy);
     }
     let route = state
         .device_registry
@@ -586,6 +543,10 @@ pub(crate) async fn v1_channel_unsubscribe(
         }
     };
 
+    if removed {
+        append_subscription_audit(&state, channel_id, device_key, "unsubscribe", &route).await?;
+    }
+
     Ok(crate::api::ok(V1ChannelUnsubscribeResponse {
         channel_id: format_channel_id(&channel_id),
         removed,
@@ -595,11 +556,7 @@ pub(crate) async fn v1_channel_unsubscribe(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct V1PullRequest {
-    pub device_key: String,
-    pub channel_id: String,
-    pub password: String,
-    #[serde(default)]
-    pub limit: Option<usize>,
+    pub delivery_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -610,222 +567,39 @@ pub struct V1PullItem {
 
 #[derive(Debug, Serialize)]
 pub struct V1PullResponse {
-    pub items: Vec<V1PullItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<V1PullItem>,
 }
 
 pub(crate) async fn v1_messages_pull(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<V1PullRequest>,
 ) -> HttpResult {
-    if !state.private_channel_enabled {
-        return Ok(crate::api::err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel is disabled",
-        ));
-    }
-    let Some(private_state) = state.private.as_ref() else {
-        return Ok(crate::api::err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel runtime is unavailable",
-        ));
-    };
-    let device_key = payload.device_key.trim();
-    if device_key.is_empty() {
-        return Err(Error::validation("device_key is required"));
-    }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
-    if !state
-        .api_rate_limiter
-        .allow_channel(payload.channel_id.as_str())
-    {
-        return Err(Error::TooBusy);
-    }
-    let route = state
-        .device_registry
-        .get(device_key)
-        .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
-    ensure_private_route(&route)?;
-
-    let channel_id = parse_channel_id(&payload.channel_id)?;
-    let password = validate_channel_password(&payload.password)?;
-    let channel_exists = state
-        .store
-        .channel_info_with_password_async(channel_id, password)
-        .await?
-        .is_some();
-    if !channel_exists {
-        return Err(Error::validation("invalid channel credentials"));
-    }
-
-    let device_id = DeviceRegistry::derive_private_device_id(device_key);
-    let limit = payload.limit.unwrap_or(200).clamp(1, 200);
-    let rows = private_state.hub.pull_outbox(device_id, limit).await?;
-    let expected_channel_id = format_channel_id(&channel_id);
-    let mut items = Vec::new();
-    for (entry, msg) in rows {
-        let envelope = match postcard::from_bytes::<PrivatePayloadEnvelope>(&msg.payload) {
-            Ok(v) => v,
-            Err(_) => {
-                ack_delivery_if_pending(private_state, device_id, entry.delivery_id.as_str())
-                    .await?;
-                continue;
-            }
-        };
-        if envelope.payload_version != PRIVATE_PAYLOAD_VERSION_V1 {
-            ack_delivery_if_pending(private_state, device_id, entry.delivery_id.as_str()).await?;
-            continue;
-        }
-        let payload_map = envelope.data;
-        let channel_id = payload_map
-            .get("channel_id")
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-        if channel_id != expected_channel_id {
-            continue;
-        }
-        let output_payload = if route.platform.eq_ignore_ascii_case("watchos") {
-            quantize_watch_payload(&payload_map)
-        } else {
-            payload_map
-        };
-        items.push(V1PullItem {
-            delivery_id: entry.delivery_id,
-            payload: output_payload,
-        });
-    }
-
-    Ok(crate::api::ok(V1PullResponse { items }))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct V1AckRequest {
-    pub device_key: String,
-    pub delivery_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct V1AckResponse {
-    pub acked: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct V1AckBatchRequest {
-    pub device_key: String,
-    pub delivery_ids: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct V1AckBatchResponse {
-    pub acked_count: usize,
-    pub acked_delivery_ids: Vec<String>,
-}
-
-pub(crate) async fn v1_messages_ack(
-    State(state): State<AppState>,
-    ApiJson(payload): ApiJson<V1AckRequest>,
-) -> HttpResult {
-    if !state.private_channel_enabled {
-        return Ok(crate::api::err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel is disabled",
-        ));
-    }
-    let Some(private_state) = state.private.as_ref() else {
-        return Ok(crate::api::err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel runtime is unavailable",
-        ));
-    };
-    let device_key = payload.device_key.trim();
-    if device_key.is_empty() {
-        return Err(Error::validation("device_key is required"));
-    }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
-    if payload.delivery_id.trim().is_empty() {
+    let delivery_id = payload.delivery_id.trim();
+    if delivery_id.is_empty() {
         return Err(Error::validation("delivery_id is required"));
     }
-    let route = state
-        .device_registry
-        .get(device_key)
-        .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
-    ensure_private_route(&route)?;
-    let device_id = DeviceRegistry::derive_private_device_id(device_key);
-    ack_delivery_if_pending(private_state, device_id, &payload.delivery_id).await?;
-    Ok(crate::api::ok(V1AckResponse { acked: true }))
-}
-
-pub(crate) async fn v1_messages_ack_batch(
-    State(state): State<AppState>,
-    ApiJson(payload): ApiJson<V1AckBatchRequest>,
-) -> HttpResult {
-    if !state.private_channel_enabled {
-        return Ok(crate::api::err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel is disabled",
-        ));
-    }
-    let Some(private_state) = state.private.as_ref() else {
-        return Ok(crate::api::err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel runtime is unavailable",
-        ));
-    };
-    let device_key = payload.device_key.trim();
-    if device_key.is_empty() {
-        return Err(Error::validation("device_key is required"));
-    }
-    if !state.api_rate_limiter.allow_device(device_key) {
-        return Err(Error::TooBusy);
-    }
-    if payload.delivery_ids.len() > 2_000 {
-        return Err(Error::validation("delivery_ids exceeds max limit 2000"));
-    }
-    let mut unique = HashSet::with_capacity(payload.delivery_ids.len());
-    let mut delivery_ids = Vec::with_capacity(payload.delivery_ids.len());
-    for raw in payload.delivery_ids {
-        let delivery_id = raw.trim();
-        if delivery_id.is_empty() {
-            continue;
-        }
-        if unique.insert(delivery_id.to_string()) {
-            delivery_ids.push(delivery_id.to_string());
-        }
-    }
-    if delivery_ids.is_empty() {
-        return Err(Error::validation("delivery_ids is required"));
-    }
-    let route = state
-        .device_registry
-        .get(device_key)
-        .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
-    ensure_private_route(&route)?;
-    let device_id = DeviceRegistry::derive_private_device_id(device_key);
-    let mut acked_delivery_ids = Vec::with_capacity(delivery_ids.len());
-    for delivery_id in delivery_ids {
-        ack_delivery_if_pending(private_state, device_id, &delivery_id).await?;
-        acked_delivery_ids.push(delivery_id);
-    }
-    Ok(crate::api::ok(V1AckBatchResponse {
-        acked_count: acked_delivery_ids.len(),
-        acked_delivery_ids,
-    }))
-}
-
-async fn ack_delivery_if_pending(
-    private_state: &crate::private::PrivateState,
-    device_id: [u8; 16],
-    delivery_id: &str,
-) -> Result<(), Error> {
-    let _ = private_state
-        .complete_terminal_delivery(device_id, delivery_id, None)
+    let now = chrono::Utc::now().timestamp();
+    let item = state
+        .store
+        .pull_provider_item_async(delivery_id, now)
         .await?;
-    Ok(())
+    let Some(item) = item else {
+        return Ok(crate::api::ok(V1PullResponse { item: None }));
+    };
+    let envelope = match postcard::from_bytes::<ProviderPullEnvelope>(&item.payload) {
+        Ok(v) => v,
+        Err(_) => return Ok(crate::api::ok(V1PullResponse { item: None })),
+    };
+    if envelope.payload_version != PRIVATE_PAYLOAD_VERSION_V1 {
+        return Ok(crate::api::ok(V1PullResponse { item: None }));
+    }
+    Ok(crate::api::ok(V1PullResponse {
+        item: Some(V1PullItem {
+            delivery_id: item.delivery_id,
+            payload: envelope.data,
+        }),
+    }))
 }
 
 async fn clear_private_pending_for_channel(
@@ -863,7 +637,7 @@ async fn clear_private_pending_for_channels(
         else {
             continue;
         };
-        let envelope = match postcard::from_bytes::<PrivatePayloadEnvelope>(&message.payload) {
+        let envelope = match postcard::from_bytes::<ProviderPullEnvelope>(&message.payload) {
             Ok(value) => value,
             Err(_) => continue,
         };
@@ -998,6 +772,9 @@ async fn sync_single_channel(
                 .private_subscribe_channel_async(channel_id, device_id)
                 .await
                 .map_err(map_sync_store_error)?;
+            append_subscription_audit(state, channel_id, device_key, "sync_subscribe", route)
+                .await
+                .map_err(|err| ("audit_error", err.to_string()))?;
             Ok((outcome.alias, outcome.created))
         }
         _ => {
@@ -1018,6 +795,9 @@ async fn sync_single_channel(
                 .subscribe_channel_async(Some(channel_id), None, password, provider_token, platform)
                 .await
                 .map_err(map_sync_store_error)?;
+            append_subscription_audit(state, channel_id, device_key, "sync_subscribe", route)
+                .await
+                .map_err(|err| ("audit_error", err.to_string()))?;
             Ok((outcome.alias, outcome.created))
         }
     }
@@ -1039,16 +819,6 @@ fn map_sync_store_error(err: StoreError) -> (&'static str, String) {
         ),
         other => ("store_error", other.to_string()),
     }
-}
-
-fn ensure_private_route(route: &DeviceRouteRecord) -> Result<(), Error> {
-    if route.channel_type != DeviceChannelType::Private {
-        return Err(Error::validation_code(
-            "private channel route required for this endpoint",
-            "private_route_required",
-        ));
-    }
-    Ok(())
 }
 
 fn normalized_optional_token(value: Option<&str>) -> Option<&str> {
@@ -1103,27 +873,109 @@ fn normalize_provider_token_for_route(
     }
 }
 
+struct DeviceKeyResolution {
+    resolved_device_key: String,
+    previous: DeviceRouteRecord,
+    issued_new_key: bool,
+    issue_reason: Option<&'static str>,
+}
+
 async fn ensure_device_key_for_channel_upsert(
     state: &AppState,
-    requested_device_key: &str,
+    requested_device_key: Option<&str>,
     requested_platform: Option<&str>,
-) -> Result<(String, DeviceRouteRecord), Error> {
-    if let Some(route) = state.device_registry.get(requested_device_key) {
-        return Ok((requested_device_key.to_string(), route));
-    }
-    let platform = requested_platform
+    _requested_channel_type: Option<DeviceChannelType>,
+) -> Result<DeviceKeyResolution, Error> {
+    let requested_device_key = requested_device_key
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| Error::validation("platform is required when device_key is missing"))?;
+        .filter(|value| !value.is_empty());
+    let requested_platform = requested_platform
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(device_key) = requested_device_key
+        && let Some(route) = state.device_registry.get(device_key)
+    {
+        if let Some(raw_platform) = requested_platform {
+            let canonical_platform = platform_str(platform_from_str(raw_platform)?);
+            if !route.platform.eq_ignore_ascii_case(canonical_platform) {
+                return issue_new_device_key(
+                    state,
+                    requested_platform,
+                    Some(device_key),
+                    Some(route.platform.as_str()),
+                    "platform_mismatch",
+                )
+                .await;
+            }
+        }
+        return Ok(DeviceKeyResolution {
+            resolved_device_key: device_key.to_string(),
+            previous: route,
+            issued_new_key: false,
+            issue_reason: None,
+        });
+    }
+
+    issue_new_device_key(
+        state,
+        requested_platform,
+        requested_device_key,
+        None,
+        if requested_device_key.is_some() {
+            "device_key_not_found"
+        } else {
+            "device_key_missing"
+        },
+    )
+    .await
+}
+
+async fn issue_new_device_key(
+    state: &AppState,
+    requested_platform: Option<&str>,
+    requested_device_key: Option<&str>,
+    existing_platform: Option<&str>,
+    issue_reason: &'static str,
+) -> Result<DeviceKeyResolution, Error> {
+    let platform = requested_platform
+        .ok_or_else(|| Error::validation("platform is required when issuing a new device_key"))?;
+    let canonical_platform = platform_str(platform_from_str(platform)?);
     let resolved_device_key = state
         .device_registry
-        .register_device(platform, Some(requested_device_key))
+        .register_device(canonical_platform, None)
         .map_err(Error::Internal)?;
-    let route = state.device_registry.get(&resolved_device_key).ok_or_else(|| {
-        Error::Internal("device route missing after channel upsert auto-register".to_string())
-    })?;
-    persist_device_registry_route(state, resolved_device_key.as_str(), &route).await?;
-    Ok((resolved_device_key, route))
+    let route = state
+        .device_registry
+        .get(&resolved_device_key)
+        .ok_or_else(|| {
+            Error::Internal("device route missing after channel upsert auto-register".to_string())
+        })?;
+    persist_device_route(
+        state,
+        resolved_device_key.as_str(),
+        None,
+        &route,
+        "route_issue_new_key",
+        Some(issue_reason),
+    )
+    .await?;
+
+    if state.diagnostics_api_enabled && issue_reason == "platform_mismatch" {
+        let old_key = requested_device_key.unwrap_or("");
+        let old_platform = existing_platform.unwrap_or("");
+        crate::util::diagnostics_log(format_args!(
+            "device_key reissued: reason={} old_device_key={} old_platform={} requested_platform={} new_device_key={}",
+            issue_reason, old_key, old_platform, canonical_platform, resolved_device_key
+        ));
+    }
+
+    Ok(DeviceKeyResolution {
+        resolved_device_key,
+        previous: route,
+        issued_new_key: true,
+        issue_reason: Some(issue_reason),
+    })
 }
 
 fn platform_from_channel_type(
@@ -1165,19 +1017,60 @@ fn platform_str(platform: Platform) -> &'static str {
     }
 }
 
-async fn persist_device_registry_route(
+async fn persist_device_route(
     state: &AppState,
     device_key: &str,
+    previous: Option<&DeviceRouteRecord>,
     route: &DeviceRouteRecord,
+    action: &str,
+    issue_reason: Option<&str>,
 ) -> Result<(), Error> {
     state
         .store
-        .upsert_device_registry_route_async(&DeviceRegistryRoute {
+        .upsert_device_route_async(&DeviceRouteRecordRow {
             device_key: device_key.to_string(),
             platform: route.platform.clone(),
             channel_type: route.channel_type.as_str().to_string(),
             provider_token: route.provider_token.clone(),
             updated_at: route.updated_at,
+        })
+        .await?;
+    let now = chrono::Utc::now().timestamp();
+    state
+        .store
+        .append_device_route_audit_async(&DeviceRouteAuditWrite {
+            device_key: device_key.to_string(),
+            action: action.to_string(),
+            old_platform: previous.map(|value| value.platform.clone()),
+            new_platform: Some(route.platform.clone()),
+            old_channel_type: previous.map(|value| value.channel_type.as_str().to_string()),
+            new_channel_type: Some(route.channel_type.as_str().to_string()),
+            old_provider_token: previous.and_then(|value| value.provider_token.clone()),
+            new_provider_token: route.provider_token.clone(),
+            issue_reason: issue_reason.map(ToString::to_string),
+            created_at: now,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn append_subscription_audit(
+    state: &AppState,
+    channel_id: [u8; 16],
+    device_key: &str,
+    action: &str,
+    route: &DeviceRouteRecord,
+) -> Result<(), Error> {
+    let now = chrono::Utc::now().timestamp();
+    state
+        .store
+        .append_subscription_audit_async(&SubscriptionAuditWrite {
+            channel_id,
+            device_key: device_key.to_string(),
+            action: action.to_string(),
+            platform: route.platform.clone(),
+            channel_type: route.channel_type.as_str().to_string(),
+            created_at: now,
         })
         .await?;
     Ok(())
@@ -1208,9 +1101,9 @@ async fn bind_private_binding_for_provider_route(
 mod tests {
     use super::{
         DeviceChannelDeleteRequest, DeviceChannelUpsertRequest, Error, V1ChannelSyncRequest,
-        ensure_private_route, platform_from_channel_type,
+        platform_from_channel_type,
     };
-    use crate::device_registry::{DeviceChannelType, DeviceRouteRecord};
+    use crate::device_registry::DeviceChannelType;
     use crate::storage::Platform;
 
     #[test]
@@ -1242,6 +1135,17 @@ mod tests {
     }
 
     #[test]
+    fn device_channel_upsert_allows_missing_device_key() {
+        let raw = r#"{
+            "channel_type":"private",
+            "platform":"android"
+        }"#;
+        let parsed = serde_json::from_str::<DeviceChannelUpsertRequest>(raw)
+            .expect("upsert request should allow missing device_key");
+        assert_eq!(parsed.device_key, None);
+    }
+
+    #[test]
     fn channel_sync_item_rejects_unknown_fields() {
         let raw = r#"{
             "device_key":"dev-1",
@@ -1252,34 +1156,6 @@ mod tests {
             parsed.is_err(),
             "channel sync item should reject unknown fields"
         );
-    }
-
-    #[test]
-    fn ensure_private_route_accepts_private_channel_type() {
-        let route = DeviceRouteRecord {
-            platform: "android".to_string(),
-            channel_type: DeviceChannelType::Private,
-            provider_token: None,
-            updated_at: 0,
-        };
-        ensure_private_route(&route).expect("private route should be accepted");
-    }
-
-    #[test]
-    fn ensure_private_route_rejects_provider_channel_type() {
-        let route = DeviceRouteRecord {
-            platform: "ios".to_string(),
-            channel_type: DeviceChannelType::Apns,
-            provider_token: Some("token".to_string()),
-            updated_at: 0,
-        };
-        let err = ensure_private_route(&route).expect_err("provider route should be rejected");
-        match err {
-            Error::Validation {
-                code: Some(code), ..
-            } => assert_eq!(code.as_ref(), "private_route_required"),
-            other => panic!("unexpected error variant: {other:?}"),
-        }
     }
 
     #[test]

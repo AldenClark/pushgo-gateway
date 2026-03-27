@@ -15,7 +15,7 @@ use crate::{
     device_registry::DeviceRegistry,
     dispatch::{ApnsJob, DispatchChannels, FcmJob, WnsJob},
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
-    rate_limit::PrivateRateLimiter,
+    stats::StatsCollector,
     storage::{
         DeviceId, MaintenanceCleanupStats, Platform, PrivateMessage, PrivateOutboxEntry, Store,
     },
@@ -44,12 +44,14 @@ const PRIVATE_DRAINING_DELIVERY_WINDOW_DEFAULT: Duration = Duration::from_secs(1
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_MULTIPLIER: f64 = 4.0;
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS: f64 = 2_000.0;
 const PRIVATE_DEFAULT_TTL_SECONDS_MAX: i64 = 30 * 24 * 60 * 60;
+const PRIVATE_PROVIDER_WAKEUP_PULL_ENABLED: bool = false;
 
 #[derive(Debug, Clone)]
 pub struct PrivateConfig {
     pub private_quic_bind: Option<String>,
     pub private_tcp_bind: Option<String>,
     pub tcp_tls_offload: bool,
+    pub tcp_proxy_protocol: bool,
     pub private_tls_cert_path: Option<String>,
     pub private_tls_key_path: Option<String>,
     pub session_ttl_secs: i64,
@@ -67,7 +69,6 @@ pub struct PrivateConfig {
     pub hot_cache_capacity: usize,
     pub default_ttl_secs: i64,
     pub gateway_token: Option<String>,
-    pub enable_ip_rate_limit: bool,
 }
 
 impl PrivateConfig {
@@ -76,6 +77,7 @@ impl PrivateConfig {
         private_quic_bind: Option<String>,
         private_tcp_bind: Option<String>,
         tcp_tls_offload: bool,
+        tcp_proxy_protocol: bool,
         private_tls_cert_path: Option<String>,
         private_tls_key_path: Option<String>,
         session_ttl_secs: i64,
@@ -93,12 +95,12 @@ impl PrivateConfig {
         hot_cache_capacity: usize,
         default_ttl_secs: i64,
         gateway_token: Option<String>,
-        enable_ip_rate_limit: bool,
     ) -> Self {
         PrivateConfig {
             private_quic_bind,
             private_tcp_bind,
             tcp_tls_offload,
+            tcp_proxy_protocol,
             private_tls_cert_path,
             private_tls_key_path,
             session_ttl_secs,
@@ -116,7 +118,6 @@ impl PrivateConfig {
             hot_cache_capacity,
             default_ttl_secs: normalize_private_default_ttl_secs(default_ttl_secs),
             gateway_token,
-            enable_ip_rate_limit,
         }
     }
 }
@@ -132,7 +133,10 @@ fn normalize_private_default_ttl_secs(ttl_secs: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{PRIVATE_DEFAULT_TTL_SECONDS_MAX, normalize_private_default_ttl_secs};
+    use super::{
+        PRIVATE_DEFAULT_TTL_SECONDS_MAX, normalize_private_default_ttl_secs,
+        should_attempt_fallback_for_device, should_drop_retry_attempt,
+    };
 
     #[test]
     fn private_default_ttl_is_clamped_to_max() {
@@ -166,14 +170,37 @@ mod tests {
             PRIVATE_DEFAULT_TTL_SECONDS_MAX
         );
     }
+
+    #[test]
+    fn retry_attempt_budget_can_be_disabled() {
+        assert!(!should_drop_retry_attempt(5, 5, false));
+        assert!(!should_drop_retry_attempt(5, 50, false));
+    }
+
+    #[test]
+    fn retry_attempt_budget_applies_when_enabled() {
+        assert!(!should_drop_retry_attempt(5, 4, true));
+        assert!(should_drop_retry_attempt(5, 5, true));
+    }
+
+    #[test]
+    fn retry_attempt_budget_zero_means_unbounded() {
+        assert!(!should_drop_retry_attempt(0, 10_000, true));
+    }
+
+    #[test]
+    fn fallback_attempt_requires_online_device() {
+        assert!(should_attempt_fallback_for_device(true));
+        assert!(!should_attempt_fallback_for_device(false));
+    }
 }
 
 pub struct PrivateState {
     pub hub: Arc<PrivateHub>,
     pub config: PrivateConfig,
     pub device_registry: Arc<DeviceRegistry>,
+    pub stats: Arc<StatsCollector>,
     pub metrics: Arc<metrics::PrivateMetrics>,
-    pub rate_limiter: Arc<PrivateRateLimiter>,
     fallback_tasks: Option<Arc<FallbackTaskEngine>>,
     session_coordinator: Arc<InMemoryCoordinator>,
     session_coord_owner: String,
@@ -226,7 +253,12 @@ pub(crate) struct RetransmitPollResult {
 }
 
 impl PrivateState {
-    pub fn new(store: Store, config: PrivateConfig, device_registry: Arc<DeviceRegistry>) -> Self {
+    pub fn new(
+        store: Store,
+        config: PrivateConfig,
+        device_registry: Arc<DeviceRegistry>,
+        stats: Arc<StatsCollector>,
+    ) -> Self {
         let hub = Arc::new(PrivateHub::new(store, &config));
         let owner = format!("gateway-{}", std::process::id());
         let fallback_tasks = (config.ack_timeout_secs > 0).then(FallbackTaskEngine::new);
@@ -234,8 +266,8 @@ impl PrivateState {
             hub,
             config,
             device_registry,
+            stats,
             metrics: Arc::new(metrics::PrivateMetrics::default()),
-            rate_limiter: Arc::new(PrivateRateLimiter::default()),
             fallback_tasks,
             session_coordinator: Arc::new(InMemoryCoordinator::new()),
             session_coord_owner: owner,
@@ -369,6 +401,9 @@ impl PrivateState {
         delivery_id: impl Into<String>,
         due_at_unix_secs: i64,
     ) {
+        if !private_provider_wakeup_pull_enabled() {
+            return;
+        }
         if let Some(engine) = &self.fallback_tasks {
             if !engine.schedule(device_id, delivery_id.into(), due_at_unix_secs) {
                 self.metrics.mark_enqueue_failure();
@@ -377,7 +412,19 @@ impl PrivateState {
         }
     }
 
+    pub fn request_fallback_resync(&self) {
+        if !private_provider_wakeup_pull_enabled() {
+            return;
+        }
+        if let Some(engine) = &self.fallback_tasks {
+            engine.request_resync();
+        }
+    }
+
     pub fn cancel_fallback(&self, device_id: DeviceId, delivery_id: &str) {
+        if !private_provider_wakeup_pull_enabled() {
+            return;
+        }
         if let Some(engine) = &self.fallback_tasks {
             if !engine.cancel(device_id, delivery_id) {
                 self.metrics.mark_enqueue_failure();
@@ -403,11 +450,13 @@ impl PrivateState {
         {
             engine.request_resync();
         }
-        self.schedule_fallback(
-            device_id,
-            delivery_id.to_string(),
-            sent_at + self.config.ack_timeout_secs.max(1) as i64,
-        );
+        if private_provider_wakeup_pull_enabled() && self.hub.is_online(device_id) {
+            self.schedule_fallback(
+                device_id,
+                delivery_id.to_string(),
+                sent_at + self.config.ack_timeout_secs.max(1) as i64,
+            );
+        }
         Ok(())
     }
 
@@ -445,7 +494,7 @@ impl PrivateState {
         device_id: DeviceId,
         delivery_id: &str,
         seq: Option<u64>,
-        _disposition: TerminalDeliveryDisposition,
+        disposition: TerminalDeliveryDisposition,
     ) -> Result<bool, crate::Error> {
         let resolved_delivery_id = if let Some(seq) = seq {
             self.hub
@@ -457,14 +506,56 @@ impl PrivateState {
         let Some(resolved_delivery_id) = resolved_delivery_id else {
             return Ok(false);
         };
+        let channel_id = self
+            .resolve_channel_id_for_delivery(resolved_delivery_id.as_str())
+            .await;
         self.hub
             .ack_delivery(device_id, resolved_delivery_id.as_str())
             .await?;
         let cleared = true;
         if cleared {
             self.cancel_fallback(device_id, resolved_delivery_id.as_str());
+            if disposition == TerminalDeliveryDisposition::Acked {
+                self.stats.record_private_ack_with_channel(
+                    format!("private:{}", encode_lower_hex_128(&device_id)),
+                    channel_id,
+                    1,
+                    chrono::Utc::now().timestamp(),
+                );
+            }
         }
         Ok(cleared)
+    }
+
+    async fn resolve_channel_id_for_delivery(&self, delivery_id: &str) -> Option<[u8; 16]> {
+        if let Ok(Some(context)) = self
+            .hub
+            .store()
+            .load_private_payload_context_async(delivery_id)
+            .await
+            && context.channel_id.is_some()
+        {
+            return context.channel_id;
+        }
+
+        let message = self
+            .hub
+            .load_private_message(delivery_id)
+            .await
+            .ok()
+            .flatten()?;
+        let envelope =
+            postcard::from_bytes::<protocol::PrivatePayloadEnvelope>(&message.payload).ok()?;
+        if envelope.payload_version != protocol::PRIVATE_PAYLOAD_VERSION_V1 {
+            return None;
+        }
+        let raw_channel_id = envelope
+            .data
+            .get("channel_id")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        crate::api::parse_channel_id(raw_channel_id).ok()
     }
 
     pub async fn start_or_resume_session(
@@ -473,6 +564,8 @@ impl PrivateState {
         client_resume_token: Option<&str>,
         last_acked_seq: u64,
     ) -> ResumeHandshake {
+        self.stats
+            .record_private_connected(format!("private:{}", encode_lower_hex_128(&device_id)));
         let resume = self
             .hub
             .start_or_resume_session(device_id, client_resume_token, last_acked_seq)
@@ -1199,6 +1292,13 @@ impl PrivateHub {
             .unwrap_or(false)
     }
 
+    pub fn online_device_ids(&self) -> Vec<DeviceId> {
+        self.presence
+            .iter()
+            .filter_map(|entry| entry.value().has_active().then_some(*entry.key()))
+            .collect()
+    }
+
     pub fn sweep_draining(&self, device_id: DeviceId) {
         let mut remove_presence = false;
         if let Some(mut entry) = self.presence.get_mut(&device_id) {
@@ -1290,7 +1390,10 @@ impl PrivateHub {
             .unwrap_or_default();
         let (resume_token, acked_delivery_ids) =
             self.ensure_resume_state_mut(device_id, now, |entry| {
-                if incoming.is_empty() || incoming != entry.token {
+                let token_mismatch = incoming.is_empty() || incoming != entry.token;
+                let ack_watermark_out_of_range =
+                    !token_mismatch && last_acked_seq > entry.next_seq.saturating_sub(1);
+                if token_mismatch || ack_watermark_out_of_range {
                     entry.reset(now);
                 }
                 let acked_delivery_ids = entry.ack_up_to(last_acked_seq, now);
@@ -1514,8 +1617,16 @@ impl PrivateHub {
             delivery_id: delivery_id.to_string(),
             status: "pending".to_string(),
             attempts: 0,
+            occurred_at: sent_at,
+            created_at: now,
+            claimed_at: None,
+            first_sent_at: None,
+            last_attempt_at: None,
+            acked_at: None,
+            fallback_sent_at: None,
             next_attempt_at: sent_at.saturating_add(self.ack_timeout_secs.max(1)),
             last_error_code: None,
+            last_error_detail: None,
             updated_at: now,
         };
         self.store
@@ -1616,6 +1727,19 @@ impl PrivateHub {
     ) -> Result<Vec<(DeviceId, PrivateOutboxEntry)>, crate::Error> {
         self.store
             .claim_private_outbox_due_async(now, limit, claim_until)
+            .await
+            .map_err(|err| crate::Error::Internal(err.to_string()))
+    }
+
+    pub async fn claim_due_outbox_for_device(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+        claim_until: i64,
+    ) -> Result<Vec<PrivateOutboxEntry>, crate::Error> {
+        self.store
+            .claim_private_outbox_due_for_device_async(device_id, now, limit, claim_until)
             .await
             .map_err(|err| crate::Error::Internal(err.to_string()))
     }
@@ -1872,10 +1996,13 @@ pub fn spawn_tcp_if_configured(state: Arc<PrivateState>) -> Result<(), crate::Er
         return Ok(());
     };
     if state.config.tcp_tls_offload {
+        let proxy_protocol_enabled = state.config.tcp_proxy_protocol;
         tokio::spawn(async move {
             let mut restart_delay_secs = 1u64;
             loop {
-                match tcp::serve_tcp_plain(&bind_addr, Arc::clone(&state)).await {
+                match tcp::serve_tcp_plain(&bind_addr, Arc::clone(&state), proxy_protocol_enabled)
+                    .await
+                {
                     Ok(()) | Err(_) => {}
                 }
                 if state.is_shutting_down() {
@@ -1900,10 +2027,19 @@ pub fn spawn_tcp_if_configured(state: Arc<PrivateState>) -> Result<(), crate::Er
             "PUSHGO_PRIVATE_TLS_KEY is required when private TCP is enabled".to_string(),
         ));
     };
+    let proxy_protocol_enabled = state.config.tcp_proxy_protocol;
     tokio::spawn(async move {
         let mut restart_delay_secs = 1u64;
         loop {
-            match tcp::serve_tcp_tls(&bind_addr, &cert_path, &key_path, Arc::clone(&state)).await {
+            match tcp::serve_tcp_tls(
+                &bind_addr,
+                &cert_path,
+                &key_path,
+                Arc::clone(&state),
+                proxy_protocol_enabled,
+            )
+            .await
+            {
                 Ok(()) | Err(_) => {}
             }
             if state.is_shutting_down() {
@@ -2032,30 +2168,60 @@ async fn run_claim_ack_drain(
     max_rounds: usize,
     max_processed_total: usize,
 ) -> Result<(), crate::Error> {
+    if !private_provider_wakeup_pull_enabled() {
+        return Ok(());
+    }
     let batch_size = batch_size.max(1);
     let max_rounds = max_rounds.max(1);
     let max_processed_total = max_processed_total.max(batch_size);
     let mut processed_total = 0usize;
     for round in 0..max_rounds {
-        let now = chrono::Utc::now().timestamp();
-        let claim_until = now.saturating_add(state.config.ack_timeout_secs.clamp(5, 120) as i64);
-        let claimed = state
-            .hub
-            .claim_due_outbox(now, batch_size, claim_until)
-            .await?;
-        if claimed.is_empty() {
+        let online_devices = state.hub.online_device_ids();
+        if online_devices.is_empty() {
             break;
         }
+        let now = chrono::Utc::now().timestamp();
+        let claim_until = now.saturating_add(state.config.ack_timeout_secs.clamp(5, 120) as i64);
+        let remaining_budget = max_processed_total.saturating_sub(processed_total);
+        if remaining_budget == 0 {
+            break;
+        }
+        let round_budget = batch_size.min(remaining_budget);
+        if round_budget == 0 {
+            break;
+        }
+
         let mut processed = 0usize;
-        for (device_id, outbox) in claimed {
-            processed = processed.saturating_add(1);
-            processed_total = processed_total.saturating_add(1);
-            run_claimed_fallback_task(state, dispatch, device_id, &outbox, now).await?;
-            if processed_total >= max_processed_total {
-                return Ok(());
+        let per_device_limit = (round_budget / online_devices.len().max(1)).max(1);
+        for device_id in online_devices {
+            if processed >= round_budget || processed_total >= max_processed_total {
+                break;
+            }
+            let device_limit = per_device_limit.min(round_budget.saturating_sub(processed));
+            if device_limit == 0 {
+                break;
+            }
+            let claimed = state
+                .hub
+                .claim_due_outbox_for_device(device_id, now, device_limit, claim_until)
+                .await?;
+            if claimed.is_empty() {
+                continue;
+            }
+            for outbox in claimed {
+                processed = processed.saturating_add(1);
+                processed_total = processed_total.saturating_add(1);
+                run_claimed_fallback_task(state, dispatch, device_id, &outbox, now).await?;
+                if processed >= round_budget || processed_total >= max_processed_total {
+                    break;
+                }
             }
         }
-        if processed < batch_size {
+
+        if processed == 0 {
+            break;
+        }
+        if processed < round_budget {
             break;
         }
         if round + 1 < max_rounds {
@@ -2070,16 +2236,25 @@ async fn resync_fallback_tasks(
     scheduler: &mut FallbackScheduler,
     limit: usize,
 ) -> Result<(), crate::Error> {
+    if !private_provider_wakeup_pull_enabled() {
+        scheduler.replace_fallback_tasks(std::iter::empty::<(FallbackTaskKey, i64)>());
+        return Ok(());
+    }
+    let online_device_ids: HashSet<DeviceId> = state.hub.online_device_ids().into_iter().collect();
+    if online_device_ids.is_empty() {
+        scheduler.replace_fallback_tasks(std::iter::empty());
+        return Ok(());
+    }
     let total_pending = state.hub.count_pending_outbox_total().await?;
     let entries = state.hub.list_due_outbox(i64::MAX, limit).await?;
-    let snapshot = entries.into_iter().map(|(device_id, entry)| {
-        (
+    let snapshot = entries.into_iter().filter_map(|(device_id, entry)| {
+        online_device_ids.contains(&device_id).then_some((
             FallbackTaskKey {
                 device_id,
                 delivery_id: entry.delivery_id,
             },
             entry.next_attempt_at,
-        )
+        ))
     });
     if total_pending > limit {
         scheduler.merge_fallback_tasks(snapshot);
@@ -2111,6 +2286,13 @@ async fn run_maintenance_tick(state: &PrivateState) -> Result<(), crate::Error> 
 }
 
 async fn seed_fallback_tasks(state: &PrivateState, scheduler: &mut FallbackScheduler) {
+    if !private_provider_wakeup_pull_enabled() {
+        return;
+    }
+    let online_device_ids: HashSet<DeviceId> = state.hub.online_device_ids().into_iter().collect();
+    if online_device_ids.is_empty() {
+        return;
+    }
     let total_pending = match state.hub.count_pending_outbox_total().await {
         Ok(value) => value,
         Err(_err) => {
@@ -2129,6 +2311,9 @@ async fn seed_fallback_tasks(state: &PrivateState, scheduler: &mut FallbackSched
     };
     let mut seeded = 0usize;
     for (device_id, entry) in entries {
+        if !online_device_ids.contains(&device_id) {
+            continue;
+        }
         scheduler.schedule(
             FallbackTaskKey {
                 device_id,
@@ -2154,6 +2339,11 @@ fn unix_secs_to_tokio_instant(unix_secs: i64) -> TokioInstant {
 
 fn try_trim_allocator() {}
 
+#[inline]
+fn private_provider_wakeup_pull_enabled() -> bool {
+    PRIVATE_PROVIDER_WAKEUP_PULL_ENABLED
+}
+
 async fn run_claimed_fallback_task(
     state: &PrivateState,
     dispatch: &DispatchChannels,
@@ -2161,17 +2351,6 @@ async fn run_claimed_fallback_task(
     outbox: &PrivateOutboxEntry,
     now: i64,
 ) -> Result<(), crate::Error> {
-    if should_drop_by_attempt_budget(state, outbox) {
-        drop_fallback_delivery(
-            state,
-            device_id,
-            outbox.delivery_id.as_str(),
-            "max_attempts_exhausted",
-        )
-        .await?;
-        return Ok(());
-    }
-
     let Some(message) = state
         .hub
         .load_private_message(outbox.delivery_id.as_str())
@@ -2249,10 +2428,24 @@ async fn run_claimed_fallback_task(
         }
     };
 
+    if !should_attempt_fallback_for_device(state.hub.is_online(device_id)) {
+        return Ok(());
+    }
+
     let Some(target) = resolve_system_target(state, channel_id, device_id).await else {
-        schedule_fallback_retry_task(state, device_id, outbox, now, 0).await?;
         return Ok(());
     };
+
+    if should_drop_by_attempt_budget(state, outbox) {
+        drop_fallback_delivery(
+            state,
+            device_id,
+            outbox.delivery_id.as_str(),
+            "max_attempts_exhausted",
+        )
+        .await?;
+        return Ok(());
+    }
 
     let wakeup_data = build_wakeup_data(&data);
     let ttl = data.get("ttl").and_then(|value| value.parse::<i64>().ok());
@@ -2285,7 +2478,6 @@ async fn run_claimed_fallback_task(
                     initial_path: crate::dispatch::ProviderDeliveryPath::WakeupPull,
                     wakeup_payload_within_limit: true,
                     private_wakeup: None,
-                    private_wakeup_enqueued: false,
                 })
                 .is_ok()
         }
@@ -2307,7 +2499,6 @@ async fn run_claimed_fallback_task(
                     initial_path: crate::dispatch::ProviderDeliveryPath::WakeupPull,
                     wakeup_payload_within_limit: true,
                     private_wakeup: None,
-                    private_wakeup_enqueued: false,
                 })
                 .is_ok()
         }
@@ -2315,6 +2506,7 @@ async fn run_claimed_fallback_task(
             let correlation_id: Arc<str> = Arc::from(outbox.delivery_id.clone());
             let collapse_id: Arc<str> = Arc::from(format!("private-wakeup:{channel_id_raw}"));
             let payload = Arc::new(ApnsPayload::wakeup(
+                Some("You have a new notification.".to_string()),
                 Some(channel_id_raw.to_string()),
                 ttl,
                 SharedStringMap::from(wakeup_data.clone()),
@@ -2331,7 +2523,6 @@ async fn run_claimed_fallback_task(
                     initial_path: crate::dispatch::ProviderDeliveryPath::WakeupPull,
                     wakeup_payload_within_limit: true,
                     private_wakeup: None,
-                    private_wakeup_enqueued: false,
                     collapse_id: Some(collapse_id),
                 })
                 .is_ok()
@@ -2347,7 +2538,7 @@ async fn run_claimed_fallback_task(
         return Ok(());
     }
 
-    schedule_fallback_retry(state, device_id, outbox, now, 0).await?;
+    schedule_fallback_retry(state, device_id, outbox, now, 0, true).await?;
     Ok(())
 }
 
@@ -2357,9 +2548,10 @@ async fn schedule_fallback_retry(
     outbox: &PrivateOutboxEntry,
     now: i64,
     sent: usize,
+    enforce_attempt_budget: bool,
 ) -> Result<i64, crate::Error> {
     let next_attempt = outbox.attempts.saturating_add(1);
-    if should_drop_by_next_attempt(state, next_attempt) {
+    if should_drop_by_next_attempt(state, next_attempt, enforce_attempt_budget) {
         drop_fallback_delivery(
             state,
             device_id,
@@ -2381,23 +2573,34 @@ async fn schedule_fallback_retry(
     Ok(retry_at)
 }
 
-async fn schedule_fallback_retry_task(
-    state: &PrivateState,
-    device_id: DeviceId,
-    outbox: &PrivateOutboxEntry,
-    now: i64,
-    sent: usize,
-) -> Result<(), crate::Error> {
-    schedule_fallback_retry(state, device_id, outbox, now, sent).await?;
-    Ok(())
-}
-
 fn should_drop_by_attempt_budget(state: &PrivateState, outbox: &PrivateOutboxEntry) -> bool {
-    should_drop_by_next_attempt(state, outbox.attempts)
+    should_drop_by_next_attempt(state, outbox.attempts, true)
 }
 
-fn should_drop_by_next_attempt(state: &PrivateState, next_attempt: u32) -> bool {
-    let max_attempts = state.config.fallback_max_attempts;
+fn should_drop_by_next_attempt(
+    state: &PrivateState,
+    next_attempt: u32,
+    enforce_attempt_budget: bool,
+) -> bool {
+    should_drop_retry_attempt(
+        state.config.fallback_max_attempts,
+        next_attempt,
+        enforce_attempt_budget,
+    )
+}
+
+fn should_attempt_fallback_for_device(is_online: bool) -> bool {
+    is_online
+}
+
+fn should_drop_retry_attempt(
+    max_attempts: u32,
+    next_attempt: u32,
+    enforce_attempt_budget: bool,
+) -> bool {
+    if !enforce_attempt_budget {
+        return false;
+    }
     max_attempts > 0 && next_attempt >= max_attempts
 }
 

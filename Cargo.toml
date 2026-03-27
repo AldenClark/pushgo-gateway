@@ -1,6 +1,6 @@
 [package]
 name = "pushgo-gateway"
-version = "1.0.29"
+version = "1.1.32"
 edition = "2024"
 license = "MIT"
 authors = ["PushGo Team <team@pushgo.dev>"]
@@ -70,12 +70,14 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 rand = "0.10.0"
 hmac = "0.12.1"
 async-trait = "0.1.89"
-warp-link = { git = "https://github.com/AldenClark/warp-link", rev = "4c11f58cd211a4baffa729996e19e40b71188221" }
-warp-link-coordination = { git = "https://github.com/AldenClark/warp-link", rev = "4c11f58cd211a4baffa729996e19e40b71188221" }
-pushgo-warp-profile = { git = "https://github.com/AldenClark/warp-link", rev = "4c11f58cd211a4baffa729996e19e40b71188221" }
+warp-link = { git = "https://github.com/AldenClark/warp-link", rev = "830721e14d59e645a64808af2ec1b0f74d23e4cc" }
+warp-link-coordination = { git = "https://github.com/AldenClark/warp-link", rev = "830721e14d59e645a64808af2ec1b0f74d23e4cc" }
+pushgo-warp-profile = { git = "https://github.com/AldenClark/warp-link", rev = "830721e14d59e645a64808af2ec1b0f74d23e4cc" }
 futures-util = "0.3.32"
 parking_lot = "0.12.5"
 scc = "3.6.11"
+rustls = "0.23.37"
+tokio-rustls = "0.26.4"
 
 [dev-dependencies]
 tempfile = "3.27.0"

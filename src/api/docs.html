@@ -258,12 +258,14 @@
             </tr>
             <tr>
               <td><code>op_id</code></td>
-              <td>是<br />Yes</td>
-              <td>string</td>
+              <td>否<br />No</td>
+              <td>string | null</td>
               <td>
-                调用方幂等键（1-128 字符，仅允许字母数字和
-                <code>_:-</code>）。<br />Caller idempotency key (1-128 chars;
-                letters, digits, and <code>_:-</code> only).
+                调用方幂等键（可选）。若传入则按传入值使用（1-128 字符，仅允许字母数字和
+                <code>_:-</code>）；若缺失则由网关自动生成并在响应中回传。<br />Caller
+                idempotency key (optional). If provided, gateway uses it as-is
+                (1-128 chars; letters, digits, and <code>_:-</code> only); if
+                omitted, gateway generates one and echoes it in response.
               </td>
             </tr>
           </tbody>

@@ -34,15 +34,15 @@ In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_UR
 
 - `--private-channel-enabled=true` is the master switch. If disabled, private routes/runtime are unavailable.
 - `--private-*-bind` always means the local listener address owned by gateway.
-- `--private-*-port` always means the port advertised to app clients via `/private/profile`.
+- `--private-*-port` always means the port advertised to app clients via `/gateway/profile` (`transport` hints).
 - QUIC and gateway-terminated Raw TCP both require `--private-tls-cert` + `--private-tls-key`.
 - `--private-tcp-tls-offload=true` only changes Raw TCP; QUIC still needs gateway-side TLS materials.
 - WSS has no separate bind flag; it rides on `--http-addr` and is typically exposed by edge TLS.
-- `--enable-ip-rate-limit=true` enables IP-based controls for HTTP, WSS handshake, QUIC, and Raw TCP.
 
-## Full CLI Reference
+## CLI Reference
 
-Every option supports both CLI flag and environment variable forms.
+Main options support both CLI flag and environment variable forms.  
+Advanced env-only runtime tunables are listed in a separate section below.
 
 ### Core
 
@@ -50,11 +50,11 @@ Every option supports both CLI flag and environment variable forms.
 | --------------------------------- | -------------------------------------- | -------------------------- | ----------------- | ------------------------------------------------------ |
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | No                | HTTP API / WSS bind address                            |
 | `--token`                         | `PUSHGO_TOKEN`                         | None                       | No                | Bearer token for public API                            |
-| `--enable-ip-rate-limit`          | `PUSHGO_ENABLE_IP_RATE_LIMIT`          | `false`                    | No                | Enable IP-based rate limiting                          |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | No                | Master switch for private transport                    |
-| `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `mysql://`)  |
+| `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | No                | Enable `/diagnostics/*` namespace and diagnostics logs |
+| `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
 
 ### Private Transport Bind / Advertise
 
@@ -72,6 +72,7 @@ Every option supports both CLI flag and environment variable forms.
 | `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | None    | Conditionally yes | Shared TLS cert PEM for QUIC and Raw TCP            |
 | `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | None    | Conditionally yes | Shared TLS key PEM for QUIC and Raw TCP             |
 | `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | No                | Whether Raw TCP TLS is offloaded at the edge proxy  |
+| `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | No            | Expect PROXY protocol v1 on Raw TCP ingress          |
 
 ### Private Runtime Limits
 
@@ -90,13 +91,26 @@ Every option supports both CLI flag and environment variable forms.
 | `--private-retx-max-retries`      | `PUSHGO_PRIVATE_RETX_MAX_RETRIES`      | `5`                        | No                | Max retries per delivery                               |
 | `--private-global-max-pending`    | `PUSHGO_PRIVATE_GLOBAL_MAX_PENDING`    | `5000000`                  | No                | Global pending cap for private queue                   |
 | `--private-hot-cache-capacity`    | `PUSHGO_PRIVATE_HOT_CACHE_CAPACITY`    | `50000`                    | No                | Hot-cache capacity for private payloads                |
-| `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `604800`                   | No                | Default TTL for private messages (seconds)             |
+| `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `2592000`                  | No                | Default TTL for private messages (seconds)             |
+
+### Advanced Environment Variables (env-only)
+
+| Env                                         | Default                                | Description                                                                 |
+| ------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
+| `PUSHGO_DISPATCH_WORKER_COUNT`              | Auto                                   | Dispatch worker count (clamped 2~256; auto is `cpu*2`, clamped 4~64)       |
+| `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | Auto                                   | Dispatch queue capacity (clamped 256~131072; auto is `workers*64`)          |
+| `PUSHGO_PROVIDER_PULL_RETRY_POLL_MS`        | `1000`                                 | Provider-pull retry poll interval in milliseconds (200~5000)                |
+| `PUSHGO_PROVIDER_PULL_RETRY_BATCH`          | `200`                                  | Provider-pull retry batch size (1~2000)                                     |
+| `PUSHGO_PROVIDER_PULL_RETRY_TIMEOUT_SECS`   | `30`                                   | Provider-pull retry dispatch timeout in seconds (5~600)                     |
+| `PUSHGO_DELIVERY_AUDIT_CHANNEL_CAPACITY`    | `16384`                                | Delivery-audit async queue capacity (512~262144)                            |
+| `PUSHGO_DELIVERY_AUDIT_BATCH_SIZE`          | `256`                                  | Delivery-audit batch flush size (16~4096)                                   |
+| `PUSHGO_DELIVERY_AUDIT_FLUSH_INTERVAL_MS`   | `50`                                   | Delivery-audit periodic flush interval in milliseconds (10~2000)            |
+| `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | In-process APNS max concurrent sends                                        |
+| `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | Dispatch-target cache TTL in milliseconds (200~10000)                       |
 
 ## Nginx / LB Deployment Reference
 
 ### A) HTTP API + WSS (`/private/ws`)
-
-If `--enable-ip-rate-limit` is enabled, force-overwrite `X-Forwarded-For`, `X-Real-IP`, and `Forwarded` at the edge.
 
 ```nginx
 server {
@@ -132,6 +146,7 @@ stream {
     server {
         listen 5223;
         proxy_pass pushgo_private_tcp_tls;
+        proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
     }
@@ -151,6 +166,7 @@ stream {
         ssl_certificate     /etc/nginx/certs/fullchain.pem;
         ssl_certificate_key /etc/nginx/certs/privkey.pem;
         proxy_pass pushgo_private_tcp_plain;
+        proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
     }
@@ -183,7 +199,7 @@ Recommended patterns:
 1. Use a dedicated UDP port for private QUIC (for example `5223/udp`) and keep HTTP/3 on `443/udp`.
 2. Use a dedicated LB/public IP for private QUIC (you can still expose external `443/udp` there).
 
-PushGo now defaults to loopback-only private listeners (`127.0.0.1:5223` for both QUIC and Raw TCP) and separates advertised app ports from local bind ports via `/private/profile`.
+PushGo now defaults to loopback-only private listeners (`127.0.0.1:5223` for both QUIC and Raw TCP) and separates advertised app ports from local bind ports via `/gateway/profile`.
 
 ## Installation and Runtime
 
@@ -224,7 +240,6 @@ ExecStart=/opt/pushgo-gateway/pushgo-gateway \
   --private-quic-port 443 \
   --private-tcp-bind 127.0.0.1:5223 \
   --private-tcp-port 5223 \
-  --enable-ip-rate-limit \
   --db-url ${PUSHGO_DB_URL} \
   --token-service-url https://token.pushgo.dev
 
@@ -260,7 +275,6 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
   -e PUSHGO_PRIVATE_CHANNEL_ENABLED=true \
-  -e PUSHGO_ENABLE_IP_RATE_LIMIT=true \
   -e PUSHGO_PRIVATE_QUIC_BIND=0.0.0.0:5223 \
   -e PUSHGO_PRIVATE_QUIC_PORT=443 \
   -e PUSHGO_PRIVATE_TCP_BIND=0.0.0.0:5223 \
@@ -274,9 +288,8 @@ docker run -d --name pushgo-gateway \
 ## Production Recommendations
 
 1. Enable QUIC + Raw TCP together, and keep WSS as a compatibility path for restricted networks.
-2. If IP rate limiting is enabled, ensure proxy headers are forcibly overwritten at the edge.
-3. Keep local private listeners on loopback and let the edge own public exposure.
-4. Plan private QUIC and HTTP/3 with separate `443/udp` ownership to avoid socket conflicts.
+2. Keep local private listeners on loopback and let the edge own public exposure.
+3. Plan private QUIC and HTTP/3 with separate `443/udp` ownership to avoid socket conflicts.
 
 ---
 
@@ -316,15 +329,15 @@ docker run -d --name pushgo-gateway \
 
 - `--private-channel-enabled=true` 是私有传输总开关；关闭时，私有路由与运行时均不可用。
 - `--private-*-bind` 一律表示 gateway 本机监听地址。
-- `--private-*-port` 一律表示通过 `/private/profile` 对 app 下发的对外端口。
+- `--private-*-port` 一律表示通过 `/gateway/profile`（`transport` 提示）对 app 下发的对外端口。
 - QUIC 与网关终止 TLS 的 Raw TCP 共享 `--private-tls-cert` + `--private-tls-key`。
 - `--private-tcp-tls-offload=true` 只影响 Raw TCP；QUIC 仍然需要 gateway 侧 TLS 材料。
 - WSS 没有单独 bind 参数，始终复用 `--http-addr` 对应的 HTTP 入口。
-- `--enable-ip-rate-limit=true` 时，才会启用 HTTP、WSS 握手、QUIC、Raw TCP 的 IP 限流。
 
-## CLI 参数（完整）
+## CLI 参数
 
-所有参数同时支持 CLI 与环境变量两种方式。
+主参数同时支持 CLI 与环境变量两种方式。  
+仅环境变量可配置的高级运行时参数，见后续“高级环境变量（仅 env）”章节。
 
 ### Core
 
@@ -332,11 +345,11 @@ docker run -d --name pushgo-gateway \
 | --------------------------------- | -------------------------------------- | -------------------------- | -------- | ---------------------------------------------------- |
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | 否       | HTTP API / WSS 监听地址                              |
 | `--token`                         | `PUSHGO_TOKEN`                         | 无                         | 否       | 公共 API Bearer Token                                |
-| `--enable-ip-rate-limit`          | `PUSHGO_ENABLE_IP_RATE_LIMIT`          | `false`                    | 否       | 启用基于 IP 的限流                                   |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | 否       | 私有传输总开关                                       |
-| `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`mysql://`） |
+| `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | 否       | 开启 `/diagnostics/*` 诊断接口与诊断日志             |
+| `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
 
 ### Private 监听 / 对外宣告
 
@@ -354,6 +367,7 @@ docker run -d --name pushgo-gateway \
 | `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | 无     | 条件必填 | QUIC 与 Raw TCP 共享证书 PEM               |
 | `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | 无     | 条件必填 | QUIC 与 Raw TCP 共享私钥 PEM               |
 | `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | 否       | Raw TCP 是否由边缘代理卸载 TLS            |
+| `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | 否   | Raw TCP 入站是否要求 PROXY protocol v1    |
 
 ### Private Runtime Limits
 
@@ -372,13 +386,26 @@ docker run -d --name pushgo-gateway \
 | `--private-retx-max-retries`      | `PUSHGO_PRIVATE_RETX_MAX_RETRIES`      | `5`                        | 否       | 单条消息最大重传次数                                 |
 | `--private-global-max-pending`    | `PUSHGO_PRIVATE_GLOBAL_MAX_PENDING`    | `5000000`                  | 否       | 全局私有队列待处理上限                               |
 | `--private-hot-cache-capacity`    | `PUSHGO_PRIVATE_HOT_CACHE_CAPACITY`    | `50000`                    | 否       | 私有热缓存容量                                       |
-| `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `604800`                   | 否       | 私有消息默认 TTL（秒）                               |
+| `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `2592000`                  | 否       | 私有消息默认 TTL（秒）                               |
+
+### 高级环境变量（仅 env）
+
+| Env                                         | 默认值                                 | 说明                                                                      |
+| ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| `PUSHGO_DISPATCH_WORKER_COUNT`              | 自动                                   | 分发 worker 数量（2~256；自动为 `cpu*2`，并限制在 4~64）                |
+| `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | 自动                                   | 分发队列容量（256~131072；自动为 `workers*64`）                          |
+| `PUSHGO_PROVIDER_PULL_RETRY_POLL_MS`        | `1000`                                 | provider-pull 重试轮询间隔（毫秒，200~5000）                             |
+| `PUSHGO_PROVIDER_PULL_RETRY_BATCH`          | `200`                                  | provider-pull 单轮重试批量（1~2000）                                     |
+| `PUSHGO_PROVIDER_PULL_RETRY_TIMEOUT_SECS`   | `30`                                   | provider-pull 重试下发超时（秒，5~600）                                  |
+| `PUSHGO_DELIVERY_AUDIT_CHANNEL_CAPACITY`    | `16384`                                | delivery-audit 异步队列容量（512~262144）                                 |
+| `PUSHGO_DELIVERY_AUDIT_BATCH_SIZE`          | `256`                                  | delivery-audit 批量刷写条数（16~4096）                                    |
+| `PUSHGO_DELIVERY_AUDIT_FLUSH_INTERVAL_MS`   | `50`                                   | delivery-audit 定时刷写间隔（毫秒，10~2000）                              |
+| `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | 进程内 APNS 最大发送并发数                                                |
+| `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | dispatch targets 缓存 TTL（毫秒，200~10000）                              |
 
 ## Nginx / LB 部署参考
 
 ### A) HTTP API + WSS（`/private/ws`）
-
-当启用 `--enable-ip-rate-limit` 时，建议在边缘强制覆盖 `X-Forwarded-For`、`X-Real-IP`、`Forwarded`。
 
 ```nginx
 server {
@@ -414,6 +441,7 @@ stream {
     server {
         listen 5223;
         proxy_pass pushgo_private_tcp_tls;
+        proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
     }
@@ -433,6 +461,7 @@ stream {
         ssl_certificate     /etc/nginx/certs/fullchain.pem;
         ssl_certificate_key /etc/nginx/certs/privkey.pem;
         proxy_pass pushgo_private_tcp_plain;
+        proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
     }
@@ -465,7 +494,7 @@ PushGo QUIC 使用自定义 ALPN（`pushgo-quic`），不是 HTTP/3。
 1. 私有 QUIC 使用独立 UDP 端口（例如 `5223/udp`），HTTP/3 保持在 `443/udp`。
 2. 为私有 QUIC 配置独立 LB/独立公网 IP（可继续对外暴露 `443/udp`）。
 
-PushGo 现在默认把私有 QUIC / Raw TCP 都监听在本机回环地址 `127.0.0.1:5223`，并通过 `/private/profile` 将客户端应使用的对外端口单独下发。
+PushGo 现在默认把私有 QUIC / Raw TCP 都监听在本机回环地址 `127.0.0.1:5223`，并通过 `/gateway/profile` 将客户端应使用的对外端口单独下发。
 
 ## 安装与运行
 
@@ -506,7 +535,6 @@ ExecStart=/opt/pushgo-gateway/pushgo-gateway \
   --private-quic-port 443 \
   --private-tcp-bind 127.0.0.1:5223 \
   --private-tcp-port 5223 \
-  --enable-ip-rate-limit \
   --db-url ${PUSHGO_DB_URL} \
   --token-service-url https://token.pushgo.dev
 
@@ -542,7 +570,6 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
   -e PUSHGO_PRIVATE_CHANNEL_ENABLED=true \
-  -e PUSHGO_ENABLE_IP_RATE_LIMIT=true \
   -e PUSHGO_PRIVATE_QUIC_BIND=0.0.0.0:5223 \
   -e PUSHGO_PRIVATE_QUIC_PORT=443 \
   -e PUSHGO_PRIVATE_TCP_BIND=0.0.0.0:5223 \
@@ -556,6 +583,5 @@ docker run -d --name pushgo-gateway \
 ## 生产建议
 
 1. 建议同时启用 QUIC + Raw TCP，并保留 WSS 作为受限网络下的兼容路径。
-2. 若启用 IP 限流，请确保边缘代理强制覆盖 IP 相关头部。
-3. 建议本机私有监听保持 loopback，仅由边缘层对外暴露。
-4. 私有 QUIC 与 HTTP/3 请分离 `443/udp` 归属，避免端口冲突。
+2. 建议本机私有监听保持 loopback，仅由边缘层对外暴露。
+3. 私有 QUIC 与 HTTP/3 请分离 `443/udp` 归属，避免端口冲突。

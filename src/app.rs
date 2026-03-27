@@ -1,23 +1,23 @@
 use crate::{
     api::router::build_router,
     args::Args,
+    delivery_audit::DeliveryAuditCollector,
     device_registry::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord},
     dispatch::{
         DispatchChannels, DispatchWorkerDeps,
         audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog},
-        create_dispatch_channels, spawn_dispatch_workers,
+        create_dispatch_channels, spawn_dispatch_workers, spawn_provider_pull_retry_worker,
     },
     private::{
         PrivateConfig, PrivateState, spawn_persistent_fallback_worker, spawn_quic_if_configured,
         spawn_tcp_if_configured,
     },
     providers::{ApnsClient, FcmClient, WnsClient},
-    rate_limit::{ApiRateLimiter, ClientIpResolver},
-    storage::{DeviceRegistryRoute, Platform, Store, new_store},
+    stats::StatsCollector,
+    storage::{DeviceRouteRecordRow, Platform, Store, new_store},
 };
 use axum::Router;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 
 #[derive(Clone)]
 pub(crate) struct PrivateTransportProfile {
@@ -41,14 +41,12 @@ pub(crate) enum AuthMode {
 pub(crate) struct AppState {
     pub dispatch: DispatchChannels,
     pub dispatch_audit: Arc<DispatchAuditLog>,
+    pub delivery_audit: Arc<DeliveryAuditCollector>,
     pub auth: AuthMode,
     pub private_channel_enabled: bool,
-    pub ip_rate_limit_enabled: bool,
-    pub ingress_processing_limiter: Arc<Semaphore>,
-    pub ingress_wait_limiter: Arc<Semaphore>,
-    pub api_rate_limiter: Arc<ApiRateLimiter>,
-    pub client_ip_resolver: Arc<ClientIpResolver>,
+    pub diagnostics_api_enabled: bool,
     pub device_registry: Arc<DeviceRegistry>,
+    pub stats: Arc<StatsCollector>,
     pub private_transport_profile: PrivateTransportProfile,
     pub private: Option<Arc<PrivateState>>,
     pub store: Store,
@@ -67,13 +65,20 @@ pub async fn build_app(
     docs_html: &'static str,
 ) -> Result<AppRuntime, Box<dyn std::error::Error>> {
     let store = new_store(args.db_url.as_deref()).await?;
-    let ingress_permits = auto_ingress_permits();
-    let client_ip_resolver = Arc::new(ClientIpResolver);
+    let stats = StatsCollector::spawn(Arc::clone(&store));
     let device_registry = Arc::new(DeviceRegistry::new());
     restore_device_registry(&store, &device_registry).await?;
 
     let (dispatch, apns_rx, fcm_rx, wns_rx) = create_dispatch_channels();
-    let dispatch_audit = Arc::new(DispatchAuditLog::new(DEFAULT_DISPATCH_AUDIT_CAPACITY));
+    let dispatch_audit = Arc::new(DispatchAuditLog::new(
+        DEFAULT_DISPATCH_AUDIT_CAPACITY,
+        args.diagnostics_api_enabled,
+    ));
+    let delivery_audit = DeliveryAuditCollector::spawn(
+        args.diagnostics_api_enabled,
+        Arc::clone(&store),
+        Arc::clone(&dispatch_audit),
+    );
 
     let auth = match args.token.as_deref() {
         None => AuthMode::Disabled,
@@ -84,6 +89,7 @@ pub async fn build_app(
         Some(args.private_quic_bind.clone()),
         Some(args.private_tcp_bind.clone()),
         args.private_tcp_tls_offload,
+        args.private_tcp_proxy_protocol,
         args.private_tls_cert_path.clone(),
         args.private_tls_key_path.clone(),
         args.private_session_ttl_secs,
@@ -101,13 +107,13 @@ pub async fn build_app(
         args.private_hot_cache_capacity,
         args.private_default_ttl_secs,
         args.token.clone(),
-        args.enable_ip_rate_limit,
     );
     let private = if args.private_channel_enabled {
         let state = Arc::new(PrivateState::new(
             Arc::clone(&store),
             private_config,
             Arc::clone(&device_registry),
+            Arc::clone(&stats),
         ));
         spawn_quic_if_configured(Arc::clone(&state))
             .map_err(|err| std::io::Error::other(err.to_string()))?;
@@ -132,6 +138,13 @@ pub async fn build_app(
             audit: dispatch_audit.clone(),
         },
     );
+    spawn_provider_pull_retry_worker(
+        Arc::clone(&store),
+        Arc::clone(&apns),
+        Arc::clone(&fcm),
+        Arc::clone(&wns),
+        dispatch_audit.clone(),
+    );
 
     let private_transport_profile = PrivateTransportProfile {
         quic_enabled: true,
@@ -147,14 +160,12 @@ pub async fn build_app(
     let state = AppState {
         dispatch,
         dispatch_audit,
+        delivery_audit,
         auth,
         private_channel_enabled: args.private_channel_enabled,
-        ip_rate_limit_enabled: args.enable_ip_rate_limit,
-        ingress_processing_limiter: Arc::new(Semaphore::new(ingress_permits)),
-        ingress_wait_limiter: Arc::new(Semaphore::new(ingress_permits)),
-        api_rate_limiter: Arc::new(ApiRateLimiter::default()),
-        client_ip_resolver,
+        diagnostics_api_enabled: args.diagnostics_api_enabled,
         device_registry,
+        stats,
         private_transport_profile,
         private: private.clone(),
         store,
@@ -165,21 +176,14 @@ pub async fn build_app(
     Ok(AppRuntime { router, private })
 }
 
-fn auto_ingress_permits() -> usize {
-    let cpu = std::thread::available_parallelism()
-        .map(|v| v.get())
-        .unwrap_or(1);
-    cpu.saturating_mul(200)
-}
-
 async fn restore_device_registry(
     store: &Store,
     registry: &Arc<DeviceRegistry>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let routes = store.load_device_registry_routes_async().await?;
+    let routes = store.load_device_routes_async().await?;
 
     for route in routes {
-        let Some(record) = parse_route_record(&route) else {
+        let Some(record) = parse_device_route_record(&route) else {
             continue;
         };
         if registry
@@ -191,16 +195,16 @@ async fn restore_device_registry(
         if let Err(err) =
             backfill_private_binding_for_route(store, &route.device_key, &record).await
         {
-            eprintln!(
+            crate::util::diagnostics_log(format_args!(
                 "restore private binding failed device_key={} error={}",
                 route.device_key, err
-            );
+            ));
         }
     }
     Ok(())
 }
 
-fn parse_route_record(route: &DeviceRegistryRoute) -> Option<DeviceRouteRecord> {
+fn parse_device_route_record(route: &DeviceRouteRecordRow) -> Option<DeviceRouteRecord> {
     let channel_type = DeviceChannelType::parse(&route.channel_type)?;
     Some(DeviceRouteRecord {
         platform: route.platform.trim().to_ascii_lowercase(),

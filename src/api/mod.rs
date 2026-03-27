@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned, de::Error as _, de::Vi
 use thiserror::Error;
 
 use crate::{
-    storage::{Platform, StoreError},
+    storage::StoreError,
     util::{decode_crockford_base32_128, encode_crockford_base32_128},
 };
 
@@ -246,22 +246,6 @@ where
 
     deserializer.deserialize_any(LenientI64Visitor)
 }
-/// Parse and validate the platform field from a string.
-pub(crate) fn deserialize_platform<'de, D>(deserializer: D) -> Result<Platform, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let raw: Option<Cow<'de, str>> = Option::deserialize(deserializer)?;
-    let value = raw.unwrap_or_default();
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(D::Error::custom(
-            "platform must not be empty (expected one of: ios, ipados, macos, watchos, android, windows)",
-        ));
-    }
-    Platform::from_str(trimmed).map_err(D::Error::custom)
-}
-
 const MAX_CHANNEL_ALIAS_LEN: usize = 128;
 
 pub fn normalize_channel_alias(raw: &str) -> Result<String, Error> {

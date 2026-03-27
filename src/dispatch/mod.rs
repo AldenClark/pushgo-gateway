@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use flume::{Receiver, Sender, TrySendError};
+use hashbrown::HashMap;
 
 pub(crate) mod audit;
 
@@ -12,8 +13,8 @@ use crate::{
         ApnsClient, DispatchResult, FcmClient, WnsClient, apns::ApnsPayload, fcm::FcmPayload,
         wns::WnsPayload,
     },
-    storage::{Platform, Store},
-    util::encode_crockford_base32_128,
+    storage::{Platform, PrivateMessage, Store},
+    util::{build_wakeup_data, encode_crockford_base32_128},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub(crate) enum ProviderDeliveryPath {
 #[derive(Clone)]
 pub(crate) struct PrivateWakeupDelivery {
     pub device_id: [u8; 16],
+    pub platform: Platform,
+    pub provider_token: Arc<str>,
     pub delivery_id: Arc<str>,
     pub payload: Arc<Vec<u8>>,
     pub sent_at: i64,
@@ -42,7 +45,6 @@ pub(crate) struct ApnsJob {
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
     pub private_wakeup: Option<PrivateWakeupDelivery>,
-    pub private_wakeup_enqueued: bool,
     pub collapse_id: Option<Arc<str>>,
 }
 
@@ -58,7 +60,6 @@ pub(crate) struct FcmJob {
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
     pub private_wakeup: Option<PrivateWakeupDelivery>,
-    pub private_wakeup_enqueued: bool,
 }
 
 pub(crate) struct WnsJob {
@@ -71,7 +72,6 @@ pub(crate) struct WnsJob {
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
     pub private_wakeup: Option<PrivateWakeupDelivery>,
-    pub private_wakeup_enqueued: bool,
 }
 
 #[derive(Clone)]
@@ -203,12 +203,11 @@ fn spawn_apns_worker(
                             .expect("wakeup payload required for wakeup path"),
                     ),
                 };
-                let mut private_wakeup_enqueued = job.private_wakeup_enqueued;
                 if actual_path == ProviderDeliveryPath::WakeupPull
-                    && !private_wakeup_enqueued
                     && let Some(private_meta) = job.private_wakeup.as_ref()
                 {
-                    private_wakeup_enqueued = enqueue_private_wakeup_delivery(
+                    let _ = enqueue_private_wakeup_delivery(
+                        &store_api,
                         private_state.as_deref(),
                         private_meta,
                         "APNS",
@@ -232,10 +231,9 @@ fn spawn_apns_worker(
                     && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                 {
                     payload = Arc::clone(wakeup_payload);
-                    if !private_wakeup_enqueued
-                        && let Some(private_meta) = job.private_wakeup.as_ref()
-                    {
+                    if let Some(private_meta) = job.private_wakeup.as_ref() {
                         let _ = enqueue_private_wakeup_delivery(
+                            &store_api,
                             private_state.as_deref(),
                             private_meta,
                             "APNS",
@@ -335,12 +333,11 @@ fn spawn_fcm_worker(
                             .expect("wakeup body required for wakeup path"),
                     ),
                 };
-                let mut private_wakeup_enqueued = job.private_wakeup_enqueued;
                 if actual_path == ProviderDeliveryPath::WakeupPull
-                    && !private_wakeup_enqueued
                     && let Some(private_meta) = job.private_wakeup.as_ref()
                 {
-                    private_wakeup_enqueued = enqueue_private_wakeup_delivery(
+                    let _ = enqueue_private_wakeup_delivery(
+                        &store_api,
                         private_state.as_deref(),
                         private_meta,
                         "FCM",
@@ -368,10 +365,9 @@ fn spawn_fcm_worker(
                             .as_ref()
                             .expect("wakeup body required when wakeup payload exists"),
                     );
-                    if !private_wakeup_enqueued
-                        && let Some(private_meta) = job.private_wakeup.as_ref()
-                    {
+                    if let Some(private_meta) = job.private_wakeup.as_ref() {
                         let _ = enqueue_private_wakeup_delivery(
+                            &store_api,
                             private_state.as_deref(),
                             private_meta,
                             "FCM",
@@ -458,12 +454,11 @@ fn spawn_wns_worker(
                             .expect("wakeup payload required for wakeup path"),
                     ),
                 };
-                let mut private_wakeup_enqueued = job.private_wakeup_enqueued;
                 if actual_path == ProviderDeliveryPath::WakeupPull
-                    && !private_wakeup_enqueued
                     && let Some(private_meta) = job.private_wakeup.as_ref()
                 {
-                    private_wakeup_enqueued = enqueue_private_wakeup_delivery(
+                    let _ = enqueue_private_wakeup_delivery(
+                        &store_api,
                         private_state.as_deref(),
                         private_meta,
                         "WNS",
@@ -482,10 +477,9 @@ fn spawn_wns_worker(
                     && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                 {
                     payload = Arc::clone(wakeup_payload);
-                    if !private_wakeup_enqueued
-                        && let Some(private_meta) = job.private_wakeup.as_ref()
-                    {
+                    if let Some(private_meta) = job.private_wakeup.as_ref() {
                         let _ = enqueue_private_wakeup_delivery(
+                            &store_api,
                             private_state.as_deref(),
                             private_meta,
                             "WNS",
@@ -545,37 +539,45 @@ fn spawn_wns_worker(
 }
 
 async fn enqueue_private_wakeup_delivery(
+    store: &Store,
     private: Option<&PrivateState>,
     delivery: &PrivateWakeupDelivery,
     provider: &str,
     correlation_id: &str,
     channel_id: &str,
 ) -> bool {
-    let Some(private_state) = private else {
-        return false;
+    let message = PrivateMessage {
+        payload: delivery.payload.as_ref().clone(),
+        size: delivery.payload.len(),
+        sent_at: delivery.sent_at,
+        expires_at: delivery.expires_at,
     };
-    match private_state
-        .enqueue_private_delivery(
-            delivery.device_id,
+    match store
+        .enqueue_provider_pull_item_async(
             delivery.delivery_id.as_ref(),
-            delivery.payload.as_ref().clone(),
-            delivery.sent_at,
-            delivery.expires_at,
+            &message,
+            delivery.platform,
+            delivery.provider_token.as_ref(),
+            delivery
+                .sent_at
+                .saturating_add(provider_pull_retry_timeout_secs() as i64),
         )
         .await
     {
         Ok(()) => true,
         Err(err) => {
-            private_state.metrics.mark_enqueue_failure();
-            eprintln!(
-                "private wakeup enqueue failed provider={} correlation_id={} channel_id={} device_id={} delivery_id={} error={}",
+            if let Some(private_state) = private {
+                private_state.metrics.mark_enqueue_failure();
+            }
+            crate::util::diagnostics_log(format_args!(
+                "provider wakeup pull cache enqueue failed provider={} correlation_id={} channel_id={} device_id={} delivery_id={} error={}",
                 provider,
                 correlation_id,
                 channel_id,
                 encode_crockford_base32_128(&delivery.device_id),
                 delivery.delivery_id,
                 err,
-            );
+            ));
             false
         }
     }
@@ -596,7 +598,7 @@ async fn cleanup_private_outbox_on_invalid_token(
     {
         Ok(value) => value,
         Err(err) => {
-            eprintln!(
+            crate::util::diagnostics_log(format_args!(
                 "invalid token cleanup lookup failed provider={} correlation_id={} channel_id={} platform={} device_token={} error={}",
                 provider,
                 correlation_id,
@@ -604,7 +606,7 @@ async fn cleanup_private_outbox_on_invalid_token(
                 platform_label(platform),
                 redact_device_token(device_token),
                 err,
-            );
+            ));
             return;
         }
     };
@@ -622,7 +624,7 @@ async fn cleanup_private_outbox_on_invalid_token(
     match cleared_result {
         Ok(_cleared) => {}
         Err(err) => {
-            eprintln!(
+            crate::util::diagnostics_log(format_args!(
                 "invalid token cleanup outbox clear failed provider={} correlation_id={} channel_id={} platform={} device_id={} error={}",
                 provider,
                 correlation_id,
@@ -630,7 +632,7 @@ async fn cleanup_private_outbox_on_invalid_token(
                 platform_label(platform),
                 encode_crockford_base32_128(&device_id),
                 err,
-            );
+            ));
         }
     }
 }
@@ -649,7 +651,7 @@ fn log_provider_dispatch_failure(
         .as_ref()
         .map(ToString::to_string)
         .unwrap_or_else(|| "unknown".to_string());
-    eprintln!(
+    crate::util::diagnostics_log(format_args!(
         "provider dispatch failed provider={} correlation_id={} channel_id={} path={} platform={} device_token={} status_code={} invalid_token={} payload_too_large={} error={}",
         provider,
         correlation_id,
@@ -661,7 +663,7 @@ fn log_provider_dispatch_failure(
         dispatch.invalid_token,
         dispatch.payload_too_large,
         error,
-    );
+    ));
 }
 
 fn record_provider_dispatch_result(
@@ -692,10 +694,122 @@ fn record_provider_dispatch_result(
     });
 }
 
+pub(crate) fn spawn_provider_pull_retry_worker(
+    store: Store,
+    apns: Arc<dyn ApnsClient>,
+    fcm: Arc<dyn FcmClient>,
+    wns: Arc<dyn WnsClient>,
+    audit: Arc<DispatchAuditLog>,
+) {
+    tokio::spawn(async move {
+        loop {
+            let now = chrono::Utc::now().timestamp();
+            let due_entries = match store
+                .list_provider_pull_retry_due_async(now, provider_pull_retry_batch_size())
+                .await
+            {
+                Ok(entries) => entries,
+                Err(err) => {
+                    crate::util::diagnostics_log(format_args!(
+                        "provider pull retry load due failed error={}",
+                        err
+                    ));
+                    tokio::time::sleep(Duration::from_millis(provider_pull_retry_poll_ms())).await;
+                    continue;
+                }
+            };
+
+            for entry in due_entries {
+                let dispatch = send_provider_retry_wakeup(
+                    &entry,
+                    Arc::clone(&apns),
+                    Arc::clone(&fcm),
+                    Arc::clone(&wns),
+                )
+                .await;
+                audit.record(DispatchAuditRecord {
+                    stage: "provider_pull_retry_send_result",
+                    correlation_id: "provider_pull_retry",
+                    delivery_id: Some(entry.delivery_id.as_str()),
+                    channel_id: None,
+                    provider: Some(provider_name_for_platform(entry.platform)),
+                    platform: Some(entry.platform),
+                    path: Some("wakeup_pull"),
+                    device_token: Some(entry.provider_token.as_str()),
+                    success: Some(dispatch.success),
+                    status_code: Some(dispatch.status_code),
+                    invalid_token: Some(dispatch.invalid_token),
+                    payload_too_large: Some(dispatch.payload_too_large),
+                    detail: dispatch.error.as_ref().map(|err| err.to_string().into()),
+                });
+
+                if dispatch.invalid_token || entry.expires_at <= now {
+                    let _ = store
+                        .clear_provider_pull_retry_async(entry.delivery_id.as_str())
+                        .await;
+                    continue;
+                }
+
+                let next_retry_at = now.saturating_add(provider_pull_retry_timeout_secs() as i64);
+                let _ = store
+                    .bump_provider_pull_retry_async(entry.delivery_id.as_str(), next_retry_at, now)
+                    .await;
+            }
+
+            tokio::time::sleep(Duration::from_millis(provider_pull_retry_poll_ms())).await;
+        }
+    });
+}
+
+async fn send_provider_retry_wakeup(
+    entry: &crate::storage::ProviderPullRetryEntry,
+    apns: Arc<dyn ApnsClient>,
+    fcm: Arc<dyn FcmClient>,
+    wns: Arc<dyn WnsClient>,
+) -> DispatchResult {
+    let data = provider_retry_wakeup_data(entry.delivery_id.as_str());
+    match entry.platform {
+        Platform::IOS | Platform::MACOS | Platform::WATCHOS => {
+            let payload = Arc::new(ApnsPayload::wakeup(
+                None,
+                None,
+                Some(entry.expires_at),
+                data,
+            ));
+            apns.send_to_device(entry.provider_token.as_str(), entry.platform, payload, None)
+                .await
+        }
+        Platform::ANDROID => {
+            let payload = Arc::new(FcmPayload::new(data, "HIGH", None));
+            fcm.send_to_device(entry.provider_token.as_str(), payload, None)
+                .await
+        }
+        Platform::WINDOWS => {
+            let payload = Arc::new(WnsPayload::new(data, "high", None));
+            wns.send_to_device(entry.provider_token.as_str(), payload)
+                .await
+        }
+    }
+}
+
+fn provider_retry_wakeup_data(delivery_id: &str) -> HashMap<String, String> {
+    let mut base = HashMap::new();
+    base.insert("delivery_id".to_string(), delivery_id.to_string());
+    build_wakeup_data(&base)
+}
+
 fn delivery_path_label(path: ProviderDeliveryPath) -> &'static str {
     match path {
         ProviderDeliveryPath::Direct => "direct",
         ProviderDeliveryPath::WakeupPull => "wakeup_pull",
+    }
+}
+
+fn provider_name_for_platform(platform: Platform) -> &'static str {
+    match platform {
+        Platform::IOS | Platform::MACOS | Platform::WATCHOS => "APNS",
+        Platform::ANDROID => "FCM",
+        Platform::WINDOWS => "WNS",
     }
 }
 
@@ -715,12 +829,64 @@ fn redact_device_token(token: &str) -> String {
 }
 
 fn auto_dispatch_worker_count() -> usize {
+    if let Some(configured) = std::env::var("PUSHGO_DISPATCH_WORKER_COUNT")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return configured.clamp(2, 256);
+    }
     let cpu = std::thread::available_parallelism()
         .map(|value| value.get())
         .unwrap_or(4);
-    (cpu * 8).clamp(8, 256)
+    (cpu * 2).clamp(4, 64)
 }
 
 fn auto_dispatch_queue_capacity() -> usize {
-    (auto_dispatch_worker_count() * 64).clamp(2048, 65_536)
+    if let Some(configured) = std::env::var("PUSHGO_DISPATCH_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return configured.clamp(256, 131_072);
+    }
+    (auto_dispatch_worker_count() * 64).clamp(1024, 32_768)
+}
+
+fn provider_pull_retry_poll_ms() -> u64 {
+    std::env::var("PUSHGO_PROVIDER_PULL_RETRY_POLL_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|value| value.clamp(200, 5_000))
+        .unwrap_or(1_000)
+}
+
+fn provider_pull_retry_batch_size() -> usize {
+    std::env::var("PUSHGO_PROVIDER_PULL_RETRY_BATCH")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .map(|value| value.clamp(1, 2_000))
+        .unwrap_or(200)
+}
+
+fn provider_pull_retry_timeout_secs() -> u64 {
+    std::env::var("PUSHGO_PROVIDER_PULL_RETRY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|value| value.clamp(5, 600))
+        .unwrap_or(30)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_retry_wakeup_data;
+
+    #[test]
+    fn provider_retry_wakeup_data_contains_wakeup_markers() {
+        let data = provider_retry_wakeup_data("delivery-001");
+        assert_eq!(
+            data.get("delivery_id").map(String::as_str),
+            Some("delivery-001")
+        );
+        assert_eq!(data.get("private_mode").map(String::as_str), Some("wakeup"));
+        assert_eq!(data.get("private_wakeup").map(String::as_str), Some("1"));
+    }
 }

@@ -61,6 +61,38 @@ struct PrivateTransportHints {
 struct PrivateProfileResponse {
     private_enabled: bool,
     transport: PrivateTransportHints,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recommended_transport: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport_penalty_window_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggested_connect_budget_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggested_backoff_cap_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_generated_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_ttl_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct GatewayProfileResponse {
+    private_channel_enabled: bool,
+    private_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport: Option<PrivateTransportHints>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recommended_transport: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport_penalty_window_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggested_connect_budget_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggested_backoff_cap_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_generated_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_ttl_ms: Option<u64>,
 }
 
 pub(crate) async fn private_metrics(State(state): State<AppState>) -> HttpResult {
@@ -91,18 +123,51 @@ pub(crate) async fn private_health(State(state): State<AppState>) -> HttpResult 
     Ok(crate::api::ok(snapshot))
 }
 
-pub(crate) async fn private_profile(State(state): State<AppState>) -> HttpResult {
+pub(crate) async fn gateway_profile(State(state): State<AppState>) -> HttpResult {
     if !state.private_channel_enabled {
-        return Ok(crate::api::err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel is disabled",
-        ));
+        return Ok(crate::api::ok(GatewayProfileResponse {
+            private_channel_enabled: false,
+            private_enabled: false,
+            transport: None,
+            recommended_transport: None,
+            transport_penalty_window_ms: None,
+            suggested_connect_budget_ms: None,
+            suggested_backoff_cap_ms: None,
+            profile_generated_at_ms: None,
+            profile_ttl_ms: None,
+        }));
     }
+    let private_profile = private_profile_payload(&state);
+    Ok(crate::api::ok(GatewayProfileResponse {
+        private_channel_enabled: true,
+        private_enabled: true,
+        transport: Some(private_profile.transport),
+        recommended_transport: private_profile.recommended_transport,
+        transport_penalty_window_ms: private_profile.transport_penalty_window_ms,
+        suggested_connect_budget_ms: private_profile.suggested_connect_budget_ms,
+        suggested_backoff_cap_ms: private_profile.suggested_backoff_cap_ms,
+        profile_generated_at_ms: private_profile.profile_generated_at_ms,
+        profile_ttl_ms: private_profile.profile_ttl_ms,
+    }))
+}
 
-    Ok(crate::api::ok(PrivateProfileResponse {
+fn private_profile_payload(state: &AppState) -> PrivateProfileResponse {
+    let metrics = state
+        .private
+        .as_ref()
+        .map(|private| private.metrics.snapshot())
+        .unwrap_or_else(|| crate::private::metrics::PrivateMetrics::default().snapshot());
+    let v2_hints = derive_transport_v2_hints(&state.private_transport_profile, &metrics);
+    PrivateProfileResponse {
         private_enabled: true,
         transport: transport_hints(&state.private_transport_profile),
-    }))
+        recommended_transport: v2_hints.recommended_transport,
+        transport_penalty_window_ms: v2_hints.transport_penalty_window_ms,
+        suggested_connect_budget_ms: v2_hints.suggested_connect_budget_ms,
+        suggested_backoff_cap_ms: v2_hints.suggested_backoff_cap_ms,
+        profile_generated_at_ms: v2_hints.profile_generated_at_ms,
+        profile_ttl_ms: v2_hints.profile_ttl_ms,
+    }
 }
 
 pub(crate) async fn private_network_diagnostics(
@@ -117,17 +182,14 @@ pub(crate) async fn private_network_diagnostics(
         ));
     }
 
-    let observed_client_ip = state.client_ip_resolver.resolve(&headers, Some(peer.ip()));
+    let observed_client_ip = Some(peer.ip().to_string());
     let peer_ip = peer.ip().to_string();
     let resolved_ip_source = resolve_ip_source(&headers);
     let observed_ip_scope = observed_client_ip
         .as_deref()
         .map(classify_ip_scope)
         .unwrap_or("unknown");
-    let proxy_detected = has_proxy_headers(&headers)
-        || observed_client_ip
-            .as_deref()
-            .is_some_and(|value| value != peer_ip.as_str());
+    let proxy_detected = has_proxy_headers(&headers);
 
     Ok(crate::api::ok(PrivateNetworkDiagnosticsResponse {
         private_enabled: true,
@@ -149,7 +211,6 @@ pub(crate) async fn private_network_diagnostics(
 
 pub(crate) async fn private_ws(
     ws: WebSocketUpgrade,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
@@ -171,15 +232,6 @@ pub(crate) async fn private_ws(
             "private channel runtime is unavailable",
         );
     };
-    if state.ip_rate_limit_enabled {
-        let client_ip = state.client_ip_resolver.resolve(&headers, Some(peer.ip()));
-        if !private_state.rate_limiter.allow_ws_ip(client_ip.as_deref()) {
-            return crate::api::err(
-                StatusCode::TOO_MANY_REQUESTS,
-                "private websocket handshake rate limited",
-            );
-        }
-    }
     let private_state = Arc::clone(private_state);
     ws.protocols([PRIVATE_WS_SUBPROTOCOL])
         .on_upgrade(move |socket| async move {
@@ -199,6 +251,101 @@ fn transport_hints(profile: &PrivateTransportProfile) -> PrivateTransportHints {
         wss_path: profile.wss_path.to_string(),
         ws_subprotocol: profile.ws_subprotocol.to_string(),
     }
+}
+
+#[derive(Default)]
+struct PrivateTransportV2Hints {
+    recommended_transport: Option<String>,
+    transport_penalty_window_ms: Option<u64>,
+    suggested_connect_budget_ms: Option<u64>,
+    suggested_backoff_cap_ms: Option<u64>,
+    profile_generated_at_ms: Option<i64>,
+    profile_ttl_ms: Option<u64>,
+}
+
+fn derive_transport_v2_hints(
+    profile: &PrivateTransportProfile,
+    metrics: &crate::private::metrics::PrivateMetricsSnapshot,
+) -> PrivateTransportV2Hints {
+    let quic_attempts = metrics.quic_connect_attempts;
+    let tcp_attempts = metrics.tcp_connect_attempts;
+    let wss_attempts = metrics.wss_connect_attempts;
+    let quic_score = transport_success_score(
+        profile.quic_enabled,
+        quic_attempts,
+        metrics.quic_connect_success,
+        metrics.quic_connect_failures,
+    );
+    let tcp_score = transport_success_score(
+        profile.tcp_enabled,
+        tcp_attempts,
+        metrics.tcp_connect_success,
+        metrics.tcp_connect_failures,
+    );
+    let wss_score = transport_success_score(
+        profile.wss_enabled,
+        wss_attempts,
+        metrics.wss_connect_success,
+        metrics.wss_connect_failures,
+    );
+    let recommended_transport = [("quic", quic_score), ("tcp", tcp_score), ("wss", wss_score)]
+        .into_iter()
+        .filter(|(_, score)| *score >= 0.0)
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(name, _)| name.to_string());
+
+    let connect_failures =
+        metrics.quic_connect_failures + metrics.tcp_connect_failures + metrics.wss_connect_failures;
+    let connect_success =
+        metrics.quic_connect_success + metrics.tcp_connect_success + metrics.wss_connect_success;
+    let total_connect = connect_success + connect_failures;
+    let failure_ratio = if total_connect == 0 {
+        0.0
+    } else {
+        connect_failures as f64 / total_connect as f64
+    };
+    let ack_total = metrics.frames_ack_ok + metrics.frames_ack_non_ok;
+    let ack_non_ok_ratio = if ack_total == 0 {
+        0.0
+    } else {
+        metrics.frames_ack_non_ok as f64 / ack_total as f64
+    };
+
+    let suggested_connect_budget_ms = if failure_ratio >= 0.45 || ack_non_ok_ratio >= 0.20 {
+        Some(3_500)
+    } else if failure_ratio >= 0.20 || ack_non_ok_ratio >= 0.10 {
+        Some(2_400)
+    } else {
+        Some(1_800)
+    };
+    let suggested_backoff_cap_ms = if failure_ratio >= 0.45 {
+        Some(120_000)
+    } else if failure_ratio >= 0.20 {
+        Some(90_000)
+    } else {
+        Some(60_000)
+    };
+    let generated_ms = chrono::Utc::now().timestamp_millis();
+    PrivateTransportV2Hints {
+        recommended_transport,
+        transport_penalty_window_ms: Some(120_000),
+        suggested_connect_budget_ms,
+        suggested_backoff_cap_ms,
+        profile_generated_at_ms: Some(generated_ms),
+        profile_ttl_ms: Some(120_000),
+    }
+}
+
+fn transport_success_score(enabled: bool, attempts: u64, success: u64, failures: u64) -> f64 {
+    if !enabled {
+        return -1.0;
+    }
+    if attempts == 0 {
+        return 0.5;
+    }
+    let success_ratio = success as f64 / attempts as f64;
+    let failure_penalty = (failures as f64 / attempts as f64) * 0.7;
+    (success_ratio - failure_penalty).clamp(-1.0, 1.0)
 }
 
 fn client_offers_ws_subprotocol(headers: &HeaderMap, expected: &str) -> bool {
@@ -301,4 +448,101 @@ fn nat_hint_for_scope(scope: &str) -> &'static str {
 fn is_cgnat_ipv4(ip: std::net::Ipv4Addr) -> bool {
     let octets = ip.octets();
     octets[0] == 100 && (64..=127).contains(&octets[1])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn sample_metrics() -> crate::private::metrics::PrivateMetricsSnapshot {
+        crate::private::metrics::PrivateMetrics::default().snapshot()
+    }
+
+    #[test]
+    fn transport_success_score_handles_disabled_and_cold_start() {
+        assert_eq!(transport_success_score(false, 0, 0, 0), -1.0);
+        assert_eq!(transport_success_score(true, 0, 0, 0), 0.5);
+    }
+
+    #[test]
+    fn derive_transport_v2_hints_prefers_healthier_enabled_transport() {
+        let profile = PrivateTransportProfile {
+            quic_enabled: true,
+            quic_port: Some(8443),
+            tcp_enabled: true,
+            tcp_port: 9443,
+            wss_enabled: true,
+            wss_port: 10443,
+            wss_path: Arc::from("/private/ws"),
+            ws_subprotocol: Arc::from(PRIVATE_WS_SUBPROTOCOL),
+        };
+        let mut metrics = sample_metrics();
+        metrics.quic_connect_attempts = 20;
+        metrics.quic_connect_success = 16;
+        metrics.quic_connect_failures = 4;
+        metrics.tcp_connect_attempts = 20;
+        metrics.tcp_connect_success = 8;
+        metrics.tcp_connect_failures = 12;
+        metrics.wss_connect_attempts = 20;
+        metrics.wss_connect_success = 10;
+        metrics.wss_connect_failures = 10;
+
+        let hints = derive_transport_v2_hints(&profile, &metrics);
+        assert_eq!(hints.recommended_transport.as_deref(), Some("quic"));
+        assert_eq!(hints.profile_ttl_ms, Some(120_000));
+        assert!(hints.profile_generated_at_ms.is_some());
+    }
+
+    #[test]
+    fn derive_transport_v2_hints_raises_backoff_cap_under_failures() {
+        let profile = PrivateTransportProfile {
+            quic_enabled: true,
+            quic_port: Some(8443),
+            tcp_enabled: true,
+            tcp_port: 9443,
+            wss_enabled: true,
+            wss_port: 10443,
+            wss_path: Arc::from("/private/ws"),
+            ws_subprotocol: Arc::from(PRIVATE_WS_SUBPROTOCOL),
+        };
+        let mut metrics = sample_metrics();
+        metrics.quic_connect_attempts = 10;
+        metrics.quic_connect_success = 2;
+        metrics.quic_connect_failures = 8;
+        metrics.tcp_connect_attempts = 10;
+        metrics.tcp_connect_success = 2;
+        metrics.tcp_connect_failures = 8;
+        metrics.wss_connect_attempts = 10;
+        metrics.wss_connect_success = 2;
+        metrics.wss_connect_failures = 8;
+        metrics.frames_ack_ok = 20;
+        metrics.frames_ack_non_ok = 1;
+
+        let hints = derive_transport_v2_hints(&profile, &metrics);
+        assert_eq!(hints.suggested_backoff_cap_ms, Some(120_000));
+        assert_eq!(hints.suggested_connect_budget_ms, Some(3_500));
+        assert_eq!(hints.transport_penalty_window_ms, Some(120_000));
+    }
+
+    #[test]
+    fn derive_transport_v2_hints_uses_ack_signal_when_connect_sample_low() {
+        let profile = PrivateTransportProfile {
+            quic_enabled: true,
+            quic_port: Some(8443),
+            tcp_enabled: true,
+            tcp_port: 9443,
+            wss_enabled: true,
+            wss_port: 10443,
+            wss_path: Arc::from("/private/ws"),
+            ws_subprotocol: Arc::from(PRIVATE_WS_SUBPROTOCOL),
+        };
+        let mut metrics = sample_metrics();
+        metrics.frames_ack_ok = 60;
+        metrics.frames_ack_non_ok = 20;
+
+        let hints = derive_transport_v2_hints(&profile, &metrics);
+        assert_eq!(hints.suggested_connect_budget_ms, Some(3_500));
+        assert_eq!(hints.suggested_backoff_cap_ms, Some(60_000));
+    }
 }

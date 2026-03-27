@@ -68,18 +68,23 @@ pub(crate) struct DispatchAuditRecord<'a> {
 #[derive(Clone)]
 pub(crate) struct DispatchAuditLog {
     capacity: usize,
+    enabled: bool,
     entries: Arc<Mutex<VecDeque<DispatchAuditEntry>>>,
 }
 
 impl DispatchAuditLog {
-    pub(crate) fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize, enabled: bool) -> Self {
         Self {
             capacity: capacity.max(1),
+            enabled,
             entries: Arc::new(Mutex::new(VecDeque::with_capacity(capacity.max(1)))),
         }
     }
 
     pub(crate) fn record<'a>(&self, record: DispatchAuditRecord<'a>) {
+        if !self.enabled {
+            return;
+        }
         let mut entries = self.entries.lock().expect("dispatch audit lock poisoned");
         if entries.len() >= self.capacity {
             entries.pop_front();
@@ -106,6 +111,9 @@ impl DispatchAuditLog {
         &self,
         filter: DispatchAuditFilter<'a>,
     ) -> Vec<DispatchAuditEntry> {
+        if !self.enabled {
+            return Vec::new();
+        }
         let limit = filter.limit.clamp(1, MAX_DISPATCH_AUDIT_QUERY_LIMIT);
         let entries = self.entries.lock().expect("dispatch audit lock poisoned");
         let mut out = Vec::with_capacity(limit);
@@ -163,7 +171,7 @@ mod tests {
 
     #[test]
     fn ring_buffer_keeps_latest_entries() {
-        let log = DispatchAuditLog::new(2);
+        let log = DispatchAuditLog::new(2, true);
         log.record(DispatchAuditRecord {
             stage: "a",
             correlation_id: "c1",
@@ -223,7 +231,7 @@ mod tests {
 
     #[test]
     fn filter_by_delivery_id() {
-        let log = DispatchAuditLog::new(8);
+        let log = DispatchAuditLog::new(8, true);
         for index in 0..3 {
             log.record(DispatchAuditRecord {
                 stage: "enqueue",

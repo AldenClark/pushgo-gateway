@@ -15,15 +15,6 @@ pub struct Args {
     #[arg(env = "PUSHGO_TOKEN", long = "token")]
     pub token: Option<String>,
 
-    /// Enable IP-based rate limiting. When enabled, gateway resolves client IP by
-    /// X-Forwarded-For -> X-Real-IP -> Forwarded (assuming trusted proxy overwrites).
-    #[arg(
-        env = "PUSHGO_ENABLE_IP_RATE_LIMIT",
-        long = "enable-ip-rate-limit",
-        default_value = "false"
-    )]
-    pub enable_ip_rate_limit: bool,
-
     /// Run gateway in sandbox mode (APNs sandbox endpoint + verbose logging).
     #[arg(
         env = "PUSHGO_SANDBOX_MODE",
@@ -47,6 +38,14 @@ pub struct Args {
         default_value = "false"
     )]
     pub private_channel_enabled: bool,
+
+    /// Enable diagnostics API namespace (`/diagnostics/*`).
+    #[arg(
+        env = "PUSHGO_DIAGNOSTICS_API_ENABLED",
+        long = "diagnostics-api-enabled",
+        default_value = "false"
+    )]
+    pub diagnostics_api_enabled: bool,
 
     /// Database URL. Supported schemes: sqlite://, postgres://, postgresql://, pg://, mysql://.
     /// This value is required.
@@ -100,6 +99,14 @@ pub struct Args {
         default_value = "false"
     )]
     pub private_tcp_tls_offload: bool,
+
+    /// If true, expects HAProxy PROXY protocol v1 on private TCP inbound.
+    #[arg(
+        env = "PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL",
+        long = "private-tcp-proxy-protocol",
+        default_value = "false"
+    )]
+    pub private_tcp_proxy_protocol: bool,
 
     /// Private session TTL in seconds.
     #[arg(

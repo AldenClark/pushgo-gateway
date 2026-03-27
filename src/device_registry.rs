@@ -292,7 +292,7 @@ fn normalized_provider_token(provider_token: Option<String>) -> Option<String> {
 fn default_route_for_platform(platform: &str, updated_at: i64) -> DeviceRouteRecord {
     DeviceRouteRecord {
         platform: platform.trim().to_ascii_lowercase(),
-        channel_type: default_channel_for_platform(platform),
+        channel_type: DeviceChannelType::Private,
         provider_token: None,
         updated_at,
     }
@@ -300,17 +300,6 @@ fn default_route_for_platform(platform: &str, updated_at: i64) -> DeviceRouteRec
 
 fn generate_device_key() -> String {
     generate_hex_id_128()
-}
-
-fn default_channel_for_platform(platform: &str) -> DeviceChannelType {
-    let trimmed = platform.trim();
-    if trimmed.eq_ignore_ascii_case("android") {
-        DeviceChannelType::Fcm
-    } else if trimmed.eq_ignore_ascii_case("windows") || trimmed.eq_ignore_ascii_case("win") {
-        DeviceChannelType::Wns
-    } else {
-        DeviceChannelType::Apns
-    }
 }
 
 #[derive(Debug, Clone, Eq)]
@@ -354,6 +343,24 @@ impl Hash for ProviderTokenKey {
 #[cfg(test)]
 mod tests {
     use super::{DeviceChannelType, DeviceRegistry};
+
+    #[test]
+    fn register_device_defaults_to_private_route() {
+        let registry = DeviceRegistry::new();
+        for platform in ["ios", "macos", "android", "windows"] {
+            let device_key = registry
+                .register_device(platform, None)
+                .expect("register device should succeed");
+            let route = registry
+                .get(device_key.as_str())
+                .expect("registered route should exist");
+            assert_eq!(route.channel_type, DeviceChannelType::Private);
+            assert!(
+                route.provider_token.is_none(),
+                "newly issued route should not carry provider token"
+            );
+        }
+    }
 
     #[test]
     fn clear_channel_rejects_mismatch_and_preserves_provider_index() {

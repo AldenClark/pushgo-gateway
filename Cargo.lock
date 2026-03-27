@@ -426,9 +426,9 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cmake"
-version = "0.1.57"
+version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75443c44cd6b379beb8c5b45d85d0773baf31cce901fe7bb252f4eff3008ef7d"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
 dependencies = [
  "cc",
 ]
@@ -1413,9 +1413,9 @@ checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
 name = "iri-string"
-version = "0.7.10"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c91338f0783edbd6195decb37bae672fd3b165faffb89bf7b9e6942f8b1a731a"
+checksum = "d8e7418f59cc01c88316161279a7f665217ae316b388e58a0d10e29f54f1e5eb"
 dependencies = [
  "memchr",
  "serde",
@@ -1442,7 +1442,7 @@ dependencies = [
  "cesu8",
  "cfg-if",
  "combine",
- "jni-sys",
+ "jni-sys 0.3.1",
  "log",
  "thiserror 1.0.69",
  "walkdir",
@@ -1451,9 +1451,31 @@ dependencies = [
 
 [[package]]
 name = "jni-sys"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eaf4bc02d17cbdd7ff4c7438cafcdf7fb9a4613313ad11b4f8fefe7d3fa0130"
+checksum = "41a652e1f9b6e0275df1f15b32661cf0d4b78d4d87ddec5e0c3c20f097433258"
+dependencies = [
+ "jni-sys 0.4.1",
+]
+
+[[package]]
+name = "jni-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6377a88cb3910bee9b0fa88d4f42e1d2da8e79915598f65fb0c7ee14c878af2"
+dependencies = [
+ "jni-sys-macros",
+]
+
+[[package]]
+name = "jni-sys-macros"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264"
+dependencies = [
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "jobserver"
@@ -1527,9 +1549,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1744e39d1d6a9948f4f388969627434e31128196de472883b39f148769bfe30a"
+checksum = "7ddbf48fd451246b1f8c2610bd3b4ac0cc6e149d89832867093ab69a17194f08"
 dependencies = [
  "bitflags",
  "libc",
@@ -1667,9 +1689,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
+checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
 
 [[package]]
 name = "num-integer"
@@ -1920,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "pushgo-gateway"
-version = "1.0.29"
+version = "1.1.32"
 dependencies = [
  "arc-swap",
  "argon2",
@@ -1940,6 +1962,7 @@ dependencies = [
  "pushgo-warp-profile",
  "rand 0.10.0",
  "reqwest",
+ "rustls",
  "scc",
  "serde",
  "serde_json",
@@ -1947,6 +1970,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "tower",
  "warp-link",
  "warp-link-coordination",
@@ -1955,7 +1979,7 @@ dependencies = [
 [[package]]
 name = "pushgo-warp-profile"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=4c11f58cd211a4baffa729996e19e40b71188221#4c11f58cd211a4baffa729996e19e40b71188221"
+source = "git+https://github.com/AldenClark/warp-link?rev=830721e14d59e645a64808af2ec1b0f74d23e4cc#830721e14d59e645a64808af2ec1b0f74d23e4cc"
 dependencies = [
  "bytes",
  "postcard",
@@ -2351,9 +2375,9 @@ dependencies = [
 
 [[package]]
 name = "scc"
-version = "3.6.11"
+version = "3.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6e0fa9801e22430b9ddd8f10b981e42fed14367508a07b5cb713cab979b1d51"
+checksum = "f448f7d881535036452f0cac656a41463807f095eda504890764ca7d11e2a2ea"
 dependencies = [
  "saa",
  "sdd",
@@ -2539,9 +2563,9 @@ dependencies = [
 
 [[package]]
 name = "simd-adler32"
-version = "0.3.8"
+version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
+checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
 name = "simple_asn1"
@@ -3280,7 +3304,7 @@ dependencies = [
 [[package]]
 name = "warp-link"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=4c11f58cd211a4baffa729996e19e40b71188221#4c11f58cd211a4baffa729996e19e40b71188221"
+source = "git+https://github.com/AldenClark/warp-link?rev=830721e14d59e645a64808af2ec1b0f74d23e4cc#830721e14d59e645a64808af2ec1b0f74d23e4cc"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3298,7 +3322,7 @@ dependencies = [
 [[package]]
 name = "warp-link-coordination"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=4c11f58cd211a4baffa729996e19e40b71188221#4c11f58cd211a4baffa729996e19e40b71188221"
+source = "git+https://github.com/AldenClark/warp-link?rev=830721e14d59e645a64808af2ec1b0f74d23e4cc#830721e14d59e645a64808af2ec1b0f74d23e4cc"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -3308,7 +3332,7 @@ dependencies = [
 [[package]]
 name = "warp-link-core"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=4c11f58cd211a4baffa729996e19e40b71188221#4c11f58cd211a4baffa729996e19e40b71188221"
+source = "git+https://github.com/AldenClark/warp-link?rev=830721e14d59e645a64808af2ec1b0f74d23e4cc#830721e14d59e645a64808af2ec1b0f74d23e4cc"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3318,7 +3342,7 @@ dependencies = [
 [[package]]
 name = "warp-link-transport"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=4c11f58cd211a4baffa729996e19e40b71188221#4c11f58cd211a4baffa729996e19e40b71188221"
+source = "git+https://github.com/AldenClark/warp-link?rev=830721e14d59e645a64808af2ec1b0f74d23e4cc#830721e14d59e645a64808af2ec1b0f74d23e4cc"
 dependencies = [
  "bytes",
  "futures-util",

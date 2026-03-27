@@ -26,7 +26,6 @@ use crate::{
             PERF_TIER_HIGH, PERF_TIER_LOW,
         },
     },
-    rate_limit::parse_peer_remote_ip,
     storage::DeviceId,
     util::constant_time_eq,
 };
@@ -183,8 +182,6 @@ impl PushgoServerApp {
 struct SessionRuntime {
     device_id: DeviceId,
     conn_id: u64,
-    client_ip: Option<String>,
-    ip_slot_acquired: bool,
     terminate_requested: AtomicBool,
     control: Mutex<Option<SessionControl>>,
     receiver: Receiver<DeliverEnvelope>,
@@ -363,45 +360,7 @@ impl ServerApp for PushgoServerApp {
                         "device not on private channel".to_string(),
                     ));
                 }
-                if !self.state.rate_limiter.allow_connect_device(device_key) {
-                    self.state.metrics.mark_auth_failure();
-                    self.mark_connect_failure(peer.transport);
-                    return Err(AuthError::Unauthorized("connect rate limited".to_string()));
-                }
-                let client_ip = parse_peer_remote_ip(peer.remote_addr.as_deref());
-                let mut ip_slot_acquired = false;
-                if self.state.config.enable_ip_rate_limit {
-                    if !self
-                        .state
-                        .rate_limiter
-                        .allow_connect_ip(client_ip.as_deref())
-                    {
-                        self.state.metrics.mark_auth_failure();
-                        self.mark_connect_failure(peer.transport);
-                        return Err(AuthError::Unauthorized(
-                            "connect ip rate limited".to_string(),
-                        ));
-                    }
-                    if !self
-                        .state
-                        .rate_limiter
-                        .try_acquire_connect_ip_slot(client_ip.as_deref())
-                    {
-                        self.state.metrics.mark_auth_failure();
-                        self.mark_connect_failure(peer.transport);
-                        return Err(AuthError::Unauthorized(
-                            "connect ip concurrency limited".to_string(),
-                        ));
-                    }
-                    ip_slot_acquired = true;
-                }
-
                 if let Err(err) = self.verify_gateway_token(hello.auth_token.as_deref()) {
-                    if ip_slot_acquired {
-                        self.state
-                            .rate_limiter
-                            .release_connect_ip_slot(client_ip.as_deref());
-                    }
                     self.mark_connect_failure(peer.transport);
                     return Err(err);
                 }
@@ -409,23 +368,11 @@ impl ServerApp for PushgoServerApp {
                 let (negotiated_wire_version, negotiated_payload_version) =
                     match negotiate_hello_versions(&hello) {
                         Ok(value) => value,
-                        Err(err) => {
-                            if ip_slot_acquired {
-                                self.state
-                                    .rate_limiter
-                                    .release_connect_ip_slot(client_ip.as_deref());
-                            }
-                            return Err(AuthError::Unauthorized(err.to_string()));
-                        }
+                        Err(err) => return Err(AuthError::Unauthorized(err.to_string())),
                     };
 
                 let device_id = DeviceRegistry::derive_private_device_id(device_key);
                 if self.state.is_device_revoked(device_id) {
-                    if ip_slot_acquired {
-                        self.state
-                            .rate_limiter
-                            .release_connect_ip_slot(client_ip.as_deref());
-                    }
                     self.state.metrics.mark_auth_failure();
                     self.mark_connect_failure(peer.transport);
                     return Err(AuthError::Unauthorized("device revoked".to_string()));
@@ -440,14 +387,7 @@ impl ServerApp for PushgoServerApp {
                     .await
                 {
                     Ok(value) => value,
-                    Err(err) => {
-                        if ip_slot_acquired {
-                            self.state
-                                .rate_limiter
-                                .release_connect_ip_slot(client_ip.as_deref());
-                        }
-                        return Err(AuthError::Internal(err.to_string()));
-                    }
+                    Err(err) => return Err(AuthError::Internal(err.to_string())),
                 };
                 let tuning = resolve_tuning(hello.perf_tier.as_deref(), hello.app_state.as_deref());
                 let conn_id = rand::random::<u64>();
@@ -457,6 +397,7 @@ impl ServerApp for PushgoServerApp {
                     self.state
                         .hub
                         .register_connection(device_id, conn_id, peer.transport, tx);
+                self.state.request_fallback_resync();
                 let logical_partition = logical_partition_for_device(device_id);
 
                 if !prepared.bootstrap.pending.is_empty() {
@@ -472,8 +413,6 @@ impl ServerApp for PushgoServerApp {
                     Arc::new(SessionRuntime {
                         device_id,
                         conn_id,
-                        client_ip,
-                        ip_slot_acquired,
                         terminate_requested: AtomicBool::new(false),
                         control: Mutex::new(None),
                         receiver: rx,
@@ -655,11 +594,6 @@ impl ServerApp for PushgoServerApp {
     async fn on_disconnect(&self, session: &SessionCtx, reason: DisconnectReason) {
         self.sessions.detach_control(session.session_id.as_str());
         if let Some(runtime) = self.sessions.remove(session.session_id.as_str()) {
-            if runtime.ip_slot_acquired {
-                self.state
-                    .rate_limiter
-                    .release_connect_ip_slot(runtime.client_ip.as_deref());
-            }
             self.state
                 .hub
                 .unregister_connection(runtime.device_id, runtime.conn_id);

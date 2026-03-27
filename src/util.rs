@@ -89,6 +89,7 @@ pub const CROCKFORD_128_LEN: usize = 26;
 pub const HEX_128_LEN: usize = 32;
 const INVALID_BASE32_DIGIT: u8 = 0xFF;
 static SANDBOX_MODE: AtomicBool = AtomicBool::new(false);
+static DIAGNOSTICS_MODE: AtomicBool = AtomicBool::new(false);
 
 const CROCKFORD_DECODE_LUT: [u8; 256] = build_crockford_decode_lut();
 
@@ -117,6 +118,20 @@ pub fn set_sandbox_mode(enabled: bool) {
 
 pub fn is_sandbox_mode() -> bool {
     SANDBOX_MODE.load(Ordering::Relaxed)
+}
+
+pub fn set_diagnostics_mode(enabled: bool) {
+    DIAGNOSTICS_MODE.store(enabled, Ordering::Relaxed);
+}
+
+pub fn is_diagnostics_mode() -> bool {
+    DIAGNOSTICS_MODE.load(Ordering::Relaxed)
+}
+
+pub fn diagnostics_log(args: fmt::Arguments<'_>) {
+    if is_diagnostics_mode() {
+        eprintln!("{args}");
+    }
 }
 
 pub fn redact_text(value: &str) -> String {
@@ -149,6 +164,12 @@ pub fn build_wakeup_data(base: &HashMap<String, String>) -> HashMap<String, Stri
     for key in [
         "delivery_id",
         "channel_id",
+        "entity_type",
+        "entity_id",
+        "message_id",
+        "event_id",
+        "thing_id",
+        "op_id",
         "sent_at",
         "ttl",
         "schema_version",
@@ -160,6 +181,7 @@ pub fn build_wakeup_data(base: &HashMap<String, String>) -> HashMap<String, Stri
     }
     out.insert("private_mode".to_string(), "wakeup".to_string());
     out.insert("private_wakeup".to_string(), "1".to_string());
+    out.insert("_skip_persist".to_string(), "1".to_string());
     out
 }
 
