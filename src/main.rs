@@ -24,7 +24,7 @@ const FCM_SEND_BASE_URL: &str = "https://fcm.googleapis.com";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
+    let args = Args::parse().normalized();
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
     pushgo_gateway::util::set_diagnostics_mode(args.diagnostics_api_enabled);
     let apns_endpoint = apns_endpoint(args.sandbox_mode);
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     print_startup_diagnostics(&args, apns_endpoint, token_service_url.as_str());
 
     let client = reqwest::Client::builder()
-        .user_agent("pushgo-gateway/1.0.27")
+        .user_agent("pushgo-gateway/1.1.34")
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|err| pushgo_gateway::Error::Internal(err.to_string()))?;

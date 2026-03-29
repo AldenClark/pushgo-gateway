@@ -14,7 +14,7 @@ use crate::{
     },
     providers::{ApnsClient, FcmClient, WnsClient},
     stats::StatsCollector,
-    storage::{DeviceRouteRecordRow, Platform, Store, new_store},
+    storage::{DeviceRouteRecordRow, Platform, Storage},
 };
 use axum::Router;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ pub(crate) struct AppState {
     pub stats: Arc<StatsCollector>,
     pub private_transport_profile: PrivateTransportProfile,
     pub private: Option<Arc<PrivateState>>,
-    pub store: Store,
+    pub store: Storage,
 }
 
 pub struct AppRuntime {
@@ -64,8 +64,8 @@ pub async fn build_app(
     wns: Arc<dyn WnsClient>,
     docs_html: &'static str,
 ) -> Result<AppRuntime, Box<dyn std::error::Error>> {
-    let store = new_store(args.db_url.as_deref()).await?;
-    let stats = StatsCollector::spawn(Arc::clone(&store));
+    let store = Storage::new(args.db_url.as_deref()).await?;
+    let stats = StatsCollector::spawn(store.clone());
     let device_registry = Arc::new(DeviceRegistry::new());
     restore_device_registry(&store, &device_registry).await?;
 
@@ -76,7 +76,7 @@ pub async fn build_app(
     ));
     let delivery_audit = DeliveryAuditCollector::spawn(
         args.diagnostics_api_enabled,
-        Arc::clone(&store),
+        store.clone(),
         Arc::clone(&dispatch_audit),
     );
 
@@ -110,7 +110,7 @@ pub async fn build_app(
     );
     let private = if args.private_channel_enabled {
         let state = Arc::new(PrivateState::new(
-            Arc::clone(&store),
+            store.clone(),
             private_config,
             Arc::clone(&device_registry),
             Arc::clone(&stats),
@@ -133,13 +133,13 @@ pub async fn build_app(
             apns: Arc::clone(&apns),
             fcm: Arc::clone(&fcm),
             wns: Arc::clone(&wns),
-            store: Arc::clone(&store),
+            store: store.clone(),
             private: private.clone(),
             audit: dispatch_audit.clone(),
         },
     );
     spawn_provider_pull_retry_worker(
-        Arc::clone(&store),
+        store.clone(),
         Arc::clone(&apns),
         Arc::clone(&fcm),
         Arc::clone(&wns),
@@ -177,10 +177,10 @@ pub async fn build_app(
 }
 
 async fn restore_device_registry(
-    store: &Store,
+    store: &Storage,
     registry: &Arc<DeviceRegistry>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let routes = store.load_device_routes_async().await?;
+    let routes = store.load_device_routes().await?;
 
     for route in routes {
         let Some(record) = parse_device_route_record(&route) else {
@@ -215,7 +215,7 @@ fn parse_device_route_record(route: &DeviceRouteRecordRow) -> Option<DeviceRoute
 }
 
 async fn backfill_private_binding_for_route(
-    store: &Store,
+    store: &Storage,
     device_key: &str,
     route: &DeviceRouteRecord,
 ) -> Result<(), String> {
@@ -236,7 +236,7 @@ async fn backfill_private_binding_for_route(
         .map_err(|_| "invalid route platform".to_string())?;
     let device_id = DeviceRegistry::derive_private_device_id(device_key);
     store
-        .bind_private_token_async(device_id, platform, token)
+        .bind_private_token(device_id, platform, token)
         .await
         .map_err(|err| err.to_string())
 }

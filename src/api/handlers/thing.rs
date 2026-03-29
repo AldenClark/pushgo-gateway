@@ -230,7 +230,7 @@ async fn thing_to_channel_with_action(
     let password = validate_channel_password(&payload.password)?;
     state
         .store
-        .channel_info_with_password_async(channel_id, password)
+        .channel_info_with_password(channel_id, password)
         .await?
         .ok_or(StoreError::ChannelNotFound)?;
 

@@ -13,7 +13,7 @@ use crate::{
         ApnsClient, DispatchResult, FcmClient, WnsClient, apns::ApnsPayload, fcm::FcmPayload,
         wns::WnsPayload,
     },
-    storage::{Platform, PrivateMessage, Store},
+    storage::{Platform, PrivateMessage, Storage},
     util::{build_wakeup_data, encode_crockford_base32_128},
 };
 
@@ -139,7 +139,7 @@ pub(crate) struct DispatchWorkerDeps {
     pub apns: Arc<dyn ApnsClient>,
     pub fcm: Arc<dyn FcmClient>,
     pub wns: Arc<dyn WnsClient>,
-    pub store: Store,
+    pub store: Storage,
     pub private: Option<Arc<PrivateState>>,
     pub audit: Arc<DispatchAuditLog>,
 }
@@ -158,40 +158,28 @@ pub(crate) fn spawn_dispatch_workers(
         private,
         audit,
     } = deps;
-    spawn_apns_worker(
-        apns_rx,
-        apns,
-        Arc::clone(&store),
-        private.clone(),
-        audit.clone(),
-    );
-    spawn_fcm_worker(
-        fcm_rx,
-        fcm,
-        Arc::clone(&store),
-        private.clone(),
-        audit.clone(),
-    );
+    spawn_apns_worker(apns_rx, apns, store.clone(), private.clone(), audit.clone());
+    spawn_fcm_worker(fcm_rx, fcm, store.clone(), private.clone(), audit.clone());
     spawn_wns_worker(wns_rx, wns, store, private, audit);
 }
 
 fn spawn_apns_worker(
     apns_rx: Receiver<ApnsJob>,
     apns: Arc<dyn ApnsClient>,
-    store: Store,
+    store: Storage,
     private: Option<Arc<PrivateState>>,
     audit: Arc<DispatchAuditLog>,
 ) {
     for _ in 0..auto_dispatch_worker_count() {
         let apns_rx = apns_rx.clone();
         let apns = Arc::clone(&apns);
-        let store = Arc::clone(&store);
+        let store = store.clone();
         let private = private.clone();
         let audit = audit.clone();
         tokio::spawn(async move {
             while let Ok(job) = apns_rx.recv_async().await {
                 let apns_client = Arc::clone(&apns);
-                let store_api = Arc::clone(&store);
+                let store_api = store.clone();
                 let private_state = private.clone();
                 let channel_id = encode_crockford_base32_128(&job.channel_id);
                 let actual_path = job.initial_path;
@@ -275,7 +263,7 @@ fn spawn_apns_worker(
                 }
                 if dispatch.invalid_token {
                     let _ = store_api
-                        .unsubscribe_channel_async(
+                        .unsubscribe_channel(
                             job.channel_id,
                             job.device_token.as_ref(),
                             job.platform,
@@ -300,20 +288,20 @@ fn spawn_apns_worker(
 fn spawn_fcm_worker(
     fcm_rx: Receiver<FcmJob>,
     fcm: Arc<dyn FcmClient>,
-    store: Store,
+    store: Storage,
     private: Option<Arc<PrivateState>>,
     audit: Arc<DispatchAuditLog>,
 ) {
     for _ in 0..auto_dispatch_worker_count() {
         let fcm_rx = fcm_rx.clone();
         let fcm = Arc::clone(&fcm);
-        let store = Arc::clone(&store);
+        let store = store.clone();
         let private = private.clone();
         let audit = audit.clone();
         tokio::spawn(async move {
             while let Ok(job) = fcm_rx.recv_async().await {
                 let fcm_client = Arc::clone(&fcm);
-                let store_api = Arc::clone(&store);
+                let store_api = store.clone();
                 let private_state = private.clone();
                 let channel_id = encode_crockford_base32_128(&job.channel_id);
                 let actual_path = job.initial_path;
@@ -404,7 +392,7 @@ fn spawn_fcm_worker(
                 }
                 if dispatch.invalid_token {
                     let _ = store_api
-                        .unsubscribe_channel_async(
+                        .unsubscribe_channel(
                             job.channel_id,
                             job.device_token.as_ref(),
                             Platform::ANDROID,
@@ -429,20 +417,20 @@ fn spawn_fcm_worker(
 fn spawn_wns_worker(
     wns_rx: Receiver<WnsJob>,
     wns: Arc<dyn WnsClient>,
-    store: Store,
+    store: Storage,
     private: Option<Arc<PrivateState>>,
     audit: Arc<DispatchAuditLog>,
 ) {
     for _ in 0..auto_dispatch_worker_count() {
         let wns_rx = wns_rx.clone();
         let wns = Arc::clone(&wns);
-        let store = Arc::clone(&store);
+        let store = store.clone();
         let private = private.clone();
         let audit = audit.clone();
         tokio::spawn(async move {
             while let Ok(job) = wns_rx.recv_async().await {
                 let wns_client = Arc::clone(&wns);
-                let store_api = Arc::clone(&store);
+                let store_api = store.clone();
                 let private_state = private.clone();
                 let channel_id = encode_crockford_base32_128(&job.channel_id);
                 let actual_path = job.initial_path;
@@ -516,7 +504,7 @@ fn spawn_wns_worker(
                 }
                 if dispatch.invalid_token {
                     let _ = store_api
-                        .unsubscribe_channel_async(
+                        .unsubscribe_channel(
                             job.channel_id,
                             job.device_token.as_ref(),
                             Platform::WINDOWS,
@@ -539,7 +527,7 @@ fn spawn_wns_worker(
 }
 
 async fn enqueue_private_wakeup_delivery(
-    store: &Store,
+    store: &Storage,
     private: Option<&PrivateState>,
     delivery: &PrivateWakeupDelivery,
     provider: &str,
@@ -553,7 +541,7 @@ async fn enqueue_private_wakeup_delivery(
         expires_at: delivery.expires_at,
     };
     match store
-        .enqueue_provider_pull_item_async(
+        .enqueue_provider_pull_item(
             delivery.delivery_id.as_ref(),
             &message,
             delivery.platform,
@@ -584,7 +572,7 @@ async fn enqueue_private_wakeup_delivery(
 }
 
 async fn cleanup_private_outbox_on_invalid_token(
-    store: &Store,
+    store: &Storage,
     private: Option<&PrivateState>,
     platform: Platform,
     device_token: &str,
@@ -592,10 +580,7 @@ async fn cleanup_private_outbox_on_invalid_token(
     correlation_id: &str,
     channel_id: &str,
 ) {
-    let device_id = match store
-        .lookup_private_device_async(platform, device_token)
-        .await
-    {
+    let device_id = match store.lookup_private_device(platform, device_token).await {
         Ok(value) => value,
         Err(err) => {
             crate::util::diagnostics_log(format_args!(
@@ -617,8 +602,9 @@ async fn cleanup_private_outbox_on_invalid_token(
         private_state.clear_device_outbox(device_id).await
     } else {
         store
-            .clear_private_outbox_for_device_async(device_id)
+            .clear_private_outbox_for_device(device_id)
             .await
+            .map(|entries| entries.len())
             .map_err(|err| crate::Error::Internal(err.to_string()))
     };
     match cleared_result {
@@ -666,6 +652,7 @@ fn log_provider_dispatch_failure(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_provider_dispatch_result(
     audit: &DispatchAuditLog,
     provider: &'static str,
@@ -695,7 +682,7 @@ fn record_provider_dispatch_result(
 }
 
 pub(crate) fn spawn_provider_pull_retry_worker(
-    store: Store,
+    store: Storage,
     apns: Arc<dyn ApnsClient>,
     fcm: Arc<dyn FcmClient>,
     wns: Arc<dyn WnsClient>,
@@ -705,7 +692,7 @@ pub(crate) fn spawn_provider_pull_retry_worker(
         loop {
             let now = chrono::Utc::now().timestamp();
             let due_entries = match store
-                .list_provider_pull_retry_due_async(now, provider_pull_retry_batch_size())
+                .list_provider_pull_retry_due(now, provider_pull_retry_batch_size())
                 .await
             {
                 Ok(entries) => entries,
@@ -745,14 +732,14 @@ pub(crate) fn spawn_provider_pull_retry_worker(
 
                 if dispatch.invalid_token || entry.expires_at <= now {
                     let _ = store
-                        .clear_provider_pull_retry_async(entry.delivery_id.as_str())
+                        .clear_provider_pull_retry(entry.delivery_id.as_str())
                         .await;
                     continue;
                 }
 
                 let next_retry_at = now.saturating_add(provider_pull_retry_timeout_secs() as i64);
                 let _ = store
-                    .bump_provider_pull_retry_async(entry.delivery_id.as_str(), next_retry_at, now)
+                    .bump_provider_pull_retry(entry.delivery_id.as_str(), next_retry_at, now)
                     .await;
             }
 

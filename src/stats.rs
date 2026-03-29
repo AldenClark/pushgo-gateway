@@ -6,7 +6,7 @@ use tokio::{sync::mpsc, time::Duration};
 
 use crate::storage::{
     AutomationCounts, ChannelStatsDailyDelta, DeviceStatsDailyDelta, GatewayStatsHourlyDelta,
-    StatsBatchWrite, Store,
+    StatsBatchWrite, Storage,
 };
 
 const STATS_EVENT_CHANNEL_CAPACITY: usize = 8192;
@@ -63,7 +63,7 @@ pub struct StatsCollector {
 }
 
 impl StatsCollector {
-    pub fn spawn(store: Store) -> Arc<Self> {
+    pub fn spawn(store: Storage) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(STATS_EVENT_CHANNEL_CAPACITY);
         tokio::spawn(run_stats_worker(store, rx));
         Arc::new(Self { tx })
@@ -134,7 +134,7 @@ impl StatsCollector {
     }
 }
 
-async fn run_stats_worker(store: Store, mut rx: mpsc::Receiver<StatsEvent>) {
+async fn run_stats_worker(store: Storage, mut rx: mpsc::Receiver<StatsEvent>) {
     let mut interval = tokio::time::interval(Duration::from_secs(STATS_FLUSH_INTERVAL_SECS));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -283,11 +283,11 @@ fn merge_device_daily_delta(
 }
 
 async fn sample_gateway_runtime_metrics(
-    store: &Store,
+    store: &Storage,
     gateway_rows: &mut HashMap<String, GatewayStatsHourlyDelta>,
 ) {
     let outbox_depth = store
-        .count_private_outbox_total_async()
+        .count_private_outbox_total()
         .await
         .map(|value| value as i64)
         .unwrap_or(0);
@@ -295,7 +295,7 @@ async fn sample_gateway_runtime_metrics(
     let AutomationCounts {
         delivery_dedupe_pending_count,
         ..
-    } = store.automation_counts_async().await.unwrap_or_default();
+    } = store.automation_counts().await.unwrap_or_default();
 
     let (_, bucket_hour) = time_buckets(Utc::now().timestamp());
     let row = gateway_rows
@@ -311,7 +311,7 @@ async fn sample_gateway_runtime_metrics(
 }
 
 async fn flush_stats_batch(
-    store: &Store,
+    store: &Storage,
     channel_rows: &mut HashMap<([u8; 16], String), ChannelStatsDailyDelta>,
     device_rows: &mut HashMap<(String, String), DeviceStatsDailyDelta>,
     gateway_rows: &mut HashMap<String, GatewayStatsHourlyDelta>,
@@ -331,7 +331,7 @@ async fn flush_stats_batch(
         .gateway
         .extend(gateway_rows.drain().map(|(_, row)| row));
 
-    let _ = store.apply_stats_batch_async(&batch).await;
+    let _ = store.apply_stats_batch(&batch).await;
 }
 
 fn time_buckets(ts: i64) -> (String, String) {

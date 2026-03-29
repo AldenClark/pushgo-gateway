@@ -33,6 +33,7 @@ pub struct PrivateMetrics {
     task_lag_ms: AtomicU64,
     enqueue_failures: AtomicU64,
     replay_bootstrap_enqueued: AtomicU64,
+    last_accept_at: AtomicI64,
     last_error_at: AtomicI64,
 }
 
@@ -67,6 +68,7 @@ pub struct PrivateMetricsSnapshot {
     pub task_lag_ms: u64,
     pub enqueue_failures: u64,
     pub replay_bootstrap_enqueued: u64,
+    pub last_accept_at: Option<i64>,
     pub last_error_at: Option<i64>,
 }
 
@@ -118,6 +120,7 @@ impl PrivateMetrics {
         self.task_lag_ms.store(0, Ordering::Relaxed);
         self.enqueue_failures.store(0, Ordering::Relaxed);
         self.replay_bootstrap_enqueued.store(0, Ordering::Relaxed);
+        self.last_accept_at.store(0, Ordering::Relaxed);
         self.last_error_at.store(0, Ordering::Relaxed);
     }
 
@@ -127,6 +130,7 @@ impl PrivateMetrics {
 
     pub fn mark_quic_connect_success(&self) {
         self.quic_connect_success.fetch_add(1, Ordering::Relaxed);
+        self.mark_accept();
     }
 
     pub fn mark_quic_connect_failure(&self) {
@@ -140,6 +144,7 @@ impl PrivateMetrics {
 
     pub fn mark_wss_connect_success(&self) {
         self.wss_connect_success.fetch_add(1, Ordering::Relaxed);
+        self.mark_accept();
     }
 
     pub fn mark_wss_connect_failure(&self) {
@@ -153,6 +158,7 @@ impl PrivateMetrics {
 
     pub fn mark_tcp_connect_success(&self) {
         self.tcp_connect_success.fetch_add(1, Ordering::Relaxed);
+        self.mark_accept();
     }
 
     pub fn mark_tcp_connect_failure(&self) {
@@ -250,6 +256,7 @@ impl PrivateMetrics {
     }
 
     pub fn snapshot(&self) -> PrivateMetricsSnapshot {
+        let last_accept = self.last_accept_at.load(Ordering::Relaxed);
         let last_error = self.last_error_at.load(Ordering::Relaxed);
         PrivateMetricsSnapshot {
             quic_connect_attempts: self.quic_connect_attempts.load(Ordering::Relaxed),
@@ -285,6 +292,7 @@ impl PrivateMetrics {
             task_lag_ms: self.task_lag_ms.load(Ordering::Relaxed),
             enqueue_failures: self.enqueue_failures.load(Ordering::Relaxed),
             replay_bootstrap_enqueued: self.replay_bootstrap_enqueued.load(Ordering::Relaxed),
+            last_accept_at: (last_accept > 0).then_some(last_accept),
             last_error_at: (last_error > 0).then_some(last_error),
         }
     }
@@ -382,6 +390,11 @@ impl PrivateMetrics {
 
     fn mark_error(&self) {
         self.last_error_at
+            .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
+    }
+
+    fn mark_accept(&self) {
+        self.last_accept_at
             .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
     }
 }

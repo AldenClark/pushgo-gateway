@@ -49,19 +49,19 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | CLI Flag                          | Env                                    | Default                    | Required          | Description                                            |
 | --------------------------------- | -------------------------------------- | -------------------------- | ----------------- | ------------------------------------------------------ |
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | No                | HTTP API / WSS bind address                            |
-| `--token`                         | `PUSHGO_TOKEN`                         | None                       | No                | Bearer token for public API                            |
+| `--token`                         | `PUSHGO_TOKEN`                         | None                       | No                | Public API auth token (`Authorization: Bearer <token>` first; fallback `?token=<token>` only when Authorization is absent) |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | No                | Master switch for private transport                    |
 | `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | No                | Enable `/diagnostics/*` namespace and diagnostics logs |
-| `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
+| `--db-url`                        | `PUSHGO_DB_URL`                        | `sqlite://./pushgo-gateway.db?mode=rwc` | No    | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
 
 ### Private Transport Bind / Advertise
 
 | CLI Flag                    | Env                         | Default          | Required | Description                              |
 | --------------------------- | --------------------------- | ---------------- | -------- | ---------------------------------------- |
 | `--private-quic-bind`       | `PUSHGO_PRIVATE_QUIC_BIND`  | `127.0.0.1:5223` | No       | Local QUIC listener bind address (UDP)   |
-| `--private-quic-port`       | `PUSHGO_PRIVATE_QUIC_PORT`  | `443`            | No       | QUIC port advertised to app clients      |
+| `--private-quic-port`       | `PUSHGO_PRIVATE_QUIC_PORT`  | `5223`           | No       | QUIC port advertised to app clients      |
 | `--private-tcp-bind`        | `PUSHGO_PRIVATE_TCP_BIND`   | `127.0.0.1:5223` | No       | Local Raw TCP listener bind address      |
 | `--private-tcp-port`        | `PUSHGO_PRIVATE_TCP_PORT`   | `5223`           | No       | TCP port advertised to app clients       |
 
@@ -258,7 +258,20 @@ WantedBy=multi-user.target
 
 ### Option 2: Run with Docker
 
-The root `Dockerfile` exposes:
+Docker image files:
+
+- `Dockerfile.gha`: release/GitHub Actions image assembly from prebuilt `dist/*-gnu` binaries.
+- `Dockerfile.local`: local source build (multi-stage) for developer machines.
+
+Published images (for example `ghcr.io/<owner>/pushgo-gateway:latest`) are built from `Dockerfile.gha`.
+
+Build locally from source:
+
+```bash
+docker build -f Dockerfile.local -t pushgo-gateway:local .
+```
+
+Image ports:
 
 - `6666/tcp`: HTTP API + WSS
 - `5223/tcp`: Raw TCP
@@ -344,19 +357,19 @@ docker run -d --name pushgo-gateway \
 | CLI Flag                          | Env                                    | 默认值                     | 必填     | 说明                                                 |
 | --------------------------------- | -------------------------------------- | -------------------------- | -------- | ---------------------------------------------------- |
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | 否       | HTTP API / WSS 监听地址                              |
-| `--token`                         | `PUSHGO_TOKEN`                         | 无                         | 否       | 公共 API Bearer Token                                |
+| `--token`                         | `PUSHGO_TOKEN`                         | 无                         | 否       | 公共 API 鉴权 token（优先 `Authorization: Bearer <token>`；仅当 Authorization 缺失时回退 `?token=<token>`） |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | 否       | 私有传输总开关                                       |
 | `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | 否       | 开启 `/diagnostics/*` 诊断接口与诊断日志             |
-| `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
+| `--db-url`                        | `PUSHGO_DB_URL`                        | `sqlite://./pushgo-gateway.db?mode=rwc` | 否 | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
 
 ### Private 监听 / 对外宣告
 
 | CLI Flag                    | Env                         | 默认值           | 必填 | 说明                             |
 | --------------------------- | --------------------------- | ---------------- | ---- | -------------------------------- |
 | `--private-quic-bind`       | `PUSHGO_PRIVATE_QUIC_BIND`  | `127.0.0.1:5223` | 否   | QUIC 本机监听地址（UDP）         |
-| `--private-quic-port`       | `PUSHGO_PRIVATE_QUIC_PORT`  | `443`            | 否   | 对 app 下发的 QUIC 端口          |
+| `--private-quic-port`       | `PUSHGO_PRIVATE_QUIC_PORT`  | `5223`           | 否   | 对 app 下发的 QUIC 端口          |
 | `--private-tcp-bind`        | `PUSHGO_PRIVATE_TCP_BIND`   | `127.0.0.1:5223` | 否   | Raw TCP 本机监听地址             |
 | `--private-tcp-port`        | `PUSHGO_PRIVATE_TCP_PORT`   | `5223`           | 否   | 对 app 下发的 TCP 端口           |
 
@@ -553,7 +566,20 @@ WantedBy=multi-user.target
 
 ### 方式二：Docker 运行
 
-根目录 `Dockerfile` 暴露端口：
+Docker 镜像文件说明：
+
+- `Dockerfile.gha`：用于 Release/GitHub Actions，基于预编译 `dist/*-gnu` 二进制组装镜像。
+- `Dockerfile.local`：用于本地开发机，直接从源码多阶段构建镜像。
+
+已发布镜像（例如 `ghcr.io/<owner>/pushgo-gateway:latest`）由 `Dockerfile.gha` 产出。
+
+本地源码构建示例：
+
+```bash
+docker build -f Dockerfile.local -t pushgo-gateway:local .
+```
+
+镜像默认暴露端口：
 
 - `6666/tcp`：HTTP API + WSS
 - `5223/tcp`：Raw TCP

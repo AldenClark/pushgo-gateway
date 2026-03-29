@@ -64,7 +64,7 @@ pub struct Args {
     #[arg(
         env = "PUSHGO_PRIVATE_QUIC_PORT",
         long = "private-quic-port",
-        default_value = "443"
+        default_value = "5223"
     )]
     pub private_quic_port: u16,
 
@@ -219,4 +219,47 @@ pub struct Args {
         default_value = "2592000"
     )]
     pub private_default_ttl_secs: i64,
+}
+
+impl Args {
+    #[must_use]
+    pub fn normalized(mut self) -> Self {
+        self.token = normalize_optional_non_empty(self.token);
+        self.db_url = normalize_optional_non_empty(self.db_url);
+        self.private_tls_cert_path = normalize_optional_non_empty(self.private_tls_cert_path);
+        self.private_tls_key_path = normalize_optional_non_empty(self.private_tls_key_path);
+        self
+    }
+}
+
+#[inline]
+fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_optional_non_empty;
+
+    #[test]
+    fn normalize_optional_non_empty_treats_empty_and_whitespace_as_missing() {
+        assert_eq!(normalize_optional_non_empty(None), None);
+        assert_eq!(normalize_optional_non_empty(Some(String::new())), None);
+        assert_eq!(normalize_optional_non_empty(Some("   ".to_string())), None);
+    }
+
+    #[test]
+    fn normalize_optional_non_empty_trims_non_empty_values() {
+        assert_eq!(
+            normalize_optional_non_empty(Some(" sqlite:///data/pushgo.db  ".to_string())),
+            Some("sqlite:///data/pushgo.db".to_string())
+        );
+    }
 }

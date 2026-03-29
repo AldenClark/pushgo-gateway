@@ -1,6 +1,10 @@
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
-use axum::{extract::State, http::StatusCode};
+use axum::{
+    body::Bytes,
+    extract::{Form, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+};
 use chrono::Utc;
 use hashbrown::HashMap;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -30,6 +34,13 @@ use super::dispatch_lifecycle::{
     dispatch_failure_error_message,
 };
 use super::watch_light::quantize_watch_payload;
+
+mod compat;
+pub(crate) use compat::{
+    compat_bark_v1_body, compat_bark_v1_title_body, compat_bark_v2_push, compat_ntfy_get,
+    compat_ntfy_post, compat_ntfy_put, compat_serverchan_get, compat_serverchan_post,
+    message_to_channel_get,
+};
 
 fn apple_thread_id_for_payload(
     channel_id: &str,
@@ -114,7 +125,7 @@ where
     parse_metadata_map_value(raw).map_err(serde::de::Error::custom)
 }
 
-fn parse_metadata_map_value(raw: Value) -> Result<JsonMap<String, Value>, String> {
+pub(super) fn parse_metadata_map_value(raw: Value) -> Result<JsonMap<String, Value>, String> {
     match raw {
         Value::Null => Ok(JsonMap::new()),
         Value::Object(object) => parse_metadata_object(object),
@@ -222,7 +233,7 @@ pub(crate) async fn message_to_channel(
     dispatch_message_intent(&state, payload, scoped_thing_id).await
 }
 
-async fn dispatch_message_intent(
+pub(super) async fn dispatch_message_intent(
     state: &AppState,
     payload: MessageIntent,
     scoped_thing_id: Option<String>,
@@ -233,7 +244,7 @@ async fn dispatch_message_intent(
     let password = validate_channel_password(&payload.password)?;
     state
         .store
-        .channel_info_with_password_async(channel_id, password)
+        .channel_info_with_password(channel_id, password)
         .await?
         .ok_or(StoreError::ChannelNotFound)?;
 
@@ -404,7 +415,7 @@ pub(super) async fn dispatch_entity_notification(
             effective_ttl.map(|expires_at| ttl_seconds_remaining(sent_at, expires_at));
         let dispatch_targets = state
             .store
-            .list_channel_dispatch_targets_async(channel_id, sent_at)
+            .list_channel_dispatch_targets(channel_id, sent_at)
             .await?;
 
         let private_state = state.private.as_ref();
@@ -1380,9 +1391,7 @@ fn merge_device_dispatch_delta(
     device_key: Arc<str>,
     delta: DeviceDispatchDelta,
 ) {
-    let entry = aggregates
-        .entry(device_key)
-        .or_insert_with(DeviceDispatchDelta::default);
+    let entry = aggregates.entry(device_key).or_default();
     entry.messages_received += delta.messages_received;
     entry.messages_acked += delta.messages_acked;
     entry.private_connected_count += delta.private_connected_count;
@@ -1392,6 +1401,7 @@ fn merge_device_dispatch_delta(
     entry.private_outbox_enqueued_count += delta.private_outbox_enqueued_count;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_dispatch_stats(
     state: &AppState,
     channel_id: [u8; 16],
@@ -1717,7 +1727,7 @@ fn normalize_image_values(values: &[String], field: &str) -> Result<Vec<String>,
     Ok(out)
 }
 
-fn normalize_thing_id(raw: &str) -> Result<&str, Error> {
+pub(super) fn normalize_thing_id(raw: &str) -> Result<&str, Error> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(Error::validation("thing_id must not be empty"));
@@ -1745,7 +1755,7 @@ async fn reserve_new_delivery_id(state: &AppState, created_at: i64) -> Result<St
         let dedupe_key = build_delivery_dedupe_key(&delivery_id);
         let inserted = state
             .store
-            .reserve_delivery_dedupe_async(dedupe_key.as_str(), &delivery_id, created_at)
+            .reserve_delivery_dedupe(dedupe_key.as_str(), &delivery_id, created_at)
             .await
             .map_err(|err| Error::Internal(err.to_string()))?;
         if inserted {
@@ -1795,7 +1805,7 @@ pub(super) async fn resolve_create_semantic_id(
         let semantic_id = generate_hex_id_128();
         match state
             .store
-            .reserve_semantic_id_async(dedupe_key, &semantic_id, created_at)
+            .reserve_semantic_id(dedupe_key, &semantic_id, created_at)
             .await
             .map_err(|err| Error::Internal(err.to_string()))?
         {
@@ -1963,7 +1973,7 @@ fn build_private_wakeup_delivery(
     provider_device_key: Option<&str>,
     platform: Platform,
     provider_token: &str,
-    private_payload: &Vec<u8>,
+    private_payload: &[u8],
     delivery_id: &str,
     sent_at: i64,
     expires_at: i64,
@@ -1987,7 +1997,7 @@ fn build_private_wakeup_delivery(
         platform,
         provider_token: Arc::from(normalized_token.to_string().into_boxed_str()),
         delivery_id: Arc::from(delivery_id.to_string().into_boxed_str()),
-        payload: Arc::new(private_payload.clone()),
+        payload: Arc::new(private_payload.to_owned()),
         sent_at,
         expires_at,
     })

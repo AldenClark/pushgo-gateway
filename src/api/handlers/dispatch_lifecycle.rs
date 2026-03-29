@@ -69,7 +69,7 @@ impl DispatchOpGuard {
     ) -> Result<DispatchOpGuardDecision, Error> {
         let reservation = state
             .store
-            .reserve_op_dedupe_pending_async(
+            .reserve_op_dedupe_pending(
                 dedupe_key.as_str(),
                 reserved_delivery_id.as_str(),
                 created_at,
@@ -171,7 +171,7 @@ async fn settle_dispatch_op_dedupe(
             let delivery_id = finalized_delivery_id.unwrap_or(guard.reserved_delivery_id.as_str());
             let marked = state
                 .store
-                .mark_op_dedupe_sent_async(guard.dedupe_key.as_str(), delivery_id)
+                .mark_op_dedupe_sent(guard.dedupe_key.as_str(), delivery_id)
                 .await
                 .map_err(|err| Error::Internal(err.to_string()))?;
             if !marked {
@@ -181,7 +181,7 @@ async fn settle_dispatch_op_dedupe(
         DispatchOpDedupeAction::ClearPending => {
             state
                 .store
-                .clear_op_dedupe_pending_async(
+                .clear_op_dedupe_pending(
                     guard.dedupe_key.as_str(),
                     guard.reserved_delivery_id.as_str(),
                 )

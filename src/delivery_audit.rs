@@ -7,7 +7,7 @@ use tokio::{
 
 use crate::{
     dispatch::audit::{DispatchAuditLog, DispatchAuditRecord},
-    storage::{DeliveryAuditWrite, Store},
+    storage::{DeliveryAuditWrite, Storage},
 };
 
 const DEFAULT_DELIVERY_AUDIT_CHANNEL_CAPACITY: usize = 16_384;
@@ -27,7 +27,7 @@ pub(crate) struct DeliveryAuditCollector {
 }
 
 impl DeliveryAuditCollector {
-    pub(crate) fn spawn(enabled: bool, store: Store, audit: Arc<DispatchAuditLog>) -> Arc<Self> {
+    pub(crate) fn spawn(enabled: bool, store: Storage, audit: Arc<DispatchAuditLog>) -> Arc<Self> {
         if !enabled {
             return Arc::new(Self {
                 enabled: false,
@@ -88,7 +88,7 @@ impl DeliveryAuditCollector {
 }
 
 async fn run_delivery_audit_worker(
-    store: Store,
+    store: Storage,
     dispatch_audit: Arc<DispatchAuditLog>,
     mut rx: mpsc::Receiver<DeliveryAuditQueued>,
     batch_size: usize,
@@ -126,7 +126,7 @@ async fn run_delivery_audit_worker(
 }
 
 async fn flush_delivery_audit_batch(
-    store: &Store,
+    store: &Storage,
     dispatch_audit: &DispatchAuditLog,
     buffer: &mut Vec<DeliveryAuditQueued>,
 ) {
@@ -137,7 +137,7 @@ async fn flush_delivery_audit_batch(
     let batch: Vec<DeliveryAuditWrite> = buffer.iter().map(|item| item.entry.clone()).collect();
     let count = batch.len();
     buffer.clear();
-    if let Err(err) = store.append_delivery_audit_batch_async(&batch).await {
+    if let Err(err) = store.append_delivery_audit_batch(&batch).await {
         dispatch_audit.record(DispatchAuditRecord {
             stage: "delivery_audit_batch_write_failed",
             correlation_id: correlation_id.as_str(),
@@ -175,7 +175,7 @@ fn parse_env_u64(key: &str, default: u64, min: u64, max: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::new_store;
+    use crate::storage::Storage;
     use sqlx::{Row, SqlitePool};
     use tempfile::tempdir;
 
@@ -198,12 +198,12 @@ mod tests {
     async fn collector_disabled_skips_writes() {
         let dir = tempdir().expect("tempdir should be created");
         let db_path = dir.path().join("audit-disabled.sqlite");
-        let db_url = format!("sqlite://{}", db_path.to_string_lossy());
-        let store = new_store(Some(db_url.as_str()))
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+        let store = Storage::new(Some(db_url.as_str()))
             .await
             .expect("store should be created");
         let audit = Arc::new(DispatchAuditLog::new(32, true));
-        let collector = DeliveryAuditCollector::spawn(false, Arc::clone(&store), audit);
+        let collector = DeliveryAuditCollector::spawn(false, store.clone(), audit);
 
         for i in 0..8 {
             let entry = build_entry(i);
@@ -227,28 +227,36 @@ mod tests {
     async fn collector_enabled_flushes_batch_to_storage() {
         let dir = tempdir().expect("tempdir should be created");
         let db_path = dir.path().join("audit-enabled.sqlite");
-        let db_url = format!("sqlite://{}", db_path.to_string_lossy());
-        let store = new_store(Some(db_url.as_str()))
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+        let store = Storage::new(Some(db_url.as_str()))
             .await
             .expect("store should be created");
         let audit = Arc::new(DispatchAuditLog::new(32, true));
-        let collector = DeliveryAuditCollector::spawn(true, Arc::clone(&store), audit);
+        let collector = DeliveryAuditCollector::spawn(true, store.clone(), audit);
 
         for i in 0..300 {
             let entry = build_entry(i);
             collector.enqueue("corr-enabled", &entry);
         }
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
         let pool = SqlitePool::connect(db_url.as_str())
             .await
             .expect("sqlite should open");
-        let row = sqlx::query("SELECT COUNT(1) AS count FROM delivery_audit")
-            .fetch_one(&pool)
-            .await
-            .expect("count query should succeed");
-        let count: i64 = row.try_get("count").expect("count column should exist");
-        assert_eq!(count, 300);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let row = sqlx::query("SELECT COUNT(1) AS count FROM delivery_audit")
+                .fetch_one(&pool)
+                .await
+                .expect("count query should succeed");
+            let count: i64 = row.try_get("count").expect("count column should exist");
+            if count == 300 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for collector flush, current count={count}"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 }

@@ -28,7 +28,7 @@ pub(crate) async fn channel_exists(
     Query(query): Query<ChannelExistsQuery>,
 ) -> HttpResult {
     let channel_id = parse_channel_id(&query.channel_id)?;
-    let info = state.store.channel_info_async(channel_id).await?;
+    let info = state.store.channel_info(channel_id).await?;
     Ok(crate::api::ok(ChannelExistsResponse {
         channel_id: format_channel_id(&channel_id),
         exists: info.is_some(),
@@ -60,7 +60,7 @@ pub(crate) async fn channel_rename(
 
     state
         .store
-        .rename_channel_async(channel_id, password, &channel_name)
+        .rename_channel(channel_id, password, &channel_name)
         .await?;
 
     Ok(crate::api::ok(ChannelRenameResponse {

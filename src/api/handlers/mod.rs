@@ -1,9 +1,10 @@
 pub mod channel;
+pub mod core;
 pub(crate) mod diagnostics;
 pub(crate) mod dispatch_lifecycle;
 pub mod event;
+pub(crate) mod health;
 pub mod message;
 pub mod private;
 pub mod thing;
-pub mod v1;
 pub(crate) mod watch_light;

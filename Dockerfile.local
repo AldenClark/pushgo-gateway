@@ -1,0 +1,107 @@
+# syntax=docker/dockerfile:1.6
+
+FROM rust:bookworm AS builder
+
+ARG BINARY_NAME=pushgo-gateway
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo ./.cargo
+COPY src ./src
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    set -eux; \
+    cargo build --release -p pushgo-gateway --bin "${BINARY_NAME}"; \
+    install -m 0755 "target/release/${BINARY_NAME}" /tmp/pushgo-gateway
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /tmp/pushgo-gateway /usr/local/bin/pushgo-gateway
+
+RUN set -eux; \
+    groupadd --system --gid 10001 pushgo; \
+    useradd --system --uid 10001 --gid pushgo --home-dir /nonexistent --shell /usr/sbin/nologin pushgo; \
+    install -d -o pushgo -g pushgo /data
+
+WORKDIR /data
+
+ENV PUSHGO_TOKEN= \
+    PUSHGO_TOKEN_SERVICE_URL=https://token.pushgo.dev \
+    PUSHGO_PRIVATE_CHANNEL_ENABLED=true \
+    PUSHGO_DIAGNOSTICS_API_ENABLED=false \
+    PUSHGO_DB_URL=sqlite:///data/pushgo-gateway.sqlite \
+    PUSHGO_PRIVATE_TLS_CERT= \
+    PUSHGO_PRIVATE_TLS_KEY= \
+    PUSHGO_PRIVATE_QUIC_PORT=5223 \
+    PUSHGO_PRIVATE_TCP_PORT=5223
+
+RUN set -eux; \
+    cat > /usr/local/bin/docker-entrypoint.sh <<'ENTRYPOINT_EOF'
+#!/bin/sh
+set -eu
+
+export PUSHGO_SANDBOX_MODE=false
+export PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false
+export PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL=false
+export PUSHGO_DISPATCH_WORKER_COUNT=2
+export PUSHGO_DISPATCH_QUEUE_CAPACITY=512
+export PUSHGO_PROVIDER_PULL_RETRY_POLL_MS=1500
+export PUSHGO_PROVIDER_PULL_RETRY_BATCH=64
+export PUSHGO_PROVIDER_PULL_RETRY_TIMEOUT_SECS=20
+export PUSHGO_DELIVERY_AUDIT_CHANNEL_CAPACITY=2048
+export PUSHGO_DELIVERY_AUDIT_BATCH_SIZE=64
+export PUSHGO_DELIVERY_AUDIT_FLUSH_INTERVAL_MS=200
+export PUSHGO_APNS_MAX_IN_FLIGHT=32
+export PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS=5000
+export PUSHGO_HTTP_ADDR=0.0.0.0:6666
+export PUSHGO_PRIVATE_QUIC_BIND=0.0.0.0:5223
+export PUSHGO_PRIVATE_TCP_BIND=0.0.0.0:5223
+export PUSHGO_PRIVATE_SESSION_TTL=1800
+export PUSHGO_PRIVATE_GRACE_WINDOW=20
+export PUSHGO_PRIVATE_MAX_PENDING=100
+export PUSHGO_PRIVATE_PULL_LIMIT=100
+export PUSHGO_PRIVATE_ACK_TIMEOUT=15
+export PUSHGO_PRIVATE_FALLBACK_MAX_ATTEMPTS=3
+export PUSHGO_PRIVATE_FALLBACK_MAX_BACKOFF=120
+export PUSHGO_PRIVATE_RETX_WINDOW_SECS=10
+export PUSHGO_PRIVATE_RETX_MAX_PER_WINDOW=64
+export PUSHGO_PRIVATE_RETX_MAX_PER_TICK=8
+export PUSHGO_PRIVATE_RETX_MAX_RETRIES=3
+export PUSHGO_PRIVATE_GLOBAL_MAX_PENDING=200000
+export PUSHGO_PRIVATE_HOT_CACHE_CAPACITY=5000
+export PUSHGO_PRIVATE_DEFAULT_TTL=604800
+
+if [ ! -w /data ]; then
+  echo "/data is not writable" >&2
+  exit 1
+fi
+
+if [ "${PUSHGO_PRIVATE_CHANNEL_ENABLED:-false}" = "true" ] \
+  && { [ -z "${PUSHGO_PRIVATE_TLS_CERT:-}" ] || [ -z "${PUSHGO_PRIVATE_TLS_KEY:-}" ]; }; then
+  echo "PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY are required when PUSHGO_PRIVATE_CHANNEL_ENABLED=true" >&2
+  exit 1
+fi
+
+exec /usr/local/bin/pushgo-gateway
+ENTRYPOINT_EOF
+
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+
+USER pushgo:pushgo
+STOPSIGNAL SIGTERM
+
+EXPOSE 6666/tcp
+EXPOSE 5223/tcp
+EXPOSE 5223/udp
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

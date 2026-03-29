@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hans">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,7 +28,7 @@
       }
       main {
         max-width: 980px;
-        margin: 36px auto 80px;
+        margin: 18px auto 80px;
         padding: 0 20px;
       }
       header {
@@ -146,6 +146,14 @@
         padding: 6px 10px;
         border-radius: 999px;
         font-size: 13px;
+        transition:
+          background-color 0.16s ease,
+          border-color 0.16s ease,
+          color 0.16s ease;
+      }
+      .quick-nav a:hover {
+        background: #e7f1ff;
+        border-color: #9cc3ea;
       }
       .callout {
         margin-top: 10px;
@@ -155,9 +163,97 @@
         background: #eff6ff;
         color: #1e3a8a;
       }
+      .lang-switch {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 20px 10px;
+        max-width: 980px;
+        margin: 0 auto;
+        background: linear-gradient(
+          to bottom,
+          rgba(242, 244, 248, 0.95),
+          rgba(242, 244, 248, 0.6),
+          rgba(242, 244, 248, 0)
+        );
+        backdrop-filter: blur(6px);
+      }
+      .lang-switch button {
+        border: 1px solid #c5dcf4;
+        background: #f2f8ff;
+        color: #0f4c81;
+        padding: 5px 12px;
+        border-radius: 999px;
+        font-size: 13px;
+        cursor: pointer;
+        font-weight: 600;
+        transition:
+          background-color 0.16s ease,
+          border-color 0.16s ease,
+          color 0.16s ease,
+          transform 0.12s ease;
+      }
+      .lang-switch button:hover {
+        background: #e7f1ff;
+        border-color: #9cc3ea;
+      }
+      .lang-switch button:active {
+        transform: translateY(1px);
+      }
+      .lang-switch button.active {
+        background: #0f4c81;
+        color: #ffffff;
+        border-color: #0f4c81;
+      }
+      .lang-sep {
+        display: inline;
+      }
+      html[data-doc-lang="en"] .lang-zh,
+      html[data-doc-lang="en"] .lang-sep {
+        display: none !important;
+      }
+      html[data-doc-lang="zh"] .lang-en,
+      html[data-doc-lang="zh"] .lang-sep {
+        display: none !important;
+      }
+      @media (max-width: 900px) {
+        main {
+          padding: 0 12px;
+          margin-top: 12px;
+        }
+        header,
+        section {
+          padding: 18px 16px;
+          border-radius: 14px;
+        }
+        h1 {
+          font-size: 26px;
+        }
+        h2 {
+          font-size: 20px;
+        }
+        table {
+          font-size: 13px;
+          display: block;
+          overflow-x: auto;
+          white-space: nowrap;
+        }
+        th,
+        td {
+          padding: 9px 8px;
+        }
+      }
     </style>
   </head>
   <body>
+    <div class="lang-switch" aria-label="Language switch">
+      <button type="button" data-doc-lang="en">English</button>
+      <button type="button" data-doc-lang="zh">中文</button>
+    </div>
     <main>
       <header>
         <h1>PushGo Gateway API</h1>
@@ -261,8 +357,10 @@
               <td>否<br />No</td>
               <td>string | null</td>
               <td>
-                调用方幂等键（可选）。若传入则按传入值使用（1-128 字符，仅允许字母数字和
-                <code>_:-</code>）；若缺失则由网关自动生成并在响应中回传。<br />Caller
+                调用方幂等键（可选）。若传入则按传入值使用（1-128
+                字符，仅允许字母数字和
+                <code>_:-</code
+                >）；若缺失则由网关自动生成并在响应中回传。<br />Caller
                 idempotency key (optional). If provided, gateway uses it as-is
                 (1-128 chars; letters, digits, and <code>_:-</code> only); if
                 omitted, gateway generates one and echoes it in response.
@@ -398,8 +496,10 @@
               <td>否<br />No</td>
               <td>string</td>
               <td>
-                可选密文透传字段（空字符串会被忽略）。<br />Optional encrypted
-                payload passthrough (empty string is ignored).
+                可选密文透传字段（空字符串会被忽略）。网关不解密、不重写、只按字符串透传给客户端。
+                <br />
+                Optional encrypted payload passthrough (empty string is ignored).
+                Gateway does not decrypt or rewrite it; it is forwarded as-is to clients.
               </td>
             </tr>
             <tr>
@@ -457,6 +557,135 @@
             </tr>
           </tbody>
         </table>
+
+        <h3><code>ciphertext</code> 详细规范（重要）<br />Detailed <code>ciphertext</code> spec (important)</h3>
+        <p class="callout">
+          以下规则基于 Apple 客户端当前实现（PushGo iOS/macOS/watchOS 共享解密路径）。
+          发送侧请严格按此构造，否则客户端会标记解密失败并回退到明文展示（若有明文字段）。
+          <br />
+          The rules below are based on the current Apple client implementation
+          (shared iOS/macOS/watchOS decrypt path). Follow this exactly; otherwise
+          clients mark decrypt failure and fall back to plaintext when available.
+        </p>
+
+        <h4>1) 支持算法与密钥要求<br />1) Supported algorithm and key requirements</h4>
+        <ul>
+          <li>
+            仅支持 <code>AES-GCM</code>。客户端若配置为其它算法会进入
+            <code>algMismatch</code>。<br />
+            Only <code>AES-GCM</code> is supported. Other algorithms are treated as
+            <code>algMismatch</code>.
+          </li>
+          <li>
+            密钥长度必须是 <code>16/24/32</code> 字节（128/192/256 bit）。<br />
+            Key length must be <code>16/24/32</code> bytes (128/192/256 bits).
+          </li>
+          <li>
+            IV（nonce）长度固定 <code>12</code> 字节，Tag 长度固定 <code>16</code> 字节。<br />
+            IV (nonce) is fixed to <code>12</code> bytes, Tag to <code>16</code> bytes.
+          </li>
+        </ul>
+
+        <h4>2) <code>ciphertext</code> 编码格式<br />2) <code>ciphertext</code> encoding format</h4>
+        <p>
+          先将明文 JSON（UTF-8）做 AES-GCM 加密，然后按如下字节顺序拼接并 Base64：<br />
+          Encrypt plaintext JSON (UTF-8) with AES-GCM, then concatenate and Base64:
+        </p>
+        <pre>ciphertext_field = Base64( cipher || tag || iv )</pre>
+        <ul>
+          <li>
+            <code>cipher</code>: 密文字节（不含 tag）<br />
+            <code>cipher</code>: ciphertext bytes (without tag)
+          </li>
+          <li>
+            <code>tag</code>: 16 字节认证标签<br />
+            <code>tag</code>: 16-byte authentication tag
+          </li>
+          <li>
+            <code>iv</code>: 12 字节 nonce，放在末尾（非常重要）<br />
+            <code>iv</code>: 12-byte nonce, appended at the end (important)
+          </li>
+          <li>
+            Base64 使用标准字符集（<code>A-Z a-z 0-9 + / =</code>），长度需为 4 的倍数。<br />
+            Use standard Base64 alphabet (<code>A-Z a-z 0-9 + / =</code>), length must be multiple of 4.
+          </li>
+        </ul>
+
+        <h4>3) 解密后 JSON 结构（iOS 当前实现）<br />3) JSON structure after decrypt (current iOS implementation)</h4>
+        <p>
+          客户端解密 <code>ciphertext</code> 后会按 JSON 解码，当前识别字段为：<br />
+          After decrypting <code>ciphertext</code>, client decodes JSON and currently recognizes:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>字段<br />Field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>title</code></td>
+              <td>string</td>
+              <td>可选。存在且非空时覆盖通知标题。<br />Optional. Non-empty value overrides notification title.</td>
+            </tr>
+            <tr>
+              <td><code>body</code></td>
+              <td>string</td>
+              <td>可选。存在且非空时覆盖通知正文。<br />Optional. Non-empty value overrides notification body.</td>
+            </tr>
+            <tr>
+              <td><code>images</code></td>
+              <td>string[] 或 JSON 字符串<br />string[] or JSON-stringified array</td>
+              <td>
+                可选。客户端会做 trim + 去重后写回 payload。<br />
+                Optional. Client trims and deduplicates values before applying.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>4) 发送构造示例<br />4) Sender construction example</h4>
+        <pre>{
+  "title": "Encrypted title",
+  "body": "Encrypted body",
+  "images": [
+    "https://cdn.example.com/a.png",
+    "https://cdn.example.com/b.png"
+  ]
+}</pre>
+        <p>
+          将上面 JSON 作为明文，使用共享密钥 + 12-byte IV 做 AES-GCM，加密后拼成
+          <code>cipher||tag||iv</code>，再 Base64，放入 <code>/message</code> 的
+          <code>ciphertext</code> 字段。<br />
+          Use the JSON above as plaintext, encrypt with shared key + 12-byte IV using AES-GCM,
+          concatenate <code>cipher||tag||iv</code>, Base64 it, and put the result in
+          <code>/message.ciphertext</code>.
+        </p>
+        <pre>{
+  "channel_id": "YOUR_CHANNEL_ID",
+  "password": "YOUR_PASSWORD",
+  "title": "Fallback title",
+  "body": "Fallback body",
+  "ciphertext": "BASE64_OF_cipher_tag_iv"
+}</pre>
+
+        <h4>5) 行为优先级与回退<br />5) priority and fallback behavior</h4>
+        <ul>
+          <li>
+            客户端正文优先级：<code>ciphertext.body &gt; body</code>。<br />
+            Client body priority: <code>ciphertext.body &gt; body</code>.
+          </li>
+          <li>
+            若 <code>ciphertext</code> 格式错误、密钥不匹配或解密失败：客户端保留原始 payload 并标记解密失败。<br />
+            If <code>ciphertext</code> is malformed, key mismatched, or decrypt fails, client keeps original payload and marks decrypt failed.
+          </li>
+          <li>
+            网关不校验密文字节布局；正确性由发送方与客户端密钥配置共同保证。<br />
+            Gateway does not validate encrypted byte layout; correctness is guaranteed by sender/client key alignment.
+          </li>
+        </ul>
 
         <h3>响应业务字段<br />Response business fields</h3>
         <table>
@@ -1664,6 +1893,228 @@
           </li>
         </ul>
       </section>
+
+      <section id="compat">
+        <h2>兼容接口（附录）<br />Compatibility Endpoints (Appendix)</h2>
+        <p class="note">
+          本节为迁移与低门槛接入提供的兼容入口，优先级低于标准接口。生产集成建议优先使用
+          <code>/message</code>、<code>/event/*</code>、<code>/thing/*</code>。
+          <br />
+          This section provides migration-friendly compatibility endpoints and
+          is secondary to the standard APIs. Prefer
+          <code>/message</code>, <code>/event/*</code>, and
+          <code>/thing/*</code> for production integrations.
+        </p>
+        <p>
+          鉴权保持 PushGo 基础规则：兼容参数中使用明文
+          <code>&lt;channel_id&gt;:&lt;password&gt;</code>（称为
+          <code>compat_key</code
+          >），并借位放入对方风格参数（topic/sendkey/device_key）。
+          <br />
+          Authentication still follows PushGo rules: use plaintext
+          <code>&lt;channel_id&gt;:&lt;password&gt;</code> as a compatibility
+          key and place it in provider-style parameters
+          (topic/sendkey/device_key).
+        </p>
+        <p class="callout">
+          兼容接口与 <code>GET /message</code> 均不接受 <code>thing_id</code>。
+          <br />
+          <code>thing_id</code> is not accepted by compatibility endpoints and
+          <code>GET /message</code>.
+        </p>
+
+        <h3>兼容路由<br />Compatibility routes</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>类别<br />Kind</th>
+              <th>方法<br />Method</th>
+              <th>路径<br />Path</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>ntfy</td>
+              <td><code>POST/PUT</code></td>
+              <td><code>/ntfy/{topic}</code></td>
+              <td>
+                <code>{topic}=compat_key</code>，并兼容
+                <code>/publish</code>、<code>/send</code>、<code>/trigger</code>
+                变体。
+              </td>
+            </tr>
+            <tr>
+              <td>Server酱</td>
+              <td><code>GET/POST</code></td>
+              <td><code>/serverchan/{sendkey}</code></td>
+              <td>
+                <code>{sendkey}=compat_key</code>，支持
+                <code>.send</code> 后缀风格。
+              </td>
+            </tr>
+            <tr>
+              <td>Bark v1</td>
+              <td><code>GET</code></td>
+              <td>
+                <code>/bark/{device_key}/{body}</code> 或
+                <code>/bark/{device_key}/{title}/{body}</code>
+              </td>
+              <td><code>{device_key}=compat_key</code>。</td>
+            </tr>
+            <tr>
+              <td>Bark v2</td>
+              <td><code>POST</code></td>
+              <td><code>/bark/push</code></td>
+              <td>JSON 字段 <code>device_key=compat_key</code>。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
     </main>
+    <script>
+      (() => {
+        const root = document.documentElement;
+        const main = document.querySelector("main");
+        const switchButtons = Array.from(
+          document.querySelectorAll(".lang-switch [data-doc-lang]"),
+        );
+        if (!main || switchButtons.length === 0) return;
+
+        const hanRe = /[\u4e00-\u9fff]/;
+        const latinRe = /[A-Za-z]/;
+
+        const hasHan = (text) => hanRe.test(text);
+        const hasLatin = (text) => latinRe.test(text);
+
+        function wrapBilingualByBr() {
+          const targets = main.querySelectorAll(
+            "p,h1,h2,h3,h4,li,th,td,.note,.callout,a",
+          );
+          for (const el of targets) {
+            if (el.closest("pre,code,script,style")) continue;
+            if (el.querySelector(".lang-zh, .lang-en")) continue;
+
+            const br = el.querySelector("br");
+            if (!br) continue;
+
+            const nodes = Array.from(el.childNodes);
+            const brIndex = nodes.indexOf(br);
+            if (brIndex < 0) continue;
+
+            const beforeNodes = nodes.slice(0, brIndex);
+            const afterNodes = nodes.slice(brIndex + 1);
+            if (beforeNodes.length === 0 || afterNodes.length === 0) continue;
+
+            const beforeContainer = document.createElement("div");
+            const afterContainer = document.createElement("div");
+            beforeNodes.forEach((n) => beforeContainer.appendChild(n.cloneNode(true)));
+            afterNodes.forEach((n) => afterContainer.appendChild(n.cloneNode(true)));
+
+            const zhHtml = beforeContainer.innerHTML.trim();
+            const enHtml = afterContainer.innerHTML.trim();
+            if (!zhHtml || !enHtml) continue;
+            if (!hasHan(zhHtml) || !hasLatin(enHtml)) continue;
+
+            el.innerHTML =
+              `<span class="lang-zh">${zhHtml}</span>` +
+              `<span class="lang-sep"><br /></span>` +
+              `<span class="lang-en">${enHtml}</span>`;
+          }
+        }
+
+        function wrapBilingualBySlash() {
+          const walker = document.createTreeWalker(
+            main,
+            NodeFilter.SHOW_TEXT,
+            {
+              acceptNode(node) {
+                const parent = node.parentElement;
+                if (!parent) return NodeFilter.FILTER_REJECT;
+                if (parent.closest("pre,code,script,style")) {
+                  return NodeFilter.FILTER_REJECT;
+                }
+                if (parent.closest(".lang-zh,.lang-en")) {
+                  return NodeFilter.FILTER_REJECT;
+                }
+                const text = node.nodeValue || "";
+                if (!text.includes(" / ")) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+              },
+            },
+          );
+
+          const textNodes = [];
+          while (walker.nextNode()) {
+            textNodes.push(walker.currentNode);
+          }
+
+          for (const textNode of textNodes) {
+            const text = textNode.nodeValue || "";
+            const match = text.match(/^(.*?)\s+\/\s+(.*)$/);
+            if (!match) continue;
+            const zhText = match[1].trim();
+            const enText = match[2].trim();
+            if (!hasHan(zhText) || !hasLatin(enText)) continue;
+
+            const fragment = document.createDocumentFragment();
+            const zhSpan = document.createElement("span");
+            const sepSpan = document.createElement("span");
+            const enSpan = document.createElement("span");
+            zhSpan.className = "lang-zh";
+            sepSpan.className = "lang-sep";
+            enSpan.className = "lang-en";
+            zhSpan.textContent = zhText;
+            sepSpan.textContent = " / ";
+            enSpan.textContent = enText;
+
+            fragment.appendChild(zhSpan);
+            fragment.appendChild(sepSpan);
+            fragment.appendChild(enSpan);
+            textNode.parentNode.replaceChild(fragment, textNode);
+          }
+        }
+
+        function setActive(lang) {
+          for (const button of switchButtons) {
+            button.classList.toggle("active", button.dataset.docLang === lang);
+          }
+        }
+
+        function applyLang(lang, updateUrl = true) {
+          const normalized = lang === "zh" ? "zh" : "en";
+          root.dataset.docLang = normalized;
+          root.lang = normalized === "zh" ? "zh-Hans" : "en";
+          localStorage.setItem("pushgo_docs_lang", normalized);
+          setActive(normalized);
+
+          if (updateUrl) {
+            const url = new URL(window.location.href);
+            url.searchParams.set("lang", normalized);
+            history.replaceState(null, "", url.toString());
+          }
+        }
+
+        wrapBilingualByBr();
+        wrapBilingualBySlash();
+
+        const queryLang = new URL(window.location.href).searchParams.get("lang");
+        const storedLang = localStorage.getItem("pushgo_docs_lang");
+        const initialLang =
+          queryLang === "zh" || queryLang === "en"
+            ? queryLang
+            : storedLang === "zh" || storedLang === "en"
+              ? storedLang
+              : "en";
+
+        applyLang(initialLang, false);
+
+        for (const button of switchButtons) {
+          button.addEventListener("click", () => {
+            applyLang(button.dataset.docLang || "en");
+          });
+        }
+      })();
+    </script>
   </body>
 </html>
