@@ -217,6 +217,14 @@ impl Storage {
         self.db.automation_counts().await
     }
 
+    pub async fn load_mcp_state_json(&self) -> StoreResult<Option<String>> {
+        self.db.load_mcp_state_json().await
+    }
+
+    pub async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()> {
+        self.db.save_mcp_state_json(state_json).await
+    }
+
     pub async fn automation_reset(&self) -> StoreResult<()> {
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();

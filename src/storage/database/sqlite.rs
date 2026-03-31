@@ -84,6 +84,7 @@ impl SqliteDb {
             "CREATE TABLE IF NOT EXISTS device_stats_daily (device_key TEXT NOT NULL, bucket_date TEXT NOT NULL, messages_received INTEGER NOT NULL DEFAULT 0, messages_acked INTEGER NOT NULL DEFAULT 0, private_connected_count INTEGER NOT NULL DEFAULT 0, private_pull_count INTEGER NOT NULL DEFAULT 0, provider_success_count INTEGER NOT NULL DEFAULT 0, provider_failure_count INTEGER NOT NULL DEFAULT 0, private_outbox_enqueued_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (device_key, bucket_date))",
             "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour TEXT PRIMARY KEY, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_outbox_depth_max INTEGER NOT NULL DEFAULT 0, dedupe_pending_max INTEGER NOT NULL DEFAULT 0, active_private_sessions_max INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
         ];
 
         for stmt in statements {
@@ -2151,6 +2152,7 @@ impl DatabaseAccess for SqliteDb {
             "private_payloads",
             "private_sessions",
             "private_device_keys",
+            "mcp_state",
         ];
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
@@ -2181,5 +2183,27 @@ impl DatabaseAccess for SqliteDb {
             subscription_count: subscription_count as usize,
             delivery_dedupe_pending_count: delivery_dedupe_pending_count as usize,
         })
+    }
+
+    async fn load_mcp_state_json(&self) -> StoreResult<Option<String>> {
+        let state = sqlx::query_scalar::<_, String>(
+            "SELECT state_json FROM mcp_state WHERE state_key = 'default'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(state)
+    }
+
+    async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()> {
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO mcp_state (state_key, state_json, updated_at) VALUES ('default', ?, ?) \
+             ON CONFLICT(state_key) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",
+        )
+        .bind(state_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

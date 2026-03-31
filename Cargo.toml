@@ -69,6 +69,8 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 ] }
 rand = "0.10.0"
 hmac = "0.12.1"
+sha2 = "0.10.9"
+base64 = "0.22.1"
 async-trait = "0.1.89"
 warp-link = { git = "https://github.com/AldenClark/warp-link", rev = "830721e14d59e645a64808af2ec1b0f74d23e4cc" }
 warp-link-coordination = { git = "https://github.com/AldenClark/warp-link", rev = "830721e14d59e645a64808af2ec1b0f74d23e4cc" }

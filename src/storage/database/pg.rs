@@ -59,6 +59,7 @@ impl PostgresDb {
             "CREATE TABLE IF NOT EXISTS device_stats_daily (device_key VARCHAR(255) NOT NULL, bucket_date VARCHAR(10) NOT NULL, messages_received BIGINT NOT NULL DEFAULT 0, messages_acked BIGINT NOT NULL DEFAULT 0, private_connected_count BIGINT NOT NULL DEFAULT 0, private_pull_count BIGINT NOT NULL DEFAULT 0, provider_success_count BIGINT NOT NULL DEFAULT 0, provider_failure_count BIGINT NOT NULL DEFAULT 0, private_outbox_enqueued_count BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (device_key, bucket_date))",
             "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour VARCHAR(16) PRIMARY KEY, messages_routed BIGINT NOT NULL DEFAULT 0, deliveries_attempted BIGINT NOT NULL DEFAULT 0, deliveries_acked BIGINT NOT NULL DEFAULT 0, private_outbox_depth_max BIGINT NOT NULL DEFAULT 0, dedupe_pending_max BIGINT NOT NULL DEFAULT 0, active_private_sessions_max BIGINT NOT NULL DEFAULT 0)",
             "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS mcp_state (state_key VARCHAR(64) PRIMARY KEY, state_json TEXT NOT NULL, updated_at BIGINT NOT NULL)",
         ];
 
         for stmt in statements {
@@ -2059,6 +2060,7 @@ impl DatabaseAccess for PostgresDb {
             "private_payloads",
             "private_sessions",
             "private_device_keys",
+            "mcp_state",
         ];
         let mut tx = self.pool.begin().await?;
         for table in tables {
@@ -2091,5 +2093,29 @@ impl DatabaseAccess for PostgresDb {
             subscription_count: subscription_count as usize,
             delivery_dedupe_pending_count: delivery_dedupe_pending_count as usize,
         })
+    }
+
+    async fn load_mcp_state_json(&self) -> StoreResult<Option<String>> {
+        let state = sqlx::query_scalar::<_, String>(
+            "SELECT state_json FROM mcp_state WHERE state_key = $1",
+        )
+        .bind("default")
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(state)
+    }
+
+    async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()> {
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO mcp_state (state_key, state_json, updated_at) VALUES ($1, $2, $3) \
+             ON CONFLICT(state_key) DO UPDATE SET state_json = EXCLUDED.state_json, updated_at = EXCLUDED.updated_at",
+        )
+        .bind("default")
+        .bind(state_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

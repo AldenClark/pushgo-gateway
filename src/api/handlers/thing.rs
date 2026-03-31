@@ -8,15 +8,13 @@ use serde_json::json;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
-    api::{
-        ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_i64_lenient,
-        format_channel_id, parse_channel_id, validate_channel_password,
-    },
+    api::{ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_i64_lenient},
     app::AppState,
-    storage::{StoreError, ThingState},
+    storage::ThingState,
 };
 
 use super::{
+    channel_auth::{AuthorizedChannel, authorize_channel_by_password},
     dispatch_lifecycle::dispatch_failure_error_message,
     message::{
         build_semantic_create_dedupe_key, deserialize_metadata_map, dispatch_entity_notification,
@@ -59,7 +57,8 @@ struct ThingProfile {
 #[serde(deny_unknown_fields)]
 struct ThingCommonFields {
     channel_id: String,
-    password: String,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    password: Option<String>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     op_id: Option<String>,
 }
@@ -137,7 +136,6 @@ struct ThingPayloadFields {
 #[derive(Debug)]
 struct ThingIntent {
     channel_id: String,
-    password: String,
     op_id: Option<String>,
     thing_id: Option<String>,
     payload: ThingPayloadFields,
@@ -147,7 +145,6 @@ impl ThingIntent {
     fn from_create(request: ThingCreateRequest) -> Self {
         Self {
             channel_id: request.common.channel_id,
-            password: request.common.password,
             op_id: request.common.op_id,
             thing_id: None,
             payload: ThingPayloadFields {
@@ -161,7 +158,6 @@ impl ThingIntent {
     fn from_update(request: ThingUpdateRequest) -> Self {
         Self {
             channel_id: request.common.channel_id,
-            password: request.common.password,
             op_id: request.common.op_id,
             thing_id: Some(request.thing_id),
             payload: ThingPayloadFields {
@@ -175,7 +171,6 @@ impl ThingIntent {
     fn from_archive(request: ThingArchiveRequest) -> Self {
         Self {
             channel_id: request.common.channel_id,
-            password: request.common.password,
             op_id: request.common.op_id,
             thing_id: Some(request.thing_id),
             payload: ThingPayloadFields {
@@ -189,7 +184,6 @@ impl ThingIntent {
     fn from_delete(request: ThingDeleteRequest) -> Self {
         Self {
             channel_id: request.common.channel_id,
-            password: request.common.password,
             op_id: request.common.op_id,
             thing_id: Some(request.thing_id),
             payload: ThingPayloadFields {
@@ -219,20 +213,15 @@ enum ThingRouteAction {
 
 async fn thing_to_channel_with_action(
     state: AppState,
+    authorized_channel: AuthorizedChannel,
     payload: ThingIntent,
     route_action: ThingRouteAction,
 ) -> HttpResult {
     if payload.channel_id.trim().is_empty() {
         return Err(Error::validation("channel id must not be empty"));
     }
-    let channel_id = parse_channel_id(&payload.channel_id)?;
-    let channel_scope = format_channel_id(&channel_id);
-    let password = validate_channel_password(&payload.password)?;
-    state
-        .store
-        .channel_info_with_password(channel_id, password)
-        .await?
-        .ok_or(StoreError::ChannelNotFound)?;
+    let channel_id = authorized_channel.channel_id;
+    let channel_scope = authorized_channel.channel_scope.clone();
 
     let op_id = resolve_op_id(payload.op_id.as_deref())?;
     if route_action == ThingRouteAction::Create
@@ -445,8 +434,30 @@ pub(crate) async fn thing_create_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ThingCreateRequest>,
 ) -> HttpResult {
+    let password = payload
+        .common
+        .password
+        .as_deref()
+        .ok_or_else(|| Error::validation("password is required"))?;
+    let authorized_channel =
+        authorize_channel_by_password(&state, &payload.common.channel_id, password).await?;
     thing_to_channel_with_action(
         state,
+        authorized_channel,
+        ThingIntent::from_create(payload),
+        ThingRouteAction::Create,
+    )
+    .await
+}
+
+pub(crate) async fn thing_create_authorized(
+    state: &AppState,
+    payload: ThingCreateRequest,
+    authorized_channel: AuthorizedChannel,
+) -> HttpResult {
+    thing_to_channel_with_action(
+        state.clone(),
+        authorized_channel,
         ThingIntent::from_create(payload),
         ThingRouteAction::Create,
     )
@@ -457,8 +468,30 @@ pub(crate) async fn thing_update_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ThingUpdateRequest>,
 ) -> HttpResult {
+    let password = payload
+        .common
+        .password
+        .as_deref()
+        .ok_or_else(|| Error::validation("password is required"))?;
+    let authorized_channel =
+        authorize_channel_by_password(&state, &payload.common.channel_id, password).await?;
     thing_to_channel_with_action(
         state,
+        authorized_channel,
+        ThingIntent::from_update(payload),
+        ThingRouteAction::Update,
+    )
+    .await
+}
+
+pub(crate) async fn thing_update_authorized(
+    state: &AppState,
+    payload: ThingUpdateRequest,
+    authorized_channel: AuthorizedChannel,
+) -> HttpResult {
+    thing_to_channel_with_action(
+        state.clone(),
+        authorized_channel,
         ThingIntent::from_update(payload),
         ThingRouteAction::Update,
     )
@@ -469,8 +502,30 @@ pub(crate) async fn thing_archive_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ThingArchiveRequest>,
 ) -> HttpResult {
+    let password = payload
+        .common
+        .password
+        .as_deref()
+        .ok_or_else(|| Error::validation("password is required"))?;
+    let authorized_channel =
+        authorize_channel_by_password(&state, &payload.common.channel_id, password).await?;
     thing_to_channel_with_action(
         state,
+        authorized_channel,
+        ThingIntent::from_archive(payload),
+        ThingRouteAction::Archive,
+    )
+    .await
+}
+
+pub(crate) async fn thing_archive_authorized(
+    state: &AppState,
+    payload: ThingArchiveRequest,
+    authorized_channel: AuthorizedChannel,
+) -> HttpResult {
+    thing_to_channel_with_action(
+        state.clone(),
+        authorized_channel,
         ThingIntent::from_archive(payload),
         ThingRouteAction::Archive,
     )
@@ -481,8 +536,30 @@ pub(crate) async fn thing_delete_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ThingDeleteRequest>,
 ) -> HttpResult {
+    let password = payload
+        .common
+        .password
+        .as_deref()
+        .ok_or_else(|| Error::validation("password is required"))?;
+    let authorized_channel =
+        authorize_channel_by_password(&state, &payload.common.channel_id, password).await?;
     thing_to_channel_with_action(
         state,
+        authorized_channel,
+        ThingIntent::from_delete(payload),
+        ThingRouteAction::Delete,
+    )
+    .await
+}
+
+pub(crate) async fn thing_delete_authorized(
+    state: &AppState,
+    payload: ThingDeleteRequest,
+    authorized_channel: AuthorizedChannel,
+) -> HttpResult {
+    thing_to_channel_with_action(
+        state.clone(),
+        authorized_channel,
         ThingIntent::from_delete(payload),
         ThingRouteAction::Delete,
     )

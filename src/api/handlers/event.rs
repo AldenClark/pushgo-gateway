@@ -7,15 +7,13 @@ use serde_json::json;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
-    api::{
-        ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_i64_lenient,
-        format_channel_id, parse_channel_id, validate_channel_password,
-    },
+    api::{ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_i64_lenient},
     app::AppState,
-    storage::{EventState, StoreError},
+    storage::EventState,
 };
 
 use super::{
+    channel_auth::{AuthorizedChannel, authorize_channel_by_password},
     dispatch_lifecycle::dispatch_failure_error_message,
     message::{
         build_semantic_create_dedupe_key, deserialize_metadata_map, dispatch_entity_notification,
@@ -49,7 +47,8 @@ struct EventProfile {
 #[serde(deny_unknown_fields)]
 struct EventCommonFields {
     channel_id: String,
-    password: String,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    password: Option<String>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     op_id: Option<String>,
 }
@@ -113,7 +112,6 @@ pub(crate) struct EventCloseRequest {
 #[derive(Debug)]
 struct EventIntent {
     channel_id: String,
-    password: String,
     op_id: Option<String>,
     event_id: Option<String>,
     thing_id: Option<String>,
@@ -124,7 +122,6 @@ impl EventIntent {
     fn from_create(request: EventCreateRequest) -> Self {
         Self {
             channel_id: request.common.channel_id,
-            password: request.common.password,
             op_id: request.common.op_id,
             event_id: None,
             thing_id: request.thing_id,
@@ -135,7 +132,6 @@ impl EventIntent {
     fn from_update(request: EventUpdateRequest) -> Self {
         Self {
             channel_id: request.common.channel_id,
-            password: request.common.password,
             op_id: request.common.op_id,
             event_id: Some(request.event_id),
             thing_id: request.thing_id,
@@ -146,7 +142,6 @@ impl EventIntent {
     fn from_close(request: EventCloseRequest) -> Self {
         Self {
             channel_id: request.common.channel_id,
-            password: request.common.password,
             op_id: request.common.op_id,
             event_id: Some(request.event_id),
             thing_id: request.thing_id,
@@ -184,6 +179,7 @@ impl EventRouteAction {
 
 async fn event_to_channel_with_action(
     state: AppState,
+    authorized_channel: AuthorizedChannel,
     payload: EventIntent,
     route_action: EventRouteAction,
 ) -> HttpResult {
@@ -191,14 +187,8 @@ async fn event_to_channel_with_action(
     if payload.channel_id.trim().is_empty() {
         return Err(Error::validation("channel id must not be empty"));
     }
-    let channel_id = parse_channel_id(&payload.channel_id)?;
-    let channel_scope = format_channel_id(&channel_id);
-    let password = validate_channel_password(&payload.password)?;
-    state
-        .store
-        .channel_info_with_password(channel_id, password)
-        .await?
-        .ok_or(StoreError::ChannelNotFound)?;
+    let channel_id = authorized_channel.channel_id;
+    let channel_scope = authorized_channel.channel_scope.clone();
 
     let op_id = resolve_op_id(payload.op_id.as_deref())?;
     let thing_id = payload
@@ -425,8 +415,30 @@ pub(crate) async fn event_create_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<EventCreateRequest>,
 ) -> HttpResult {
+    let password = payload
+        .common
+        .password
+        .as_deref()
+        .ok_or_else(|| Error::validation("password is required"))?;
+    let authorized_channel =
+        authorize_channel_by_password(&state, &payload.common.channel_id, password).await?;
     event_to_channel_with_action(
         state,
+        authorized_channel,
+        EventIntent::from_create(payload),
+        EventRouteAction::Create,
+    )
+    .await
+}
+
+pub(crate) async fn event_create_authorized(
+    state: &AppState,
+    payload: EventCreateRequest,
+    authorized_channel: AuthorizedChannel,
+) -> HttpResult {
+    event_to_channel_with_action(
+        state.clone(),
+        authorized_channel,
         EventIntent::from_create(payload),
         EventRouteAction::Create,
     )
@@ -437,8 +449,30 @@ pub(crate) async fn event_update_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<EventUpdateRequest>,
 ) -> HttpResult {
+    let password = payload
+        .common
+        .password
+        .as_deref()
+        .ok_or_else(|| Error::validation("password is required"))?;
+    let authorized_channel =
+        authorize_channel_by_password(&state, &payload.common.channel_id, password).await?;
     event_to_channel_with_action(
         state,
+        authorized_channel,
+        EventIntent::from_update(payload),
+        EventRouteAction::Update,
+    )
+    .await
+}
+
+pub(crate) async fn event_update_authorized(
+    state: &AppState,
+    payload: EventUpdateRequest,
+    authorized_channel: AuthorizedChannel,
+) -> HttpResult {
+    event_to_channel_with_action(
+        state.clone(),
+        authorized_channel,
         EventIntent::from_update(payload),
         EventRouteAction::Update,
     )
@@ -449,8 +483,30 @@ pub(crate) async fn event_close_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<EventCloseRequest>,
 ) -> HttpResult {
+    let password = payload
+        .common
+        .password
+        .as_deref()
+        .ok_or_else(|| Error::validation("password is required"))?;
+    let authorized_channel =
+        authorize_channel_by_password(&state, &payload.common.channel_id, password).await?;
     event_to_channel_with_action(
         state,
+        authorized_channel,
+        EventIntent::from_close(payload),
+        EventRouteAction::Close,
+    )
+    .await
+}
+
+pub(crate) async fn event_close_authorized(
+    state: &AppState,
+    payload: EventCloseRequest,
+    authorized_channel: AuthorizedChannel,
+) -> HttpResult {
+    event_to_channel_with_action(
+        state.clone(),
+        authorized_channel,
         EventIntent::from_close(payload),
         EventRouteAction::Close,
     )

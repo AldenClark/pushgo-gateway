@@ -8,6 +8,7 @@ use crate::{
         audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog},
         create_dispatch_channels, spawn_dispatch_workers, spawn_provider_pull_retry_worker,
     },
+    mcp::{McpAuthMode, McpConfig, McpState},
     private::{
         PrivateConfig, PrivateState, spawn_persistent_fallback_worker, spawn_quic_if_configured,
         spawn_tcp_if_configured,
@@ -50,6 +51,7 @@ pub(crate) struct AppState {
     pub private_transport_profile: PrivateTransportProfile,
     pub private: Option<Arc<PrivateState>>,
     pub store: Storage,
+    pub mcp: Option<Arc<McpState>>,
 }
 
 pub struct AppRuntime {
@@ -157,11 +159,48 @@ pub async fn build_app(
         ws_subprotocol: Arc::from("pushgo-private.v1"),
     };
 
+    let mcp_state = if args.mcp_enabled {
+        let issuer = args
+            .mcp_oauth_issuer
+            .clone()
+            .unwrap_or_else(|| format!("https://{}", args.http_addr));
+        let allowed_redirect_uris = args
+            .mcp_oauth_allowed_redirect_uris
+            .as_deref()
+            .map(|raw| {
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let config = McpConfig {
+            oauth_enabled: args.mcp_oauth_enabled,
+            legacy_auth_enabled: args.mcp_legacy_auth_enabled,
+            auth_mode: McpAuthMode::parse(args.mcp_auth_mode.as_str()),
+            oauth_issuer: Arc::from(issuer.into_boxed_str()),
+            oauth_signing_key: args
+                .mcp_oauth_signing_key
+                .as_deref()
+                .map(|value| Arc::from(value.to_string().into_boxed_str())),
+            access_token_ttl_secs: args.mcp_access_token_ttl_secs,
+            refresh_token_absolute_ttl_secs: args.mcp_refresh_token_absolute_ttl_secs,
+            refresh_token_idle_ttl_secs: args.mcp_refresh_token_idle_ttl_secs,
+            bind_session_ttl_secs: args.mcp_bind_session_ttl_secs,
+            revoke_requires_password: args.mcp_revoke_requires_password,
+            allowed_redirect_uris: Arc::new(allowed_redirect_uris),
+        };
+        Some(Arc::new(McpState::new(config, &auth, store.clone()).await))
+    } else {
+        None
+    };
+
     let state = AppState {
         dispatch,
         dispatch_audit,
         delivery_audit,
-        auth,
+        auth: auth.clone(),
         private_channel_enabled: args.private_channel_enabled,
         diagnostics_api_enabled: args.diagnostics_api_enabled,
         device_registry,
@@ -169,6 +208,7 @@ pub async fn build_app(
         private_transport_profile,
         private: private.clone(),
         store,
+        mcp: mcp_state,
     };
 
     let router = build_router(state.clone(), docs_html);

@@ -14,7 +14,7 @@ use serde_json::{Map as JsonMap, Value};
 use crate::{
     api::{
         ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_i64_lenient,
-        format_channel_id, parse_channel_id, validate_channel_password,
+        format_channel_id, validate_channel_password,
     },
     app::AppState,
     device_registry::DeviceRegistry,
@@ -25,10 +25,11 @@ use crate::{
     private::protocol::PRIVATE_PAYLOAD_VERSION_V1,
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
     stats::{DeviceDispatchDelta, DispatchStatsEvent},
-    storage::{DeliveryAuditWrite, DeviceInfo, DispatchTarget, Platform, StoreError},
+    storage::{DeliveryAuditWrite, DeviceInfo, DispatchTarget, Platform},
     util::{SharedStringMap, build_wakeup_data, encode_lower_hex_128, generate_hex_id_128},
 };
 
+use super::channel_auth::{AuthorizedChannel, authorize_channel_by_password};
 use super::dispatch_lifecycle::{
     DispatchOpGuard, DispatchOpGuardStart, NotificationDispatchSummary,
     dispatch_failure_error_message,
@@ -239,16 +240,55 @@ pub(super) async fn dispatch_message_intent(
     scoped_thing_id: Option<String>,
 ) -> HttpResult {
     payload.validate_payload()?;
-    let channel_id = parse_channel_id(&payload.channel_id)?;
-    let channel_id_value = format_channel_id(&channel_id);
-    let password = validate_channel_password(&payload.password)?;
-    state
-        .store
-        .channel_info_with_password(channel_id, password)
-        .await?
-        .ok_or(StoreError::ChannelNotFound)?;
+    let authorized =
+        authorize_channel_by_password(state, &payload.channel_id, &payload.password).await?;
+    dispatch_message_authorized_intent(state, authorized, payload.into_dispatch(), scoped_thing_id)
+        .await
+}
 
-    let MessageIntent {
+#[derive(Debug, Clone)]
+pub(crate) struct MessageDispatchIntent {
+    pub op_id: Option<String>,
+    pub occurred_at: Option<i64>,
+    pub title: String,
+    pub body: Option<String>,
+    pub severity: Option<String>,
+    pub ttl: Option<i64>,
+    pub url: Option<String>,
+    pub images: Vec<String>,
+    pub ciphertext: Option<String>,
+    pub tags: Vec<String>,
+    pub metadata: JsonMap<String, Value>,
+}
+
+impl MessageIntent {
+    fn into_dispatch(self) -> MessageDispatchIntent {
+        MessageDispatchIntent {
+            op_id: self.op_id,
+            occurred_at: self.occurred_at,
+            title: self.title,
+            body: self.body,
+            severity: self.severity,
+            ttl: self.ttl,
+            url: self.url,
+            images: self.images,
+            ciphertext: self.ciphertext,
+            tags: self.tags,
+            metadata: self.metadata,
+        }
+    }
+}
+
+pub(crate) async fn dispatch_message_authorized_intent(
+    state: &AppState,
+    authorized_channel: AuthorizedChannel,
+    payload: MessageDispatchIntent,
+    scoped_thing_id: Option<String>,
+) -> HttpResult {
+    let channel_id = authorized_channel.channel_id;
+    let channel_id_value = authorized_channel.channel_scope;
+
+    let MessageDispatchIntent {
         op_id,
         occurred_at,
         title,
@@ -260,7 +300,6 @@ pub(super) async fn dispatch_message_intent(
         ciphertext,
         tags,
         metadata,
-        ..
     } = payload;
     let occurred_at = if scoped_thing_id.is_some() {
         occurred_at.ok_or_else(|| {
@@ -1727,7 +1766,7 @@ fn normalize_image_values(values: &[String], field: &str) -> Result<Vec<String>,
     Ok(out)
 }
 
-pub(super) fn normalize_thing_id(raw: &str) -> Result<&str, Error> {
+pub(crate) fn normalize_thing_id(raw: &str) -> Result<&str, Error> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(Error::validation("thing_id must not be empty"));
