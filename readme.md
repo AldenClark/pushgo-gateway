@@ -1,9 +1,10 @@
 # PushGo Gateway
 
-`pushgo-gateway` is the gateway service for PushGo, with two core capability groups:
+`pushgo-gateway` is the gateway service for PushGo, with three core capability groups:
 
 - Public API: HTTP endpoints for devices, channels, messages, and events
 - Private transport: real-time delivery over QUIC / Raw TCP / WSS
+- MCP gateway: MCP HTTP endpoint, OAuth flow, and channel-binding pages for MCP clients
 
 ## Project Links
 
@@ -39,6 +40,13 @@ In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_UR
 - `--private-tcp-tls-offload=true` only changes Raw TCP; QUIC still needs gateway-side TLS materials.
 - WSS has no separate bind flag; it rides on `--http-addr` and is typically exposed by edge TLS.
 
+## MCP Runtime Model
+
+- `--mcp-enabled=true` mounts `/mcp`, `/oauth/*`, and `/.well-known/*` endpoints on the same HTTP listener as the public API.
+- `--public-base-url` is recommended for reverse-proxy / container deployments so OAuth issuer URLs, bind URLs, and WSS hints point to the externally reachable HTTPS origin.
+- `--mcp-predefined-clients` accepts `client_id:client_secret` entries separated by semicolons or newlines.
+- If `--public-base-url` is omitted, gateway will bootstrap issuer URLs from the incoming HTTPS origin when possible; fixed public deployments should still set it explicitly.
+
 ## CLI Reference
 
 Main options support both CLI flag and environment variable forms.  
@@ -54,7 +62,8 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | No                | Master switch for private transport                    |
 | `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | No                | Enable `/diagnostics/*` namespace and diagnostics logs |
-| `--db-url`                        | `PUSHGO_DB_URL`                        | `sqlite://./pushgo-gateway.db?mode=rwc` | No    | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
+| `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
+| `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | None                       | No                | External HTTPS base URL used for MCP/OAuth issuer URLs and advertised WSS URL |
 
 ### Private Transport Bind / Advertise
 
@@ -92,6 +101,18 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--private-global-max-pending`    | `PUSHGO_PRIVATE_GLOBAL_MAX_PENDING`    | `5000000`                  | No                | Global pending cap for private queue                   |
 | `--private-hot-cache-capacity`    | `PUSHGO_PRIVATE_HOT_CACHE_CAPACITY`    | `50000`                    | No                | Hot-cache capacity for private payloads                |
 | `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `2592000`                  | No                | Default TTL for private messages (seconds)             |
+
+### MCP / OAuth
+
+| CLI Flag                                  | Env                                             | Default     | Required | Description                                                            |
+| ----------------------------------------- | ----------------------------------------------- | ----------- | -------- | ---------------------------------------------------------------------- |
+| `--mcp-enabled`                           | `PUSHGO_MCP_ENABLED`                            | `false`     | No       | Enable MCP HTTP endpoint (`/mcp`) and related OAuth / bind routes      |
+| `--mcp-access-token-ttl-secs`             | `PUSHGO_MCP_ACCESS_TOKEN_TTL_SECS`              | `900`       | No       | MCP OAuth access token TTL in seconds                                  |
+| `--mcp-refresh-token-absolute-ttl-secs`   | `PUSHGO_MCP_REFRESH_TOKEN_ABSOLUTE_TTL_SECS`    | `2592000`   | No       | MCP OAuth refresh token absolute TTL in seconds                        |
+| `--mcp-refresh-token-idle-ttl-secs`       | `PUSHGO_MCP_REFRESH_TOKEN_IDLE_TTL_SECS`        | `604800`    | No       | MCP OAuth refresh token idle TTL in seconds                            |
+| `--mcp-bind-session-ttl-secs`             | `PUSHGO_MCP_BIND_SESSION_TTL_SECS`              | `600`       | No       | MCP channel-bind page session TTL in seconds                           |
+| `--mcp-dcr-enabled`                       | `PUSHGO_MCP_DCR_ENABLED`                        | `true`      | No       | Enable OAuth Dynamic Client Registration                               |
+| `--mcp-predefined-clients`                | `PUSHGO_MCP_PREDEFINED_CLIENTS`                 | None        | No       | Predefined OAuth clients as `client_id:client_secret` joined by `;` or newlines |
 
 ### Advanced Environment Variables (env-only)
 
@@ -277,6 +298,8 @@ Image ports:
 - `5223/tcp`: Raw TCP
 - `5223/udp`: QUIC
 
+MCP/OAuth routes (`/mcp`, `/oauth/*`, `/.well-known/*`) also use `6666/tcp`; no extra container port is required.
+
 Example:
 
 ```bash
@@ -288,6 +311,9 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
   -e PUSHGO_PRIVATE_CHANNEL_ENABLED=true \
+  -e PUSHGO_MCP_ENABLED=true \
+  -e PUSHGO_PUBLIC_BASE_URL='https://gateway.example.com' \
+  -e PUSHGO_MCP_PREDEFINED_CLIENTS='chatgpt-prod:replace-me' \
   -e PUSHGO_PRIVATE_QUIC_BIND=0.0.0.0:5223 \
   -e PUSHGO_PRIVATE_QUIC_PORT=443 \
   -e PUSHGO_PRIVATE_TCP_BIND=0.0.0.0:5223 \
@@ -297,6 +323,8 @@ docker run -d --name pushgo-gateway \
   -v /etc/pushgo/certs:/certs:ro \
   ghcr.io/<owner>/pushgo-gateway:latest
 ```
+
+If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_CLIENTS`. For fixed clients, keep `PUSHGO_PUBLIC_BASE_URL` on the public HTTPS origin exposed by your reverse proxy or LB.
 
 ## Production Recommendations
 
@@ -312,6 +340,7 @@ docker run -d --name pushgo-gateway \
 
 - 公共 API：设备、频道、消息、事件等 HTTP 接口
 - 私有传输层：基于 QUIC / Raw TCP / WSS 的实时收发
+- MCP 网关：面向 MCP 客户端的 MCP HTTP 入口、OAuth 流程与频道绑定页面
 
 ## 项目链接
 
@@ -347,6 +376,13 @@ docker run -d --name pushgo-gateway \
 - `--private-tcp-tls-offload=true` 只影响 Raw TCP；QUIC 仍然需要 gateway 侧 TLS 材料。
 - WSS 没有单独 bind 参数，始终复用 `--http-addr` 对应的 HTTP 入口。
 
+## MCP 运行模型
+
+- `--mcp-enabled=true` 后，会在同一个 HTTP 监听器上挂载 `/mcp`、`/oauth/*` 与 `/.well-known/*`。
+- 容器部署或反向代理部署时，建议显式设置 `--public-base-url`，让 OAuth issuer、绑定页面 URL、WSS 对外提示都指向真实可访问的 HTTPS 域名。
+- `--mcp-predefined-clients` 使用 `client_id:client_secret` 格式，多个条目之间用分号或换行分隔。
+- 如果不传 `--public-base-url`，gateway 会尽量从入站 HTTPS Origin 推导 issuer；固定公网部署仍建议显式配置。
+
 ## CLI 参数
 
 主参数同时支持 CLI 与环境变量两种方式。  
@@ -362,7 +398,8 @@ docker run -d --name pushgo-gateway \
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | 否       | 私有传输总开关                                       |
 | `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | 否       | 开启 `/diagnostics/*` 诊断接口与诊断日志             |
-| `--db-url`                        | `PUSHGO_DB_URL`                        | `sqlite://./pushgo-gateway.db?mode=rwc` | 否 | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
+| `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
+| `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | 无                         | 否       | MCP/OAuth issuer URL 与 WSS 对外提示使用的外部 HTTPS 基准地址 |
 
 ### Private 监听 / 对外宣告
 
@@ -400,6 +437,18 @@ docker run -d --name pushgo-gateway \
 | `--private-global-max-pending`    | `PUSHGO_PRIVATE_GLOBAL_MAX_PENDING`    | `5000000`                  | 否       | 全局私有队列待处理上限                               |
 | `--private-hot-cache-capacity`    | `PUSHGO_PRIVATE_HOT_CACHE_CAPACITY`    | `50000`                    | 否       | 私有热缓存容量                                       |
 | `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `2592000`                  | 否       | 私有消息默认 TTL（秒）                               |
+
+### MCP / OAuth
+
+| CLI Flag                                | Env                                           | 默认值      | 必填 | 说明                                                   |
+| --------------------------------------- | --------------------------------------------- | ----------- | ---- | ------------------------------------------------------ |
+| `--mcp-enabled`                         | `PUSHGO_MCP_ENABLED`                          | `false`     | 否   | 开启 MCP HTTP 入口（`/mcp`）及相关 OAuth / 绑定路由   |
+| `--mcp-access-token-ttl-secs`           | `PUSHGO_MCP_ACCESS_TOKEN_TTL_SECS`            | `900`       | 否   | MCP OAuth access token TTL（秒）                      |
+| `--mcp-refresh-token-absolute-ttl-secs` | `PUSHGO_MCP_REFRESH_TOKEN_ABSOLUTE_TTL_SECS`  | `2592000`   | 否   | MCP OAuth refresh token 绝对 TTL（秒）                |
+| `--mcp-refresh-token-idle-ttl-secs`     | `PUSHGO_MCP_REFRESH_TOKEN_IDLE_TTL_SECS`      | `604800`    | 否   | MCP OAuth refresh token 空闲 TTL（秒）                |
+| `--mcp-bind-session-ttl-secs`           | `PUSHGO_MCP_BIND_SESSION_TTL_SECS`            | `600`       | 否   | MCP 频道绑定页面会话 TTL（秒）                        |
+| `--mcp-dcr-enabled`                     | `PUSHGO_MCP_DCR_ENABLED`                      | `true`      | 否   | 是否开启 OAuth Dynamic Client Registration            |
+| `--mcp-predefined-clients`              | `PUSHGO_MCP_PREDEFINED_CLIENTS`               | 无          | 否   | 预置 OAuth 客户端，格式为 `client_id:client_secret`，用 `;` 或换行分隔 |
 
 ### 高级环境变量（仅 env）
 
@@ -585,6 +634,8 @@ docker build -f Dockerfile.local -t pushgo-gateway:local .
 - `5223/tcp`：Raw TCP
 - `5223/udp`：QUIC
 
+MCP/OAuth 路由（`/mcp`、`/oauth/*`、`/.well-known/*`）同样复用 `6666/tcp`，不需要额外容器端口。
+
 示例：
 
 ```bash
@@ -596,6 +647,9 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
   -e PUSHGO_PRIVATE_CHANNEL_ENABLED=true \
+  -e PUSHGO_MCP_ENABLED=true \
+  -e PUSHGO_PUBLIC_BASE_URL='https://gateway.example.com' \
+  -e PUSHGO_MCP_PREDEFINED_CLIENTS='chatgpt-prod:replace-me' \
   -e PUSHGO_PRIVATE_QUIC_BIND=0.0.0.0:5223 \
   -e PUSHGO_PRIVATE_QUIC_PORT=443 \
   -e PUSHGO_PRIVATE_TCP_BIND=0.0.0.0:5223 \
@@ -605,6 +659,8 @@ docker run -d --name pushgo-gateway \
   -v /etc/pushgo/certs:/certs:ro \
   ghcr.io/<owner>/pushgo-gateway:latest
 ```
+
+如果使用 Dynamic Client Registration，可以不传 `PUSHGO_MCP_PREDEFINED_CLIENTS`。如果是固定客户端，建议把 `PUSHGO_PUBLIC_BASE_URL` 设为反向代理或 LB 对外暴露的 HTTPS 域名。
 
 ## 生产建议
 
