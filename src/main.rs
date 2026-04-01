@@ -107,14 +107,12 @@ fn apns_endpoint(sandbox_mode: bool) -> &'static str {
 
 fn print_startup_diagnostics(args: &Args, apns_endpoint: &str, token_service_url: &str) {
     pushgo_gateway::util::diagnostics_log(format_args!(
-        "gateway startup: http_addr={} sandbox_mode={} private_channel_enabled={} diagnostics_api_enabled={} mcp_enabled={} mcp_oauth_enabled={} mcp_auth_mode={} apns_endpoint={} token_service_url={}",
+        "gateway startup: http_addr={} sandbox_mode={} private_channel_enabled={} diagnostics_api_enabled={} mcp_enabled={} apns_endpoint={} token_service_url={}",
         args.http_addr,
         args.sandbox_mode,
         args.private_channel_enabled,
         args.diagnostics_api_enabled,
         args.mcp_enabled,
-        args.mcp_oauth_enabled,
-        args.mcp_auth_mode,
         apns_endpoint,
         token_service_url
     ));

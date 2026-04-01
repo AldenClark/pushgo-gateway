@@ -1,3 +1,4 @@
+#[path = "channels/mod.rs"]
 mod channels;
 mod device_channels;
 mod pull;

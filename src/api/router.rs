@@ -15,7 +15,7 @@ use axum::{
     response::IntoResponse,
 };
 
-pub fn build_router(state: AppState, docs_html: &'static str) -> Router {
+pub(crate) fn build_router(state: AppState, docs_html: &'static str) -> Router {
     let mut router = handlers::public_router(docs_html);
 
     if state.diagnostics_api_enabled {
@@ -92,5 +92,5 @@ async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> 
 }
 
 #[cfg(test)]
-#[path = "router_tests.rs"]
+#[path = "router_tests/mod.rs"]
 mod tests;

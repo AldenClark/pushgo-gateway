@@ -33,16 +33,24 @@ pub(crate) struct NotificationDispatchSummary {
     pub private_enqueue_too_busy: bool,
 }
 
-pub(crate) fn dispatch_failure_error_message(
-    summary: &NotificationDispatchSummary,
-) -> Option<&'static str> {
-    if !summary.partial_failure {
-        return None;
+impl NotificationDispatchSummary {
+    pub(crate) fn failure_error_message(&self) -> Option<&'static str> {
+        if !self.partial_failure {
+            return None;
+        }
+        if self.private_enqueue_too_busy {
+            Some("private enqueue failures exceeded safety threshold")
+        } else {
+            Some("notification dispatch completed with partial failure")
+        }
     }
-    if summary.private_enqueue_too_busy {
-        Some("private enqueue failures exceeded safety threshold")
-    } else {
-        Some("notification dispatch completed with partial failure")
+
+    fn dedupe_action(&self) -> DispatchOpDedupeAction {
+        if self.partial_failure || self.private_enqueue_too_busy {
+            DispatchOpDedupeAction::ClearPending
+        } else {
+            DispatchOpDedupeAction::FinalizeSent
+        }
     }
 }
 
@@ -119,17 +127,50 @@ impl DispatchOpGuard {
         state: &AppState,
         summary: &NotificationDispatchSummary,
     ) -> Result<(), Error> {
-        settle_dispatch_op_dedupe(
+        self.settle(
             state,
-            self,
-            resolve_dispatch_op_dedupe_action(summary),
+            summary.dedupe_action(),
             Some(summary.delivery_id.as_str()),
         )
         .await
     }
 
     async fn clear_pending(&self, state: &AppState) -> Result<(), Error> {
-        settle_dispatch_op_dedupe(state, self, DispatchOpDedupeAction::ClearPending, None).await
+        self.settle(state, DispatchOpDedupeAction::ClearPending, None)
+            .await
+    }
+
+    async fn settle(
+        &self,
+        state: &AppState,
+        action: DispatchOpDedupeAction,
+        finalized_delivery_id: Option<&str>,
+    ) -> Result<(), Error> {
+        match action {
+            DispatchOpDedupeAction::FinalizeSent => {
+                let delivery_id =
+                    finalized_delivery_id.unwrap_or(self.reserved_delivery_id.as_str());
+                let marked = state
+                    .store
+                    .mark_op_dedupe_sent(self.dedupe_key.as_str(), delivery_id)
+                    .await
+                    .map_err(|err| Error::Internal(err.to_string()))?;
+                if !marked {
+                    return Err(Error::Internal("failed to finalize op dedupe".to_string()));
+                }
+            }
+            DispatchOpDedupeAction::ClearPending => {
+                state
+                    .store
+                    .clear_op_dedupe_pending(
+                        self.dedupe_key.as_str(),
+                        self.reserved_delivery_id.as_str(),
+                    )
+                    .await
+                    .map_err(|err| Error::Internal(err.to_string()))?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn finish(
@@ -150,44 +191,55 @@ impl DispatchOpGuard {
     }
 }
 
-pub(crate) fn resolve_dispatch_op_dedupe_action(
-    summary: &NotificationDispatchSummary,
-) -> DispatchOpDedupeAction {
-    if summary.partial_failure || summary.private_enqueue_too_busy {
-        DispatchOpDedupeAction::ClearPending
-    } else {
-        DispatchOpDedupeAction::FinalizeSent
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::{DispatchOpDedupeAction, NotificationDispatchSummary};
 
-async fn settle_dispatch_op_dedupe(
-    state: &AppState,
-    guard: &DispatchOpGuard,
-    action: DispatchOpDedupeAction,
-    finalized_delivery_id: Option<&str>,
-) -> Result<(), Error> {
-    match action {
-        DispatchOpDedupeAction::FinalizeSent => {
-            let delivery_id = finalized_delivery_id.unwrap_or(guard.reserved_delivery_id.as_str());
-            let marked = state
-                .store
-                .mark_op_dedupe_sent(guard.dedupe_key.as_str(), delivery_id)
-                .await
-                .map_err(|err| Error::Internal(err.to_string()))?;
-            if !marked {
-                return Err(Error::Internal("failed to finalize op dedupe".to_string()));
-            }
-        }
-        DispatchOpDedupeAction::ClearPending => {
-            state
-                .store
-                .clear_op_dedupe_pending(
-                    guard.dedupe_key.as_str(),
-                    guard.reserved_delivery_id.as_str(),
-                )
-                .await
-                .map_err(|err| Error::Internal(err.to_string()))?;
-        }
+    #[test]
+    fn notification_summary_reports_partial_failure_message() {
+        let partial = NotificationDispatchSummary {
+            channel_id: "channel".to_string(),
+            op_id: "op".to_string(),
+            delivery_id: "delivery".to_string(),
+            partial_failure: true,
+            private_enqueue_too_busy: false,
+        };
+        assert_eq!(
+            partial.failure_error_message(),
+            Some("notification dispatch completed with partial failure")
+        );
+
+        let busy = NotificationDispatchSummary {
+            private_enqueue_too_busy: true,
+            ..partial
+        };
+        assert_eq!(
+            busy.failure_error_message(),
+            Some("private enqueue failures exceeded safety threshold")
+        );
     }
-    Ok(())
+
+    #[test]
+    fn notification_summary_selects_dedupe_action() {
+        let success = NotificationDispatchSummary {
+            channel_id: "channel".to_string(),
+            op_id: "op".to_string(),
+            delivery_id: "delivery".to_string(),
+            partial_failure: false,
+            private_enqueue_too_busy: false,
+        };
+        assert_eq!(
+            success.dedupe_action(),
+            DispatchOpDedupeAction::FinalizeSent
+        );
+
+        let partial = NotificationDispatchSummary {
+            partial_failure: true,
+            ..success
+        };
+        assert_eq!(
+            partial.dedupe_action(),
+            DispatchOpDedupeAction::ClearPending
+        );
+    }
 }

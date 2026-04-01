@@ -12,6 +12,18 @@ use crate::storage::Platform;
 pub(crate) const DEFAULT_DISPATCH_AUDIT_CAPACITY: usize = 4096;
 pub(crate) const MAX_DISPATCH_AUDIT_QUERY_LIMIT: usize = 500;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DispatchAuditMode {
+    Enabled,
+    Disabled,
+}
+
+impl DispatchAuditMode {
+    fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DispatchAuditEntry {
     pub timestamp_ms: i64,
@@ -68,21 +80,21 @@ pub(crate) struct DispatchAuditRecord<'a> {
 #[derive(Clone)]
 pub(crate) struct DispatchAuditLog {
     capacity: usize,
-    enabled: bool,
+    mode: DispatchAuditMode,
     entries: Arc<Mutex<VecDeque<DispatchAuditEntry>>>,
 }
 
 impl DispatchAuditLog {
-    pub(crate) fn new(capacity: usize, enabled: bool) -> Self {
+    pub(crate) fn new(capacity: usize, mode: DispatchAuditMode) -> Self {
         Self {
             capacity: capacity.max(1),
-            enabled,
+            mode,
             entries: Arc::new(Mutex::new(VecDeque::with_capacity(capacity.max(1)))),
         }
     }
 
     pub(crate) fn record<'a>(&self, record: DispatchAuditRecord<'a>) {
-        if !self.enabled {
+        if !self.mode.is_enabled() {
             return;
         }
         let mut entries = self.entries.lock().expect("dispatch audit lock poisoned");
@@ -96,7 +108,7 @@ impl DispatchAuditLog {
             delivery_id: record.delivery_id.map(ToString::to_string),
             channel_id: record.channel_id.map(ToString::to_string),
             provider: record.provider.map(ToString::to_string),
-            platform: record.platform.map(platform_label).map(ToString::to_string),
+            platform: record.platform.map(Platform::name).map(ToString::to_string),
             path: record.path.map(ToString::to_string),
             device_token: record.device_token.map(redact_device_token),
             success: record.success,
@@ -111,7 +123,7 @@ impl DispatchAuditLog {
         &self,
         filter: DispatchAuditFilter<'a>,
     ) -> Vec<DispatchAuditEntry> {
-        if !self.enabled {
+        if !self.mode.is_enabled() {
             return Vec::new();
         }
         let limit = filter.limit.clamp(1, MAX_DISPATCH_AUDIT_QUERY_LIMIT);
@@ -155,23 +167,13 @@ fn redact_device_token(token: &str) -> String {
     format!("...{}", &token[token.len().saturating_sub(visible)..])
 }
 
-fn platform_label(platform: Platform) -> &'static str {
-    match platform {
-        Platform::IOS => "ios",
-        Platform::MACOS => "macos",
-        Platform::WATCHOS => "watchos",
-        Platform::ANDROID => "android",
-        Platform::WINDOWS => "windows",
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{DispatchAuditFilter, DispatchAuditLog, DispatchAuditRecord};
+    use super::{DispatchAuditFilter, DispatchAuditLog, DispatchAuditMode, DispatchAuditRecord};
 
     #[test]
     fn ring_buffer_keeps_latest_entries() {
-        let log = DispatchAuditLog::new(2, true);
+        let log = DispatchAuditLog::new(2, DispatchAuditMode::Enabled);
         log.record(DispatchAuditRecord {
             stage: "a",
             correlation_id: "c1",
@@ -231,7 +233,7 @@ mod tests {
 
     #[test]
     fn filter_by_delivery_id() {
-        let log = DispatchAuditLog::new(8, true);
+        let log = DispatchAuditLog::new(8, DispatchAuditMode::Enabled);
         for index in 0..3 {
             log.record(DispatchAuditRecord {
                 stage: "enqueue",

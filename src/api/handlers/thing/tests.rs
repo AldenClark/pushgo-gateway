@@ -1,0 +1,110 @@
+use super::{ThingArchiveRequest, ThingCreateRequest, ThingDeleteRequest, ThingUpdateRequest};
+
+#[test]
+fn thing_create_rejects_thing_id_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "op_id":"op-1",
+        "thing_id":"should-not-exist",
+        "title":"name"
+    }"#;
+    let parsed = serde_json::from_str::<ThingCreateRequest>(raw);
+    assert!(
+        parsed.is_err(),
+        "thing create should reject thing_id in payload"
+    );
+}
+
+#[test]
+fn thing_archive_rejects_state_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "op_id":"op-1",
+        "thing_id":"thing-1",
+        "state":"deleted"
+    }"#;
+    let parsed = serde_json::from_str::<ThingArchiveRequest>(raw);
+    assert!(parsed.is_err(), "thing archive should reject state field");
+}
+
+#[test]
+fn thing_create_rejects_state_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "op_id":"op-1",
+        "state":"deleted"
+    }"#;
+    let parsed = serde_json::from_str::<ThingCreateRequest>(raw);
+    assert!(parsed.is_err(), "thing create should reject state field");
+}
+
+#[test]
+fn thing_update_rejects_state_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "op_id":"op-1",
+        "thing_id":"thing-1",
+        "state":"archived"
+    }"#;
+    let parsed = serde_json::from_str::<ThingUpdateRequest>(raw);
+    assert!(parsed.is_err(), "thing update should reject state field");
+}
+
+#[test]
+fn thing_create_rejects_deleted_at_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "op_id":"op-1",
+        "deleted_at":123
+    }"#;
+    let parsed = serde_json::from_str::<ThingCreateRequest>(raw);
+    assert!(
+        parsed.is_err(),
+        "thing create should reject deleted_at field"
+    );
+}
+
+#[test]
+fn thing_update_rejects_deleted_at_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "op_id":"op-1",
+        "thing_id":"thing-1",
+        "deleted_at":123
+    }"#;
+    let parsed = serde_json::from_str::<ThingUpdateRequest>(raw);
+    assert!(
+        parsed.is_err(),
+        "thing update should reject deleted_at field"
+    );
+}
+
+#[test]
+fn thing_delete_accepts_deleted_at_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "op_id":"op-1",
+        "thing_id":"thing-1",
+        "deleted_at":123
+    }"#;
+    let parsed = serde_json::from_str::<ThingDeleteRequest>(raw);
+    assert!(parsed.is_ok(), "thing delete should accept deleted_at");
+}
+
+#[test]
+fn thing_create_accepts_missing_op_id() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "title":"name"
+    }"#;
+    let parsed = serde_json::from_str::<ThingCreateRequest>(raw);
+    assert!(parsed.is_ok(), "thing create should accept missing op_id");
+}

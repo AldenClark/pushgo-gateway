@@ -5,25 +5,23 @@ use serde::{Deserialize, Serialize};
 use crate::{
     api::{ApiJson, Error, HttpResult},
     app::AppState,
-    private::protocol::{
-        PRIVATE_PAYLOAD_VERSION_V1, PrivatePayloadEnvelope as ProviderPullEnvelope,
-    },
+    private::protocol::PrivatePayloadEnvelope as ProviderPullEnvelope,
 };
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PullRequest {
+pub(crate) struct PullRequest {
     pub delivery_id: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct PullItem {
+pub(super) struct PullItem {
     pub delivery_id: String,
     pub payload: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct PullResponse {
+pub(super) struct PullResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<PullItem>,
 }
@@ -41,11 +39,11 @@ pub(crate) async fn messages_pull(
     let Some(item) = item else {
         return Ok(crate::api::ok(PullResponse { item: None }));
     };
-    let envelope = match postcard::from_bytes::<ProviderPullEnvelope>(&item.payload) {
-        Ok(v) => v,
-        Err(_) => return Ok(crate::api::ok(PullResponse { item: None })),
+    let envelope = match ProviderPullEnvelope::decode_postcard(&item.payload) {
+        Some(v) => v,
+        None => return Ok(crate::api::ok(PullResponse { item: None })),
     };
-    if envelope.payload_version != PRIVATE_PAYLOAD_VERSION_V1 {
+    if !envelope.is_supported_version() {
         return Ok(crate::api::ok(PullResponse { item: None }));
     }
     Ok(crate::api::ok(PullResponse {

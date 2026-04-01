@@ -1,13 +1,14 @@
-pub mod channel;
+pub(crate) mod channel;
 pub(crate) mod channel_auth;
-pub mod core;
+pub(crate) mod core;
 pub(crate) mod diagnostics;
 pub(crate) mod dispatch_lifecycle;
-pub mod event;
+pub(crate) mod entity_input;
+pub(crate) mod event;
 pub(crate) mod health;
-pub mod message;
-pub mod private;
-pub mod thing;
+pub(crate) mod message;
+pub(crate) mod private;
+pub(crate) mod thing;
 pub(crate) mod watch_light;
 
 use axum::{

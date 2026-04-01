@@ -86,6 +86,18 @@ pub struct PrivateHealthSnapshot {
     pub metrics: PrivateMetricsSnapshot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateHealthMode {
+    Enabled,
+    Disabled,
+}
+
+impl PrivateHealthMode {
+    fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
 impl PrivateMetrics {
     pub fn reset(&self) {
         self.quic_connect_attempts.store(0, Ordering::Relaxed);
@@ -297,10 +309,10 @@ impl PrivateMetrics {
         }
     }
 
-    pub fn health_snapshot(&self, private_enabled: bool) -> PrivateHealthSnapshot {
+    pub fn health_snapshot(&self, mode: PrivateHealthMode) -> PrivateHealthSnapshot {
         let metrics = self.snapshot();
         let mut alerts = Vec::new();
-        if private_enabled {
+        if mode.is_enabled() {
             let connect_failures = metrics.quic_connect_failures
                 + metrics.tcp_connect_failures
                 + metrics.wss_connect_failures;

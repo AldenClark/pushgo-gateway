@@ -16,7 +16,7 @@ const TOKEN_PRODUCTION_ENDPOINT_PATH: &str = "/provider/token/production";
 const TOKEN_REFRESH_BUFFER: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy)]
-pub enum GatewayProvider {
+pub(crate) enum GatewayProvider {
     Apns,
     Fcm,
     Wns,
@@ -39,7 +39,7 @@ struct GatewayTokenState {
     project_id: Option<Arc<str>>,
 }
 
-pub struct GatewayTokenCache {
+pub(crate) struct GatewayTokenCache {
     client: Client,
     provider: GatewayProvider,
     base_url: Arc<str>,
@@ -47,7 +47,7 @@ pub struct GatewayTokenCache {
 }
 
 impl GatewayTokenCache {
-    pub fn new(client: Client, provider: GatewayProvider, base_url: &str) -> Self {
+    pub(crate) fn new(client: Client, provider: GatewayProvider, base_url: &str) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
 
         let initial = GatewayTokenState {
@@ -63,7 +63,7 @@ impl GatewayTokenCache {
         }
     }
 
-    pub async fn token_info(&self) -> Result<TokenInfo, Error> {
+    pub(crate) async fn token_info(&self) -> Result<TokenInfo, Error> {
         let cached = self.state.load();
         let now = Instant::now();
         let remaining = cached.expires_at.saturating_duration_since(now);
@@ -90,7 +90,7 @@ impl GatewayTokenCache {
         }
     }
 
-    pub async fn token_info_with_project(&self) -> Result<(TokenInfo, Arc<str>), Error> {
+    pub(crate) async fn token_info_with_project(&self) -> Result<(TokenInfo, Arc<str>), Error> {
         let cached = self.state.load();
         let now = Instant::now();
         let remaining = cached.expires_at.saturating_duration_since(now);
@@ -130,7 +130,7 @@ impl GatewayTokenCache {
         }
     }
 
-    pub async fn refresh_now(&self) -> Result<Arc<str>, Error> {
+    pub(crate) async fn refresh_now(&self) -> Result<Arc<str>, Error> {
         let info = self.fetch_and_store().await?;
         Ok(info.token)
     }

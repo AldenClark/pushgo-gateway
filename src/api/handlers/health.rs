@@ -1,7 +1,11 @@
 use axum::{extract::State, http::StatusCode};
 use serde::Serialize;
 
-use crate::{api::HttpResult, app::AppState, private::metrics::PrivateHealthSnapshot};
+use crate::{
+    api::HttpResult,
+    app::AppState,
+    private::metrics::{PrivateHealthMode, PrivateHealthSnapshot},
+};
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -38,7 +42,11 @@ pub(crate) async fn healthz(State(state): State<AppState>) -> HttpResult {
     let private_health_status = state.private.as_ref().map(|private| {
         private
             .metrics
-            .health_snapshot(state.private_channel_enabled)
+            .health_snapshot(if state.private_channel_enabled {
+                PrivateHealthMode::Enabled
+            } else {
+                PrivateHealthMode::Disabled
+            })
     });
     let private_last_accept_at = private_health_status
         .as_ref()

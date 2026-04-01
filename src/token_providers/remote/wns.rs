@@ -5,12 +5,12 @@ use pushgo_gateway::{
 
 use crate::token_providers::remote::gateway::{GatewayProvider, GatewayTokenCache};
 
-pub struct WnsTokenProvider {
+pub(crate) struct WnsTokenProvider {
     cache: GatewayTokenCache,
 }
 
 impl WnsTokenProvider {
-    pub fn new(token_service_url: &str, client: reqwest::Client) -> Result<Self, Error> {
+    pub(crate) fn new(token_service_url: &str, client: reqwest::Client) -> Result<Self, Error> {
         let cache = GatewayTokenCache::new(client, GatewayProvider::Wns, token_service_url);
         Ok(Self { cache })
     }

@@ -2,10 +2,7 @@ use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::{
-        ApiJson, HttpResult, format_channel_id, normalize_channel_alias, parse_channel_id,
-        validate_channel_password,
-    },
+    api::{ApiJson, ChannelAlias, ChannelId, ChannelPassword, HttpResult},
     app::AppState,
 };
 
@@ -27,10 +24,10 @@ pub(crate) async fn channel_exists(
     State(state): State<AppState>,
     Query(query): Query<ChannelExistsQuery>,
 ) -> HttpResult {
-    let channel_id = parse_channel_id(&query.channel_id)?;
-    let info = state.store.channel_info(channel_id).await?;
+    let channel_id = ChannelId::parse(&query.channel_id)?;
+    let info = state.store.channel_info(channel_id.into_inner()).await?;
     Ok(crate::api::ok(ChannelExistsResponse {
-        channel_id: format_channel_id(&channel_id),
+        channel_id: channel_id.to_string(),
         exists: info.is_some(),
         channel_name: info.map(|meta| meta.alias),
     }))
@@ -54,17 +51,21 @@ pub(crate) async fn channel_rename(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ChannelRenameData>,
 ) -> HttpResult {
-    let channel_id = parse_channel_id(&payload.channel_id)?;
-    let channel_name = normalize_channel_alias(&payload.channel_name)?;
-    let password = validate_channel_password(&payload.password)?;
+    let channel_id = ChannelId::parse(&payload.channel_id)?;
+    let channel_name = ChannelAlias::parse(&payload.channel_name)?;
+    let password = ChannelPassword::parse(&payload.password)?;
 
     state
         .store
-        .rename_channel(channel_id, password, &channel_name)
+        .rename_channel(
+            channel_id.into_inner(),
+            password.as_str(),
+            channel_name.as_str(),
+        )
         .await?;
 
     Ok(crate::api::ok(ChannelRenameResponse {
-        channel_id: format_channel_id(&channel_id),
-        channel_name,
+        channel_id: channel_id.to_string(),
+        channel_name: channel_name.into_owned(),
     }))
 }

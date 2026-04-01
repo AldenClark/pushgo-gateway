@@ -228,38 +228,6 @@ pub struct Args {
     )]
     pub mcp_enabled: bool,
 
-    /// Enable built-in OAuth endpoints for MCP (`/oauth/*`).
-    #[arg(
-        env = "PUSHGO_MCP_OAUTH_ENABLED",
-        long = "mcp-oauth-enabled",
-        default_value = "false"
-    )]
-    pub mcp_oauth_enabled: bool,
-
-    /// Allow legacy shared-token auth mode for MCP.
-    #[arg(
-        env = "PUSHGO_MCP_LEGACY_AUTH_ENABLED",
-        long = "mcp-legacy-auth-enabled",
-        default_value = "true"
-    )]
-    pub mcp_legacy_auth_enabled: bool,
-
-    /// MCP auth mode: hybrid|oauth2_only|legacy_only.
-    #[arg(
-        env = "PUSHGO_MCP_AUTH_MODE",
-        long = "mcp-auth-mode",
-        default_value = "hybrid"
-    )]
-    pub mcp_auth_mode: String,
-
-    /// OAuth issuer used in access tokens for MCP.
-    #[arg(env = "PUSHGO_MCP_OAUTH_ISSUER", long = "mcp-oauth-issuer")]
-    pub mcp_oauth_issuer: Option<String>,
-
-    /// HMAC secret used to sign MCP OAuth access tokens.
-    #[arg(env = "PUSHGO_MCP_OAUTH_SIGNING_KEY", long = "mcp-oauth-signing-key")]
-    pub mcp_oauth_signing_key: Option<String>,
-
     /// Access token TTL for MCP OAuth (seconds).
     #[arg(
         env = "PUSHGO_MCP_ACCESS_TOKEN_TTL_SECS",
@@ -267,6 +235,10 @@ pub struct Args {
         default_value = "900"
     )]
     pub mcp_access_token_ttl_secs: i64,
+
+    /// Public base URL used by externally exposed gateway URLs.
+    #[arg(env = "PUSHGO_PUBLIC_BASE_URL", long = "public-base-url")]
+    pub public_base_url: Option<String>,
 
     /// Refresh token absolute TTL (seconds).
     #[arg(
@@ -292,20 +264,17 @@ pub struct Args {
     )]
     pub mcp_bind_session_ttl_secs: i64,
 
-    /// Require password on revoke page/API when unbinding channel grant.
+    /// Enable dynamic client registration for MCP OAuth.
     #[arg(
-        env = "PUSHGO_MCP_REVOKE_REQUIRES_PASSWORD",
-        long = "mcp-revoke-requires-password",
+        env = "PUSHGO_MCP_DCR_ENABLED",
+        long = "mcp-dcr-enabled",
         default_value = "true"
     )]
-    pub mcp_revoke_requires_password: bool,
+    pub mcp_dcr_enabled: bool,
 
-    /// Allowed OAuth redirect URI(s), comma-separated.
-    #[arg(
-        env = "PUSHGO_MCP_OAUTH_ALLOWED_REDIRECT_URIS",
-        long = "mcp-oauth-allowed-redirect-uris"
-    )]
-    pub mcp_oauth_allowed_redirect_uris: Option<String>,
+    /// Predefined MCP OAuth clients formatted as `client_id:client_secret`, separated by newlines or semicolons.
+    #[arg(env = "PUSHGO_MCP_PREDEFINED_CLIENTS", long = "mcp-predefined-clients")]
+    pub mcp_predefined_clients: Option<String>,
 }
 
 impl Args {
@@ -315,11 +284,8 @@ impl Args {
         self.db_url = normalize_optional_non_empty(self.db_url);
         self.private_tls_cert_path = normalize_optional_non_empty(self.private_tls_cert_path);
         self.private_tls_key_path = normalize_optional_non_empty(self.private_tls_key_path);
-        self.mcp_auth_mode = self.mcp_auth_mode.trim().to_ascii_lowercase();
-        self.mcp_oauth_issuer = normalize_optional_non_empty(self.mcp_oauth_issuer);
-        self.mcp_oauth_signing_key = normalize_optional_non_empty(self.mcp_oauth_signing_key);
-        self.mcp_oauth_allowed_redirect_uris =
-            normalize_optional_non_empty(self.mcp_oauth_allowed_redirect_uris);
+        self.public_base_url = normalize_optional_non_empty(self.public_base_url);
+        self.mcp_predefined_clients = normalize_optional_non_empty(self.mcp_predefined_clients);
         self
     }
 }
