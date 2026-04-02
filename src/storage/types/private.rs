@@ -86,6 +86,8 @@ pub struct ProviderPullItem {
     pub payload: Vec<u8>,
     pub sent_at: i64,
     pub expires_at: i64,
+    pub platform: super::Platform,
+    pub provider_token: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

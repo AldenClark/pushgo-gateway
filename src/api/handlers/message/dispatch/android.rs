@@ -31,7 +31,7 @@ pub(super) async fn dispatch(
         let selection = match ProviderDeliverySelection::wakeup_pull(
             target.device.platform,
             encoded_wakeup.len(),
-            target.private_wakeup_delivery.is_some(),
+            target.provider_pull_delivery.is_some(),
         ) {
             Ok(selection) => selection,
             Err(err) => {
@@ -54,7 +54,7 @@ pub(super) async fn dispatch(
         wakeup_body,
         initial_path: selection.initial_path,
         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
-        private_wakeup: target.private_wakeup_delivery.clone(),
+        provider_pull_delivery: target.provider_pull_delivery.clone(),
     }) {
         Ok(()) => {
             record_provider_enqueued(prepared, target, progress, selection.initial_path).await;

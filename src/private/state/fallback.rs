@@ -8,7 +8,7 @@ impl PrivateState {
         delivery_id: impl Into<String>,
         due_at_unix_secs: i64,
     ) {
-        if !private_provider_wakeup_pull_enabled() {
+        if !provider_wakeup_pull_enabled() {
             return;
         }
         if let Some(engine) = &self.fallback_tasks {
@@ -20,7 +20,7 @@ impl PrivateState {
     }
 
     pub fn request_fallback_resync(&self) {
-        if !private_provider_wakeup_pull_enabled() {
+        if !provider_wakeup_pull_enabled() {
             return;
         }
         if let Some(engine) = &self.fallback_tasks {
@@ -29,7 +29,7 @@ impl PrivateState {
     }
 
     pub fn cancel_fallback(&self, device_id: DeviceId, delivery_id: &str) {
-        if !private_provider_wakeup_pull_enabled() {
+        if !provider_wakeup_pull_enabled() {
             return;
         }
         if let Some(engine) = &self.fallback_tasks {

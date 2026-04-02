@@ -18,9 +18,9 @@ pub(super) struct ProviderDispatchFailureLog<'a> {
 }
 
 impl DispatchWorkerRuntime {
-    pub(super) async fn enqueue_private_wakeup_delivery(
+    pub(super) async fn enqueue_provider_pull_delivery(
         &self,
-        delivery: &PrivateWakeupDelivery,
+        delivery: &ProviderPullDelivery,
         provider: &str,
         correlation_id: &str,
         channel_id: &str,

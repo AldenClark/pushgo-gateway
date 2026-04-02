@@ -14,7 +14,7 @@ use crate::{
         wns::WnsPayload,
     },
     storage::{Platform, PrivateMessage, Storage},
-    util::{build_wakeup_data, encode_crockford_base32_128},
+    util::encode_crockford_base32_128,
 };
 
 #[path = "config.rs"]
@@ -36,6 +36,6 @@ pub(crate) use retry::ProviderPullRetryWorkerDeps;
 use runtime::DispatchWorkerRuntime;
 pub(crate) use types::{
     ApnsJob, DispatchChannels, DispatchError, DispatchWorkerReceivers, FcmJob,
-    PrivateWakeupDelivery, ProviderDeliveryPath, WnsJob,
+    ProviderDeliveryPath, ProviderPullDelivery, WnsJob,
 };
 pub(crate) use workers::DispatchWorkerDeps;

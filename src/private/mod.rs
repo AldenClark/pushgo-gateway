@@ -19,7 +19,7 @@ use crate::{
     storage::{
         DeviceId, MaintenanceCleanupStats, Platform, PrivateMessage, PrivateOutboxEntry, Storage,
     },
-    util::{SharedStringMap, build_wakeup_data, decode_lower_hex_128, encode_lower_hex_128},
+    util::{SharedStringMap, decode_lower_hex_128, encode_lower_hex_128},
 };
 
 pub mod metrics;
@@ -54,11 +54,11 @@ const PRIVATE_DRAINING_DELIVERY_WINDOW_DEFAULT: Duration = Duration::from_secs(1
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_MULTIPLIER: f64 = 4.0;
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS: f64 = 2_000.0;
 const PRIVATE_DEFAULT_TTL_SECONDS_MAX: i64 = 30 * 24 * 60 * 60;
-const PRIVATE_PROVIDER_WAKEUP_PULL_ENABLED: bool = false;
+const PROVIDER_WAKEUP_PULL_ENABLED: bool = false;
 
 #[inline]
-const fn private_provider_wakeup_pull_enabled() -> bool {
-    PRIVATE_PROVIDER_WAKEUP_PULL_ENABLED
+const fn provider_wakeup_pull_enabled() -> bool {
+    PROVIDER_WAKEUP_PULL_ENABLED
 }
 
 #[derive(Debug, Clone)]

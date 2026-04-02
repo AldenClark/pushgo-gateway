@@ -100,7 +100,6 @@ impl ApnsPayload {
             fallback_body
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
-                .or_else(|| Some("You received a new message.".to_string()))
         } else {
             normalized_body
         };
@@ -140,14 +139,10 @@ impl ApnsPayload {
     ) -> Self {
         let title = fallback_title
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "You have a new notification.".to_string());
+            .filter(|value| !value.is_empty());
         Self {
             aps: Aps {
-                alert: Some(Alert {
-                    title: Some(title),
-                    body: None,
-                }),
+                alert: Some(Alert { title, body: None }),
                 content_available: None,
                 sound: None,
                 mutable_content: Some(1),
@@ -236,13 +231,18 @@ mod tests {
 
     #[test]
     fn wakeup_payload_is_alert_with_mutable_content() {
-        let payload = ApnsPayload::wakeup(None, None, None, SharedStringMap::default());
+        let payload = ApnsPayload::wakeup(
+            Some("Wakeup title".to_string()),
+            None,
+            None,
+            SharedStringMap::default(),
+        );
         assert_eq!(payload.push_type_header(), "alert");
         assert_eq!(payload.aps.mutable_content, Some(1));
         assert_eq!(payload.priority(), 10);
         assert_eq!(
             payload.aps.alert.and_then(|alert| alert.title),
-            Some("You have a new notification.".to_string())
+            Some("Wakeup title".to_string())
         );
     }
 }

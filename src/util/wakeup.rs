@@ -1,6 +1,6 @@
 use hashbrown::HashMap;
 
-pub fn build_wakeup_data(base: &HashMap<String, String>) -> HashMap<String, String> {
+pub fn build_provider_wakeup_data(base: &HashMap<String, String>) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for key in [
         "delivery_id",
@@ -20,8 +20,8 @@ pub fn build_wakeup_data(base: &HashMap<String, String>) -> HashMap<String, Stri
             out.insert(key.to_string(), value.clone());
         }
     }
-    out.insert("private_mode".to_string(), "wakeup".to_string());
-    out.insert("private_wakeup".to_string(), "1".to_string());
+    out.insert("provider_mode".to_string(), "wakeup".to_string());
+    out.insert("provider_wakeup".to_string(), "1".to_string());
     out.insert("_skip_persist".to_string(), "1".to_string());
     out
 }

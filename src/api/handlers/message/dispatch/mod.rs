@@ -7,7 +7,7 @@ use crate::{
     api::{Error, format_channel_id},
     app::AppState,
     dispatch::{
-        DispatchError, PrivateWakeupDelivery, ProviderDeliveryPath, audit::DispatchAuditRecord,
+        DispatchError, ProviderDeliveryPath, ProviderPullDelivery, audit::DispatchAuditRecord,
     },
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
     routing::derive_private_device_id,

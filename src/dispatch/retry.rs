@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::build_provider_wakeup_data;
 
 pub(crate) struct ProviderPullRetryWorkerDeps {
     pub store: Storage,
@@ -92,10 +93,11 @@ impl ProviderPullRetryWorker {
 
     async fn send_wakeup(&self, entry: &crate::storage::ProviderPullRetryEntry) -> DispatchResult {
         let data = Self::wakeup_data(entry.delivery_id.as_str());
+        let wakeup_title = self.wakeup_title(entry.delivery_id.as_str()).await;
         match entry.platform {
             Platform::IOS | Platform::MACOS | Platform::WATCHOS => {
                 let payload = Arc::new(ApnsPayload::wakeup(
-                    None,
+                    wakeup_title,
                     None,
                     Some(entry.expires_at),
                     data,
@@ -122,7 +124,19 @@ impl ProviderPullRetryWorker {
     pub(super) fn wakeup_data(delivery_id: &str) -> HashMap<String, String> {
         let mut base = HashMap::new();
         base.insert("delivery_id".to_string(), delivery_id.to_string());
-        build_wakeup_data(&base)
+        build_provider_wakeup_data(&base)
+    }
+
+    async fn wakeup_title(&self, delivery_id: &str) -> Option<String> {
+        let message = self
+            .store
+            .load_private_message(delivery_id)
+            .await
+            .ok()
+            .flatten()?;
+        crate::api::handlers::message::wakeup_notification_title_from_private_payload(
+            &message.payload,
+        )
     }
 }
 
@@ -137,8 +151,11 @@ mod tests {
             data.get("delivery_id").map(String::as_str),
             Some("delivery-001")
         );
-        assert_eq!(data.get("private_mode").map(String::as_str), Some("wakeup"));
-        assert_eq!(data.get("private_wakeup").map(String::as_str), Some("1"));
+        assert_eq!(
+            data.get("provider_mode").map(String::as_str),
+            Some("wakeup")
+        );
+        assert_eq!(data.get("provider_wakeup").map(String::as_str), Some("1"));
     }
 
     #[test]

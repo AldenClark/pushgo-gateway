@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::build_provider_wakeup_data;
 
 #[derive(Clone, Copy)]
 pub(super) struct FallbackAttemptPolicy {
@@ -55,6 +56,7 @@ struct FallbackPayloadContext {
     channel_id: [u8; 16],
     channel_id_raw: String,
     wakeup_data: HashMap<String, String>,
+    wakeup_title: Option<String>,
     ttl: Option<i64>,
     ttl_seconds: Option<u32>,
 }
@@ -76,7 +78,10 @@ impl FallbackPayloadContext {
         let ttl_seconds = envelope.ttl_seconds_remaining(now);
         Some(Self {
             channel_id,
-            wakeup_data: build_wakeup_data(&envelope.data),
+            wakeup_data: build_provider_wakeup_data(&envelope.data),
+            wakeup_title: crate::api::handlers::message::wakeup_notification_title_from_private_payload(
+                &message.payload,
+            ),
             channel_id_raw,
             ttl,
             ttl_seconds,
@@ -112,7 +117,7 @@ impl FallbackRuntime {
     }
 
     fn wakeup_pull_enabled(&self) -> bool {
-        PRIVATE_PROVIDER_WAKEUP_PULL_ENABLED
+        PROVIDER_WAKEUP_PULL_ENABLED
     }
 
     fn try_trim_allocator(&self) {}
@@ -409,7 +414,7 @@ impl SystemTarget {
                         wakeup_body: Some(body),
                         initial_path: crate::dispatch::ProviderDeliveryPath::WakeupPull,
                         wakeup_payload_within_limit: true,
-                        private_wakeup: None,
+                        provider_pull_delivery: None,
                     })
                     .is_ok()
             }
@@ -430,7 +435,7 @@ impl SystemTarget {
                         wakeup_payload: Some(Arc::clone(&payload)),
                         initial_path: crate::dispatch::ProviderDeliveryPath::WakeupPull,
                         wakeup_payload_within_limit: true,
-                        private_wakeup: None,
+                        provider_pull_delivery: None,
                     })
                     .is_ok()
             }
@@ -439,7 +444,7 @@ impl SystemTarget {
                 let collapse_id: Arc<str> =
                     Arc::from(format!("private-wakeup:{}", context.channel_id_raw));
                 let payload = Arc::new(ApnsPayload::wakeup(
-                    Some("You have a new notification.".to_string()),
+                    context.wakeup_title.clone(),
                     Some(context.channel_id_raw.clone()),
                     context.ttl,
                     SharedStringMap::from(context.wakeup_data.clone()),
@@ -455,7 +460,7 @@ impl SystemTarget {
                         wakeup_payload: Some(Arc::clone(&payload)),
                         initial_path: crate::dispatch::ProviderDeliveryPath::WakeupPull,
                         wakeup_payload_within_limit: true,
-                        private_wakeup: None,
+                        provider_pull_delivery: None,
                         collapse_id: Some(collapse_id),
                     })
                     .is_ok()
@@ -501,7 +506,7 @@ mod tests {
         assert_eq!(context.channel_id_raw, "06J0FZG1Y8XGG14VTQ4Y3G10MR");
         assert_eq!(context.ttl, Some(120));
         assert_eq!(context.ttl_seconds, Some(60));
-        assert!(context.wakeup_data.contains_key("private_wakeup"));
+        assert!(context.wakeup_data.contains_key("provider_wakeup"));
     }
 
     #[test]

@@ -62,21 +62,21 @@ pub(super) async fn dispatch_provider_devices(
             prepared.wakeup_data.as_ref(),
             provider_pull_delivery_id.as_str(),
         ));
-        let private_wakeup_delivery = PrivateWakeupDelivery::for_provider_target(
+        let provider_pull_delivery = ProviderPullDelivery::for_provider_target(
             provider_route.provider_device_key.as_deref(),
             device.platform,
             device.token_str(),
             &prepared.private_payload,
             provider_pull_delivery_id.as_str(),
             prepared.sent_at,
-            prepared.provider_private_expires_at(),
+            prepared.provider_pull_expires_at(),
         );
         let target = ResolvedProviderTarget {
             device,
             provider_audit_key,
             provider_stats_key,
             wakeup_data_for_device,
-            private_wakeup_delivery,
+            provider_pull_delivery,
         };
 
         match device.platform {

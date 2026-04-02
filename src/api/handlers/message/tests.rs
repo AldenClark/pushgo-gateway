@@ -205,7 +205,7 @@ fn custom_payload_prepare_dispatch_builds_thread_id_and_wakeup_data() {
         prepared
             .wakeup_data
             .into_inner()
-            .get("private_mode")
+            .get("provider_mode")
             .map(String::as_str),
         Some("wakeup")
     );

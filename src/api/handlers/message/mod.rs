@@ -30,6 +30,7 @@ pub(crate) use compat::{
 pub(crate) use dispatch::dispatch_entity_notification;
 pub(crate) use ids::{OpId, ProviderPullDeliveryId, ResolvedSemanticId, SemanticScope};
 use payload::OptionalText;
+pub(crate) use payload::wakeup_notification_title_from_private_payload;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

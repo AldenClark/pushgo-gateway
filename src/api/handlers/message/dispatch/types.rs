@@ -46,7 +46,7 @@ pub(super) struct ResolvedProviderTarget<'a> {
     pub(super) provider_audit_key: String,
     pub(super) provider_stats_key: Arc<str>,
     pub(super) wakeup_data_for_device: Arc<HashMap<String, String>>,
-    pub(super) private_wakeup_delivery: Option<PrivateWakeupDelivery>,
+    pub(super) provider_pull_delivery: Option<ProviderPullDelivery>,
 }
 
 #[derive(Default)]
@@ -95,8 +95,6 @@ impl<'a> PreparedDispatch<'a> {
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .map(ToString::to_string);
-        let provider_fallback_body = (resolved_title.is_none() && resolved_body.is_none())
-            .then(|| entity_kind.default_notification_body().to_string());
 
         let severity = PayloadSeverity::normalize(severity);
         let effective_ttl =
@@ -152,6 +150,13 @@ impl<'a> PreparedDispatch<'a> {
             entity_id: &entity_id,
         });
         custom_data.insert_extra_fields(extra_fields);
+        let derived_notification_text = custom_data.resolve_notification_text(
+            entity_kind,
+            resolved_title.as_deref(),
+            resolved_body.as_deref(),
+        );
+        let resolved_title = resolved_title.or(derived_notification_text.title);
+        let resolved_body = resolved_body.or(derived_notification_text.body);
         let prepared_payload = custom_data
             .prepare_dispatch(channel_id_value.as_str(), entity_kind)
             .map_err(|err| Error::Internal(format!("private payload encoding failed: {err}")))?;
@@ -187,11 +192,11 @@ impl<'a> PreparedDispatch<'a> {
             provider_devices,
             private_dispatch,
             apple_thread_id: prepared_payload.apple_thread_id.into_inner(),
-            provider_fallback_body,
+            provider_fallback_body: None,
         })
     }
 
-    pub(super) fn provider_private_expires_at(&self) -> i64 {
+    pub(super) fn provider_pull_expires_at(&self) -> i64 {
         self.effective_ttl
             .unwrap_or(self.sent_at + self.private_default_ttl_secs)
     }
@@ -262,10 +267,7 @@ impl ProviderPayloads {
         });
         let apns_collapse_id =
             has_apns.then(|| Arc::from(prepared.delivery_id.clone().into_boxed_str()));
-        let apns_wakeup_title = has_apns.then(|| {
-            EntityKind::new(prepared.entity_type)
-                .wakeup_fallback_title(prepared.resolved_title.as_deref())
-        });
+        let apns_wakeup_title = has_apns.then(|| prepared.resolved_title.clone()).flatten();
         let fcm_payload = has_android.then(|| {
             Arc::new(FcmPayload::new(
                 SharedStringMap::from(Arc::clone(&prepared.custom_data)),

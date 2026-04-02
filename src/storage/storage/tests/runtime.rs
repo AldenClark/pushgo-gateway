@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::encode_lower_hex_128;
 
 #[tokio::test]
 async fn dispatch_targets_cache_hits_within_ttl_and_expires() {
@@ -271,12 +272,135 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
         .await
         .expect("provider pull should succeed");
     assert!(pulled.is_some());
+    let provider_outbox_after_pull = ctx
+        .storage
+        .load_private_outbox_entry(device_a, provider_delivery_id)
+        .await
+        .expect("provider outbox lookup after pull should succeed");
+    assert!(provider_outbox_after_pull.is_none());
     let provider_payload_after_pull = ctx
         .storage
         .load_private_message(provider_delivery_id)
         .await
         .expect("provider payload lookup after pull should succeed");
     assert!(provider_payload_after_pull.is_none());
+}
+
+#[tokio::test]
+async fn provider_pull_clears_original_private_outbox_delivery() {
+    let ctx = setup_sqlite_storage("provider-pull-original-outbox-cleanup").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let device_id: DeviceId = [7; 16];
+    let platform = Platform::IOS;
+    let provider_token = "ios-provider-token-provider-pull-cleanup-001";
+    let original_delivery_id = "delivery-original-private-001";
+    let provider_delivery_id =
+        derive_provider_pull_delivery_id(original_delivery_id, platform.name(), provider_token);
+
+    ctx.storage
+        .bind_private_token(device_id, platform, provider_token)
+        .await
+        .expect("bind private token should succeed");
+
+    let mut data = hashbrown::HashMap::new();
+    data.insert("delivery_id", original_delivery_id);
+    let envelope = postcard::to_allocvec(&TestPrivatePayloadEnvelope {
+        payload_version: 1,
+        data,
+    })
+    .expect("provider pull envelope should encode");
+    let message = PrivateMessage {
+        payload: envelope.clone(),
+        size: envelope.len(),
+        sent_at: now,
+        expires_at: now + 300,
+    };
+
+    ctx.storage
+        .insert_private_message(original_delivery_id, &message)
+        .await
+        .expect("insert original private payload should succeed");
+    ctx.storage
+        .insert_private_message(provider_delivery_id.as_str(), &message)
+        .await
+        .expect("insert provider pull payload should succeed");
+
+    let original_entry = PrivateOutboxEntry {
+        delivery_id: original_delivery_id.to_string(),
+        status: OUTBOX_STATUS_PENDING.to_string(),
+        attempts: 0,
+        occurred_at: now,
+        created_at: now,
+        claimed_at: None,
+        first_sent_at: None,
+        last_attempt_at: None,
+        acked_at: None,
+        fallback_sent_at: None,
+        next_attempt_at: now,
+        last_error_code: None,
+        last_error_detail: None,
+        updated_at: now,
+    };
+    ctx.storage
+        .enqueue_private_outbox(device_id, &original_entry)
+        .await
+        .expect("enqueue original private outbox should succeed");
+    ctx.storage
+        .enqueue_provider_pull_item(
+            provider_delivery_id.as_str(),
+            &message,
+            platform,
+            provider_token,
+            now,
+        )
+        .await
+        .expect("enqueue provider pull item should succeed");
+
+    let pulled = ctx
+        .storage
+        .pull_provider_item(provider_delivery_id.as_str(), now + 1)
+        .await
+        .expect("pull provider item should succeed");
+    assert!(pulled.is_some());
+
+    let original_outbox_after_pull = ctx
+        .storage
+        .load_private_outbox_entry(device_id, original_delivery_id)
+        .await
+        .expect("load original outbox after pull should succeed");
+    assert!(original_outbox_after_pull.is_none());
+
+    let original_payload_after_pull = ctx
+        .storage
+        .load_private_message(original_delivery_id)
+        .await
+        .expect("load original payload after pull should succeed");
+    assert!(original_payload_after_pull.is_none());
+
+    let provider_payload_after_pull = ctx
+        .storage
+        .load_private_message(provider_delivery_id.as_str())
+        .await
+        .expect("load provider payload after pull should succeed");
+    assert!(provider_payload_after_pull.is_none());
+}
+
+fn derive_provider_pull_delivery_id(
+    dispatch_delivery_id: &str,
+    platform_name: &str,
+    provider_token: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(dispatch_delivery_id.trim().as_bytes());
+    hasher.update(b"|");
+    hasher.update(platform_name.as_bytes());
+    hasher.update(b"|");
+    hasher.update(provider_token.trim().as_bytes());
+    let digest = hasher.finalize();
+    let mut short = [0u8; 16];
+    short.copy_from_slice(&digest.as_bytes()[..16]);
+    encode_lower_hex_128(&short)
 }
 
 #[tokio::test]

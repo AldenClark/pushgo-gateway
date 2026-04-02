@@ -1,6 +1,9 @@
 use super::*;
-use crate::storage::database::{
-    PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderPullDatabaseAccess,
+use crate::{
+    private::protocol::PrivatePayloadEnvelope,
+    storage::database::{
+        PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderPullDatabaseAccess,
+    },
 };
 
 impl Storage {
@@ -91,7 +94,13 @@ impl Storage {
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>> {
-        self.db.pull_provider_item(delivery_id, now).await
+        let item = self.db.pull_provider_item(delivery_id, now).await?;
+        let Some(item) = item else {
+            return Ok(None);
+        };
+
+        self.clear_private_outbox_after_provider_pull(&item).await;
+        Ok(Some(item))
     }
 
     pub async fn list_provider_pull_retry_due(
@@ -187,5 +196,53 @@ impl Storage {
         token: &str,
     ) -> StoreResult<Option<DeviceId>> {
         self.db.lookup_private_device(platform, token).await
+    }
+
+    async fn clear_private_outbox_after_provider_pull(&self, item: &ProviderPullItem) {
+        let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(&item.payload) else {
+            return;
+        };
+        if !envelope.is_supported_version() {
+            return;
+        }
+        let Some(original_delivery_id) = envelope
+            .data
+            .get("delivery_id")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        let device_id = match self
+            .lookup_private_device(item.platform, item.provider_token.as_str())
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                crate::util::diagnostics_log(format_args!(
+                    "provider pull cleanup lookup failed delivery_id={} platform={} error={}",
+                    item.delivery_id,
+                    item.platform.name(),
+                    err,
+                ));
+                return;
+            }
+        };
+        let Some(device_id) = device_id else {
+            return;
+        };
+        if let Err(err) = self
+            .ack_private_delivery(device_id, original_delivery_id)
+            .await
+        {
+            crate::util::diagnostics_log(format_args!(
+                "provider pull cleanup private outbox ack failed delivery_id={} original_delivery_id={} device_id={} error={}",
+                item.delivery_id,
+                original_delivery_id,
+                crate::util::encode_crockford_base32_128(&device_id),
+                err,
+            ));
+        }
     }
 }

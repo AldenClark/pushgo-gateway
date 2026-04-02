@@ -24,7 +24,7 @@ pub(super) async fn dispatch(
         wakeup_payload
             .encoded_len()
             .map_err(|err| Error::Internal(err.to_string()))?,
-        target.private_wakeup_delivery.is_some(),
+        target.provider_pull_delivery.is_some(),
     ) {
         Ok(value) => value,
         Err(err) => {
@@ -42,7 +42,7 @@ pub(super) async fn dispatch(
         wakeup_payload: Some(Arc::clone(&wakeup_payload)),
         initial_path: selection.initial_path,
         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
-        private_wakeup: target.private_wakeup_delivery.clone(),
+        provider_pull_delivery: target.provider_pull_delivery.clone(),
     }) {
         Ok(()) => {
             record_provider_enqueued(prepared, target, progress, selection.initial_path).await;

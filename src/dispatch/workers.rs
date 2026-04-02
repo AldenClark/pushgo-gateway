@@ -64,11 +64,11 @@ impl DispatchWorkerPool {
                         ),
                     };
                     if actual_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(private_meta) = job.private_wakeup.as_ref()
+                        && let Some(provider_pull) = job.provider_pull_delivery.as_ref()
                     {
                         let _ = runtime
-                            .enqueue_private_wakeup_delivery(
-                                private_meta,
+                            .enqueue_provider_pull_delivery(
+                                provider_pull,
                                 "APNS",
                                 job.correlation_id.as_ref(),
                                 &channel_id,
@@ -90,10 +90,10 @@ impl DispatchWorkerPool {
                         && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                     {
                         payload = Arc::clone(wakeup_payload);
-                        if let Some(private_meta) = job.private_wakeup.as_ref() {
+                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
                             let _ = runtime
-                                .enqueue_private_wakeup_delivery(
-                                    private_meta,
+                                .enqueue_provider_pull_delivery(
+                                    provider_pull,
                                     "APNS",
                                     job.correlation_id.as_ref(),
                                     &channel_id,
@@ -184,11 +184,11 @@ impl DispatchWorkerPool {
                         ),
                     };
                     if actual_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(private_meta) = job.private_wakeup.as_ref()
+                        && let Some(provider_pull) = job.provider_pull_delivery.as_ref()
                     {
                         let _ = runtime
-                            .enqueue_private_wakeup_delivery(
-                                private_meta,
+                            .enqueue_provider_pull_delivery(
+                                provider_pull,
                                 "FCM",
                                 job.correlation_id.as_ref(),
                                 &channel_id,
@@ -210,10 +210,10 @@ impl DispatchWorkerPool {
                                 .as_ref()
                                 .expect("wakeup body required when wakeup payload exists"),
                         );
-                        if let Some(private_meta) = job.private_wakeup.as_ref() {
+                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
                             let _ = runtime
-                                .enqueue_private_wakeup_delivery(
-                                    private_meta,
+                                .enqueue_provider_pull_delivery(
+                                    provider_pull,
                                     "FCM",
                                     job.correlation_id.as_ref(),
                                     &channel_id,
@@ -295,11 +295,11 @@ impl DispatchWorkerPool {
                         ),
                     };
                     if actual_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(private_meta) = job.private_wakeup.as_ref()
+                        && let Some(provider_pull) = job.provider_pull_delivery.as_ref()
                     {
                         let _ = runtime
-                            .enqueue_private_wakeup_delivery(
-                                private_meta,
+                            .enqueue_provider_pull_delivery(
+                                provider_pull,
                                 "WNS",
                                 job.correlation_id.as_ref(),
                                 &channel_id,
@@ -316,10 +316,10 @@ impl DispatchWorkerPool {
                         && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                     {
                         payload = Arc::clone(wakeup_payload);
-                        if let Some(private_meta) = job.private_wakeup.as_ref() {
+                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
                             let _ = runtime
-                                .enqueue_private_wakeup_delivery(
-                                    private_meta,
+                                .enqueue_provider_pull_delivery(
+                                    provider_pull,
                                     "WNS",
                                     job.correlation_id.as_ref(),
                                     &channel_id,

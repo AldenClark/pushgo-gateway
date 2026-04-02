@@ -18,7 +18,7 @@ impl PrivateState {
         {
             engine.request_resync();
         }
-        if private_provider_wakeup_pull_enabled() && self.hub.is_online(device_id) {
+        if provider_wakeup_pull_enabled() && self.hub.is_online(device_id) {
             self.schedule_fallback(
                 device_id,
                 delivery_id.to_string(),

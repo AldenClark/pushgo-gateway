@@ -100,9 +100,10 @@ impl SqliteDb {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query(
-            "SELECT p.payload_blob, p.sent_at, p.expires_at \
+            "SELECT p.payload_blob, p.sent_at, p.expires_at, r.platform, r.provider_token \
              FROM provider_pull_queue q \
              INNER JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             INNER JOIN provider_pull_retry r ON r.delivery_id = q.delivery_id \
              WHERE q.delivery_id = ? AND q.status = 'pending' AND p.expires_at > ?",
         )
         .bind(delivery_id)
@@ -134,6 +135,8 @@ impl SqliteDb {
                 payload: r.get("payload_blob"),
                 sent_at: r.get("sent_at"),
                 expires_at: r.get("expires_at"),
+                platform: r.get::<String, _>("platform").parse()?,
+                provider_token: r.get("provider_token"),
             })
         } else {
             None

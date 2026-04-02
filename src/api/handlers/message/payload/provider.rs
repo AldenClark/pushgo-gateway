@@ -1,7 +1,7 @@
 use crate::{
     api::Error,
     app::AppState,
-    dispatch::{PrivateWakeupDelivery, ProviderDeliveryPath},
+    dispatch::{ProviderDeliveryPath, ProviderPullDelivery},
     routing::derive_private_device_id,
     storage::{DeliveryAuditPath, Platform},
     util::encode_lower_hex_128,
@@ -160,7 +160,7 @@ impl ProviderDeliveryPath {
     }
 }
 
-impl PrivateWakeupDelivery {
+impl ProviderPullDelivery {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_provider_target(
         provider_device_key: Option<&str>,
