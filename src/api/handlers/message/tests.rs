@@ -217,6 +217,24 @@ fn custom_payload_prepare_dispatch_builds_thread_id_and_wakeup_data() {
 }
 
 #[test]
+fn custom_payload_prepare_dispatch_includes_gateway_base_url_in_wakeup_data() {
+    let mut payload = CustomPayloadData::new(HashMap::new());
+    payload.apply_gateway_base_url(Some(" https://sandbox.pushgo.dev/ "));
+    let prepared = payload
+        .prepare_dispatch("channel-1", EntityKind::new("message"))
+        .expect("payload should encode");
+
+    assert_eq!(
+        prepared
+            .wakeup_data
+            .into_inner()
+            .get("base_url")
+            .map(String::as_str),
+        Some("https://sandbox.pushgo.dev")
+    );
+}
+
+#[test]
 fn provider_pull_delivery_id_is_stable_for_same_device() {
     let first = ProviderPullDeliveryId::derive("base-delivery", "ios", "token-a").into_inner();
     let second = ProviderPullDeliveryId::derive("base-delivery", "ios", "token-a").into_inner();

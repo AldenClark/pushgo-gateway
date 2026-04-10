@@ -1,6 +1,6 @@
 [package]
 name = "pushgo-gateway"
-version = "1.1.36"
+version = "1.2.0"
 edition = "2024"
 license = "MIT"
 authors = ["PushGo Team <team@pushgo.dev>"]

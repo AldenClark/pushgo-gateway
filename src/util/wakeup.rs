@@ -16,6 +16,7 @@ pub fn build_provider_wakeup_data(base: &HashMap<String, String>) -> HashMap<Str
         "ttl",
         "schema_version",
         "payload_version",
+        "base_url",
     ] {
         if let Some(value) = base.get(key) {
             out.insert(key.to_string(), value.clone());
@@ -53,12 +54,20 @@ mod tests {
         let base = HashMap::from([
             ("delivery_id".to_string(), "delivery-1".to_string()),
             ("title".to_string(), "Wakeup title".to_string()),
+            (
+                "base_url".to_string(),
+                "https://sandbox.pushgo.dev".to_string(),
+            ),
         ]);
 
         let wakeup = build_provider_wakeup_data(&base);
         assert_eq!(
             wakeup.get("title").map(String::as_str),
             Some("Wakeup title")
+        );
+        assert_eq!(
+            wakeup.get("base_url").map(String::as_str),
+            Some("https://sandbox.pushgo.dev")
         );
     }
 

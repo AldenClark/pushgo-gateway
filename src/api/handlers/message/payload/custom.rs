@@ -147,6 +147,17 @@ impl CustomPayloadData {
         }
     }
 
+    pub(crate) fn apply_gateway_base_url(&mut self, base_url: Option<&str>) {
+        let normalized = base_url
+            .map(str::trim)
+            .map(|value| value.trim_end_matches('/'))
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        if let Some(value) = normalized {
+            self.data.insert("base_url".to_string(), value);
+        }
+    }
+
     pub(crate) fn resolve_notification_text(
         &self,
         entity_kind: EntityKind<'_>,
@@ -364,7 +375,7 @@ impl<'a> EntityKind<'a> {
                     normalize_optional_text(explicit_body).or_else(|| map_text(payload, "body"));
                 ProviderNotificationText {
                     title: normalize_optional_text(explicit_title)
-                        .or_else(|| message_title_preview(explicit_or_payload_body.as_deref()))
+                        .or_else(|| map_text(payload, "title"))
                         .or_else(|| map_text(payload, "url"))
                         .or_else(|| first_image_url(payload))
                         .or_else(|| {
@@ -513,19 +524,6 @@ fn json_scalar_text(value: &JsonValue) -> Option<String> {
     }
 }
 
-fn message_title_preview(body: Option<&str>) -> Option<String> {
-    let text = body?.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let line = text
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or(text);
-    let preview: String = line.trim().chars().take(80).collect();
-    (!preview.is_empty()).then_some(preview)
-}
-
 fn first_image_url(data: &HashMap<String, String>) -> Option<String> {
     let raw = data.get("images")?;
     let values = serde_json::from_str::<Vec<String>>(raw).ok()?;
@@ -570,10 +568,11 @@ mod tests {
     }
 
     #[test]
-    fn wakeup_title_for_message_uses_body_preview() {
+    fn wakeup_title_for_message_uses_payload_title() {
         let payload = encode_private_payload(HashMap::from([
             ("entity_type".to_string(), "message".to_string()),
             ("message_id".to_string(), "msg-1".to_string()),
+            ("title".to_string(), "Expected wakeup title".to_string()),
             (
                 "body".to_string(),
                 "Long message body first line\nsecond line".to_string(),
@@ -582,7 +581,7 @@ mod tests {
 
         assert_eq!(
             wakeup_notification_title_from_private_payload(&payload),
-            Some("Long message body first line".to_string())
+            Some("Expected wakeup title".to_string())
         );
     }
 
@@ -622,11 +621,12 @@ mod tests {
 
     #[test]
     fn ensure_notification_title_promotes_derived_title_into_payload() {
+        let body_text = "Body is present but should not be promoted as title";
         let mut payload = super::CustomPayloadData::new(HashMap::new());
         payload.apply_standard_fields(super::StandardFields {
             channel_id: "channel-1",
             title: None,
-            body: Some("First line becomes wakeup title"),
+            body: Some(body_text),
             severity: None,
             schema_version: "1",
             payload_version: "1",
@@ -646,13 +646,11 @@ mod tests {
             .prepare_dispatch("channel-1", super::EntityKind::new("message"))
             .expect("payload should encode");
 
-        assert_eq!(
-            prepared
-                .wakeup_data
-                .into_inner()
-                .get("title")
-                .map(String::as_str),
-            Some("First line becomes wakeup title")
+        let wakeup = prepared.wakeup_data.into_inner();
+        assert_ne!(
+            wakeup.get("title").map(String::as_str),
+            Some(body_text),
+            "message wakeup title must not come from body preview"
         );
     }
 }

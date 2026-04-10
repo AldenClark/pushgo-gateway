@@ -150,6 +150,7 @@ impl<'a> PreparedDispatch<'a> {
             entity_id: &entity_id,
         });
         custom_data.insert_extra_fields(extra_fields);
+        custom_data.apply_gateway_base_url(state.public_base_url.as_deref());
         let derived_notification_text = custom_data.resolve_notification_text(
             entity_kind,
             resolved_title.as_deref(),

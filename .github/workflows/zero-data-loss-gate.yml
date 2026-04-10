@@ -35,14 +35,6 @@ on:
         description: "Android repo ref (branch/tag/SHA)"
         required: false
         default: "main"
-      pushgo_windows_repo:
-        description: "Windows repo (owner/name)"
-        required: false
-        default: ""
-      pushgo_windows_ref:
-        description: "Windows repo ref (branch/tag/SHA)"
-        required: false
-        default: "main"
 
 permissions:
   contents: read
@@ -59,25 +51,16 @@ jobs:
             os: ubuntu-latest
             run_gateway: "1"
             run_android: "0"
-            run_windows: "0"
             run_apple: "0"
           - id: android
             os: ubuntu-latest
             run_gateway: "0"
             run_android: "1"
-            run_windows: "0"
-            run_apple: "0"
-          - id: windows
-            os: macos-15
-            run_gateway: "0"
-            run_android: "0"
-            run_windows: "1"
             run_apple: "0"
           - id: apple
             os: macos-15
             run_gateway: "0"
             run_android: "0"
-            run_windows: "0"
             run_apple: "1"
     env:
       CHECKOUT_TOKEN: ${{ secrets.PUSHGO_CROSS_REPO_READ_TOKEN || github.token }}
@@ -85,8 +68,6 @@ jobs:
       PUSHGO_REF: ${{ github.event.inputs.pushgo_ref || 'main' }}
       PUSHGO_ANDROID_REPO: ${{ github.event.inputs.pushgo_android_repo || format('{0}/pushgo-android', github.repository_owner) }}
       PUSHGO_ANDROID_REF: ${{ github.event.inputs.pushgo_android_ref || 'main' }}
-      PUSHGO_WINDOWS_REPO: ${{ github.event.inputs.pushgo_windows_repo || format('{0}/pushgo-windows', github.repository_owner) }}
-      PUSHGO_WINDOWS_REF: ${{ github.event.inputs.pushgo_windows_ref || 'main' }}
 
     steps:
       - name: Checkout gateway
@@ -110,16 +91,8 @@ jobs:
           token: ${{ env.CHECKOUT_TOKEN }}
           path: pushgo-android
 
-      - name: Checkout pushgo-windows
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PUSHGO_WINDOWS_REPO }}
-          ref: ${{ env.PUSHGO_WINDOWS_REF }}
-          token: ${{ env.CHECKOUT_TOKEN }}
-          path: pushgo-windows
-
       - name: Setup Rust
-        if: ${{ matrix.target.run_gateway == '1' || matrix.target.run_windows == '1' }}
+        if: ${{ matrix.target.run_gateway == '1' }}
         uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Java
@@ -139,7 +112,6 @@ jobs:
         env:
           RUN_GATEWAY: ${{ matrix.target.run_gateway }}
           RUN_ANDROID: ${{ matrix.target.run_android }}
-          RUN_WINDOWS: ${{ matrix.target.run_windows }}
           RUN_APPLE: ${{ matrix.target.run_apple }}
         run: |
           set -euo pipefail
@@ -150,7 +122,6 @@ jobs:
             echo "gateway_sha=$(git -C gateway rev-parse HEAD)"
             echo "pushgo_repo=${PUSHGO_REPO} ref=${PUSHGO_REF} sha=$(git -C pushgo rev-parse HEAD)"
             echo "pushgo_android_repo=${PUSHGO_ANDROID_REPO} ref=${PUSHGO_ANDROID_REF} sha=$(git -C pushgo-android rev-parse HEAD)"
-            echo "pushgo_windows_repo=${PUSHGO_WINDOWS_REPO} ref=${PUSHGO_WINDOWS_REF} sha=$(git -C pushgo-windows rev-parse HEAD)"
           } | tee "ci_artifacts/context-${{ matrix.target.id }}.txt"
           {
             if [[ "${RUN_GATEWAY}" == "1" ]]; then
@@ -164,12 +135,6 @@ jobs:
             if [[ "${RUN_ANDROID}" == "1" ]]; then
               cd pushgo-android
               ./gradlew --no-daemon test
-              cd ..
-            fi
-
-            if [[ "${RUN_WINDOWS}" == "1" ]]; then
-              cd pushgo-windows
-              cargo check
               cd ..
             fi
 
