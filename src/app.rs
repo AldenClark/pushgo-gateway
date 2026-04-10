@@ -126,7 +126,7 @@ pub async fn build_app(
         state
             .spawn_configured_transports()
             .map_err(|err| std::io::Error::other(err.to_string()))?;
-        state.spawn_persistent_fallback_worker(dispatch.clone());
+        state.spawn_persistent_fallback_worker();
         Some(state)
     } else {
         None

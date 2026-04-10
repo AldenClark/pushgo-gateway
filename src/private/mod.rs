@@ -12,14 +12,12 @@ use warp_link::warp_link_core::{SessionControl, SessionCoordinator, TransportKin
 use warp_link_coordination::InMemoryCoordinator;
 
 use crate::{
-    dispatch::{ApnsJob, DispatchChannels, FcmJob, WnsJob},
-    providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
     routing::DeviceRegistry,
     stats::StatsCollector,
     storage::{
         DeviceId, MaintenanceCleanupStats, Platform, PrivateMessage, PrivateOutboxEntry, Storage,
     },
-    util::{SharedStringMap, decode_lower_hex_128, encode_lower_hex_128},
+    util::{decode_lower_hex_128, encode_lower_hex_128},
 };
 
 pub mod metrics;
@@ -54,13 +52,6 @@ const PRIVATE_DRAINING_DELIVERY_WINDOW_DEFAULT: Duration = Duration::from_secs(1
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_MULTIPLIER: f64 = 4.0;
 const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS: f64 = 2_000.0;
 const PRIVATE_DEFAULT_TTL_SECONDS_MAX: i64 = 30 * 24 * 60 * 60;
-const PROVIDER_WAKEUP_PULL_ENABLED: bool = false;
-
-#[inline]
-const fn provider_wakeup_pull_enabled() -> bool {
-    PROVIDER_WAKEUP_PULL_ENABLED
-}
-
 #[derive(Debug, Clone)]
 pub struct PrivateConfig {
     pub private_quic_bind: Option<String>,
@@ -334,7 +325,7 @@ impl PartialOrd for FallbackTaskEntry {
 }
 
 impl PrivateState {
-    pub(crate) fn spawn_persistent_fallback_worker(self: &Arc<Self>, dispatch: DispatchChannels) {
+    pub(crate) fn spawn_persistent_fallback_worker(self: &Arc<Self>) {
         let Some(engine) = self.fallback_tasks.clone() else {
             return;
         };
@@ -344,7 +335,7 @@ impl PrivateState {
         let state = Arc::clone(self);
 
         tokio::spawn(async move {
-            let runtime = FallbackRuntime::new(Arc::clone(&state), dispatch);
+            let runtime = FallbackRuntime::new(Arc::clone(&state));
             let mut scheduler = FallbackScheduler::default();
             runtime.seed_fallback_tasks(&mut scheduler).await;
             scheduler.schedule_maintenance(

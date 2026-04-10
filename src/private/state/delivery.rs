@@ -18,13 +18,11 @@ impl PrivateState {
         {
             engine.request_resync();
         }
-        if provider_wakeup_pull_enabled() && self.hub.is_online(device_id) {
-            self.schedule_fallback(
-                device_id,
-                delivery_id.to_string(),
-                sent_at + self.config.ack_timeout_secs.max(1) as i64,
-            );
-        }
+        self.schedule_fallback(
+            device_id,
+            delivery_id.to_string(),
+            sent_at + self.config.ack_timeout_secs.max(1) as i64,
+        );
         Ok(())
     }
 

@@ -5,5 +5,5 @@ mod runtime_tasks_scheduler;
 
 #[allow(unused_imports)]
 use self::runtime_tasks_fallback::{AttemptBudget, FallbackAttemptPolicy};
-use self::runtime_tasks_fallback::{FallbackRuntime, SystemTarget};
+use self::runtime_tasks_fallback::FallbackRuntime;
 use self::runtime_tasks_scheduler::FallbackScheduler;

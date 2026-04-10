@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::build_provider_wakeup_data;
+use crate::util::{apply_provider_wakeup_title, build_provider_wakeup_data};
 
 pub(crate) struct ProviderPullRetryWorkerDeps {
     pub store: Storage,
@@ -92,8 +92,8 @@ impl ProviderPullRetryWorker {
     }
 
     async fn send_wakeup(&self, entry: &crate::storage::ProviderPullRetryEntry) -> DispatchResult {
-        let data = Self::wakeup_data(entry.delivery_id.as_str());
         let wakeup_title = self.wakeup_title(entry.delivery_id.as_str()).await;
+        let data = Self::wakeup_data(entry.delivery_id.as_str(), wakeup_title.as_deref());
         match entry.platform {
             Platform::IOS | Platform::MACOS | Platform::WATCHOS => {
                 let payload = Arc::new(ApnsPayload::wakeup(
@@ -121,10 +121,12 @@ impl ProviderPullRetryWorker {
         }
     }
 
-    pub(super) fn wakeup_data(delivery_id: &str) -> HashMap<String, String> {
+    pub(super) fn wakeup_data(delivery_id: &str, title: Option<&str>) -> HashMap<String, String> {
         let mut base = HashMap::new();
         base.insert("delivery_id".to_string(), delivery_id.to_string());
-        build_provider_wakeup_data(&base)
+        let mut wakeup = build_provider_wakeup_data(&base);
+        apply_provider_wakeup_title(&mut wakeup, title);
+        wakeup
     }
 
     async fn wakeup_title(&self, delivery_id: &str) -> Option<String> {
@@ -146,11 +148,12 @@ mod tests {
 
     #[test]
     fn provider_retry_wakeup_data_contains_wakeup_markers() {
-        let data = ProviderPullRetryWorker::wakeup_data("delivery-001");
+        let data = ProviderPullRetryWorker::wakeup_data("delivery-001", Some("Wakeup title"));
         assert_eq!(
             data.get("delivery_id").map(String::as_str),
             Some("delivery-001")
         );
+        assert_eq!(data.get("title").map(String::as_str), Some("Wakeup title"));
         assert_eq!(
             data.get("provider_mode").map(String::as_str),
             Some("wakeup")

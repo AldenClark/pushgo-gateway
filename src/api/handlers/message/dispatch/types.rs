@@ -157,6 +157,7 @@ impl<'a> PreparedDispatch<'a> {
         );
         let resolved_title = resolved_title.or(derived_notification_text.title);
         let resolved_body = resolved_body.or(derived_notification_text.body);
+        custom_data.ensure_notification_title(resolved_title.as_deref());
         let prepared_payload = custom_data
             .prepare_dispatch(channel_id_value.as_str(), entity_kind)
             .map_err(|err| Error::Internal(format!("private payload encoding failed: {err}")))?;

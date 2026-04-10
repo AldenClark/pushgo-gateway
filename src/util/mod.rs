@@ -18,4 +18,4 @@ pub use runtime_flags::{
     is_diagnostics_mode, is_sandbox_mode, set_diagnostics_mode, set_sandbox_mode,
 };
 pub use shared_string_map::SharedStringMap;
-pub use wakeup::build_provider_wakeup_data;
+pub use wakeup::{apply_provider_wakeup_title, build_provider_wakeup_data};

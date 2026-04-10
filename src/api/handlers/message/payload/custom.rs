@@ -156,6 +156,16 @@ impl CustomPayloadData {
         entity_kind.resolve_notification_text(explicit_title, explicit_body, &self.data)
     }
 
+    pub(crate) fn ensure_notification_title(&mut self, title: Option<&str>) {
+        let normalized = title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        if let Some(title) = normalized {
+            self.data.entry("title".to_string()).or_insert(title);
+        }
+    }
+
     fn apple_thread_id(&self, channel_id: &str, entity_kind: EntityKind<'_>) -> AppleThreadId {
         let mut parts = vec![entity_kind.apple_thread_prefix().to_string()];
         let trimmed_channel = channel_id.trim();
@@ -607,6 +617,42 @@ mod tests {
         assert_eq!(
             wakeup_notification_title_from_private_payload(&payload),
             Some("Pump Room Sensor".to_string())
+        );
+    }
+
+    #[test]
+    fn ensure_notification_title_promotes_derived_title_into_payload() {
+        let mut payload = super::CustomPayloadData::new(HashMap::new());
+        payload.apply_standard_fields(super::StandardFields {
+            channel_id: "channel-1",
+            title: None,
+            body: Some("First line becomes wakeup title"),
+            severity: None,
+            schema_version: "1",
+            payload_version: "1",
+            op_id: "op-1",
+            delivery_id: "delivery-1",
+            ingested_at: 1,
+            occurred_at: 1,
+            sent_at: 1,
+            ttl: None,
+            entity_type: "message",
+            entity_id: "message-1",
+        });
+        let title =
+            payload.resolve_notification_text(super::EntityKind::new("message"), None, None);
+        payload.ensure_notification_title(title.title.as_deref());
+        let prepared = payload
+            .prepare_dispatch("channel-1", super::EntityKind::new("message"))
+            .expect("payload should encode");
+
+        assert_eq!(
+            prepared
+                .wakeup_data
+                .into_inner()
+                .get("title")
+                .map(String::as_str),
+            Some("First line becomes wakeup title")
         );
     }
 }

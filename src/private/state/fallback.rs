@@ -1,5 +1,4 @@
 use super::*;
-use crate::routing::derive_private_device_id;
 
 impl PrivateState {
     pub fn schedule_fallback(
@@ -8,9 +7,6 @@ impl PrivateState {
         delivery_id: impl Into<String>,
         due_at_unix_secs: i64,
     ) {
-        if !provider_wakeup_pull_enabled() {
-            return;
-        }
         if let Some(engine) = &self.fallback_tasks {
             if !engine.schedule(device_id, delivery_id.into(), due_at_unix_secs) {
                 self.metrics.mark_enqueue_failure();
@@ -20,18 +16,12 @@ impl PrivateState {
     }
 
     pub fn request_fallback_resync(&self) {
-        if !provider_wakeup_pull_enabled() {
-            return;
-        }
         if let Some(engine) = &self.fallback_tasks {
             engine.request_resync();
         }
     }
 
     pub fn cancel_fallback(&self, device_id: DeviceId, delivery_id: &str) {
-        if !provider_wakeup_pull_enabled() {
-            return;
-        }
         if let Some(engine) = &self.fallback_tasks {
             if !engine.cancel(device_id, delivery_id) {
                 self.metrics.mark_enqueue_failure();
@@ -78,38 +68,5 @@ impl PrivateState {
             engine.request_resync();
         }
         Ok(delivery_ids.len())
-    }
-
-    pub(in crate::private) async fn resolve_system_target(
-        &self,
-        channel_id: [u8; 16],
-        device_id: DeviceId,
-    ) -> Option<SystemTarget> {
-        let devices = self.hub.list_channel_devices(channel_id).await.ok()?;
-        for item in devices {
-            let registry_match = self
-                .device_registry
-                .find_device_key_by_provider_token(item.platform, item.token_str.as_ref())
-                .map(|device_key| derive_private_device_id(device_key.as_str()))
-                .is_some_and(|mapped_device_id| mapped_device_id == device_id);
-            if registry_match {
-                return Some(SystemTarget {
-                    platform: item.platform,
-                    token: Arc::clone(&item.token_str),
-                });
-            }
-            let mapped = self
-                .hub
-                .lookup_device_for_token(item.platform, item.token_str.as_ref())
-                .await
-                .ok()?;
-            if mapped == Some(device_id) {
-                return Some(SystemTarget {
-                    platform: item.platform,
-                    token: Arc::clone(&item.token_str),
-                });
-            }
-        }
-        None
     }
 }
