@@ -41,6 +41,11 @@ impl SqliteDb {
     ) -> StoreResult<()> {
         let now = Utc::now().timestamp();
         let size = message.size as i64;
+        sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND expires_at <= ?")
+            .bind(device_id.as_slice())
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(
             "INSERT INTO provider_pull_queue \
              (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
@@ -72,6 +77,11 @@ impl SqliteDb {
     ) -> StoreResult<Option<ProviderPullItem>> {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND expires_at <= ?")
+            .bind(device_id.as_slice())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
         let row = sqlx::query(
             "SELECT payload_blob, sent_at, expires_at, platform, provider_token \
              FROM provider_pull_queue \
@@ -113,6 +123,11 @@ impl SqliteDb {
     ) -> StoreResult<Vec<ProviderPullItem>> {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND expires_at <= ?")
+            .bind(device_id.as_slice())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
         let rows = sqlx::query(
             "SELECT delivery_id, payload_blob, sent_at, expires_at, platform, provider_token \
              FROM provider_pull_queue \
@@ -157,10 +172,15 @@ impl SqliteDb {
         &self,
         device_id: DeviceId,
         delivery_id: &str,
-        _: i64,
+        now: i64,
     ) -> StoreResult<Option<ProviderPullItem>> {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND expires_at <= ?")
+            .bind(device_id.as_slice())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
         let row = sqlx::query(
             "SELECT payload_blob, sent_at, expires_at, platform, provider_token \
              FROM provider_pull_queue \

@@ -170,12 +170,7 @@ impl DeviceRouteCleanup<'_> {
             if next_type == self.old_channel_type {
                 return self.cleanup_same_provider_route(state).await;
             }
-
-            // Provider/private切换只在 Android/Windows 设备上执行历史订阅清理。
-            // Apple 平台在 upsert 切换时不做自动清理，避免误删订阅。
-            if !matches!(self.device_platform, Platform::ANDROID | Platform::WINDOWS) {
-                return Ok(());
-            }
+            self.migrate_pending_deliveries(state, next_type).await?;
         }
 
         match self.old_channel_type {
@@ -238,6 +233,67 @@ impl DeviceRouteCleanup<'_> {
                 "failed to cleanup old provider channel state: {err}"
             ))
         })?;
+        Ok(())
+    }
+
+    async fn migrate_pending_deliveries(
+        &self,
+        state: &AppState,
+        next_type: DeviceChannelType,
+    ) -> Result<(), Error> {
+        let device_id = derive_private_device_id(self.device_key);
+        match (self.old_channel_type, next_type) {
+            (
+                DeviceChannelType::Private,
+                DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns,
+            ) => {
+                let Some(next_provider_token) = self.next_provider_token else {
+                    return Err(Error::Internal(
+                        "provider token missing when migrating private pending deliveries"
+                            .to_string(),
+                    ));
+                };
+                let platform = platform_from_channel_type(next_type, self.device_platform)?;
+                state
+                    .store
+                    .migrate_private_pending_to_provider_queue(
+                        device_id,
+                        platform,
+                        next_provider_token,
+                    )
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!(
+                            "failed to migrate private pending deliveries to provider queue: {err}"
+                        ))
+                    })?;
+            }
+            (
+                DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns,
+                DeviceChannelType::Private,
+            ) => {
+                let ack_timeout_secs = state
+                    .private
+                    .as_ref()
+                    .map(|private| private.config.ack_timeout_secs)
+                    .unwrap_or(30);
+                let migrated = state
+                    .store
+                    .migrate_provider_pending_to_private_outbox(device_id, ack_timeout_secs)
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!(
+                            "failed to migrate provider pending deliveries to private outbox: {err}"
+                        ))
+                    })?;
+                if migrated > 0
+                    && let Some(private_state) = state.private.as_deref()
+                {
+                    private_state.request_fallback_resync();
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 }

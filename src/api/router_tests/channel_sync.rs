@@ -1,4 +1,92 @@
 use super::*;
+use crate::{
+    private::protocol::PrivatePayloadEnvelope,
+    routing::derive_private_device_id,
+    storage::{Platform, PrivateMessage, PrivateOutboxEntry, OUTBOX_STATUS_PENDING},
+};
+
+fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
+    let mut data = hashbrown::HashMap::new();
+    data.insert("delivery_id".to_string(), delivery_id.to_string());
+    data.insert("title".to_string(), title.to_string());
+    postcard::to_allocvec(&PrivatePayloadEnvelope {
+        payload_version: PrivatePayloadEnvelope::CURRENT_VERSION,
+        data,
+    })
+    .expect("provider payload should encode")
+}
+
+async fn seed_private_pending_delivery(
+    state: &AppState,
+    device_key: &str,
+    delivery_id: &str,
+    title: &str,
+) {
+    let now = chrono::Utc::now().timestamp();
+    let payload = make_provider_payload(delivery_id, title);
+    let message = PrivateMessage {
+        payload: payload.clone(),
+        size: payload.len(),
+        sent_at: now,
+        expires_at: now + 300,
+    };
+    state
+        .store
+        .insert_private_message(delivery_id, &message)
+        .await
+        .expect("seed private message should succeed");
+    state
+        .store
+        .enqueue_private_outbox(
+            derive_private_device_id(device_key),
+            &PrivateOutboxEntry {
+                delivery_id: delivery_id.to_string(),
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                attempts: 0,
+                occurred_at: now,
+                created_at: now,
+                claimed_at: None,
+                first_sent_at: None,
+                last_attempt_at: None,
+                acked_at: None,
+                fallback_sent_at: None,
+                next_attempt_at: now,
+                last_error_code: None,
+                last_error_detail: None,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("seed private outbox should succeed");
+}
+
+async fn seed_provider_pending_delivery(
+    state: &AppState,
+    device_key: &str,
+    delivery_id: &str,
+    title: &str,
+    provider_token: &str,
+) {
+    let now = chrono::Utc::now().timestamp();
+    let payload = make_provider_payload(delivery_id, title);
+    let message = PrivateMessage {
+        payload: payload.clone(),
+        size: payload.len(),
+        sent_at: now,
+        expires_at: now + 300,
+    };
+    state
+        .store
+        .enqueue_provider_pull_item(
+            derive_private_device_id(device_key),
+            delivery_id,
+            &message,
+            Platform::ANDROID,
+            provider_token,
+        )
+        .await
+        .expect("seed provider queue should succeed");
+}
 
 #[tokio::test]
 async fn channel_sync_with_partial_failures_does_not_reconcile_subscriptions() {
@@ -289,5 +377,144 @@ async fn channel_sync_with_all_success_reconciles_extra_subscriptions() {
         subscribed.len(),
         2,
         "full success sync should reconcile and drop extra subscriptions"
+    );
+}
+
+#[tokio::test]
+async fn route_switch_private_to_provider_migrates_pending_deliveries() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let provider_token = "android-token-route-switch-0001";
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "platform": "android",
+            "channel_type": "private"
+        }),
+    )
+    .await;
+    let device_key = response_string_field(&register_body, "device_key").to_string();
+    let delivery_a = "delivery-route-switch-private-provider-001";
+    let delivery_b = "delivery-route-switch-private-provider-002";
+    seed_private_pending_delivery(&state, &device_key, delivery_a, "title-a").await;
+    seed_private_pending_delivery(&state, &device_key, delivery_b, "title-b").await;
+
+    let (status, _route_body) = post_json(
+        app,
+        "/device/register",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": provider_token
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let device_id = derive_private_device_id(&device_key);
+    let pending_after_switch = state
+        .store
+        .count_private_outbox_for_device(device_id)
+        .await
+        .expect("private outbox count should succeed");
+    assert_eq!(
+        pending_after_switch, 0,
+        "private state should be cleared after private -> provider switch"
+    );
+
+    let mut migrated = state
+        .store
+        .pull_provider_items(device_id, chrono::Utc::now().timestamp(), 10)
+        .await
+        .expect("provider queue pull should succeed");
+    migrated.sort_by(|left, right| left.delivery_id.cmp(&right.delivery_id));
+    assert_eq!(migrated.len(), 2);
+    assert_eq!(migrated[0].delivery_id, delivery_a);
+    assert_eq!(migrated[1].delivery_id, delivery_b);
+    assert!(
+        migrated
+            .iter()
+            .all(|item| item.provider_token == provider_token && item.platform == Platform::ANDROID),
+        "migrated rows should keep provider target information"
+    );
+}
+
+#[tokio::test]
+async fn route_switch_provider_to_private_migrates_pending_deliveries() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let provider_token = "android-token-route-switch-0002";
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": provider_token
+        }),
+    )
+    .await;
+    let device_key = response_string_field(&register_body, "device_key").to_string();
+    let delivery_a = "delivery-route-switch-provider-private-001";
+    let delivery_b = "delivery-route-switch-provider-private-002";
+    seed_provider_pending_delivery(&state, &device_key, delivery_a, "title-a", provider_token).await;
+    seed_provider_pending_delivery(&state, &device_key, delivery_b, "title-b", provider_token).await;
+
+    let (status, _route_body) = post_json(
+        app,
+        "/device/register",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "private"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let device_id = derive_private_device_id(&device_key);
+    let provider_after_switch = state
+        .store
+        .pull_provider_items(device_id, chrono::Utc::now().timestamp(), 10)
+        .await
+        .expect("provider queue pull should succeed");
+    assert!(
+        provider_after_switch.is_empty(),
+        "provider queue should be drained after provider -> private switch"
+    );
+
+    let pending_private = state
+        .store
+        .list_private_outbox(device_id, 10)
+        .await
+        .expect("private outbox list should succeed");
+    assert_eq!(pending_private.len(), 2);
+    let mut ids = pending_private
+        .into_iter()
+        .map(|entry| entry.delivery_id)
+        .collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(ids, vec![delivery_a.to_string(), delivery_b.to_string()]);
+    assert!(
+        state
+            .store
+            .load_private_message(delivery_a)
+            .await
+            .expect("private message load should succeed")
+            .is_some(),
+        "migrated private message should be materialized"
+    );
+    assert!(
+        state
+            .store
+            .load_private_message(delivery_b)
+            .await
+            .expect("private message load should succeed")
+            .is_some(),
+        "migrated private message should be materialized"
     );
 }

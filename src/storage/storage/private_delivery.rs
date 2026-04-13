@@ -209,6 +209,91 @@ impl Storage {
         self.db.lookup_private_device(platform, token).await
     }
 
+    pub async fn migrate_private_pending_to_provider_queue(
+        &self,
+        device_id: DeviceId,
+        platform: Platform,
+        provider_token: &str,
+    ) -> StoreResult<usize> {
+        let normalized_token = provider_token.trim();
+        if normalized_token.is_empty() {
+            return Ok(0);
+        }
+        let pending = self.db.count_private_outbox_for_device(device_id).await?;
+        if pending == 0 {
+            return Ok(0);
+        }
+        let entries = self.db.list_private_outbox(device_id, pending).await?;
+        let mut migrated = 0usize;
+        for entry in entries {
+            let Some(message) = self.db.load_private_message(entry.delivery_id.as_str()).await? else {
+                continue;
+            };
+            self.db
+                .enqueue_provider_pull_item(
+                    device_id,
+                    entry.delivery_id.as_str(),
+                    &message,
+                    platform,
+                    normalized_token,
+                )
+                .await?;
+            migrated = migrated.saturating_add(1);
+        }
+        Ok(migrated)
+    }
+
+    pub async fn migrate_provider_pending_to_private_outbox(
+        &self,
+        device_id: DeviceId,
+        ack_timeout_secs: u64,
+    ) -> StoreResult<usize> {
+        const BATCH_SIZE: usize = 512;
+        let now = chrono::Utc::now().timestamp();
+        let next_attempt_at = now.saturating_add(ack_timeout_secs.max(1) as i64);
+        let mut migrated = 0usize;
+
+        loop {
+            let items = self.db.pull_provider_items(device_id, now, BATCH_SIZE).await?;
+            if items.is_empty() {
+                break;
+            }
+            for item in &items {
+                let message = PrivateMessage {
+                    payload: item.payload.clone(),
+                    size: item.payload.len(),
+                    sent_at: item.sent_at,
+                    expires_at: item.expires_at,
+                };
+                self.db
+                    .insert_private_message(item.delivery_id.as_str(), &message)
+                    .await?;
+                let entry = PrivateOutboxEntry {
+                    delivery_id: item.delivery_id.clone(),
+                    status: OUTBOX_STATUS_PENDING.to_string(),
+                    attempts: 0,
+                    occurred_at: item.sent_at,
+                    created_at: now,
+                    claimed_at: None,
+                    first_sent_at: None,
+                    last_attempt_at: None,
+                    acked_at: None,
+                    fallback_sent_at: None,
+                    next_attempt_at,
+                    last_error_code: None,
+                    last_error_detail: None,
+                    updated_at: now,
+                };
+                self.db.enqueue_private_outbox(device_id, &entry).await?;
+                migrated = migrated.saturating_add(1);
+            }
+            if items.len() < BATCH_SIZE {
+                break;
+            }
+        }
+        Ok(migrated)
+    }
+
     async fn clear_private_outbox_after_provider_delivery(&self, item: &ProviderPullItem) {
         let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(&item.payload) else {
             return;
