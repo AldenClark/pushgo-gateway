@@ -111,8 +111,13 @@ async fn provider_ingress_pull_and_ack_work_end_to_end() {
     let ack_again = ack_message(&client, &gateway, &device_key, &first_delivery_id).await;
     assert_eq!(ack_again, Some(false), "ack should be idempotent");
 
-    let single_after_ack =
-        pull_messages(&client, &gateway, &device_key, Some(first_delivery_id.as_str())).await;
+    let single_after_ack = pull_messages(
+        &client,
+        &gateway,
+        &device_key,
+        Some(first_delivery_id.as_str()),
+    )
+    .await;
     assert!(
         single_after_ack.is_empty(),
         "acked delivery should not be pullable"

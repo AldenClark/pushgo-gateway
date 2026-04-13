@@ -91,11 +91,13 @@ impl PostgresDb {
         .await?;
 
         let result = if let Some(r) = row {
-            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = $1 AND delivery_id = $2")
-                .bind(device_id.as_slice())
-                .bind(delivery_id)
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(
+                "DELETE FROM provider_pull_queue WHERE device_id = $1 AND delivery_id = $2",
+            )
+            .bind(device_id.as_slice())
+            .bind(delivery_id)
+            .execute(&mut *tx)
+            .await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
@@ -155,11 +157,13 @@ impl PostgresDb {
         }
 
         for delivery_id in &delivery_ids {
-            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = $1 AND delivery_id = $2")
-                .bind(device_id.as_slice())
-                .bind(delivery_id)
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(
+                "DELETE FROM provider_pull_queue WHERE device_id = $1 AND delivery_id = $2",
+            )
+            .bind(device_id.as_slice())
+            .bind(delivery_id)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
@@ -189,11 +193,13 @@ impl PostgresDb {
         .await?;
 
         let out = if let Some(r) = row {
-            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = $1 AND delivery_id = $2")
-                .bind(device_id.as_slice())
-                .bind(delivery_id)
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(
+                "DELETE FROM provider_pull_queue WHERE device_id = $1 AND delivery_id = $2",
+            )
+            .bind(device_id.as_slice())
+            .bind(delivery_id)
+            .execute(&mut *tx)
+            .await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),

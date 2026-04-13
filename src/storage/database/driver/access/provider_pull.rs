@@ -13,13 +13,7 @@ impl ProviderPullDatabaseAccess for DatabaseDriver {
     ) -> StoreResult<()> {
         delegate_db_async!(
             self,
-            enqueue_provider_pull_item(
-                device_id,
-                delivery_id,
-                message,
-                platform,
-                provider_token
-            )
+            enqueue_provider_pull_item(device_id, delivery_id, message, platform, provider_token)
         )
     }
 

@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     private::protocol::PrivatePayloadEnvelope,
     routing::derive_private_device_id,
-    storage::{Platform, PrivateMessage, PrivateOutboxEntry, OUTBOX_STATUS_PENDING},
+    storage::{OUTBOX_STATUS_PENDING, Platform, PrivateMessage, PrivateOutboxEntry},
 };
 
 fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
@@ -461,8 +461,10 @@ async fn route_switch_provider_to_private_migrates_pending_deliveries() {
     let device_key = response_string_field(&register_body, "device_key").to_string();
     let delivery_a = "delivery-route-switch-provider-private-001";
     let delivery_b = "delivery-route-switch-provider-private-002";
-    seed_provider_pending_delivery(&state, &device_key, delivery_a, "title-a", provider_token).await;
-    seed_provider_pending_delivery(&state, &device_key, delivery_b, "title-b", provider_token).await;
+    seed_provider_pending_delivery(&state, &device_key, delivery_a, "title-a", provider_token)
+        .await;
+    seed_provider_pending_delivery(&state, &device_key, delivery_b, "title-b", provider_token)
+        .await;
 
     let (status, _route_body) = post_json(
         app,

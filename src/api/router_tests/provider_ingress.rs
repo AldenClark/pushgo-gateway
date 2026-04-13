@@ -17,7 +17,12 @@ fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
     .expect("provider payload should encode")
 }
 
-async fn enqueue_provider_pull_item(state: &AppState, device_key: &str, delivery_id: &str, title: &str) {
+async fn enqueue_provider_pull_item(
+    state: &AppState,
+    device_key: &str,
+    delivery_id: &str,
+    title: &str,
+) {
     let now = chrono::Utc::now().timestamp();
     let payload = make_provider_payload(delivery_id, title);
     let message = PrivateMessage {

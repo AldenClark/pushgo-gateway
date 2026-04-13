@@ -291,7 +291,6 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
         .await
         .expect("shared payload second lookup should succeed");
     assert!(shared_after_all_acked.is_none());
-
 }
 
 #[tokio::test]

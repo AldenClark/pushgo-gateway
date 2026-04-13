@@ -79,13 +79,7 @@ impl Storage {
         provider_token: &str,
     ) -> StoreResult<()> {
         self.db
-            .enqueue_provider_pull_item(
-                device_id,
-                delivery_id,
-                message,
-                platform,
-                provider_token,
-            )
+            .enqueue_provider_pull_item(device_id, delivery_id, message, platform, provider_token)
             .await
     }
 
@@ -103,7 +97,8 @@ impl Storage {
             return Ok(None);
         };
 
-        self.clear_private_outbox_after_provider_delivery(&item).await;
+        self.clear_private_outbox_after_provider_delivery(&item)
+            .await;
         Ok(Some(item))
     }
 
@@ -115,7 +110,8 @@ impl Storage {
     ) -> StoreResult<Vec<ProviderPullItem>> {
         let items = self.db.pull_provider_items(device_id, now, limit).await?;
         for item in &items {
-            self.clear_private_outbox_after_provider_delivery(item).await;
+            self.clear_private_outbox_after_provider_delivery(item)
+                .await;
         }
         Ok(items)
     }
@@ -133,7 +129,8 @@ impl Storage {
         let Some(item) = item else {
             return Ok(None);
         };
-        self.clear_private_outbox_after_provider_delivery(&item).await;
+        self.clear_private_outbox_after_provider_delivery(&item)
+            .await;
         Ok(Some(item))
     }
 
@@ -226,7 +223,11 @@ impl Storage {
         let entries = self.db.list_private_outbox(device_id, pending).await?;
         let mut migrated = 0usize;
         for entry in entries {
-            let Some(message) = self.db.load_private_message(entry.delivery_id.as_str()).await? else {
+            let Some(message) = self
+                .db
+                .load_private_message(entry.delivery_id.as_str())
+                .await?
+            else {
                 continue;
             };
             self.db
@@ -254,7 +255,10 @@ impl Storage {
         let mut migrated = 0usize;
 
         loop {
-            let items = self.db.pull_provider_items(device_id, now, BATCH_SIZE).await?;
+            let items = self
+                .db
+                .pull_provider_items(device_id, now, BATCH_SIZE)
+                .await?;
             if items.is_empty() {
                 break;
             }
