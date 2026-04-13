@@ -206,29 +206,30 @@ pub trait DeliveryAuditDatabaseAccess: Send + Sync {
 pub trait ProviderPullDatabaseAccess: Send + Sync {
     async fn enqueue_provider_pull_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
         message: &PrivateMessage,
         platform: Platform,
         provider_token: &str,
-        next_retry_at: i64,
     ) -> StoreResult<()>;
     async fn pull_provider_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>>;
-    async fn list_provider_pull_retry_due(
+    async fn pull_provider_items(
         &self,
+        device_id: DeviceId,
         now: i64,
         limit: usize,
-    ) -> StoreResult<Vec<ProviderPullRetryEntry>>;
-    async fn bump_provider_pull_retry(
+    ) -> StoreResult<Vec<ProviderPullItem>>;
+    async fn ack_provider_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
-        next_retry_at: i64,
         now: i64,
-    ) -> StoreResult<bool>;
-    async fn clear_provider_pull_retry(&self, delivery_id: &str) -> StoreResult<()>;
+    ) -> StoreResult<Option<ProviderPullItem>>;
 }
 
 #[async_trait]

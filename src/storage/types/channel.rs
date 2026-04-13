@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{StoreError, StoreResult};
 
-pub const STORAGE_SCHEMA_VERSION: &str = "2026-03-26-gateway-v5";
-pub const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-03-18-gateway-v4";
+pub const STORAGE_SCHEMA_VERSION: &str = "2026-04-13-gateway-v6";
+pub const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-03-26-gateway-v5";
+pub const STORAGE_SCHEMA_VERSION_LEGACY: &str = "2026-03-18-gateway-v4";
 
 #[derive(Debug, Clone)]
 pub struct ChannelInfo {

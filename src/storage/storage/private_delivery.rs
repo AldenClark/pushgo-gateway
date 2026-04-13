@@ -72,58 +72,69 @@ impl Storage {
 
     pub async fn enqueue_provider_pull_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
         message: &PrivateMessage,
         platform: Platform,
         provider_token: &str,
-        next_retry_at: i64,
     ) -> StoreResult<()> {
         self.db
             .enqueue_provider_pull_item(
+                device_id,
                 delivery_id,
                 message,
                 platform,
                 provider_token,
-                next_retry_at,
             )
             .await
     }
 
     pub async fn pull_provider_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>> {
-        let item = self.db.pull_provider_item(delivery_id, now).await?;
+        let item = self
+            .db
+            .pull_provider_item(device_id, delivery_id, now)
+            .await?;
         let Some(item) = item else {
             return Ok(None);
         };
 
-        self.clear_private_outbox_after_provider_pull(&item).await;
+        self.clear_private_outbox_after_provider_delivery(&item).await;
         Ok(Some(item))
     }
 
-    pub async fn list_provider_pull_retry_due(
+    pub async fn pull_provider_items(
         &self,
+        device_id: DeviceId,
         now: i64,
         limit: usize,
-    ) -> StoreResult<Vec<ProviderPullRetryEntry>> {
-        self.db.list_provider_pull_retry_due(now, limit).await
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        let items = self.db.pull_provider_items(device_id, now, limit).await?;
+        for item in &items {
+            self.clear_private_outbox_after_provider_delivery(item).await;
+        }
+        Ok(items)
     }
 
-    pub async fn bump_provider_pull_retry(
+    pub async fn ack_provider_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
-        next_retry_at: i64,
         now: i64,
-    ) -> StoreResult<bool> {
-        self.db
-            .bump_provider_pull_retry(delivery_id, next_retry_at, now)
-            .await
-    }
-
-    pub async fn clear_provider_pull_retry(&self, delivery_id: &str) -> StoreResult<()> {
-        self.db.clear_provider_pull_retry(delivery_id).await
+    ) -> StoreResult<Option<ProviderPullItem>> {
+        let item = self
+            .db
+            .ack_provider_item(device_id, delivery_id, now)
+            .await?;
+        let Some(item) = item else {
+            return Ok(None);
+        };
+        self.clear_private_outbox_after_provider_delivery(&item).await;
+        Ok(Some(item))
     }
 
     pub async fn mark_private_fallback_sent(
@@ -198,7 +209,7 @@ impl Storage {
         self.db.lookup_private_device(platform, token).await
     }
 
-    async fn clear_private_outbox_after_provider_pull(&self, item: &ProviderPullItem) {
+    async fn clear_private_outbox_after_provider_delivery(&self, item: &ProviderPullItem) {
         let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(&item.payload) else {
             return;
         };
@@ -214,33 +225,15 @@ impl Storage {
         else {
             return;
         };
-        let device_id = match self
-            .lookup_private_device(item.platform, item.provider_token.as_str())
-            .await
-        {
-            Ok(value) => value,
-            Err(err) => {
-                crate::util::diagnostics_log(format_args!(
-                    "provider pull cleanup lookup failed delivery_id={} platform={} error={}",
-                    item.delivery_id,
-                    item.platform.name(),
-                    err,
-                ));
-                return;
-            }
-        };
-        let Some(device_id) = device_id else {
-            return;
-        };
         if let Err(err) = self
-            .ack_private_delivery(device_id, original_delivery_id)
+            .ack_private_delivery(item.device_id, original_delivery_id)
             .await
         {
             crate::util::diagnostics_log(format_args!(
                 "provider pull cleanup private outbox ack failed delivery_id={} original_delivery_id={} device_id={} error={}",
                 item.delivery_id,
                 original_delivery_id,
-                crate::util::encode_crockford_base32_128(&device_id),
+                crate::util::encode_crockford_base32_128(&item.device_id),
                 err,
             ));
         }

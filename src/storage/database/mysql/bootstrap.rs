@@ -18,8 +18,7 @@ impl MySqlDb {
             "CREATE TABLE IF NOT EXISTS private_bindings (platform SMALLINT NOT NULL, token_hash BINARY(32) NOT NULL, device_id BINARY(16) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (platform, token_hash)) ENGINE=InnoDB",
             "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BINARY(16) NOT NULL, device_id BINARY(32) NOT NULL, platform VARCHAR(32) NOT NULL, channel_type VARCHAR(32) NOT NULL, device_key VARCHAR(255) NULL, provider_token TEXT NULL, provider_token_hash BINARY(32) NULL, provider_token_preview VARCHAR(128) NULL, route_version BIGINT NOT NULL DEFAULT 1, status VARCHAR(32) NOT NULL DEFAULT 'active', subscribed_via VARCHAR(32) NULL, last_dispatch_at BIGINT NULL, last_acked_at BIGINT NULL, last_error_code VARCHAR(64) NULL, last_confirmed_at BIGINT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (channel_id, device_id)) ENGINE=InnoDB",
             "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) NOT NULL, payload_blob BLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (delivery_id)) ENGINE=InnoDB",
-            "CREATE TABLE IF NOT EXISTS provider_pull_queue (delivery_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'pending', pulled_at BIGINT NULL, acked_at BIGINT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (delivery_id)) ENGINE=InnoDB",
-            "CREATE TABLE IF NOT EXISTS provider_pull_retry (delivery_id VARCHAR(128) NOT NULL, platform VARCHAR(32) NOT NULL, provider_token VARCHAR(512) NOT NULL, attempts INT NOT NULL DEFAULT 0, next_retry_at BIGINT NOT NULL, last_attempt_at BIGINT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (delivery_id)) ENGINE=InnoDB",
+            "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) NOT NULL, payload_blob LONGBLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
             "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) NOT NULL, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
             "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) NOT NULL, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
             "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) NOT NULL, semantic_id VARCHAR(128) NOT NULL, source VARCHAR(64) NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key), UNIQUE KEY semantic_id_registry_semantic_idx (semantic_id)) ENGINE=InnoDB",
@@ -223,6 +222,60 @@ impl MySqlDb {
         )
         .await?;
         self.ensure_mysql_column(
+            "provider_pull_queue",
+            "device_id",
+            "ALTER TABLE provider_pull_queue ADD COLUMN device_id BINARY(16) NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "payload_blob",
+            "ALTER TABLE provider_pull_queue ADD COLUMN payload_blob LONGBLOB NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "payload_size",
+            "ALTER TABLE provider_pull_queue ADD COLUMN payload_size INT NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "sent_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN sent_at BIGINT NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "expires_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN expires_at BIGINT NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "platform",
+            "ALTER TABLE provider_pull_queue ADD COLUMN platform VARCHAR(32) NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "provider_token",
+            "ALTER TABLE provider_pull_queue ADD COLUMN provider_token TEXT NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "created_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN created_at BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_pull_queue",
+            "updated_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_mysql_column(
             "delivery_audit",
             "audit_id",
             "ALTER TABLE delivery_audit ADD COLUMN audit_id VARCHAR(128) NULL",
@@ -242,8 +295,9 @@ impl MySqlDb {
             "CREATE INDEX channel_subscriptions_device_idx ON channel_subscriptions (device_id)",
             "CREATE INDEX channel_subscriptions_dispatch_idx ON channel_subscriptions (channel_id, status, channel_type, route_version)",
             "CREATE INDEX private_payloads_expires_idx ON private_payloads (expires_at)",
-            "CREATE INDEX provider_pull_queue_status_updated_idx ON provider_pull_queue (status, updated_at)",
-            "CREATE INDEX provider_pull_retry_due_idx ON provider_pull_retry (next_retry_at, attempts)",
+            "CREATE UNIQUE INDEX provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
+            "CREATE INDEX provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)",
+            "CREATE INDEX provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)",
             "CREATE INDEX dispatch_delivery_dedupe_expires_idx ON dispatch_delivery_dedupe (expires_at)",
             "CREATE INDEX dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
             "CREATE INDEX dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
@@ -259,6 +313,15 @@ impl MySqlDb {
         ] {
             self.ensure_mysql_index(index_stmt).await?;
         }
+        sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "DELETE FROM provider_pull_queue \
+             WHERE device_id IS NULL OR payload_blob IS NULL OR platform IS NULL OR provider_token IS NULL",
+        )
+        .execute(&self.pool)
+        .await?;
 
         let current: Option<String> = sqlx::query_scalar(
             "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = 'schema_version'",
@@ -275,7 +338,10 @@ impl MySqlDb {
                 .await?;
             }
             Some(version) if version == STORAGE_SCHEMA_VERSION => {}
-            Some(version) if version == STORAGE_SCHEMA_VERSION_PREVIOUS => {
+            Some(version)
+                if version == STORAGE_SCHEMA_VERSION_PREVIOUS
+                    || version == STORAGE_SCHEMA_VERSION_LEGACY =>
+            {
                 sqlx::query(
                     "UPDATE pushgo_schema_meta SET meta_value = ? WHERE meta_key = 'schema_version'",
                 )

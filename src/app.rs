@@ -3,7 +3,6 @@ use crate::{
     args::Args,
     dispatch::{
         DeliveryAuditCollector, DeliveryAuditMode, DispatchChannels, DispatchWorkerDeps,
-        ProviderPullRetryWorkerDeps,
         audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog, DispatchAuditMode},
     },
     mcp::{McpConfig, McpPredefinedClientConfig, McpState},
@@ -141,14 +140,6 @@ pub async fn build_app(
         audit: dispatch_audit.clone(),
     }
     .spawn(receivers);
-    ProviderPullRetryWorkerDeps {
-        store: store.clone(),
-        apns: Arc::clone(&apns),
-        fcm: Arc::clone(&fcm),
-        wns: Arc::clone(&wns),
-        audit: dispatch_audit.clone(),
-    }
-    .spawn();
 
     let private_transport_profile = PrivateTransportProfile {
         quic_enabled: true,

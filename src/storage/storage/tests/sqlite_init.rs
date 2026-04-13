@@ -138,7 +138,7 @@ async fn sqlite_init_keeps_current_schema_version_and_backfills_new_tables() {
         "sqlite-schema-version-current-backfill",
         &[
             "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
-            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-03-26-gateway-v5')",
+            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-13-gateway-v6')",
         ],
     )
     .await;
@@ -204,6 +204,7 @@ async fn sqlite_init_creates_missing_provider_pull_tables() {
     .await;
 
     let now = chrono::Utc::now().timestamp();
+    let device_id: DeviceId = [9; 16];
     let delivery_id = "delivery-heal-provider-table-1";
     let message = PrivateMessage {
         payload: vec![11, 22, 33],
@@ -213,22 +214,25 @@ async fn sqlite_init_creates_missing_provider_pull_tables() {
     };
     ctx.storage
         .enqueue_provider_pull_item(
+            device_id,
             delivery_id,
             &message,
             Platform::ANDROID,
             "fcm-heal-provider-table-token-1",
-            now,
         )
         .await
         .expect("enqueue provider pull item should succeed after table auto-create");
 
-    let due = ctx
+    let pulled = ctx
         .storage
-        .list_provider_pull_retry_due(now + 1, 8)
+        .pull_provider_item(device_id, delivery_id, now + 1)
         .await
-        .expect("list provider due should succeed");
-    assert_eq!(due.len(), 1);
-    assert_eq!(due[0].delivery_id, delivery_id);
+        .expect("pull provider item should succeed");
+    assert!(pulled.is_some());
+    assert_eq!(
+        pulled.expect("item should exist").delivery_id,
+        delivery_id.to_string()
+    );
 }
 
 #[tokio::test]

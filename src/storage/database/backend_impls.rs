@@ -385,50 +385,48 @@ macro_rules! impl_backend_provider_pull_access {
         impl crate::storage::database::ProviderPullDatabaseAccess for $backend {
             async fn enqueue_provider_pull_item(
                 &self,
+                device_id: DeviceId,
                 delivery_id: &str,
                 message: &PrivateMessage,
                 platform: Platform,
                 provider_token: &str,
-                next_retry_at: i64,
             ) -> StoreResult<()> {
                 <$backend>::enqueue_provider_pull_item(
                     self,
+                    device_id,
                     delivery_id,
                     message,
                     platform,
                     provider_token,
-                    next_retry_at,
                 )
                 .await
             }
 
             async fn pull_provider_item(
                 &self,
+                device_id: DeviceId,
                 delivery_id: &str,
                 now: i64,
             ) -> StoreResult<Option<ProviderPullItem>> {
-                <$backend>::pull_provider_item(self, delivery_id, now).await
+                <$backend>::pull_provider_item(self, device_id, delivery_id, now).await
             }
 
-            async fn list_provider_pull_retry_due(
+            async fn pull_provider_items(
                 &self,
+                device_id: DeviceId,
                 now: i64,
                 limit: usize,
-            ) -> StoreResult<Vec<ProviderPullRetryEntry>> {
-                <$backend>::list_provider_pull_retry_due(self, now, limit).await
+            ) -> StoreResult<Vec<ProviderPullItem>> {
+                <$backend>::pull_provider_items(self, device_id, now, limit).await
             }
 
-            async fn bump_provider_pull_retry(
+            async fn ack_provider_item(
                 &self,
+                device_id: DeviceId,
                 delivery_id: &str,
-                next_retry_at: i64,
                 now: i64,
-            ) -> StoreResult<bool> {
-                <$backend>::bump_provider_pull_retry(self, delivery_id, next_retry_at, now).await
-            }
-
-            async fn clear_provider_pull_retry(&self, delivery_id: &str) -> StoreResult<()> {
-                <$backend>::clear_provider_pull_retry(self, delivery_id).await
+            ) -> StoreResult<Option<ProviderPullItem>> {
+                <$backend>::ack_provider_item(self, device_id, delivery_id, now).await
             }
         }
     };

@@ -1,7 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use flume::{Receiver, Sender, TrySendError};
-use hashbrown::HashMap;
 
 pub(crate) mod audit;
 
@@ -21,8 +20,6 @@ use crate::{
 mod config;
 #[path = "delivery_audit.rs"]
 mod delivery_audit;
-#[path = "retry.rs"]
-mod retry;
 #[path = "runtime.rs"]
 mod runtime;
 #[path = "types.rs"]
@@ -30,9 +27,8 @@ mod types;
 #[path = "workers.rs"]
 mod workers;
 
-use config::{DispatchRuntimeConfig, ProviderPullRetryConfig};
+use config::DispatchRuntimeConfig;
 pub(crate) use delivery_audit::{DeliveryAuditCollector, DeliveryAuditMode};
-pub(crate) use retry::ProviderPullRetryWorkerDeps;
 use runtime::DispatchWorkerRuntime;
 pub(crate) use types::{
     ApnsJob, DispatchChannels, DispatchError, DispatchWorkerReceivers, FcmJob,

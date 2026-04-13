@@ -16,7 +16,6 @@ impl DispatchWorkerDeps {
             store: self.store,
             private: self.private,
             audit: self.audit,
-            retry_config: ProviderPullRetryConfig::from_env(),
         };
         let pool = DispatchWorkerPool {
             apns: self.apns,
@@ -63,9 +62,7 @@ impl DispatchWorkerPool {
                                 .expect("wakeup payload required for wakeup path"),
                         ),
                     };
-                    if actual_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(provider_pull) = job.provider_pull_delivery.as_ref()
-                    {
+                    if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
                         let _ = runtime
                             .enqueue_provider_pull_delivery(
                                 provider_pull,
@@ -90,16 +87,6 @@ impl DispatchWorkerPool {
                         && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                     {
                         payload = Arc::clone(wakeup_payload);
-                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
-                            let _ = runtime
-                                .enqueue_provider_pull_delivery(
-                                    provider_pull,
-                                    "APNS",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await;
-                        }
                         dispatch = apns_client
                             .send_to_device(
                                 job.device_token.as_ref(),
@@ -183,9 +170,7 @@ impl DispatchWorkerPool {
                                 .expect("wakeup body required for wakeup path"),
                         ),
                     };
-                    if actual_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(provider_pull) = job.provider_pull_delivery.as_ref()
-                    {
+                    if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
                         let _ = runtime
                             .enqueue_provider_pull_delivery(
                                 provider_pull,
@@ -210,16 +195,6 @@ impl DispatchWorkerPool {
                                 .as_ref()
                                 .expect("wakeup body required when wakeup payload exists"),
                         );
-                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
-                            let _ = runtime
-                                .enqueue_provider_pull_delivery(
-                                    provider_pull,
-                                    "FCM",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await;
-                        }
                         dispatch = fcm_client
                             .send_to_device(
                                 job.device_token.as_ref(),
@@ -294,9 +269,7 @@ impl DispatchWorkerPool {
                                 .expect("wakeup payload required for wakeup path"),
                         ),
                     };
-                    if actual_path == ProviderDeliveryPath::WakeupPull
-                        && let Some(provider_pull) = job.provider_pull_delivery.as_ref()
-                    {
+                    if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
                         let _ = runtime
                             .enqueue_provider_pull_delivery(
                                 provider_pull,
@@ -316,16 +289,6 @@ impl DispatchWorkerPool {
                         && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                     {
                         payload = Arc::clone(wakeup_payload);
-                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
-                            let _ = runtime
-                                .enqueue_provider_pull_delivery(
-                                    provider_pull,
-                                    "WNS",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await;
-                        }
                         dispatch = wns_client
                             .send_to_device(job.device_token.as_ref(), Arc::clone(&payload))
                             .await;

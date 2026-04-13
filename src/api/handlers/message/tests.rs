@@ -7,7 +7,7 @@ use crate::{dispatch::ProviderDeliveryPath, storage::Platform};
 
 use super::{
     MessageIntent,
-    ids::{OpId, ProviderPullDeliveryId},
+    ids::{OpId, wakeup_data_with_delivery_id},
     payload::{
         CustomPayloadData, EntityKind, OptionalText, PayloadSeverity, ProviderDeliverySelection,
         ProviderDeliverySkip, StandardFields,
@@ -235,15 +235,17 @@ fn custom_payload_prepare_dispatch_includes_gateway_base_url_in_wakeup_data() {
 }
 
 #[test]
-fn provider_pull_delivery_id_is_stable_for_same_device() {
-    let first = ProviderPullDeliveryId::derive("base-delivery", "ios", "token-a").into_inner();
-    let second = ProviderPullDeliveryId::derive("base-delivery", "ios", "token-a").into_inner();
-    assert_eq!(first, second);
+fn provider_pull_delivery_id_reuses_dispatch_delivery_id() {
+    let wakeup = wakeup_data_with_delivery_id(&HashMap::new(), "base-delivery");
+    assert_eq!(
+        wakeup.get("delivery_id").map(String::as_str),
+        Some("base-delivery")
+    );
 }
 
 #[test]
-fn provider_pull_delivery_id_differs_across_devices() {
-    let ios = ProviderPullDeliveryId::derive("base-delivery", "ios", "token-a").into_inner();
-    let mac = ProviderPullDeliveryId::derive("base-delivery", "macos", "token-b").into_inner();
-    assert_ne!(ios, mac);
+fn provider_pull_delivery_id_is_not_device_derived() {
+    let first = wakeup_data_with_delivery_id(&HashMap::new(), "delivery-fixed");
+    let second = wakeup_data_with_delivery_id(&HashMap::new(), "delivery-fixed");
+    assert_eq!(first, second);
 }

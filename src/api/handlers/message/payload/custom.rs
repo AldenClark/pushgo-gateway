@@ -390,13 +390,6 @@ impl<'a> EntityKind<'a> {
         }
     }
 
-    pub(crate) fn wakeup_title_from_payload(
-        self,
-        payload: &HashMap<String, String>,
-    ) -> Option<String> {
-        self.resolve_notification_text(None, None, payload).title
-    }
-
     fn apple_thread_prefix(self) -> &'static str {
         match self.0.trim().to_ascii_lowercase().as_str() {
             "event" => "event",
@@ -412,19 +405,6 @@ impl<'a> EntityKind<'a> {
     fn includes_thing_id(self) -> bool {
         self.apple_thread_prefix() == "thing"
     }
-}
-
-pub(crate) fn wakeup_notification_title_from_private_payload(payload: &[u8]) -> Option<String> {
-    let envelope = PrivatePayloadEnvelope::decode_postcard(payload)?;
-    if !envelope.is_supported_version() {
-        return None;
-    }
-    let entity_type = envelope
-        .data
-        .get("entity_type")
-        .map(String::as_str)
-        .unwrap_or("message");
-    EntityKind::new(entity_type).wakeup_title_from_payload(&envelope.data)
 }
 
 fn normalize_optional_text(value: Option<&str>) -> Option<String> {
@@ -554,70 +534,6 @@ impl EncodedPrivatePayload {
 #[cfg(test)]
 mod tests {
     use hashbrown::HashMap;
-
-    use crate::private::protocol::PrivatePayloadEnvelope;
-
-    use super::wakeup_notification_title_from_private_payload;
-
-    fn encode_private_payload(data: HashMap<String, String>) -> Vec<u8> {
-        postcard::to_allocvec(&PrivatePayloadEnvelope {
-            payload_version: PrivatePayloadEnvelope::CURRENT_VERSION,
-            data,
-        })
-        .expect("encode private payload")
-    }
-
-    #[test]
-    fn wakeup_title_for_message_uses_payload_title() {
-        let payload = encode_private_payload(HashMap::from([
-            ("entity_type".to_string(), "message".to_string()),
-            ("message_id".to_string(), "msg-1".to_string()),
-            ("title".to_string(), "Expected wakeup title".to_string()),
-            (
-                "body".to_string(),
-                "Long message body first line\nsecond line".to_string(),
-            ),
-        ]));
-
-        assert_eq!(
-            wakeup_notification_title_from_private_payload(&payload),
-            Some("Expected wakeup title".to_string())
-        );
-    }
-
-    #[test]
-    fn wakeup_title_for_event_prefers_profile_title() {
-        let payload = encode_private_payload(HashMap::from([
-            ("entity_type".to_string(), "event".to_string()),
-            ("event_id".to_string(), "evt-1".to_string()),
-            (
-                "event_profile_json".to_string(),
-                r#"{"title":"Database Primary Down","description":"db-01"}"#.to_string(),
-            ),
-        ]));
-
-        assert_eq!(
-            wakeup_notification_title_from_private_payload(&payload),
-            Some("Database Primary Down".to_string())
-        );
-    }
-
-    #[test]
-    fn wakeup_title_for_thing_prefers_attribute_name() {
-        let payload = encode_private_payload(HashMap::from([
-            ("entity_type".to_string(), "thing".to_string()),
-            ("thing_id".to_string(), "thing-1".to_string()),
-            (
-                "thing_attrs_json".to_string(),
-                r#"{"name":"Pump Room Sensor","temperature":27}"#.to_string(),
-            ),
-        ]));
-
-        assert_eq!(
-            wakeup_notification_title_from_private_payload(&payload),
-            Some("Pump Room Sensor".to_string())
-        );
-    }
 
     #[test]
     fn ensure_notification_title_promotes_derived_title_into_payload() {

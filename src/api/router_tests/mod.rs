@@ -26,6 +26,7 @@ use crate::{
 
 mod channel_sync;
 mod mcp;
+mod provider_ingress;
 mod routes;
 
 static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);

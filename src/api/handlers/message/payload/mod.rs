@@ -3,7 +3,6 @@ mod provider;
 
 pub(crate) use custom::{
     CustomPayloadData, EntityKind, OptionalText, PayloadSeverity, StandardFields,
-    wakeup_notification_title_from_private_payload,
 };
 pub(crate) use provider::{
     ProviderDeliverySelection, ProviderDeliverySkip, ProviderRouteBinding, ProviderTtl,

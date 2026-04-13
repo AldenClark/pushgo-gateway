@@ -1,6 +1,4 @@
 use super::*;
-use crate::api::handlers::message::ProviderPullDeliveryId;
-
 pub(super) async fn dispatch_provider_devices(
     prepared: &PreparedDispatch<'_>,
     payloads: &ProviderPayloads,
@@ -52,12 +50,7 @@ pub(super) async fn dispatch_provider_devices(
             continue;
         }
 
-        let provider_pull_delivery_id = ProviderPullDeliveryId::derive(
-            prepared.delivery_id.as_str(),
-            device.platform.name(),
-            device.token_str(),
-        )
-        .into_inner();
+        let provider_pull_delivery_id = prepared.delivery_id.clone();
         let wakeup_data_for_device = Arc::new(wakeup_data_with_delivery_id(
             prepared.wakeup_data.as_ref(),
             provider_pull_delivery_id.as_str(),

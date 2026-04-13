@@ -45,10 +45,7 @@ impl SqliteDb {
             "CREATE INDEX IF NOT EXISTS channel_subscriptions_device_idx ON channel_subscriptions (device_id)",
             "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE INDEX IF NOT EXISTS private_payloads_expires_idx ON private_payloads (expires_at)",
-            "CREATE TABLE IF NOT EXISTS provider_pull_queue (delivery_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'pending', pulled_at INTEGER, acked_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-            "CREATE INDEX IF NOT EXISTS provider_pull_queue_status_updated_idx ON provider_pull_queue (status, updated_at)",
-            "CREATE TABLE IF NOT EXISTS provider_pull_retry (delivery_id TEXT PRIMARY KEY, platform TEXT NOT NULL, provider_token TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_retry_at INTEGER NOT NULL, last_attempt_at INTEGER, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-            "CREATE INDEX IF NOT EXISTS provider_pull_retry_due_idx ON provider_pull_retry (next_retry_at, attempts)",
+            "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
             "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
             "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_expires_idx ON dispatch_delivery_dedupe (expires_at)",
             "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
@@ -265,6 +262,60 @@ impl SqliteDb {
         )
         .await?;
         self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "device_id",
+            "ALTER TABLE provider_pull_queue ADD COLUMN device_id BLOB",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "payload_blob",
+            "ALTER TABLE provider_pull_queue ADD COLUMN payload_blob BLOB",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "payload_size",
+            "ALTER TABLE provider_pull_queue ADD COLUMN payload_size INTEGER",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "sent_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN sent_at INTEGER",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "expires_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN expires_at INTEGER",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "platform",
+            "ALTER TABLE provider_pull_queue ADD COLUMN platform TEXT",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "provider_token",
+            "ALTER TABLE provider_pull_queue ADD COLUMN provider_token TEXT",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "created_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_pull_queue",
+            "updated_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_sqlite_column(
             "delivery_audit",
             "audit_id",
             "ALTER TABLE delivery_audit ADD COLUMN audit_id TEXT",
@@ -308,6 +359,30 @@ impl SqliteDb {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "DELETE FROM provider_pull_queue \
+             WHERE device_id IS NULL OR payload_blob IS NULL OR platform IS NULL OR provider_token IS NULL",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         let current: Option<String> = sqlx::query_scalar(
             "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = 'schema_version'",
@@ -324,7 +399,10 @@ impl SqliteDb {
                 .await?;
             }
             Some(version) if version == STORAGE_SCHEMA_VERSION => {}
-            Some(version) if version == STORAGE_SCHEMA_VERSION_PREVIOUS => {
+            Some(version)
+                if version == STORAGE_SCHEMA_VERSION_PREVIOUS
+                    || version == STORAGE_SCHEMA_VERSION_LEGACY =>
+            {
                 sqlx::query(
                     "UPDATE pushgo_schema_meta SET meta_value = ? WHERE meta_key = 'schema_version'",
                 )

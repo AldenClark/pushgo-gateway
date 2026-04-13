@@ -120,9 +120,6 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | ------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
 | `PUSHGO_DISPATCH_WORKER_COUNT`              | Auto                                   | Dispatch worker count (clamped 2~256; auto is `cpu*2`, clamped 4~64)       |
 | `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | Auto                                   | Dispatch queue capacity (clamped 256~131072; auto is `workers*64`)          |
-| `PUSHGO_PROVIDER_PULL_RETRY_POLL_MS`        | `1000`                                 | Provider-pull retry poll interval in milliseconds (200~5000)                |
-| `PUSHGO_PROVIDER_PULL_RETRY_BATCH`          | `200`                                  | Provider-pull retry batch size (1~2000)                                     |
-| `PUSHGO_PROVIDER_PULL_RETRY_TIMEOUT_SECS`   | `30`                                   | Provider-pull retry dispatch timeout in seconds (5~600)                     |
 | `PUSHGO_DELIVERY_AUDIT_CHANNEL_CAPACITY`    | `16384`                                | Delivery-audit async queue capacity (512~262144)                            |
 | `PUSHGO_DELIVERY_AUDIT_BATCH_SIZE`          | `256`                                  | Delivery-audit batch flush size (16~4096)                                   |
 | `PUSHGO_DELIVERY_AUDIT_FLUSH_INTERVAL_MS`   | `50`                                   | Delivery-audit periodic flush interval in milliseconds (10~2000)            |
@@ -456,9 +453,6 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
 | `PUSHGO_DISPATCH_WORKER_COUNT`              | 自动                                   | 分发 worker 数量（2~256；自动为 `cpu*2`，并限制在 4~64）                |
 | `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | 自动                                   | 分发队列容量（256~131072；自动为 `workers*64`）                          |
-| `PUSHGO_PROVIDER_PULL_RETRY_POLL_MS`        | `1000`                                 | provider-pull 重试轮询间隔（毫秒，200~5000）                             |
-| `PUSHGO_PROVIDER_PULL_RETRY_BATCH`          | `200`                                  | provider-pull 单轮重试批量（1~2000）                                     |
-| `PUSHGO_PROVIDER_PULL_RETRY_TIMEOUT_SECS`   | `30`                                   | provider-pull 重试下发超时（秒，5~600）                                  |
 | `PUSHGO_DELIVERY_AUDIT_CHANNEL_CAPACITY`    | `16384`                                | delivery-audit 异步队列容量（512~262144）                                 |
 | `PUSHGO_DELIVERY_AUDIT_BATCH_SIZE`          | `256`                                  | delivery-audit 批量刷写条数（16~4096）                                    |
 | `PUSHGO_DELIVERY_AUDIT_FLUSH_INTERVAL_MS`   | `50`                                   | delivery-audit 定时刷写间隔（毫秒，10~2000）                              |

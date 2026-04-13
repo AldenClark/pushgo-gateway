@@ -24,10 +24,7 @@ impl PostgresDb {
             "CREATE INDEX IF NOT EXISTS channel_subscriptions_device_idx ON channel_subscriptions (device_id)",
             "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) PRIMARY KEY, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS private_payloads_expires_idx ON private_payloads (expires_at)",
-            "CREATE TABLE IF NOT EXISTS provider_pull_queue (delivery_id VARCHAR(128) PRIMARY KEY, status VARCHAR(32) NOT NULL DEFAULT 'pending', pulled_at BIGINT, acked_at BIGINT, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
-            "CREATE INDEX IF NOT EXISTS provider_pull_queue_status_updated_idx ON provider_pull_queue (status, updated_at)",
-            "CREATE TABLE IF NOT EXISTS provider_pull_retry (delivery_id VARCHAR(128) PRIMARY KEY, platform VARCHAR(32) NOT NULL, provider_token VARCHAR(512) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_retry_at BIGINT NOT NULL, last_attempt_at BIGINT, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
-            "CREATE INDEX IF NOT EXISTS provider_pull_retry_due_idx ON provider_pull_retry (next_retry_at, attempts)",
+            "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
             "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT)",
             "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_expires_idx ON dispatch_delivery_dedupe (expires_at)",
             "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
@@ -249,6 +246,60 @@ impl PostgresDb {
         )
         .await?;
         self.ensure_pg_column(
+            "provider_pull_queue",
+            "device_id",
+            "ALTER TABLE provider_pull_queue ADD COLUMN device_id BYTEA",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "payload_blob",
+            "ALTER TABLE provider_pull_queue ADD COLUMN payload_blob BYTEA",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "payload_size",
+            "ALTER TABLE provider_pull_queue ADD COLUMN payload_size INTEGER",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "sent_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN sent_at BIGINT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "expires_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN expires_at BIGINT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "platform",
+            "ALTER TABLE provider_pull_queue ADD COLUMN platform VARCHAR(32)",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "provider_token",
+            "ALTER TABLE provider_pull_queue ADD COLUMN provider_token TEXT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "created_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN created_at BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_pull_queue",
+            "updated_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_pg_column(
             "delivery_audit",
             "audit_id",
             "ALTER TABLE delivery_audit ADD COLUMN audit_id VARCHAR(128)",
@@ -287,6 +338,30 @@ impl PostgresDb {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "DELETE FROM provider_pull_queue \
+             WHERE device_id IS NULL OR payload_blob IS NULL OR platform IS NULL OR provider_token IS NULL",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         let current: Option<String> = sqlx::query_scalar(
             "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = 'schema_version'",
@@ -303,7 +378,10 @@ impl PostgresDb {
                 .await?;
             }
             Some(version) if version == STORAGE_SCHEMA_VERSION => {}
-            Some(version) if version == STORAGE_SCHEMA_VERSION_PREVIOUS => {
+            Some(version)
+                if version == STORAGE_SCHEMA_VERSION_PREVIOUS
+                    || version == STORAGE_SCHEMA_VERSION_LEGACY =>
+            {
                 sqlx::query(
                     "UPDATE pushgo_schema_meta SET meta_value = $1 WHERE meta_key = 'schema_version'",
                 )

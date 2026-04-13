@@ -82,22 +82,13 @@ pub struct PrivateOutboxEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderPullItem {
+    pub device_id: DeviceId,
     pub delivery_id: String,
     pub payload: Vec<u8>,
     pub sent_at: i64,
     pub expires_at: i64,
     pub platform: super::Platform,
     pub provider_token: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderPullRetryEntry {
-    pub delivery_id: String,
-    pub platform: super::Platform,
-    pub provider_token: String,
-    pub attempts: i32,
-    pub next_retry_at: i64,
-    pub expires_at: i64,
 }
 
 #[derive(Debug, Deserialize)]

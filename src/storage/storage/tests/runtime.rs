@@ -1,6 +1,4 @@
 use super::*;
-use crate::util::encode_lower_hex_128;
-
 #[tokio::test]
 async fn dispatch_targets_cache_hits_within_ttl_and_expires() {
     let ctx = setup_sqlite_storage("dispatch-targets-cache").await;
@@ -93,11 +91,12 @@ async fn dispatch_targets_cache_invalidates_on_unsubscribe() {
 }
 
 #[tokio::test]
-async fn provider_pull_retry_lifecycle_works() {
-    let ctx = setup_sqlite_storage("provider-pull-retry").await;
+async fn provider_pull_lifecycle_works() {
+    let ctx = setup_sqlite_storage("provider-pull-lifecycle").await;
 
     let now = chrono::Utc::now().timestamp();
-    let delivery_id = "delivery-retry-001";
+    let device_id: DeviceId = [3; 16];
+    let delivery_id = "delivery-provider-lifecycle-001";
     let message = PrivateMessage {
         payload: vec![1, 2, 3, 4],
         size: 4,
@@ -106,61 +105,123 @@ async fn provider_pull_retry_lifecycle_works() {
     };
     ctx.storage
         .enqueue_provider_pull_item(
+            device_id,
             delivery_id,
             &message,
             Platform::ANDROID,
             "fcm-token-001",
-            now - 1,
         )
         .await
         .expect("enqueue should succeed");
 
-    let due = ctx
-        .storage
-        .list_provider_pull_retry_due(now, 10)
-        .await
-        .expect("list due should succeed");
-    assert_eq!(due.len(), 1);
-    assert_eq!(due[0].delivery_id, delivery_id);
-    assert_eq!(due[0].attempts, 0);
-
-    ctx.storage
-        .bump_provider_pull_retry(delivery_id, now + 60, now)
-        .await
-        .expect("bump should succeed");
-    let due_after_bump = ctx
-        .storage
-        .list_provider_pull_retry_due(now, 10)
-        .await
-        .expect("second list due should succeed");
-    assert!(due_after_bump.is_empty());
-
     let pulled = ctx
         .storage
-        .pull_provider_item(delivery_id, now + 1)
+        .pull_provider_item(device_id, delivery_id, now + 1)
         .await
         .expect("pull should succeed");
     assert!(pulled.is_some());
+    assert_eq!(
+        pulled.expect("item should exist").delivery_id,
+        delivery_id.to_string()
+    );
+
     let pulled_again = ctx
         .storage
-        .pull_provider_item(delivery_id, now + 2)
+        .pull_provider_item(device_id, delivery_id, now + 2)
         .await
         .expect("second pull should succeed");
     assert!(pulled_again.is_none());
+}
 
-    let payload_after_pull = ctx
-        .storage
-        .load_private_message(delivery_id)
-        .await
-        .expect("payload lookup after pull should succeed");
-    assert!(payload_after_pull.is_none());
+#[tokio::test]
+async fn provider_ack_lifecycle_works() {
+    let ctx = setup_sqlite_storage("provider-ack-lifecycle").await;
 
-    let due_after_pull = ctx
-        .storage
-        .list_provider_pull_retry_due(now + 120, 10)
+    let now = chrono::Utc::now().timestamp();
+    let device_id: DeviceId = [4; 16];
+    let delivery_id = "delivery-provider-ack-001";
+    let message = PrivateMessage {
+        payload: vec![8, 6, 4, 2],
+        size: 4,
+        sent_at: now,
+        expires_at: now + 300,
+    };
+    ctx.storage
+        .enqueue_provider_pull_item(
+            device_id,
+            delivery_id,
+            &message,
+            Platform::ANDROID,
+            "fcm-token-ack-001",
+        )
         .await
-        .expect("list due after pull should succeed");
-    assert!(due_after_pull.is_empty());
+        .expect("enqueue should succeed");
+
+    let acked = ctx
+        .storage
+        .ack_provider_item(device_id, delivery_id, now + 1)
+        .await
+        .expect("ack should succeed");
+    assert!(acked.is_some());
+    assert_eq!(
+        acked.expect("item should exist").delivery_id,
+        delivery_id.to_string()
+    );
+
+    let acked_again = ctx
+        .storage
+        .ack_provider_item(device_id, delivery_id, now + 2)
+        .await
+        .expect("second ack should succeed");
+    assert!(acked_again.is_none());
+}
+
+#[tokio::test]
+async fn provider_pull_items_limit_and_order_works() {
+    let ctx = setup_sqlite_storage("provider-pull-limit-order").await;
+
+    let now = chrono::Utc::now().timestamp();
+    let device_id: DeviceId = [5; 16];
+    let ids = [
+        "delivery-provider-batch-001",
+        "delivery-provider-batch-002",
+        "delivery-provider-batch-003",
+    ];
+    for (index, delivery_id) in ids.iter().enumerate() {
+        let message = PrivateMessage {
+            payload: vec![index as u8],
+            size: 1,
+            sent_at: now + index as i64,
+            expires_at: now + 600,
+        };
+        ctx.storage
+            .enqueue_provider_pull_item(
+                device_id,
+                delivery_id,
+                &message,
+                Platform::ANDROID,
+                "fcm-token-batch-001",
+            )
+            .await
+            .expect("enqueue should succeed");
+    }
+
+    let first_batch = ctx
+        .storage
+        .pull_provider_items(device_id, now + 1, 2)
+        .await
+        .expect("first pull batch should succeed");
+    assert_eq!(first_batch.len(), 2);
+    assert_eq!(first_batch[0].delivery_id, ids[0]);
+    assert_eq!(first_batch[1].delivery_id, ids[1]);
+
+    let second_batch = ctx
+        .storage
+        .pull_provider_items(device_id, now + 2, 2)
+        .await
+        .expect("second pull batch should succeed");
+    assert_eq!(second_batch.len(), 1);
+    assert_eq!(second_batch[0].delivery_id, ids[2]);
 }
 
 #[tokio::test]
@@ -231,59 +292,6 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
         .expect("shared payload second lookup should succeed");
     assert!(shared_after_all_acked.is_none());
 
-    let provider_delivery_id = "delivery-provider-ref-001";
-    ctx.storage
-        .insert_private_message(provider_delivery_id, &message)
-        .await
-        .expect("insert provider payload should succeed");
-    let provider_entry = PrivateOutboxEntry {
-        delivery_id: provider_delivery_id.to_string(),
-        ..entry
-    };
-    ctx.storage
-        .enqueue_private_outbox(device_a, &provider_entry)
-        .await
-        .expect("enqueue provider entry should succeed");
-    ctx.storage
-        .enqueue_provider_pull_item(
-            provider_delivery_id,
-            &message,
-            Platform::ANDROID,
-            "fcm-token-provider-ref-001",
-            now,
-        )
-        .await
-        .expect("enqueue provider queue should succeed");
-
-    ctx.storage
-        .ack_private_delivery(device_a, provider_delivery_id)
-        .await
-        .expect("ack provider entry should succeed");
-    let provider_payload_after_private_ack = ctx
-        .storage
-        .load_private_message(provider_delivery_id)
-        .await
-        .expect("provider payload lookup should succeed");
-    assert!(provider_payload_after_private_ack.is_some());
-
-    let pulled = ctx
-        .storage
-        .pull_provider_item(provider_delivery_id, now + 1)
-        .await
-        .expect("provider pull should succeed");
-    assert!(pulled.is_some());
-    let provider_outbox_after_pull = ctx
-        .storage
-        .load_private_outbox_entry(device_a, provider_delivery_id)
-        .await
-        .expect("provider outbox lookup after pull should succeed");
-    assert!(provider_outbox_after_pull.is_none());
-    let provider_payload_after_pull = ctx
-        .storage
-        .load_private_message(provider_delivery_id)
-        .await
-        .expect("provider payload lookup after pull should succeed");
-    assert!(provider_payload_after_pull.is_none());
 }
 
 #[tokio::test]
@@ -295,13 +303,7 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
     let platform = Platform::IOS;
     let provider_token = "ios-provider-token-provider-pull-cleanup-001";
     let original_delivery_id = "delivery-original-private-001";
-    let provider_delivery_id =
-        derive_provider_pull_delivery_id(original_delivery_id, platform.name(), provider_token);
-
-    ctx.storage
-        .bind_private_token(device_id, platform, provider_token)
-        .await
-        .expect("bind private token should succeed");
+    let provider_delivery_id = original_delivery_id;
 
     let mut data = hashbrown::HashMap::new();
     data.insert("delivery_id", original_delivery_id);
@@ -321,10 +323,6 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
         .insert_private_message(original_delivery_id, &message)
         .await
         .expect("insert original private payload should succeed");
-    ctx.storage
-        .insert_private_message(provider_delivery_id.as_str(), &message)
-        .await
-        .expect("insert provider pull payload should succeed");
 
     let original_entry = PrivateOutboxEntry {
         delivery_id: original_delivery_id.to_string(),
@@ -348,18 +346,18 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
         .expect("enqueue original private outbox should succeed");
     ctx.storage
         .enqueue_provider_pull_item(
-            provider_delivery_id.as_str(),
+            device_id,
+            provider_delivery_id,
             &message,
             platform,
             provider_token,
-            now,
         )
         .await
         .expect("enqueue provider pull item should succeed");
 
     let pulled = ctx
         .storage
-        .pull_provider_item(provider_delivery_id.as_str(), now + 1)
+        .pull_provider_item(device_id, provider_delivery_id, now + 1)
         .await
         .expect("pull provider item should succeed");
     assert!(pulled.is_some());
@@ -377,30 +375,6 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
         .await
         .expect("load original payload after pull should succeed");
     assert!(original_payload_after_pull.is_none());
-
-    let provider_payload_after_pull = ctx
-        .storage
-        .load_private_message(provider_delivery_id.as_str())
-        .await
-        .expect("load provider payload after pull should succeed");
-    assert!(provider_payload_after_pull.is_none());
-}
-
-fn derive_provider_pull_delivery_id(
-    dispatch_delivery_id: &str,
-    platform_name: &str,
-    provider_token: &str,
-) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(dispatch_delivery_id.trim().as_bytes());
-    hasher.update(b"|");
-    hasher.update(platform_name.as_bytes());
-    hasher.update(b"|");
-    hasher.update(provider_token.trim().as_bytes());
-    let digest = hasher.finalize();
-    let mut short = [0u8; 16];
-    short.copy_from_slice(&digest.as_bytes()[..16]);
-    encode_lower_hex_128(&short)
 }
 
 #[tokio::test]

@@ -33,104 +33,64 @@ impl SqliteDb {
 
     pub(super) async fn enqueue_provider_pull_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
         message: &PrivateMessage,
         platform: Platform,
         provider_token: &str,
-        next_retry_at: i64,
     ) -> StoreResult<()> {
         let now = Utc::now().timestamp();
-        let mut conn = self.pool.acquire().await?;
-        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-
         let size = message.size as i64;
         sqlx::query(
-            "INSERT INTO private_payloads (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (delivery_id) DO UPDATE SET \
-             payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, updated_at = EXCLUDED.updated_at",
+            "INSERT INTO provider_pull_queue \
+             (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
+             payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, sent_at = EXCLUDED.sent_at, \
+             expires_at = EXCLUDED.expires_at, platform = EXCLUDED.platform, provider_token = EXCLUDED.provider_token, updated_at = EXCLUDED.updated_at",
         )
+        .bind(device_id.as_slice())
         .bind(delivery_id)
         .bind(&message.payload)
         .bind(size)
         .bind(message.sent_at)
         .bind(message.expires_at)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO provider_pull_queue (delivery_id, status, pulled_at, acked_at, created_at, updated_at) \
-             VALUES (?, 'pending', NULL, NULL, ?, ?) \
-             ON CONFLICT (delivery_id) DO UPDATE SET status = 'pending', updated_at = EXCLUDED.updated_at",
-        )
-        .bind(delivery_id)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO provider_pull_retry \
-             (delivery_id, platform, provider_token, attempts, next_retry_at, last_attempt_at, expires_at, created_at, updated_at) \
-             VALUES (?, ?, ?, 0, ?, NULL, ?, ?, ?) \
-             ON CONFLICT (delivery_id) DO UPDATE SET \
-                attempts = 0, next_retry_at = EXCLUDED.next_retry_at, updated_at = EXCLUDED.updated_at",
-        )
-        .bind(delivery_id)
         .bind(platform.name())
         .bind(provider_token)
-        .bind(next_retry_at)
-        .bind(message.expires_at)
         .bind(now)
         .bind(now)
-        .execute(&mut *tx)
+        .execute(&self.pool)
         .await?;
-
-        tx.commit().await?;
         Ok(())
     }
 
     pub(super) async fn pull_provider_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>> {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query(
-            "SELECT p.payload_blob, p.sent_at, p.expires_at, r.platform, r.provider_token \
-             FROM provider_pull_queue q \
-             INNER JOIN private_payloads p ON p.delivery_id = q.delivery_id \
-             INNER JOIN provider_pull_retry r ON r.delivery_id = q.delivery_id \
-             WHERE q.delivery_id = ? AND q.status = 'pending' AND p.expires_at > ?",
+            "SELECT payload_blob, sent_at, expires_at, platform, provider_token \
+             FROM provider_pull_queue \
+             WHERE device_id = ? AND delivery_id = ? AND expires_at > ?",
         )
+        .bind(device_id.as_slice())
         .bind(delivery_id)
         .bind(now)
         .fetch_optional(&mut *tx)
         .await?;
 
         let result = if let Some(r) = row {
-            sqlx::query("UPDATE provider_pull_queue SET status = 'pulled', pulled_at = ?, updated_at = ? WHERE delivery_id = ? AND status = 'pending'")
-                .bind(now)
-                .bind(now)
-                .bind(delivery_id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("DELETE FROM provider_pull_retry WHERE delivery_id = ?")
-                .bind(delivery_id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("DELETE FROM private_payloads WHERE delivery_id = ?")
-                .bind(delivery_id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("DELETE FROM provider_pull_queue WHERE delivery_id = ?")
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
+                .bind(device_id.as_slice())
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
             Some(ProviderPullItem {
+                device_id,
                 delivery_id: delivery_id.to_string(),
                 payload: r.get("payload_blob"),
                 sent_at: r.get("sent_at"),
@@ -145,65 +105,90 @@ impl SqliteDb {
         Ok(result)
     }
 
-    pub(super) async fn list_provider_pull_retry_due(
+    pub(super) async fn pull_provider_items(
         &self,
+        device_id: DeviceId,
         now: i64,
         limit: usize,
-    ) -> StoreResult<Vec<ProviderPullRetryEntry>> {
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let rows = sqlx::query(
-            "SELECT r.delivery_id, r.platform, r.provider_token, r.attempts, r.next_retry_at, r.expires_at \
-             FROM provider_pull_retry r \
-             INNER JOIN provider_pull_queue q ON q.delivery_id = r.delivery_id \
-             WHERE q.status = 'pending' AND r.next_retry_at <= ? AND r.expires_at > ? \
-             ORDER BY r.next_retry_at ASC LIMIT ?",
+            "SELECT delivery_id, payload_blob, sent_at, expires_at, platform, provider_token \
+             FROM provider_pull_queue \
+             WHERE device_id = ? AND expires_at > ? \
+             ORDER BY created_at ASC LIMIT ?",
         )
-        .bind(now)
+        .bind(device_id.as_slice())
         .bind(now)
         .bind(limit as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
+        let mut delivery_ids = Vec::with_capacity(rows.len());
         for r in rows {
+            let delivery_id: String = r.get("delivery_id");
             let platform_text: String = r.get("platform");
             let platform = platform_text.parse()?;
-            out.push(ProviderPullRetryEntry {
-                delivery_id: r.get("delivery_id"),
+            out.push(ProviderPullItem {
+                device_id,
+                delivery_id: delivery_id.clone(),
+                payload: r.get("payload_blob"),
+                sent_at: r.get("sent_at"),
+                expires_at: r.get("expires_at"),
                 platform,
                 provider_token: r.get("provider_token"),
-                attempts: r.get::<i64, _>("attempts") as i32,
-                next_retry_at: r.get("next_retry_at"),
-                expires_at: r.get("expires_at"),
             });
+            delivery_ids.push(delivery_id);
         }
+        for delivery_id in &delivery_ids {
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
+                .bind(device_id.as_slice())
+                .bind(delivery_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(out)
     }
 
-    pub(super) async fn bump_provider_pull_retry(
+    pub(super) async fn ack_provider_item(
         &self,
+        device_id: DeviceId,
         delivery_id: &str,
-        next_retry_at: i64,
-        now: i64,
-    ) -> StoreResult<bool> {
-        let result = sqlx::query(
-            "UPDATE provider_pull_retry SET attempts = attempts + 1, next_retry_at = ?, last_attempt_at = ?, updated_at = ? \
-             WHERE delivery_id = ? AND expires_at > ?",
+        _: i64,
+    ) -> StoreResult<Option<ProviderPullItem>> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let row = sqlx::query(
+            "SELECT payload_blob, sent_at, expires_at, platform, provider_token \
+             FROM provider_pull_queue \
+             WHERE device_id = ? AND delivery_id = ?",
         )
-        .bind(next_retry_at)
-        .bind(now)
-        .bind(now)
+        .bind(device_id.as_slice())
         .bind(delivery_id)
-        .bind(now)
-        .execute(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    pub(super) async fn clear_provider_pull_retry(&self, delivery_id: &str) -> StoreResult<()> {
-        sqlx::query("DELETE FROM provider_pull_retry WHERE delivery_id = ?")
-            .bind(delivery_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+        let out = if let Some(r) = row {
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
+                .bind(device_id.as_slice())
+                .bind(delivery_id)
+                .execute(&mut *tx)
+                .await?;
+            Some(ProviderPullItem {
+                device_id,
+                delivery_id: delivery_id.to_string(),
+                payload: r.get("payload_blob"),
+                sent_at: r.get("sent_at"),
+                expires_at: r.get("expires_at"),
+                platform: r.get::<String, _>("platform").parse()?,
+                provider_token: r.get("provider_token"),
+            })
+        } else {
+            None
+        };
+        tx.commit().await?;
+        Ok(out)
     }
 }

@@ -78,6 +78,7 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route("/channel/subscribe", post(core::channel_subscribe))
         .route("/channel/unsubscribe", post(core::channel_unsubscribe))
         .route("/messages/pull", post(core::messages_pull))
+        .route("/messages/ack", post(core::messages_ack))
         .route("/gateway/profile", get(private::gateway_profile))
         .route("/channel/exists", get(channel::channel_exists))
         .route("/channel/rename", post(channel::channel_rename))

@@ -5,7 +5,6 @@ pub(super) struct DispatchWorkerRuntime {
     pub(super) store: Storage,
     pub(super) private: Option<Arc<PrivateState>>,
     pub(super) audit: Arc<DispatchAuditLog>,
-    pub(super) retry_config: ProviderPullRetryConfig,
 }
 
 pub(super) struct ProviderDispatchFailureLog<'a> {
@@ -34,13 +33,11 @@ impl DispatchWorkerRuntime {
         match self
             .store
             .enqueue_provider_pull_item(
+                delivery.device_id,
                 delivery.delivery_id.as_ref(),
                 &message,
                 delivery.platform,
                 delivery.provider_token.as_ref(),
-                delivery
-                    .sent_at
-                    .saturating_add(self.retry_config.timeout_secs as i64),
             )
             .await
         {
@@ -50,7 +47,7 @@ impl DispatchWorkerRuntime {
                     private_state.metrics.mark_enqueue_failure();
                 }
                 crate::util::diagnostics_log(format_args!(
-                    "provider wakeup pull cache enqueue failed provider={} correlation_id={} channel_id={} device_id={} delivery_id={} error={}",
+                    "provider pull cache enqueue failed provider={} correlation_id={} channel_id={} device_id={} delivery_id={} error={}",
                     provider,
                     correlation_id,
                     channel_id,

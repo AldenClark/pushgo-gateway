@@ -4,7 +4,7 @@ use crate::{
     api::Error,
     app::AppState,
     storage::{SemanticIdReservation, StoreError},
-    util::{encode_lower_hex_128, generate_hex_id_128},
+    util::generate_hex_id_128,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,32 +133,6 @@ impl ResolvedSemanticId {
         Err(Error::Internal(
             "unable to reserve unique semantic id".to_string(),
         ))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProviderPullDeliveryId(String);
-
-impl ProviderPullDeliveryId {
-    pub(crate) fn derive(
-        dispatch_delivery_id: &str,
-        platform_name: &str,
-        provider_token: &str,
-    ) -> Self {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(dispatch_delivery_id.trim().as_bytes());
-        hasher.update(b"|");
-        hasher.update(platform_name.as_bytes());
-        hasher.update(b"|");
-        hasher.update(provider_token.trim().as_bytes());
-        let digest = hasher.finalize();
-        let mut short = [0u8; 16];
-        short.copy_from_slice(&digest.as_bytes()[..16]);
-        Self(encode_lower_hex_128(&short))
-    }
-
-    pub(crate) fn into_inner(self) -> String {
-        self.0
     }
 }
 

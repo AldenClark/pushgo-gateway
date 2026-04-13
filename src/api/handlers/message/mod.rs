@@ -28,9 +28,8 @@ pub(crate) use compat::{
     message_to_channel_get,
 };
 pub(crate) use dispatch::dispatch_entity_notification;
-pub(crate) use ids::{OpId, ProviderPullDeliveryId, ResolvedSemanticId, SemanticScope};
+pub(crate) use ids::{OpId, ResolvedSemanticId, SemanticScope};
 use payload::OptionalText;
-pub(crate) use payload::wakeup_notification_title_from_private_payload;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

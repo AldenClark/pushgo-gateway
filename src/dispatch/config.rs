@@ -1,5 +1,3 @@
-use super::*;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DispatchRuntimeConfig {
     pub(super) worker_count: usize,
@@ -37,51 +35,6 @@ impl DispatchRuntimeConfig {
             worker_count,
             queue_capacity,
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ProviderPullRetryConfig {
-    pub(super) poll_ms: u64,
-    pub(super) batch_size: usize,
-    pub(super) timeout_secs: u64,
-}
-
-impl ProviderPullRetryConfig {
-    pub(super) fn clamp_poll_ms(value: u64) -> u64 {
-        value.clamp(200, 5_000)
-    }
-
-    pub(super) fn clamp_batch_size(value: usize) -> usize {
-        value.clamp(1, 2_000)
-    }
-
-    pub(super) fn clamp_timeout_secs(value: u64) -> u64 {
-        value.clamp(5, 600)
-    }
-
-    pub(super) fn from_env() -> Self {
-        Self {
-            poll_ms: std::env::var("PUSHGO_PROVIDER_PULL_RETRY_POLL_MS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .map(Self::clamp_poll_ms)
-                .unwrap_or(1_000),
-            batch_size: std::env::var("PUSHGO_PROVIDER_PULL_RETRY_BATCH")
-                .ok()
-                .and_then(|value| value.trim().parse::<usize>().ok())
-                .map(Self::clamp_batch_size)
-                .unwrap_or(200),
-            timeout_secs: std::env::var("PUSHGO_PROVIDER_PULL_RETRY_TIMEOUT_SECS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .map(Self::clamp_timeout_secs)
-                .unwrap_or(30),
-        }
-    }
-
-    pub(super) fn poll_interval(self) -> Duration {
-        Duration::from_millis(self.poll_ms)
     }
 }
 
