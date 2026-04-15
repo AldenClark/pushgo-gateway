@@ -322,6 +322,7 @@ impl MySqlDb {
         )
         .execute(&self.pool)
         .await?;
+        self.ensure_mysql_provider_pull_queue_primary_key().await?;
 
         let current: Option<String> = sqlx::query_scalar(
             "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = 'schema_version'",
@@ -390,6 +391,44 @@ impl MySqlDb {
         if exists.is_none() {
             sqlx::query(ddl).execute(&self.pool).await?;
         }
+        Ok(())
+    }
+
+    async fn ensure_mysql_provider_pull_queue_primary_key(&self) -> StoreResult<()> {
+        let pk_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT COLUMN_NAME \
+             FROM information_schema.KEY_COLUMN_USAGE \
+             WHERE TABLE_SCHEMA = DATABASE() \
+               AND TABLE_NAME = 'provider_pull_queue' \
+               AND CONSTRAINT_NAME = 'PRIMARY' \
+             ORDER BY ORDINAL_POSITION",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if pk_columns.as_slice() == ["device_id", "delivery_id"] {
+            return Ok(());
+        }
+
+        let has_primary: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 \
+             FROM information_schema.TABLE_CONSTRAINTS \
+             WHERE TABLE_SCHEMA = DATABASE() \
+               AND TABLE_NAME = 'provider_pull_queue' \
+               AND CONSTRAINT_TYPE = 'PRIMARY KEY' \
+             LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        let mut clauses = vec![
+            "MODIFY COLUMN device_id BINARY(16) NOT NULL",
+            "MODIFY COLUMN delivery_id VARCHAR(128) NOT NULL",
+        ];
+        if has_primary.is_some() {
+            clauses.push("DROP PRIMARY KEY");
+        }
+        clauses.push("ADD PRIMARY KEY (device_id, delivery_id)");
+        let ddl = format!("ALTER TABLE provider_pull_queue {}", clauses.join(", "));
+        sqlx::query(ddl.as_str()).execute(&self.pool).await?;
         Ok(())
     }
 }

@@ -17,49 +17,6 @@ pub(super) struct ProviderDispatchFailureLog<'a> {
 }
 
 impl DispatchWorkerRuntime {
-    pub(super) async fn enqueue_provider_pull_delivery(
-        &self,
-        delivery: &ProviderPullDelivery,
-        provider: &str,
-        correlation_id: &str,
-        channel_id: &str,
-    ) -> bool {
-        let message = PrivateMessage {
-            payload: delivery.payload.as_ref().clone(),
-            size: delivery.payload.len(),
-            sent_at: delivery.sent_at,
-            expires_at: delivery.expires_at,
-        };
-        match self
-            .store
-            .enqueue_provider_pull_item(
-                delivery.device_id,
-                delivery.delivery_id.as_ref(),
-                &message,
-                delivery.platform,
-                delivery.provider_token.as_ref(),
-            )
-            .await
-        {
-            Ok(()) => true,
-            Err(err) => {
-                if let Some(private_state) = self.private.as_deref() {
-                    private_state.metrics.mark_enqueue_failure();
-                }
-                crate::util::diagnostics_log(format_args!(
-                    "provider pull cache enqueue failed provider={} correlation_id={} channel_id={} device_id={} delivery_id={} error={}",
-                    provider,
-                    correlation_id,
-                    channel_id,
-                    encode_crockford_base32_128(&delivery.device_id),
-                    delivery.delivery_id,
-                    err,
-                ));
-                false
-            }
-        }
-    }
-
     pub(super) async fn cleanup_private_outbox_on_invalid_token(
         &self,
         platform: Platform,

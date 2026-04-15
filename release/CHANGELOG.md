@@ -12,6 +12,19 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.1] - 2026-04-15
+
+### Changed
+- Bumped package version to `1.2.1` (release tag target: `v1.2.1`).
+- Added provider-pull cache pre-enqueue on provider dispatch path; provider delivery is now gated by successful cache enqueue to prevent unpullable wakeups.
+- Removed legacy "skip provider when private realtime already succeeded" branch to keep provider ACK/pull behavior deterministic.
+- Promoted provider pull route resolution to require concrete provider device identity, and added failure telemetry for cache-enqueue rejection paths.
+- Channel subscribe/sync handlers now proactively initialize provider pull subscription data to reduce cold-start pull misses.
+- Storage bootstrap for SQLite/Postgres/MySQL now enforces provider-pull subscription schema initialization during startup.
+
+### Added
+- Added runtime/storage tests covering provider-pull schema bootstrap, SQLite initialization path, and dispatch runtime behavior under pull-cache preconditions.
+
 ## [v1.2.0] - 2026-04-10
 
 ### Added

@@ -62,44 +62,6 @@ impl DispatchWorkerPool {
                                 .expect("wakeup payload required for wakeup path"),
                         ),
                     };
-                    let provider_cached =
-                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
-                            runtime
-                                .enqueue_provider_pull_delivery(
-                                    provider_pull,
-                                    "APNS",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await
-                        } else {
-                            true
-                        };
-                    if !provider_cached {
-                        let dispatch = provider_cache_enqueue_failure_result();
-                        runtime.record_provider_dispatch_result(
-                            "APNS",
-                            job.correlation_id.as_ref(),
-                            job.delivery_id.as_ref(),
-                            &channel_id,
-                            actual_path,
-                            Some(job.platform),
-                            job.device_token.as_ref(),
-                            &dispatch,
-                        );
-                        runtime.log_provider_dispatch_failure(
-                            ProviderDispatchFailureLog {
-                                provider: "APNS",
-                                correlation_id: job.correlation_id.as_ref(),
-                                channel_id: &channel_id,
-                                path: actual_path,
-                                platform: Some(job.platform),
-                                device_token: job.device_token.as_ref(),
-                            },
-                            &dispatch,
-                        );
-                        continue;
-                    }
                     let mut dispatch = apns_client
                         .send_to_device(
                             job.device_token.as_ref(),
@@ -198,44 +160,6 @@ impl DispatchWorkerPool {
                                 .expect("wakeup body required for wakeup path"),
                         ),
                     };
-                    let provider_cached =
-                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
-                            runtime
-                                .enqueue_provider_pull_delivery(
-                                    provider_pull,
-                                    "FCM",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await
-                        } else {
-                            true
-                        };
-                    if !provider_cached {
-                        let dispatch = provider_cache_enqueue_failure_result();
-                        runtime.record_provider_dispatch_result(
-                            "FCM",
-                            job.correlation_id.as_ref(),
-                            job.delivery_id.as_ref(),
-                            &channel_id,
-                            actual_path,
-                            Some(Platform::ANDROID),
-                            job.device_token.as_ref(),
-                            &dispatch,
-                        );
-                        runtime.log_provider_dispatch_failure(
-                            ProviderDispatchFailureLog {
-                                provider: "FCM",
-                                correlation_id: job.correlation_id.as_ref(),
-                                channel_id: &channel_id,
-                                path: actual_path,
-                                platform: Some(Platform::ANDROID),
-                                device_token: job.device_token.as_ref(),
-                            },
-                            &dispatch,
-                        );
-                        continue;
-                    }
                     let mut dispatch = fcm_client
                         .send_to_device(job.device_token.as_ref(), Arc::clone(&payload), Some(body))
                         .await;
@@ -325,44 +249,6 @@ impl DispatchWorkerPool {
                                 .expect("wakeup payload required for wakeup path"),
                         ),
                     };
-                    let provider_cached =
-                        if let Some(provider_pull) = job.provider_pull_delivery.as_ref() {
-                            runtime
-                                .enqueue_provider_pull_delivery(
-                                    provider_pull,
-                                    "WNS",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await
-                        } else {
-                            true
-                        };
-                    if !provider_cached {
-                        let dispatch = provider_cache_enqueue_failure_result();
-                        runtime.record_provider_dispatch_result(
-                            "WNS",
-                            job.correlation_id.as_ref(),
-                            job.delivery_id.as_ref(),
-                            &channel_id,
-                            actual_path,
-                            Some(Platform::WINDOWS),
-                            job.device_token.as_ref(),
-                            &dispatch,
-                        );
-                        runtime.log_provider_dispatch_failure(
-                            ProviderDispatchFailureLog {
-                                provider: "WNS",
-                                correlation_id: job.correlation_id.as_ref(),
-                                channel_id: &channel_id,
-                                path: actual_path,
-                                platform: Some(Platform::WINDOWS),
-                                device_token: job.device_token.as_ref(),
-                            },
-                            &dispatch,
-                        );
-                        continue;
-                    }
                     let mut dispatch = wns_client
                         .send_to_device(job.device_token.as_ref(), Arc::clone(&payload))
                         .await;
@@ -422,17 +308,5 @@ impl DispatchWorkerPool {
                 }
             });
         }
-    }
-}
-
-fn provider_cache_enqueue_failure_result() -> DispatchResult {
-    DispatchResult {
-        success: false,
-        status_code: 500,
-        error: Some(crate::Error::Internal(
-            "provider pull cache enqueue failed".to_string(),
-        )),
-        invalid_token: false,
-        payload_too_large: false,
     }
 }

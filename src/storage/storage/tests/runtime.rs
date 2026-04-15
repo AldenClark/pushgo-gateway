@@ -1,4 +1,23 @@
 use super::*;
+
+async fn seed_provider_route_snapshot(
+    storage: &Storage,
+    device_key: &str,
+    token: &str,
+    updated_at: i64,
+) {
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: device_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: "fcm".to_string(),
+            provider_token: Some(token.to_string()),
+            updated_at,
+        })
+        .await
+        .expect("provider route snapshot should be persisted");
+}
+
 #[tokio::test]
 async fn dispatch_targets_cache_hits_within_ttl_and_expires() {
     let ctx = setup_sqlite_storage("dispatch-targets-cache").await;
@@ -14,6 +33,13 @@ async fn dispatch_targets_cache_hits_within_ttl_and_expires() {
         )
         .await
         .expect("subscribe should succeed");
+    seed_provider_route_snapshot(
+        &ctx.storage,
+        "dispatch-targets-cache-device-key",
+        token,
+        chrono::Utc::now().timestamp(),
+    )
+    .await;
     let channel_id = subscribe.channel_id;
     let effective_at = chrono::Utc::now().timestamp();
 
@@ -65,6 +91,13 @@ async fn dispatch_targets_cache_invalidates_on_unsubscribe() {
         )
         .await
         .expect("subscribe should succeed");
+    seed_provider_route_snapshot(
+        &ctx.storage,
+        "dispatch-targets-invalidate-device-key",
+        token,
+        chrono::Utc::now().timestamp(),
+    )
+    .await;
     let channel_id = subscribe.channel_id;
     let effective_at = chrono::Utc::now().timestamp();
 
@@ -88,6 +121,216 @@ async fn dispatch_targets_cache_invalidates_on_unsubscribe() {
         .await
         .expect("post-invalidation fetch should succeed");
     assert_eq!(second.len(), 0);
+}
+
+#[tokio::test]
+async fn dispatch_targets_respect_route_snapshot_when_present() {
+    let ctx = setup_sqlite_storage("dispatch-targets-route-snapshot").await;
+    let token = "android-token-route-snapshot-000000000000000000000001";
+    let subscribe = ctx
+        .storage
+        .subscribe_channel(
+            None,
+            Some("route-snapshot"),
+            "pw123456",
+            token,
+            Platform::ANDROID,
+        )
+        .await
+        .expect("subscribe should succeed");
+    let channel_id = subscribe.channel_id;
+    let now = chrono::Utc::now().timestamp();
+    seed_provider_route_snapshot(
+        &ctx.storage,
+        "dispatch-targets-route-snapshot-key",
+        token,
+        now,
+    )
+    .await;
+    let effective_at = now + 100;
+
+    let initial = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, effective_at)
+        .await
+        .expect("initial fetch should succeed");
+    assert_eq!(initial.len(), 1);
+
+    let device_id = DeviceInfo::from_token(Platform::ANDROID, token)
+        .expect("device token should parse")
+        .device_id();
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+
+    // Route snapshot says private, so provider subscription row should be ignored.
+    sqlx::query(
+        "UPDATE devices \
+         SET channel_type = 'private', provider_token = NULL, route_updated_at = ? \
+         WHERE device_id = ?",
+    )
+    .bind(now + 2)
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("route update to private should succeed");
+    let filtered_private = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 101)
+        .await
+        .expect("fetch with private route snapshot should succeed");
+    assert!(
+        filtered_private.is_empty(),
+        "provider rows must be filtered when route snapshot is private"
+    );
+
+    // Route snapshot says provider but token mismatch, so row should still be ignored.
+    sqlx::query(
+        "UPDATE devices \
+         SET channel_type = 'fcm', provider_token = ?, route_updated_at = ? \
+         WHERE device_id = ?",
+    )
+    .bind("android-token-route-snapshot-mismatch")
+    .bind(now + 4)
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("route update to mismatched provider token should succeed");
+    let filtered_token_mismatch = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 102)
+        .await
+        .expect("fetch with mismatched provider token should succeed");
+    assert!(
+        filtered_token_mismatch.is_empty(),
+        "provider rows must be filtered when route snapshot token mismatches"
+    );
+
+    // Route snapshot matches provider channel and token, row should be dispatchable again.
+    sqlx::query(
+        "UPDATE devices \
+         SET channel_type = 'fcm', provider_token = ?, route_updated_at = ? \
+         WHERE device_id = ?",
+    )
+    .bind(token)
+    .bind(now + 6)
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("route update to matching provider token should succeed");
+    let restored = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 103)
+        .await
+        .expect("fetch with matching route snapshot should succeed");
+    assert_eq!(restored.len(), 1);
+}
+
+#[tokio::test]
+async fn dispatch_targets_drop_provider_rows_without_route_snapshot() {
+    let ctx = setup_sqlite_storage("dispatch-targets-no-route-snapshot").await;
+    let token = "android-token-no-route-snapshot-0000000000000000001";
+    let subscribe = ctx
+        .storage
+        .subscribe_channel(
+            None,
+            Some("route-missing"),
+            "pw123456",
+            token,
+            Platform::ANDROID,
+        )
+        .await
+        .expect("subscribe should succeed");
+    let channel_id = subscribe.channel_id;
+    let now = chrono::Utc::now().timestamp();
+    let device_id = DeviceInfo::from_token(Platform::ANDROID, token)
+        .expect("device token should parse")
+        .device_id();
+
+    seed_provider_route_snapshot(
+        &ctx.storage,
+        "dispatch-targets-no-route-snapshot-key",
+        token,
+        now,
+    )
+    .await;
+    let with_snapshot = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 100)
+        .await
+        .expect("fetch with route snapshot should succeed");
+    assert_eq!(with_snapshot.len(), 1);
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "UPDATE devices \
+         SET route_updated_at = NULL \
+         WHERE device_id = ?",
+    )
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("route_updated_at reset should succeed");
+
+    let without_snapshot = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 101)
+        .await
+        .expect("fetch without route snapshot should succeed");
+    assert!(
+        without_snapshot.is_empty(),
+        "provider rows without route snapshot must be filtered out"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_targets_fallback_to_route_device_key_when_subscription_key_missing() {
+    let ctx = setup_sqlite_storage("dispatch-targets-route-device-key-fallback").await;
+    let token = "android-token-route-device-key-fallback-000000000001";
+    let subscribe = ctx
+        .storage
+        .subscribe_channel(
+            None,
+            Some("route-device-key-fallback"),
+            "pw123456",
+            token,
+            Platform::ANDROID,
+        )
+        .await
+        .expect("subscribe should succeed");
+    let channel_id = subscribe.channel_id;
+    let device_id = DeviceInfo::from_token(Platform::ANDROID, token)
+        .expect("device token should parse")
+        .device_id();
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "UPDATE devices SET device_key = ?, channel_type = 'fcm', provider_token = ?, route_updated_at = ? WHERE device_id = ?",
+    )
+    .bind("route-device-key-fallback")
+    .bind(token)
+    .bind(chrono::Utc::now().timestamp())
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("device route snapshot update should succeed");
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, chrono::Utc::now().timestamp() + 1)
+        .await
+        .expect("fetch should succeed");
+    assert_eq!(targets.len(), 1);
+    match &targets[0] {
+        DispatchTarget::Provider { device_key, .. } => {
+            assert_eq!(device_key.as_deref(), Some("route-device-key-fallback"));
+        }
+        other => panic!("expected provider target, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -429,7 +672,7 @@ async fn load_device_routes_uses_devices_snapshot_not_channel_subscriptions() {
         .list_channel_dispatch_targets(subscribe.channel_id, chrono::Utc::now().timestamp())
         .await
         .expect("dispatch targets fetch should succeed");
-    assert_eq!(targets.len(), 1);
+    assert_eq!(targets.len(), 0);
 
     let mut conn = SqliteConnection::connect(&ctx.db_url)
         .await

@@ -347,6 +347,7 @@ impl PostgresDb {
         )
         .execute(&self.pool)
         .await?;
+        self.ensure_pg_provider_pull_queue_primary_key().await?;
         sqlx::query(
             "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
         )
@@ -411,6 +412,54 @@ impl PostgresDb {
         if exists.is_none() {
             sqlx::query(ddl).execute(&self.pool).await?;
         }
+        Ok(())
+    }
+
+    async fn ensure_pg_provider_pull_queue_primary_key(&self) -> StoreResult<()> {
+        let pk_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT a.attname \
+             FROM pg_index i \
+             JOIN pg_class t ON t.oid = i.indrelid \
+             JOIN pg_namespace n ON n.oid = t.relnamespace \
+             JOIN unnest(i.indkey) WITH ORDINALITY AS key(attnum, ord) ON TRUE \
+             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = key.attnum \
+             WHERE n.nspname = current_schema() \
+               AND t.relname = 'provider_pull_queue' \
+               AND i.indisprimary \
+             ORDER BY key.ord",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if pk_columns.as_slice() == ["device_id", "delivery_id"] {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let pk_constraint: Option<String> = sqlx::query_scalar(
+            "SELECT tc.constraint_name \
+             FROM information_schema.table_constraints tc \
+             WHERE tc.table_schema = current_schema() \
+               AND tc.table_name = 'provider_pull_queue' \
+               AND tc.constraint_type = 'PRIMARY KEY' \
+             LIMIT 1",
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(name) = pk_constraint {
+            let escaped = name.replace('"', "\"\"");
+            let ddl = format!("ALTER TABLE provider_pull_queue DROP CONSTRAINT \"{escaped}\"");
+            sqlx::query(ddl.as_str()).execute(&mut *tx).await?;
+        }
+        sqlx::query("ALTER TABLE provider_pull_queue ALTER COLUMN device_id SET NOT NULL")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE provider_pull_queue ALTER COLUMN delivery_id SET NOT NULL")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE provider_pull_queue ADD PRIMARY KEY (device_id, delivery_id)")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 }

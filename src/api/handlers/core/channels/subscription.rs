@@ -4,6 +4,7 @@ use crate::{
     api::{ApiJson, ChannelAlias, ChannelId, ChannelPassword, Error, HttpResult},
     app::AppState,
     routing::{DeviceChannelType, derive_private_device_id},
+    storage::DeviceRouteRecordRow,
 };
 
 use super::{
@@ -27,6 +28,12 @@ pub(crate) async fn channel_subscribe(
         .device_registry
         .get(device_key)
         .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
+    state
+        .store
+        .upsert_device_route(&DeviceRouteRecordRow::from_registry_record(
+            device_key, &route,
+        ))
+        .await?;
 
     let channel_id = match payload.channel_id.as_deref() {
         Some(raw) => Some(ChannelId::parse(raw)?),

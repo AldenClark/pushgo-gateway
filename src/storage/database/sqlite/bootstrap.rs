@@ -368,6 +368,7 @@ impl SqliteDb {
         )
         .execute(&self.pool)
         .await?;
+        self.ensure_sqlite_provider_pull_queue_primary_key().await?;
         sqlx::query(
             "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
         )
@@ -430,6 +431,82 @@ impl SqliteDb {
         if !exists {
             sqlx::query(ddl).execute(&self.pool).await?;
         }
+        Ok(())
+    }
+
+    async fn ensure_sqlite_provider_pull_queue_primary_key(&self) -> StoreResult<()> {
+        let rows = sqlx::query("PRAGMA table_info(provider_pull_queue)")
+            .fetch_all(&self.pool)
+            .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut pk_columns: Vec<(i64, String)> = rows
+            .into_iter()
+            .filter_map(|row| {
+                let pk_order = row.get::<i64, _>("pk");
+                if pk_order <= 0 {
+                    return None;
+                }
+                Some((pk_order, row.get::<String, _>("name")))
+            })
+            .collect();
+        pk_columns.sort_by_key(|(order, _)| *order);
+        let pk_names: Vec<&str> = pk_columns.iter().map(|(_, name)| name.as_str()).collect();
+        if pk_names == ["device_id", "delivery_id"] {
+            return Ok(());
+        }
+
+        // Legacy schema used PRIMARY KEY(delivery_id), which blocks multi-device
+        // queue rows for the same delivery.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "CREATE TABLE provider_pull_queue_new (\
+                device_id BLOB NOT NULL,\
+                delivery_id TEXT NOT NULL,\
+                payload_blob BLOB NOT NULL,\
+                payload_size INTEGER NOT NULL,\
+                sent_at INTEGER NOT NULL,\
+                expires_at INTEGER NOT NULL,\
+                platform TEXT NOT NULL,\
+                provider_token TEXT NOT NULL,\
+                created_at INTEGER NOT NULL,\
+                updated_at INTEGER NOT NULL,\
+                PRIMARY KEY (device_id, delivery_id)\
+            )",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO provider_pull_queue_new \
+             (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+             SELECT \
+                 device_id,\
+                 delivery_id,\
+                 payload_blob,\
+                 COALESCE(payload_size, 0),\
+                 COALESCE(sent_at, 0),\
+                 COALESCE(expires_at, 0),\
+                 platform,\
+                 provider_token,\
+                 COALESCE(created_at, 0),\
+                 COALESCE(updated_at, 0) \
+             FROM provider_pull_queue \
+             WHERE device_id IS NOT NULL \
+               AND delivery_id IS NOT NULL \
+               AND payload_blob IS NOT NULL \
+               AND platform IS NOT NULL \
+               AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DROP TABLE provider_pull_queue")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE provider_pull_queue_new RENAME TO provider_pull_queue")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 }

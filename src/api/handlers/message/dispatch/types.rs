@@ -20,7 +20,7 @@ pub(super) struct PreparedDispatch<'a> {
     pub(super) private_payload: Vec<u8>,
     pub(super) wakeup_data: Arc<HashMap<String, String>>,
     pub(super) custom_data: Arc<HashMap<String, String>>,
-    pub(super) provider_devices: Vec<DeviceInfo>,
+    pub(super) provider_devices: Vec<ProviderDispatchDevice>,
     pub(super) private_dispatch: Option<PrivateDispatchContext<'a>>,
     pub(super) apple_thread_id: String,
     pub(super) provider_fallback_body: Option<String>,
@@ -29,7 +29,11 @@ pub(super) struct PreparedDispatch<'a> {
 pub(super) struct PrivateDispatchContext<'a> {
     pub(super) state: &'a crate::private::PrivateState,
     pub(super) subscribers: Vec<DeviceId>,
-    pub(super) subscriber_set: HashSet<DeviceId>,
+}
+
+pub(super) struct ProviderDispatchDevice {
+    pub(super) info: DeviceInfo,
+    pub(super) device_key: Option<String>,
 }
 
 pub(super) struct ProviderPayloads {
@@ -123,10 +127,12 @@ impl<'a> PreparedDispatch<'a> {
                 DispatchTarget::Provider {
                     platform,
                     provider_token,
-                    ..
+                    device_key,
                 } => {
-                    provider_devices
-                        .push(DeviceInfo::from_token(platform, provider_token.as_str())?);
+                    provider_devices.push(ProviderDispatchDevice {
+                        info: DeviceInfo::from_token(platform, provider_token.as_str())?,
+                        device_key,
+                    });
                 }
                 _ => {}
             }
@@ -167,7 +173,6 @@ impl<'a> PreparedDispatch<'a> {
                 .filter(|_| private_enabled)
                 .map(|state| PrivateDispatchContext {
                     state,
-                    subscriber_set: private_subscribers.iter().copied().collect(),
                     subscribers: private_subscribers,
                 });
 
@@ -234,7 +239,7 @@ impl ProviderPayloads {
         let mut has_wns = false;
         let mut has_watchos_apns = false;
         for device in &prepared.provider_devices {
-            match device.platform {
+            match device.info.platform {
                 Platform::ANDROID => has_android = true,
                 Platform::WINDOWS => has_wns = true,
                 Platform::WATCHOS => {
@@ -339,17 +344,5 @@ impl DispatchProgress {
                 ..DeviceDispatchDelta::default()
             },
         );
-    }
-
-    pub(super) fn should_skip_provider_delivery(
-        &self,
-        private_delivery_target: Option<DeviceId>,
-        private_online: bool,
-    ) -> bool {
-        ProviderDeliverySkip::should_skip(
-            private_delivery_target,
-            private_online,
-            &self.private_realtime_delivered,
-        )
     }
 }

@@ -6,7 +6,7 @@ use crate::{
     api::{ApiJson, ChannelId, ChannelPassword, Error, HttpResult},
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
-    storage::StoreError,
+    storage::{DeviceRouteRecordRow, StoreError},
 };
 
 use super::{
@@ -31,6 +31,13 @@ pub(crate) async fn channel_sync(
         .device_registry
         .get(device_key)
         .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
+    state
+        .store
+        .upsert_device_route(&DeviceRouteRecordRow::from_registry_record(
+            device_key, &route,
+        ))
+        .await
+        .map_err(|err| Error::Internal(err.to_string()))?;
     let mut channels = Vec::with_capacity(payload.channels.len());
     let mut desired_channels = HashSet::with_capacity(payload.channels.len());
     let mut success = 0usize;

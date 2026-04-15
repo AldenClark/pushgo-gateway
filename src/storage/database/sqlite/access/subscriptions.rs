@@ -32,8 +32,10 @@ impl SqliteDb {
         effective_at: i64,
     ) -> StoreResult<Vec<DispatchTarget>> {
         let rows = sqlx::query(
-            "SELECT s.device_id, s.platform, s.channel_type, s.device_key, s.provider_token \
+            "SELECT s.device_id, s.platform, s.channel_type, s.device_key AS subscription_device_key, d.device_key AS route_device_key, s.provider_token, \
+                    d.channel_type AS route_channel_type, d.provider_token AS route_provider_token, d.route_updated_at \
              FROM channel_subscriptions s \
+             JOIN devices d ON d.device_id = s.device_id \
              WHERE s.channel_id = ? AND s.status = 'active' AND s.created_at <= ? \
              ORDER BY s.channel_type ASC, s.created_at ASC, s.device_id ASC",
         )
@@ -45,8 +47,33 @@ impl SqliteDb {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let channel_type: String = row.get("channel_type");
+            let route_channel_type: Option<String> = row.get("route_channel_type");
+            let route_provider_token: Option<String> = row.get("route_provider_token");
+            let route_updated_at: Option<i64> = row.get("route_updated_at");
+            let provider_token: Option<String> = row.get("provider_token");
+            if !Self::route_matches_dispatch_target(
+                channel_type.as_str(),
+                provider_token.as_deref(),
+                route_updated_at,
+                route_channel_type.as_deref(),
+                route_provider_token.as_deref(),
+            ) {
+                continue;
+            }
             let raw_device_id: Vec<u8> = row.get("device_id");
-            let device_key: Option<String> = row.get("device_key");
+            let device_key: Option<String> = row
+                .get::<Option<String>, _>("subscription_device_key")
+                .and_then(|value| {
+                    let trimmed = value.trim().to_string();
+                    (!trimmed.is_empty()).then_some(trimmed)
+                })
+                .or_else(|| {
+                    row.get::<Option<String>, _>("route_device_key")
+                        .and_then(|value| {
+                            let trimmed = value.trim().to_string();
+                            (!trimmed.is_empty()).then_some(trimmed)
+                        })
+                });
 
             if channel_type.eq_ignore_ascii_case("private") {
                 if raw_device_id.len() == 16 {
@@ -62,10 +89,9 @@ impl SqliteDb {
 
             let platform_raw: String = row.get("platform");
             let platform: Platform = platform_raw.parse()?;
-            let provider_token: Option<String> = row.get("provider_token");
             if let Some(token) = provider_token {
                 let token = token.trim().to_string();
-                if !token.is_empty() {
+                if !token.is_empty() && device_key.is_some() {
                     out.push(DispatchTarget::Provider {
                         platform,
                         provider_token: token,
@@ -75,6 +101,43 @@ impl SqliteDb {
             }
         }
         Ok(out)
+    }
+
+    fn route_matches_dispatch_target(
+        channel_type: &str,
+        subscription_provider_token: Option<&str>,
+        route_updated_at: Option<i64>,
+        route_channel_type: Option<&str>,
+        route_provider_token: Option<&str>,
+    ) -> bool {
+        if route_updated_at.is_none() {
+            return channel_type.eq_ignore_ascii_case("private");
+        }
+        let Some(route_channel_type) = Self::normalize_optional_token(route_channel_type) else {
+            return false;
+        };
+        if !route_channel_type.eq_ignore_ascii_case(channel_type) {
+            return false;
+        }
+        if channel_type.eq_ignore_ascii_case("private") {
+            return true;
+        }
+        let Some(route_provider_token) = Self::normalize_optional_token(route_provider_token)
+        else {
+            return false;
+        };
+        let Some(subscription_provider_token) =
+            Self::normalize_optional_token(subscription_provider_token)
+        else {
+            return false;
+        };
+        route_provider_token == subscription_provider_token
+    }
+
+    fn normalize_optional_token(value: Option<&str>) -> Option<&str> {
+        value
+            .map(str::trim)
+            .filter(|candidate| !candidate.is_empty())
     }
 
     pub(super) async fn list_subscribed_channels_for_device(

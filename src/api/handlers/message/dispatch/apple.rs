@@ -46,7 +46,6 @@ pub(super) async fn dispatch(
         wakeup_payload: Some(Arc::clone(&wakeup_payload)),
         initial_path: selection.initial_path,
         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
-        provider_pull_delivery: target.provider_pull_delivery.clone(),
         collapse_id: payloads.apns_collapse_id.clone(),
     }) {
         Ok(()) => {

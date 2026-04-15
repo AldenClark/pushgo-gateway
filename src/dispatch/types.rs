@@ -36,7 +36,6 @@ pub(crate) struct ApnsJob {
     pub wakeup_payload: Option<Arc<ApnsPayload>>,
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
-    pub provider_pull_delivery: Option<ProviderPullDelivery>,
     pub collapse_id: Option<Arc<str>>,
 }
 
@@ -51,7 +50,6 @@ pub(crate) struct FcmJob {
     pub wakeup_body: Option<Arc<[u8]>>,
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
-    pub provider_pull_delivery: Option<ProviderPullDelivery>,
 }
 
 pub(crate) struct WnsJob {
@@ -63,7 +61,6 @@ pub(crate) struct WnsJob {
     pub wakeup_payload: Option<Arc<WnsPayload>>,
     pub initial_path: ProviderDeliveryPath,
     pub wakeup_payload_within_limit: bool,
-    pub provider_pull_delivery: Option<ProviderPullDelivery>,
 }
 
 #[derive(Clone)]

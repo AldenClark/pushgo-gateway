@@ -27,7 +27,7 @@ impl FcmPayload {
 
     pub fn priority_for_level(level: &str) -> &'static str {
         match level.trim().to_ascii_lowercase().as_str() {
-            "critical" | "high" => "HIGH",
+            "critical" | "high" | "normal" => "HIGH",
             _ => "NORMAL",
         }
     }
@@ -81,4 +81,18 @@ struct FcmAndroidConfig {
     priority: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     ttl: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FcmPayload;
+
+    #[test]
+    fn priority_for_level_maps_normal_to_high() {
+        assert_eq!(FcmPayload::priority_for_level("critical"), "HIGH");
+        assert_eq!(FcmPayload::priority_for_level("high"), "HIGH");
+        assert_eq!(FcmPayload::priority_for_level("normal"), "HIGH");
+        assert_eq!(FcmPayload::priority_for_level("low"), "NORMAL");
+        assert_eq!(FcmPayload::priority_for_level("unknown"), "NORMAL");
+    }
 }

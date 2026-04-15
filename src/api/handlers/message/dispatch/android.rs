@@ -54,7 +54,6 @@ pub(super) async fn dispatch(
         wakeup_body,
         initial_path: selection.initial_path,
         wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
-        provider_pull_delivery: target.provider_pull_delivery.clone(),
     }) {
         Ok(()) => {
             record_provider_enqueued(prepared, target, progress, selection.initial_path).await;

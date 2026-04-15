@@ -236,6 +236,87 @@ async fn sqlite_init_creates_missing_provider_pull_tables() {
 }
 
 #[tokio::test]
+async fn sqlite_init_heals_provider_pull_queue_legacy_primary_key() {
+    let ctx = setup_sqlite_storage_with_custom_schema(
+        "sqlite-heal-provider-pull-legacy-pk",
+        &[
+            "CREATE TABLE IF NOT EXISTS provider_pull_queue (delivery_id TEXT PRIMARY KEY, device_id BLOB, payload_blob BLOB, payload_size INTEGER, sent_at INTEGER, expires_at INTEGER, platform TEXT, provider_token TEXT, created_at INTEGER, updated_at INTEGER)",
+            "INSERT INTO provider_pull_queue (delivery_id, device_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) VALUES ('legacy-provider-pull-existing-1', X'01010101010101010101010101010101', X'ABCD', 2, 100, 253402300799, 'android', 'legacy-token-1', 100, 100)",
+        ],
+    )
+    .await;
+
+    let now = chrono::Utc::now().timestamp();
+    let delivery_id = "legacy-provider-pull-shared-delivery-1";
+    let payload = PrivateMessage {
+        payload: vec![1, 3, 5, 7],
+        size: 4,
+        sent_at: now,
+        expires_at: now + 600,
+    };
+    let device_a: DeviceId = [3; 16];
+    let device_b: DeviceId = [4; 16];
+
+    ctx.storage
+        .enqueue_provider_pull_item(
+            device_a,
+            delivery_id,
+            &payload,
+            Platform::ANDROID,
+            "legacy-provider-token-a",
+        )
+        .await
+        .expect("enqueue provider item for device A should succeed");
+    ctx.storage
+        .enqueue_provider_pull_item(
+            device_b,
+            delivery_id,
+            &payload,
+            Platform::ANDROID,
+            "legacy-provider-token-b",
+        )
+        .await
+        .expect("enqueue provider item for device B should succeed");
+
+    let pulled_a = ctx
+        .storage
+        .pull_provider_item(device_a, delivery_id, now + 1)
+        .await
+        .expect("pull device A should succeed");
+    let pulled_b = ctx
+        .storage
+        .pull_provider_item(device_b, delivery_id, now + 1)
+        .await
+        .expect("pull device B should succeed");
+    assert!(pulled_a.is_some(), "device A should receive queued payload");
+    assert!(pulled_b.is_some(), "device B should receive queued payload");
+
+    let legacy_existing = ctx
+        .storage
+        .pull_provider_item([1; 16], "legacy-provider-pull-existing-1", now + 1)
+        .await
+        .expect("pull migrated legacy row should succeed");
+    assert!(
+        legacy_existing.is_some(),
+        "legacy row should survive primary key healing"
+    );
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let pk_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_table_info('provider_pull_queue') WHERE pk > 0 ORDER BY pk",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .expect("provider_pull_queue primary key query should succeed");
+    assert_eq!(
+        pk_columns,
+        vec!["device_id".to_string(), "delivery_id".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn sqlite_init_heals_missing_private_outbox_columns() {
     let ctx = setup_sqlite_storage_with_custom_schema(
         "sqlite-heal-private-outbox-columns",
@@ -298,6 +379,16 @@ async fn sqlite_init_heals_missing_channel_subscription_columns() {
         )
         .await
         .expect("subscribe should succeed after channel_subscriptions column healing");
+    ctx.storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: "sqlite-heal-channel-sub-route-key".to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: "fcm".to_string(),
+            provider_token: Some(token.to_string()),
+            updated_at: chrono::Utc::now().timestamp(),
+        })
+        .await
+        .expect("provider route snapshot upsert should succeed");
 
     let targets = ctx
         .storage

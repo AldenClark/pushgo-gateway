@@ -8,6 +8,13 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.1]
+
+### Improved
+- Improved ACK + pull delivery reliability by ensuring provider wakeup deliveries are cached before dispatch.
+- Improved first-sync behavior for provider pull routes, reducing missed pulls right after subscribe/sync.
+- Improved cross-database startup consistency for provider-pull subscription initialization (SQLite/Postgres/MySQL).
+
 ## [v1.2.0]
 
 ### Improved

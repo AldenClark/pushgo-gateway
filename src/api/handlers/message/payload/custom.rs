@@ -92,8 +92,8 @@ impl PayloadSeverity {
 
     pub(crate) fn fcm_priority(self) -> &'static str {
         match self {
-            Self::Critical | Self::High => "HIGH",
-            Self::Normal | Self::Low => "NORMAL",
+            Self::Critical | Self::High | Self::Normal => "HIGH",
+            Self::Low => "NORMAL",
         }
     }
 }

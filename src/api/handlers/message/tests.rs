@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use hashbrown::HashMap;
 use serde_json::Map as JsonMap;
 
@@ -10,32 +8,9 @@ use super::{
     ids::{OpId, wakeup_data_with_delivery_id},
     payload::{
         CustomPayloadData, EntityKind, OptionalText, PayloadSeverity, ProviderDeliverySelection,
-        ProviderDeliverySkip, StandardFields,
+        StandardFields,
     },
 };
-
-#[test]
-fn skip_provider_only_when_private_delivery_succeeds_while_online() {
-    let device_id = [1u8; 16];
-    let mut delivered = HashSet::new();
-    delivered.insert(device_id);
-    assert!(ProviderDeliverySkip::should_skip(
-        Some(device_id),
-        true,
-        &delivered
-    ));
-    assert!(!ProviderDeliverySkip::should_skip(
-        Some(device_id),
-        false,
-        &delivered
-    ));
-    assert!(!ProviderDeliverySkip::should_skip(
-        Some([2u8; 16]),
-        true,
-        &delivered
-    ));
-    assert!(!ProviderDeliverySkip::should_skip(None, true, &delivered));
-}
 
 #[test]
 fn wakeup_pull_requires_available_wakeup_path() {
@@ -156,6 +131,7 @@ fn payload_severity_normalizes_to_known_levels() {
         PayloadSeverity::normalize(Some("unknown".to_string())),
         PayloadSeverity::Normal
     );
+    assert_eq!(PayloadSeverity::Normal.fcm_priority(), "HIGH");
     assert_eq!(PayloadSeverity::Low.fcm_priority(), "NORMAL");
     assert_eq!(PayloadSeverity::Critical.fcm_priority(), "HIGH");
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::{storage::PrivateMessage, util::encode_crockford_base32_128};
 pub(super) async fn dispatch_provider_devices(
     prepared: &PreparedDispatch<'_>,
     payloads: &ProviderPayloads,
@@ -6,32 +7,12 @@ pub(super) async fn dispatch_provider_devices(
 ) -> Result<(), Error> {
     let total = prepared.provider_devices.len();
     for (index, device) in prepared.provider_devices.iter().enumerate() {
-        let private_delivery_target =
-            prepared
-                .private_dispatch
-                .as_ref()
-                .and_then(|private_dispatch| {
-                    private_dispatch
-                        .state
-                        .device_registry
-                        .find_device_key_by_provider_token(device.platform, device.token_str())
-                        .map(|device_key| derive_private_device_id(device_key.as_str()))
-                        .filter(|device_id| {
-                            private_dispatch.subscriber_set.contains(device_id)
-                                && progress.private_enqueued.contains(device_id)
-                        })
-                });
-        let private_online = private_delivery_target
-            .map(|device_id| {
-                prepared
-                    .private_dispatch
-                    .as_ref()
-                    .map(|private_dispatch| private_dispatch.state.hub.is_online(device_id))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        let provider_route =
-            ProviderRouteBinding::resolve(prepared.state, device.platform, device.token_str());
+        let provider_route = ProviderRouteBinding::resolve(
+            prepared.state,
+            device.info.platform,
+            device.info.token_str(),
+            device.device_key.as_deref(),
+        );
         let provider_audit_key = provider_route.audit_device_key.as_str().to_string();
         let provider_stats_key = Arc::<str>::from(
             provider_route
@@ -40,15 +21,6 @@ pub(super) async fn dispatch_provider_devices(
                 .to_string()
                 .into_boxed_str(),
         );
-        if progress.should_skip_provider_delivery(private_delivery_target, private_online) {
-            record_private_realtime_skip(
-                prepared,
-                device,
-                provider_route.audit_device_key.into_inner(),
-            )
-            .await;
-            continue;
-        }
 
         let provider_pull_delivery_id = prepared.delivery_id.clone();
         let wakeup_data_for_device = Arc::new(wakeup_data_with_delivery_id(
@@ -57,22 +29,25 @@ pub(super) async fn dispatch_provider_devices(
         ));
         let provider_pull_delivery = ProviderPullDelivery::for_provider_target(
             provider_route.provider_device_key.as_deref(),
-            device.platform,
-            device.token_str(),
+            device.info.platform,
+            device.info.token_str(),
             &prepared.private_payload,
             provider_pull_delivery_id.as_str(),
             prepared.sent_at,
             prepared.provider_pull_expires_at(),
         );
         let target = ResolvedProviderTarget {
-            device,
+            device: &device.info,
             provider_audit_key,
             provider_stats_key,
             wakeup_data_for_device,
             provider_pull_delivery,
         };
+        if !ensure_provider_pull_cached(prepared, &target, progress).await {
+            continue;
+        }
 
-        match device.platform {
+        match device.info.platform {
             Platform::ANDROID => android::dispatch(prepared, payloads, &target, progress).await?,
             Platform::WINDOWS => windows::dispatch(prepared, payloads, &target, progress).await?,
             _ => apple::dispatch(prepared, payloads, &target, progress).await?,
@@ -84,4 +59,56 @@ pub(super) async fn dispatch_provider_devices(
         }
     }
     Ok(())
+}
+
+async fn ensure_provider_pull_cached(
+    prepared: &PreparedDispatch<'_>,
+    target: &ResolvedProviderTarget<'_>,
+    progress: &mut DispatchProgress,
+) -> bool {
+    let Some(provider_pull) = target.provider_pull_delivery.as_ref() else {
+        record_provider_cache_enqueue_failed(
+            prepared,
+            target,
+            progress,
+            "provider pull cache unavailable: missing provider target identity",
+        )
+        .await;
+        return false;
+    };
+    let message = PrivateMessage {
+        payload: provider_pull.payload.as_ref().clone(),
+        size: provider_pull.payload.len(),
+        sent_at: provider_pull.sent_at,
+        expires_at: provider_pull.expires_at,
+    };
+    match prepared
+        .state
+        .store
+        .enqueue_provider_pull_item(
+            provider_pull.device_id,
+            provider_pull.delivery_id.as_ref(),
+            &message,
+            provider_pull.platform,
+            provider_pull.provider_token.as_ref(),
+        )
+        .await
+    {
+        Ok(()) => true,
+        Err(err) => {
+            record_provider_cache_enqueue_failed(
+                prepared,
+                target,
+                progress,
+                format!(
+                    "provider pull cache enqueue failed device_id={} delivery_id={} error={}",
+                    encode_crockford_base32_128(&provider_pull.device_id),
+                    provider_pull.delivery_id,
+                    err,
+                ),
+            )
+            .await;
+            false
+        }
+    }
 }

@@ -10,7 +10,6 @@ use crate::{
         DispatchError, ProviderDeliveryPath, ProviderPullDelivery, audit::DispatchAuditRecord,
     },
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
-    routing::derive_private_device_id,
     stats::DeviceDispatchDelta,
     storage::{
         DeliveryAuditPath, DeliveryAuditStatus, DeliveryAuditWrite, DeviceId, DeviceInfo,
@@ -23,8 +22,8 @@ use super::{
     ids::{DeliveryId, OpId, SemanticScope, wakeup_data_with_delivery_id},
     payload::{
         CustomPayloadData, EntityKind, MAX_PROVIDER_TTL_SECONDS, PAYLOAD_VERSION, PayloadSeverity,
-        ProviderDeliverySelection, ProviderDeliverySkip, ProviderRouteBinding, ProviderTtl,
-        SCHEMA_VERSION, StandardFields,
+        ProviderDeliverySelection, ProviderRouteBinding, ProviderTtl, SCHEMA_VERSION,
+        StandardFields,
     },
     stats::{PrivateEnqueueStats, emit_dispatch_stats, merge_device_dispatch_delta},
 };
@@ -42,7 +41,7 @@ mod types;
 mod windows;
 
 use audit::{
-    append_delivery_audit_best_effort, record_private_realtime_skip,
+    append_delivery_audit_best_effort, record_provider_cache_enqueue_failed,
     record_provider_enqueue_failed, record_provider_enqueued, record_provider_path_rejected,
 };
 use private::enqueue_private_deliveries;
@@ -54,8 +53,6 @@ const AUDIT_PATH_PROVIDER: DeliveryAuditPath = DeliveryAuditPath::Provider;
 const AUDIT_STATUS_ENQUEUED: DeliveryAuditStatus = DeliveryAuditStatus::Enqueued;
 const AUDIT_STATUS_ENQUEUE_FAILED: DeliveryAuditStatus = DeliveryAuditStatus::EnqueueFailed;
 const AUDIT_STATUS_PATH_REJECTED: DeliveryAuditStatus = DeliveryAuditStatus::PathRejected;
-const AUDIT_STATUS_SKIPPED_PRIVATE_REALTIME: DeliveryAuditStatus =
-    DeliveryAuditStatus::SkippedPrivateRealtime;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_entity_notification(
