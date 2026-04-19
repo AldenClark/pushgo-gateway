@@ -172,7 +172,7 @@ impl GatewayTokenCache {
     }
 
     async fn fetch_token(&self) -> Result<(TokenInfo, Option<Arc<str>>), Error> {
-        let mut paths = Vec::with_capacity(2);
+        let mut paths = Vec::with_capacity(1);
         match self.provider {
             GatewayProvider::Apns => {
                 if pushgo_gateway::util::is_sandbox_mode() {
@@ -180,32 +180,14 @@ impl GatewayTokenCache {
                 } else {
                     paths.push(TOKEN_PRODUCTION_ENDPOINT_PATH);
                 }
-                // Backward-compatible fallback for older token-service deployments.
-                paths.push(TOKEN_ENDPOINT_PATH);
             }
             GatewayProvider::Fcm | GatewayProvider::Wns => paths.push(TOKEN_ENDPOINT_PATH),
         }
 
-        let mut last_error: Option<Error> = None;
-        for path in paths {
-            match self.fetch_token_from_path(path).await {
-                Ok(value) => return Ok(value),
-                Err(err) => {
-                    let should_try_fallback = path != TOKEN_ENDPOINT_PATH
-                        && matches!(
-                            &err,
-                            Error::Upstream { status, .. } if *status == 400 || *status == 404 || *status == 405
-                        );
-                    if should_try_fallback {
-                        last_error = Some(err);
-                        continue;
-                    }
-                    return Err(err);
-                }
-            }
+        if let Some(path) = paths.into_iter().next() {
+            return self.fetch_token_from_path(path).await;
         }
-        Err(last_error
-            .unwrap_or_else(|| Error::Internal("token service request failed".to_string())))
+        Err(Error::Internal("token service request failed".to_string()))
     }
 
     async fn fetch_token_from_path(

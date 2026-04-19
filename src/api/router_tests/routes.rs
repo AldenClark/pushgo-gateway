@@ -201,7 +201,7 @@ async fn diagnostics_dispatch_route_is_locked_when_disabled() {
 }
 
 #[tokio::test]
-async fn channel_device_register_compat_route_is_not_available() {
+async fn channel_device_route_requires_device_key() {
     let state = build_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let response = app
@@ -221,5 +221,5 @@ async fn channel_device_register_compat_route_is_not_available() {
         )
         .await
         .expect("router should handle request");
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

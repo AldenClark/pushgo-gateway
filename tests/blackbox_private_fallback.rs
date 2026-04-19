@@ -199,8 +199,7 @@ async fn register_private_device(client: &Client, gateway: &GatewayProcess) -> S
         .post(format!("{}/device/register", gateway.base_url()))
         .bearer_auth(&gateway.token)
         .json(&serde_json::json!({
-            "platform": "android",
-            "channel_type": "private"
+            "platform": "android"
         }))
         .send()
         .await

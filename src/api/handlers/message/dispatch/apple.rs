@@ -15,6 +15,7 @@ pub(super) async fn dispatch(
     .ok_or(Error::Internal("missing APNs payload".to_string()))?;
     let wakeup_payload = Arc::new(ApnsPayload::wakeup(
         payloads.apns_wakeup_title.clone(),
+        payloads.apns_wakeup_body.clone(),
         Some(prepared.channel_id_value.clone()),
         prepared.effective_ttl,
         SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
@@ -40,6 +41,7 @@ pub(super) async fn dispatch(
         channel_id: prepared.channel_id,
         correlation_id: Arc::clone(&prepared.correlation_id),
         delivery_id: Arc::clone(&prepared.delivery_id_ref),
+        device_key: Arc::clone(&target.device_key),
         device_token: Arc::from(target.device.token_str()),
         platform: target.device.platform,
         direct_payload: Arc::clone(&direct_payload),

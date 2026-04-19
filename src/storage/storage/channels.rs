@@ -4,15 +4,16 @@ use crate::storage::database::{
 };
 
 impl Storage {
-    pub async fn subscribe_channel(
+    pub async fn subscribe_channel_for_device_key(
         &self,
         channel_id: Option<[u8; 16]>,
         alias: Option<&str>,
         password: &str,
-        device_token: &str,
+        device_key: &str,
+        provider_token: &str,
         platform: Platform,
     ) -> StoreResult<SubscribeOutcome> {
-        let device_info = DeviceInfo::from_token(platform, device_token)?;
+        let device_info = DeviceInfo::from_token(platform, provider_token)?;
         let device_id = device_info.device_id();
 
         let password_hash = if let Some(id) = channel_id {
@@ -29,7 +30,14 @@ impl Storage {
 
         let outcome = self
             .db
-            .subscribe_channel(channel_id, alias, &password_hash, device_token, platform)
+            .subscribe_channel_for_device_key(
+                channel_id,
+                alias,
+                &password_hash,
+                device_key,
+                provider_token,
+                platform,
+            )
             .await?;
 
         self.cache.put_device(device_id, &device_info);
@@ -44,15 +52,14 @@ impl Storage {
         Ok(outcome)
     }
 
-    pub async fn unsubscribe_channel(
+    pub async fn unsubscribe_channel_for_device_key(
         &self,
         channel_id: [u8; 16],
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<bool> {
         let removed = self
             .db
-            .unsubscribe_channel(channel_id, device_token, platform)
+            .unsubscribe_channel_for_device_key(channel_id, device_key)
             .await?;
         self.cache.invalidate_channel_devices(channel_id);
         Ok(removed)
@@ -106,13 +113,12 @@ impl Storage {
         Ok(targets)
     }
 
-    pub async fn list_subscribed_channels_for_device(
+    pub async fn list_subscribed_channels_for_device_key(
         &self,
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<Vec<[u8; 16]>> {
         self.db
-            .list_subscribed_channels_for_device(device_token, platform)
+            .list_subscribed_channels_for_device_key(device_key)
             .await
     }
 

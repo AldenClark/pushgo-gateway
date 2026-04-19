@@ -13,13 +13,13 @@ use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 use crate::{
-    app::{AppState, AuthMode},
+    app::{AppState, AuthMode, DeviceOperationGuards},
     dispatch::{
         DeliveryAuditCollector, DeliveryAuditMode, DispatchChannels,
         audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog, DispatchAuditMode},
     },
     mcp::{McpConfig, McpState},
-    routing::DeviceRegistry,
+    routing::{DeviceRegistry, DeviceRouteRecord},
     stats::StatsCollector,
     storage::{Platform, Storage},
 };
@@ -65,6 +65,7 @@ async fn build_test_state() -> AppState {
         diagnostics_api_enabled: false,
         public_base_url: Some(Arc::from("https://sandbox.pushgo.dev")),
         device_registry: Arc::new(DeviceRegistry::new()),
+        device_operation_guards: Arc::new(DeviceOperationGuards::default()),
         stats: StatsCollector::spawn(store.clone()),
         private_transport_profile: crate::app::PrivateTransportProfile {
             quic_enabled: true,
@@ -99,6 +100,49 @@ async fn build_mcp_test_state(auth: AuthMode) -> AppState {
         McpState::new(config, &auth, state.store.clone()).await,
     ));
     state
+}
+
+async fn seed_provider_channel_for_router_test(
+    state: &AppState,
+    device_key: &str,
+    alias: &str,
+    password: &str,
+    token: &str,
+    platform: Platform,
+) -> String {
+    let route = DeviceRouteRecord {
+        platform,
+        channel_type: crate::routing::DeviceChannelType::parse(platform.channel_type())
+            .expect("provider platform should map to provider channel type"),
+        provider_token: Some(token.to_string()),
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    state
+        .device_registry
+        .restore_route(device_key, route.clone())
+        .expect("provider route restore should succeed");
+    state
+        .store
+        .upsert_device_route(&crate::storage::DeviceRouteRecordRow::from_registry_record(
+            device_key, &route,
+        ))
+        .await
+        .expect("provider route should persist");
+    crate::api::format_channel_id(
+        &state
+            .store
+            .subscribe_channel_for_device_key(
+                None,
+                Some(alias),
+                password,
+                device_key,
+                token,
+                platform,
+            )
+            .await
+            .expect("provider channel seed should succeed")
+            .channel_id,
+    )
 }
 
 async fn build_private_test_state() -> AppState {

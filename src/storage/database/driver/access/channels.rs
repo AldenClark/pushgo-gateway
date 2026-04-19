@@ -36,57 +36,44 @@ impl ChannelQueryDatabaseAccess for DatabaseDriver {
 
 #[async_trait]
 impl ProviderSubscriptionDatabaseAccess for DatabaseDriver {
-    async fn subscribe_channel(
+    async fn subscribe_channel_for_device_key(
         &self,
         channel_id: Option<[u8; 16]>,
         alias: Option<&str>,
         password_hash: &str,
-        device_token: &str,
+        device_key: &str,
+        provider_token: &str,
         platform: Platform,
     ) -> StoreResult<SubscribeOutcome> {
         delegate_db_async!(
             self,
-            subscribe_channel(channel_id, alias, password_hash, device_token, platform)
+            subscribe_channel_for_device_key(
+                channel_id,
+                alias,
+                password_hash,
+                device_key,
+                provider_token,
+                platform
+            )
         )
     }
 
-    async fn unsubscribe_channel(
+    async fn unsubscribe_channel_for_device_key(
         &self,
         channel_id: [u8; 16],
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<bool> {
         delegate_db_async!(
             self,
-            unsubscribe_channel(channel_id, device_token, platform)
+            unsubscribe_channel_for_device_key(channel_id, device_key)
         )
     }
 
-    async fn retire_device(&self, device_token: &str, platform: Platform) -> StoreResult<usize> {
-        delegate_db_async!(self, retire_device(device_token, platform))
-    }
-
-    async fn migrate_device_subscriptions(
+    async fn list_subscribed_channels_for_device_key(
         &self,
-        old_device_token: &str,
-        new_device_token: &str,
-        platform: Platform,
-    ) -> StoreResult<usize> {
-        delegate_db_async!(
-            self,
-            migrate_device_subscriptions(old_device_token, new_device_token, platform)
-        )
-    }
-
-    async fn list_subscribed_channels_for_device(
-        &self,
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<Vec<[u8; 16]>> {
-        delegate_db_async!(
-            self,
-            list_subscribed_channels_for_device(device_token, platform)
-        )
+        delegate_db_async!(self, list_subscribed_channels_for_device_key(device_key))
     }
 }
 

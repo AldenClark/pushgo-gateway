@@ -1,6 +1,26 @@
 use super::*;
 
 impl SqliteDb {
+    pub(super) async fn resolve_device_key_route_device(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<Vec<u8>>> {
+        let normalized_key = device_key.trim();
+        if normalized_key.is_empty() {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            "SELECT device_id \
+             FROM devices \
+             WHERE device_key = ? \
+             LIMIT 1",
+        )
+        .bind(normalized_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|value| value.get("device_id")))
+    }
+
     pub(super) async fn list_channel_devices(
         &self,
         channel_id: [u8; 16],
@@ -32,12 +52,11 @@ impl SqliteDb {
         effective_at: i64,
     ) -> StoreResult<Vec<DispatchTarget>> {
         let rows = sqlx::query(
-            "SELECT s.device_id, s.platform, s.channel_type, s.device_key AS subscription_device_key, d.device_key AS route_device_key, s.provider_token, \
-                    d.channel_type AS route_channel_type, d.provider_token AS route_provider_token, d.route_updated_at \
+            "SELECT s.device_id, d.platform, d.channel_type, d.device_key AS route_device_key, d.provider_token AS route_provider_token, d.route_updated_at \
              FROM channel_subscriptions s \
              JOIN devices d ON d.device_id = s.device_id \
              WHERE s.channel_id = ? AND s.status = 'active' AND s.created_at <= ? \
-             ORDER BY s.channel_type ASC, s.created_at ASC, s.device_id ASC",
+             ORDER BY d.channel_type ASC, s.created_at ASC, s.device_id ASC",
         )
         .bind(&channel_id[..])
         .bind(effective_at)
@@ -47,32 +66,21 @@ impl SqliteDb {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let channel_type: String = row.get("channel_type");
-            let route_channel_type: Option<String> = row.get("route_channel_type");
             let route_provider_token: Option<String> = row.get("route_provider_token");
             let route_updated_at: Option<i64> = row.get("route_updated_at");
-            let provider_token: Option<String> = row.get("provider_token");
             if !Self::route_matches_dispatch_target(
                 channel_type.as_str(),
-                provider_token.as_deref(),
                 route_updated_at,
-                route_channel_type.as_deref(),
                 route_provider_token.as_deref(),
             ) {
                 continue;
             }
             let raw_device_id: Vec<u8> = row.get("device_id");
             let device_key: Option<String> = row
-                .get::<Option<String>, _>("subscription_device_key")
+                .get::<Option<String>, _>("route_device_key")
                 .and_then(|value| {
                     let trimmed = value.trim().to_string();
                     (!trimmed.is_empty()).then_some(trimmed)
-                })
-                .or_else(|| {
-                    row.get::<Option<String>, _>("route_device_key")
-                        .and_then(|value| {
-                            let trimmed = value.trim().to_string();
-                            (!trimmed.is_empty()).then_some(trimmed)
-                        })
                 });
 
             if channel_type.eq_ignore_ascii_case("private") {
@@ -89,9 +97,11 @@ impl SqliteDb {
 
             let platform_raw: String = row.get("platform");
             let platform: Platform = platform_raw.parse()?;
-            if let Some(token) = provider_token {
+            if let Some(token) = route_provider_token {
                 let token = token.trim().to_string();
-                if !token.is_empty() && device_key.is_some() {
+                if !token.is_empty()
+                    && let Some(device_key) = device_key
+                {
                     out.push(DispatchTarget::Provider {
                         platform,
                         provider_token: token,
@@ -105,19 +115,11 @@ impl SqliteDb {
 
     fn route_matches_dispatch_target(
         channel_type: &str,
-        subscription_provider_token: Option<&str>,
         route_updated_at: Option<i64>,
-        route_channel_type: Option<&str>,
         route_provider_token: Option<&str>,
     ) -> bool {
         if route_updated_at.is_none() {
             return channel_type.eq_ignore_ascii_case("private");
-        }
-        let Some(route_channel_type) = Self::normalize_optional_token(route_channel_type) else {
-            return false;
-        };
-        if !route_channel_type.eq_ignore_ascii_case(channel_type) {
-            return false;
         }
         if channel_type.eq_ignore_ascii_case("private") {
             return true;
@@ -126,12 +128,7 @@ impl SqliteDb {
         else {
             return false;
         };
-        let Some(subscription_provider_token) =
-            Self::normalize_optional_token(subscription_provider_token)
-        else {
-            return false;
-        };
-        route_provider_token == subscription_provider_token
+        !route_provider_token.is_empty()
     }
 
     fn normalize_optional_token(value: Option<&str>) -> Option<&str> {
@@ -140,18 +137,18 @@ impl SqliteDb {
             .filter(|candidate| !candidate.is_empty())
     }
 
-    pub(super) async fn list_subscribed_channels_for_device(
+    pub(super) async fn list_subscribed_channels_for_device_key(
         &self,
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<Vec<[u8; 16]>> {
-        let device_info = DeviceInfo::from_token(platform, device_token)?;
-        let device_id = device_info.device_id();
+        let Some(device_id) = self.resolve_device_key_route_device(device_key).await? else {
+            return Ok(Vec::new());
+        };
         let rows = sqlx::query(
             "SELECT channel_id FROM channel_subscriptions \
              WHERE device_id = ? AND status = 'active'",
         )
-        .bind(&device_id[..])
+        .bind(device_id.as_slice())
         .fetch_all(&self.pool)
         .await?;
         let mut channels = Vec::with_capacity(rows.len());
@@ -172,7 +169,7 @@ impl SqliteDb {
     ) -> StoreResult<Vec<[u8; 16]>> {
         let rows = sqlx::query(
             "SELECT channel_id FROM channel_subscriptions \
-             WHERE device_id = ? AND channel_type = 'private'",
+             WHERE device_id = ? AND status = 'active'",
         )
         .bind(&device_id[..])
         .fetch_all(&self.pool)
@@ -265,14 +262,12 @@ impl SqliteDb {
     ) -> StoreResult<()> {
         let now = Utc::now().timestamp();
         sqlx::query(
-            "INSERT INTO channel_subscriptions (channel_id, device_id, platform, channel_type, status, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
+            "INSERT INTO channel_subscriptions (channel_id, device_id, status, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT (channel_id, device_id) DO UPDATE SET status = 'active', updated_at = EXCLUDED.updated_at",
         )
         .bind(&channel_id[..])
         .bind(&device_id[..])
-        .bind("private")
-        .bind("private")
         .bind("active")
         .bind(now)
         .bind(now)
@@ -286,7 +281,7 @@ impl SqliteDb {
         channel_id: [u8; 16],
         device_id: DeviceId,
     ) -> StoreResult<()> {
-        sqlx::query("DELETE FROM channel_subscriptions WHERE channel_id = ? AND device_id = ? AND channel_type = 'private'")
+        sqlx::query("DELETE FROM channel_subscriptions WHERE channel_id = ? AND device_id = ?")
             .bind(&channel_id[..])
             .bind(&device_id[..])
             .execute(&self.pool)
@@ -300,9 +295,10 @@ impl SqliteDb {
         subscribed_at_or_before: i64,
     ) -> StoreResult<Vec<DeviceId>> {
         let rows = sqlx::query(
-            "SELECT device_id FROM channel_subscriptions \
-             WHERE channel_id = ? AND channel_type = 'private' AND created_at <= ? \
-             ORDER BY created_at ASC",
+            "SELECT s.device_id FROM channel_subscriptions s \
+             JOIN devices d ON d.device_id = s.device_id \
+             WHERE s.channel_id = ? AND s.status = 'active' AND d.channel_type = 'private' AND d.route_updated_at IS NOT NULL AND s.created_at <= ? \
+             ORDER BY s.created_at ASC",
         )
         .bind(&channel_id[..])
         .bind(subscribed_at_or_before)

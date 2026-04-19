@@ -47,63 +47,40 @@ macro_rules! impl_backend_provider_subscription_access {
     ($backend:ty) => {
         #[async_trait]
         impl crate::storage::database::ProviderSubscriptionDatabaseAccess for $backend {
-            async fn subscribe_channel(
+            async fn subscribe_channel_for_device_key(
                 &self,
                 channel_id: Option<[u8; 16]>,
                 alias: Option<&str>,
                 password_hash: &str,
-                device_token: &str,
+                device_key: &str,
+                provider_token: &str,
                 platform: Platform,
             ) -> StoreResult<SubscribeOutcome> {
-                <$backend>::subscribe_channel(
+                <$backend>::subscribe_channel_for_device_key(
                     self,
                     channel_id,
                     alias,
                     password_hash,
-                    device_token,
+                    device_key,
+                    provider_token,
                     platform,
                 )
                 .await
             }
 
-            async fn unsubscribe_channel(
+            async fn unsubscribe_channel_for_device_key(
                 &self,
                 channel_id: [u8; 16],
-                device_token: &str,
-                platform: Platform,
+                device_key: &str,
             ) -> StoreResult<bool> {
-                <$backend>::unsubscribe_channel(self, channel_id, device_token, platform).await
+                <$backend>::unsubscribe_channel_for_device_key(self, channel_id, device_key).await
             }
 
-            async fn retire_device(
+            async fn list_subscribed_channels_for_device_key(
                 &self,
-                device_token: &str,
-                platform: Platform,
-            ) -> StoreResult<usize> {
-                <$backend>::retire_device(self, device_token, platform).await
-            }
-
-            async fn migrate_device_subscriptions(
-                &self,
-                old_device_token: &str,
-                new_device_token: &str,
-                platform: Platform,
-            ) -> StoreResult<usize> {
-                <$backend>::migrate_device_subscriptions(
-                    self,
-                    old_device_token,
-                    new_device_token,
-                    platform,
-                )
-                .await
-            }
-
-            async fn list_subscribed_channels_for_device(
-                &self,
-                device_token: &str,
-                platform: Platform,
+                device_key: &str,
             ) -> StoreResult<Vec<[u8; 16]>> {
-                <$backend>::list_subscribed_channels_for_device(self, device_token, platform).await
+                <$backend>::list_subscribed_channels_for_device_key(self, device_key).await
             }
         }
     };
@@ -333,11 +310,33 @@ macro_rules! impl_backend_device_route_access {
                 <$backend>::upsert_device_route(self, route).await
             }
 
-            async fn apply_route_snapshot(
+            async fn persist_device_route_change(
                 &self,
-                snapshot: &DeviceRouteSnapshot,
+                route: &DeviceRouteRecordRow,
+                audit: &DeviceRouteAuditWrite,
             ) -> StoreResult<()> {
-                <$backend>::apply_route_snapshot(self, snapshot).await
+                <$backend>::persist_device_route_change(self, route, audit).await
+            }
+
+            async fn replace_device_identity(
+                &self,
+                route: &DeviceRouteRecordRow,
+                old_device_key: Option<&str>,
+                audit: &DeviceRouteAuditWrite,
+            ) -> StoreResult<()> {
+                <$backend>::replace_device_identity(self, route, old_device_key, audit).await
+            }
+
+            async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()> {
+                <$backend>::revoke_device_identity(self, device_key).await
+            }
+
+            async fn retire_provider_token(
+                &self,
+                platform: Platform,
+                provider_token: &str,
+            ) -> StoreResult<()> {
+                <$backend>::retire_provider_token(self, platform, provider_token).await
             }
 
             async fn append_device_route_audit(

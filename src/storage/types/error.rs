@@ -14,6 +14,8 @@ pub enum StoreError {
     RuntimeUnavailable,
     #[error("Invalid device token")]
     InvalidDeviceToken,
+    #[error("Device not found")]
+    DeviceNotFound,
     #[error("Invalid platform")]
     InvalidPlatform,
     #[error("Binary Error")]

@@ -4,17 +4,15 @@ use super::*;
 async fn sqlite_cold_start_initializes_schema() {
     let ctx = setup_sqlite_storage_without_bootstrap("sqlite-cold-start").await;
     let token = "android-cold-start-000000000000000000000000000001";
-    let subscribe = ctx
-        .storage
-        .subscribe_channel(
-            None,
-            Some("cold-start"),
-            "pw123456",
-            token,
-            Platform::ANDROID,
-        )
-        .await
-        .expect("subscribe should succeed after cold-start schema init");
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        "sqlite-cold-start-device-key",
+        token,
+        "cold-start",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
     let info = ctx
         .storage
         .channel_info(subscribe.channel_id)
@@ -44,16 +42,15 @@ async fn sqlite_new_creates_parent_directories() {
     assert!(db_path.exists(), "sqlite db file should be created");
 
     let token = "android-parent-dir-create-0000000000000000000000000001";
-    let subscribe = storage
-        .subscribe_channel(
-            None,
-            Some("auto-parent"),
-            "pw123456",
-            token,
-            Platform::ANDROID,
-        )
-        .await
-        .expect("subscribe should succeed on auto-created sqlite path");
+    let subscribe = subscribe_provider_channel_for_test(
+        &storage,
+        "sqlite-auto-parent-device-key",
+        token,
+        "auto-parent",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
     let info = storage
         .channel_info(subscribe.channel_id)
         .await
@@ -109,16 +106,15 @@ async fn sqlite_init_accepts_previous_schema_version_and_upgrades_meta() {
     .await;
 
     let token = "android-schema-upgrade-000000000000000000000000000001";
-    ctx.storage
-        .subscribe_channel(
-            None,
-            Some("schema-upgrade"),
-            "pw123456",
-            token,
-            Platform::ANDROID,
-        )
-        .await
-        .expect("subscribe should succeed after schema version upgrade");
+    subscribe_provider_channel_for_test(
+        &ctx.storage,
+        "sqlite-schema-upgrade-device-key",
+        token,
+        "schema-upgrade",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
 
     let mut conn = SqliteConnection::connect(&ctx.db_url)
         .await
@@ -138,7 +134,7 @@ async fn sqlite_init_keeps_current_schema_version_and_backfills_new_tables() {
         "sqlite-schema-version-current-backfill",
         &[
             "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
-            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-13-gateway-v6')",
+            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-17-gateway-v8')",
         ],
     )
     .await;
@@ -161,6 +157,57 @@ async fn sqlite_init_keeps_current_schema_version_and_backfills_new_tables() {
     .await
     .expect("schema meta query should succeed");
     assert_eq!(meta.as_deref(), Some(STORAGE_SCHEMA_VERSION));
+}
+
+#[tokio::test]
+async fn sqlite_init_records_current_schema_migration() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-schema-migration-ledger").await;
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+
+    let row: (String, String, i64) = sqlx::query_as(
+        "SELECT migration_id, target_schema_version, success \
+         FROM pushgo_schema_migrations \
+         WHERE migration_id = '20260417_001_device_identity_v8'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("current migration ledger row should exist");
+    assert_eq!(row.1, STORAGE_SCHEMA_VERSION);
+    assert_eq!(row.2, 1);
+}
+
+#[tokio::test]
+async fn sqlite_init_rejects_current_migration_checksum_drift() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("sqlite-schema-migration-checksum.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite bootstrap connection should succeed");
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+        "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-17-gateway-v8')",
+        "CREATE TABLE IF NOT EXISTS pushgo_schema_migrations (migration_id TEXT PRIMARY KEY, description TEXT NOT NULL, checksum TEXT NOT NULL, target_schema_version TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, execution_ms INTEGER NOT NULL, success INTEGER NOT NULL, error TEXT)",
+        "INSERT INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error) VALUES ('20260417_001_device_identity_v8', 'tampered', 'sha256:tampered', '2026-04-17-gateway-v8', 1, 1, 0, 1, NULL)",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut conn)
+            .await
+            .expect("custom schema statement should succeed");
+    }
+    drop(conn);
+
+    let err = Storage::new(Some(db_url.as_str()))
+        .await
+        .expect_err("checksum drift should reject startup");
+    assert!(
+        matches!(err, StoreError::SchemaVersionMismatch { .. }),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -236,7 +283,7 @@ async fn sqlite_init_creates_missing_provider_pull_tables() {
 }
 
 #[tokio::test]
-async fn sqlite_init_heals_provider_pull_queue_legacy_primary_key() {
+async fn sqlite_init_hard_resets_provider_pull_queue_without_schema_meta() {
     let ctx = setup_sqlite_storage_with_custom_schema(
         "sqlite-heal-provider-pull-legacy-pk",
         &[
@@ -295,10 +342,10 @@ async fn sqlite_init_heals_provider_pull_queue_legacy_primary_key() {
         .storage
         .pull_provider_item([1; 16], "legacy-provider-pull-existing-1", now + 1)
         .await
-        .expect("pull migrated legacy row should succeed");
+        .expect("pull legacy row should succeed after hard reset");
     assert!(
-        legacy_existing.is_some(),
-        "legacy row should survive primary key healing"
+        legacy_existing.is_none(),
+        "legacy row without schema meta should be dropped during hard-cut migration"
     );
 
     let mut conn = SqliteConnection::connect(&ctx.db_url)
@@ -360,35 +407,27 @@ async fn sqlite_init_heals_missing_private_outbox_columns() {
 }
 
 #[tokio::test]
-async fn sqlite_init_heals_missing_channel_subscription_columns() {
+async fn sqlite_init_upgrades_v7_channel_subscription_shape() {
     let ctx = setup_sqlite_storage_with_custom_schema(
         "sqlite-heal-channel-sub-columns",
-        &[ "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BLOB NOT NULL, device_id BLOB NOT NULL, platform TEXT NOT NULL, channel_type TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (channel_id, device_id))" ],
+        &[
+            "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-16-gateway-v7')",
+            "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BLOB NOT NULL, device_id BLOB NOT NULL, platform TEXT NOT NULL, channel_type TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (channel_id, device_id))",
+        ],
     )
     .await;
 
     let token = "android-heal-channel-sub-token-0001";
-    let subscribe = ctx
-        .storage
-        .subscribe_channel(
-            None,
-            Some("heal-channel-sub"),
-            "password-1234",
-            token,
-            Platform::ANDROID,
-        )
-        .await
-        .expect("subscribe should succeed after channel_subscriptions column healing");
-    ctx.storage
-        .upsert_device_route(&DeviceRouteRecordRow {
-            device_key: "sqlite-heal-channel-sub-route-key".to_string(),
-            platform: Platform::ANDROID.name().to_string(),
-            channel_type: "fcm".to_string(),
-            provider_token: Some(token.to_string()),
-            updated_at: chrono::Utc::now().timestamp(),
-        })
-        .await
-        .expect("provider route snapshot upsert should succeed");
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        "sqlite-heal-channel-sub-route-key",
+        token,
+        "heal-channel-sub",
+        "password-1234",
+        Platform::ANDROID,
+    )
+    .await;
 
     let targets = ctx
         .storage

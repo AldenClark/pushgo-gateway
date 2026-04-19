@@ -98,8 +98,7 @@ async fn channel_sync_with_partial_failures_does_not_reconcile_subscriptions() {
         app.clone(),
         "/device/register",
         json!({
-            "platform": "android",
-            "channel_type": "private"
+            "platform": "android"
         }),
     )
     .await;
@@ -108,7 +107,7 @@ async fn channel_sync_with_partial_failures_does_not_reconcile_subscriptions() {
 
     let (status, _route_body) = post_json(
         app.clone(),
-        "/device/register",
+        "/channel/device",
         json!({
             "device_key": device_key,
             "platform": "android",
@@ -173,7 +172,7 @@ async fn channel_sync_with_partial_failures_does_not_reconcile_subscriptions() {
     );
 
     let subscribed = store
-        .list_subscribed_channels_for_device(provider_token, Platform::ANDROID)
+        .list_subscribed_channels_for_device_key(&device_key)
         .await
         .expect("list subscribed channels should succeed");
     assert_eq!(
@@ -184,7 +183,7 @@ async fn channel_sync_with_partial_failures_does_not_reconcile_subscriptions() {
 }
 
 #[tokio::test]
-async fn device_channel_upsert_auto_registers_missing_device_key_when_platform_present() {
+async fn device_register_issues_new_key_for_missing_device_key() {
     let state = build_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let missing_device_key = "missing-device-key-0001";
@@ -194,9 +193,7 @@ async fn device_channel_upsert_auto_registers_missing_device_key_when_platform_p
         "/device/register",
         json!({
             "device_key": missing_device_key,
-            "platform": "android",
-            "channel_type": "fcm",
-            "provider_token": "android-token-auto-register-0001"
+            "platform": "android"
         }),
     )
     .await;
@@ -211,6 +208,19 @@ async fn device_channel_upsert_auto_registers_missing_device_key_when_platform_p
         returned_device_key, missing_device_key,
         "missing device_key should be replaced with a newly issued one"
     );
+
+    let (status, _route_body) = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({
+            "device_key": returned_device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": "android-token-auto-register-0001"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     let (status, subscribe_body) = post_json(
         app.clone(),
@@ -230,29 +240,52 @@ async fn device_channel_upsert_auto_registers_missing_device_key_when_platform_p
 }
 
 #[tokio::test]
-async fn device_channel_upsert_reissues_key_on_platform_mismatch() {
+async fn device_register_reissues_key_on_platform_mismatch() {
     let state = build_test_state().await;
+    let store = state.store.clone();
     let app = super::super::build_router(state, "<html>docs</html>");
 
     let (_status, register_body) = post_json(
         app.clone(),
         "/device/register",
         json!({
-            "platform": "ios",
-            "channel_type": "private"
+            "platform": "android"
         }),
     )
     .await;
     let original_device_key = response_string_field(&register_body, "device_key").to_string();
+
+    let (status, _route_body) = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({
+            "device_key": original_device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": "android-platform-mismatch-old-token-0001"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _subscribe_body) = post_json(
+        app.clone(),
+        "/channel/subscribe",
+        json!({
+            "device_key": original_device_key,
+            "channel_name": "platform-mismatch-old-subscription",
+            "password": "password-1234"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     let (status, route_body) = post_json(
         app.clone(),
         "/device/register",
         json!({
             "device_key": original_device_key,
-            "platform": "android",
-            "channel_type": "fcm",
-            "provider_token": "android-token-platform-mismatch-0001"
+            "platform": "ios"
         }),
     )
     .await;
@@ -277,6 +310,287 @@ async fn device_channel_upsert_reissues_key_on_platform_mismatch() {
         Some("platform_mismatch"),
         "response should expose platform_mismatch reason"
     );
+
+    let routes = store
+        .load_device_routes()
+        .await
+        .expect("routes should load after platform mismatch");
+    assert!(
+        routes
+            .iter()
+            .all(|route| route.device_key != original_device_key),
+        "old device identity should be revoked immediately after issuing replacement key"
+    );
+    let old_subscriptions = store
+        .list_subscribed_channels_for_device_key(&original_device_key)
+        .await
+        .expect("old identity subscription list should be queryable");
+    assert!(
+        old_subscriptions.is_empty(),
+        "old device identity should not retain subscriptions after revocation"
+    );
+}
+
+#[tokio::test]
+async fn stale_platform_mismatch_register_reuses_existing_replacement_key() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "platform": "android"
+        }),
+    )
+    .await;
+    let original_device_key = response_string_field(&register_body, "device_key").to_string();
+
+    let (status, first_reissue_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "device_key": original_device_key,
+            "platform": "ios"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let replacement_device_key =
+        response_string_field(&first_reissue_body, "device_key").to_string();
+
+    let (status, second_reissue_body) = post_json(
+        app,
+        "/device/register",
+        json!({
+            "device_key": original_device_key,
+            "platform": "ios"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        response_string_field(&second_reissue_body, "device_key"),
+        replacement_device_key,
+        "stale platform-mismatch requests should converge on the already issued replacement key"
+    );
+    assert_eq!(
+        response_data(&second_reissue_body)
+            .get("issue_reason")
+            .and_then(Value::as_str),
+        Some("platform_mismatch")
+    );
+}
+
+#[tokio::test]
+async fn concurrent_platform_mismatch_register_converges_on_single_replacement_key() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "platform": "android"
+        }),
+    )
+    .await;
+    let original_device_key = response_string_field(&register_body, "device_key").to_string();
+
+    let request_a = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "device_key": original_device_key,
+            "platform": "ios"
+        }),
+    );
+    let request_b = post_json(
+        app,
+        "/device/register",
+        json!({
+            "device_key": original_device_key,
+            "platform": "ios"
+        }),
+    );
+    let ((status_a, body_a), (status_b, body_b)) = tokio::join!(request_a, request_b);
+    assert_eq!(status_a, StatusCode::OK);
+    assert_eq!(status_b, StatusCode::OK);
+
+    let replacement_a = response_string_field(&body_a, "device_key").to_string();
+    let replacement_b = response_string_field(&body_b, "device_key").to_string();
+    assert_eq!(
+        replacement_a, replacement_b,
+        "same stale device_key should not fork into multiple replacement identities under concurrency"
+    );
+
+    let routes = state
+        .store
+        .load_device_routes()
+        .await
+        .expect("routes should load after concurrent platform mismatch");
+    let matching_routes: Vec<_> = routes
+        .iter()
+        .filter(|route| route.platform == "ios")
+        .filter(|route| route.device_key == replacement_a)
+        .collect();
+    assert_eq!(matching_routes.len(), 1);
+    assert!(
+        routes
+            .iter()
+            .all(|route| route.device_key != original_device_key),
+        "old device identity should be revoked after concurrent replacement"
+    );
+}
+
+#[tokio::test]
+async fn provider_token_retire_removes_only_old_token_state() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let old_token = "android-provider-token-retire-old-0001";
+    let new_token = "android-provider-token-retire-new-0001";
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "platform": "android"
+        }),
+    )
+    .await;
+    let device_key = response_string_field(&register_body, "device_key").to_string();
+
+    let (status, _route_body) = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": old_token
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    seed_provider_pending_delivery(
+        &state,
+        &device_key,
+        "delivery-provider-token-retire-old",
+        "old-title",
+        old_token,
+    )
+    .await;
+
+    let (status, _route_body) = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": new_token
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    seed_provider_pending_delivery(
+        &state,
+        &device_key,
+        "delivery-provider-token-retire-new",
+        "new-title",
+        new_token,
+    )
+    .await;
+
+    let (status, _retire_body) = post_json(
+        app,
+        "/channel/device/provider-token/retire",
+        json!({
+            "platform": "android",
+            "provider_token": old_token
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let routes = state
+        .store
+        .load_device_routes()
+        .await
+        .expect("routes should load");
+    let route = routes
+        .iter()
+        .find(|route| route.device_key == device_key)
+        .expect("current route should remain present");
+    assert_eq!(route.provider_token.as_deref(), Some(new_token));
+    assert_eq!(route.channel_type, "fcm");
+
+    let device_id = derive_private_device_id(&device_key);
+    let remaining = state
+        .store
+        .pull_provider_items(device_id, chrono::Utc::now().timestamp(), 10)
+        .await
+        .expect("provider pull should succeed");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(
+        remaining[0].delivery_id,
+        "delivery-provider-token-retire-new"
+    );
+    assert_eq!(remaining[0].provider_token, new_token);
+}
+
+#[tokio::test]
+async fn concurrent_route_upserts_keep_single_route_and_complete_audit_chain() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "platform": "android"
+        }),
+    )
+    .await;
+    let device_key = response_string_field(&register_body, "device_key").to_string();
+
+    let request_a = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": "android-concurrent-route-token-a"
+        }),
+    );
+    let request_b = post_json(
+        app,
+        "/channel/device",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": "android-concurrent-route-token-b"
+        }),
+    );
+    let ((status_a, _body_a), (status_b, _body_b)) = tokio::join!(request_a, request_b);
+    assert_eq!(status_a, StatusCode::OK);
+    assert_eq!(status_b, StatusCode::OK);
+
+    let routes = state
+        .store
+        .load_device_routes()
+        .await
+        .expect("routes should load after concurrent upserts");
+    let route = routes
+        .iter()
+        .find(|route| route.device_key == device_key)
+        .expect("device route should remain present after concurrent upserts");
+    assert!(matches!(
+        route.provider_token.as_deref(),
+        Some("android-concurrent-route-token-a") | Some("android-concurrent-route-token-b")
+    ));
 }
 
 #[tokio::test]
@@ -289,8 +603,7 @@ async fn channel_sync_with_all_success_reconciles_extra_subscriptions() {
         app.clone(),
         "/device/register",
         json!({
-            "platform": "android",
-            "channel_type": "private"
+            "platform": "android"
         }),
     )
     .await;
@@ -299,7 +612,7 @@ async fn channel_sync_with_all_success_reconciles_extra_subscriptions() {
 
     let (status, _route_body) = post_json(
         app.clone(),
-        "/device/register",
+        "/channel/device",
         json!({
             "device_key": device_key,
             "platform": "android",
@@ -370,7 +683,7 @@ async fn channel_sync_with_all_success_reconciles_extra_subscriptions() {
     );
 
     let subscribed = store
-        .list_subscribed_channels_for_device(provider_token, Platform::ANDROID)
+        .list_subscribed_channels_for_device_key(&device_key)
         .await
         .expect("list subscribed channels should succeed");
     assert_eq!(
@@ -390,8 +703,7 @@ async fn route_switch_private_to_provider_migrates_pending_deliveries() {
         app.clone(),
         "/device/register",
         json!({
-            "platform": "android",
-            "channel_type": "private"
+            "platform": "android"
         }),
     )
     .await;
@@ -403,7 +715,7 @@ async fn route_switch_private_to_provider_migrates_pending_deliveries() {
 
     let (status, _route_body) = post_json(
         app,
-        "/device/register",
+        "/channel/device",
         json!({
             "device_key": device_key,
             "platform": "android",
@@ -452,13 +764,23 @@ async fn route_switch_provider_to_private_migrates_pending_deliveries() {
         app.clone(),
         "/device/register",
         json!({
+            "platform": "android"
+        }),
+    )
+    .await;
+    let device_key = response_string_field(&register_body, "device_key").to_string();
+    let (status, _route_body) = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({
+            "device_key": device_key,
             "platform": "android",
             "channel_type": "fcm",
             "provider_token": provider_token
         }),
     )
     .await;
-    let device_key = response_string_field(&register_body, "device_key").to_string();
+    assert_eq!(status, StatusCode::OK);
     let delivery_a = "delivery-route-switch-provider-private-001";
     let delivery_b = "delivery-route-switch-provider-private-002";
     seed_provider_pending_delivery(&state, &device_key, delivery_a, "title-a", provider_token)
@@ -468,7 +790,7 @@ async fn route_switch_provider_to_private_migrates_pending_deliveries() {
 
     let (status, _route_body) = post_json(
         app,
-        "/device/register",
+        "/channel/device",
         json!({
             "device_key": device_key,
             "platform": "android",

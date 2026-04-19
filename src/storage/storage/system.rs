@@ -1,7 +1,7 @@
 use super::*;
 use crate::storage::database::{
     DeliveryAuditDatabaseAccess, DeviceRouteDatabaseAccess, PrivateMessageDatabaseAccess,
-    ProviderSubscriptionDatabaseAccess, SystemStateDatabaseAccess,
+    SystemStateDatabaseAccess,
 };
 
 impl Storage {
@@ -27,36 +27,6 @@ impl Storage {
         self.db.automation_reset().await
     }
 
-    pub async fn retire_device(
-        &self,
-        device_token: &str,
-        platform: Platform,
-    ) -> StoreResult<usize> {
-        let device_info = DeviceInfo::from_token(platform, device_token)?;
-        let device_id = device_info.device_id();
-        let count = self.db.retire_device(device_token, platform).await?;
-        self.cache.remove_device(&device_id);
-        self.cache.invalidate_all_channel_devices();
-        Ok(count)
-    }
-
-    pub async fn migrate_device_subscriptions(
-        &self,
-        old_device_token: &str,
-        new_device_token: &str,
-        platform: Platform,
-    ) -> StoreResult<usize> {
-        let old_device_info = DeviceInfo::from_token(platform, old_device_token)?;
-        let old_device_id = old_device_info.device_id();
-        let count = self
-            .db
-            .migrate_device_subscriptions(old_device_token, new_device_token, platform)
-            .await?;
-        self.cache.remove_device(&old_device_id);
-        self.cache.invalidate_all_channel_devices();
-        Ok(count)
-    }
-
     pub async fn delete_private_device_state(&self, device_id: DeviceId) -> StoreResult<()> {
         self.db.delete_private_device_state(device_id).await?;
         self.cache.invalidate_all_channel_devices();
@@ -77,9 +47,50 @@ impl Storage {
     }
 
     pub async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()> {
-        let snapshot = route.route_snapshot()?;
         self.db.upsert_device_route(route).await?;
-        self.db.apply_route_snapshot(&snapshot).await?;
+        Ok(())
+    }
+
+    pub async fn persist_device_route_change(
+        &self,
+        route: &DeviceRouteRecordRow,
+        audit: &DeviceRouteAuditWrite,
+    ) -> StoreResult<()> {
+        self.db.persist_device_route_change(route, audit).await?;
+        Ok(())
+    }
+
+    pub async fn replace_device_identity(
+        &self,
+        route: &DeviceRouteRecordRow,
+        old_device_key: Option<&str>,
+        audit: &DeviceRouteAuditWrite,
+    ) -> StoreResult<()> {
+        self.db
+            .replace_device_identity(route, old_device_key, audit)
+            .await?;
+        self.cache.clear_devices();
+        self.cache.invalidate_all_channel_devices();
+        Ok(())
+    }
+
+    pub async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()> {
+        self.db.revoke_device_identity(device_key).await?;
+        self.cache.clear_devices();
+        self.cache.invalidate_all_channel_devices();
+        Ok(())
+    }
+
+    pub async fn retire_provider_token(
+        &self,
+        platform: Platform,
+        provider_token: &str,
+    ) -> StoreResult<()> {
+        self.db
+            .retire_provider_token(platform, provider_token)
+            .await?;
+        self.cache.clear_devices();
+        self.cache.invalidate_all_channel_devices();
         Ok(())
     }
 

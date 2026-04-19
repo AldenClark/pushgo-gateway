@@ -164,10 +164,10 @@ write_case "auth.invalid" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
 request "POST" "$BASE_URL" "/device/register" "valid" "application/json" "{bad json"
 write_case "device_register.invalid_json" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
 
-request "POST" "$BASE_URL" "/device/register" "valid" "application/json" '{"platform":"invalid","channel_type":"private"}'
+request "POST" "$BASE_URL" "/device/register" "valid" "application/json" '{"platform":"invalid"}'
 write_case "device_register.invalid_platform" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
 
-request "POST" "$BASE_URL" "/device/register" "valid" "application/json" '{"platform":"android","channel_type":"private"}'
+request "POST" "$BASE_URL" "/device/register" "valid" "application/json" '{"platform":"android"}'
 write_case "device_register.private_ok" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
 require_status "200" "$REQUEST_STATUS" "device_register.private_ok" "$REQUEST_BODY"
 DEVICE_KEY="$(extract_field "$REQUEST_BODY" '.data.device_key')"

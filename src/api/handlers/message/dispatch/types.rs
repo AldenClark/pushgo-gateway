@@ -33,7 +33,7 @@ pub(super) struct PrivateDispatchContext<'a> {
 
 pub(super) struct ProviderDispatchDevice {
     pub(super) info: DeviceInfo,
-    pub(super) device_key: Option<String>,
+    pub(super) device_key: String,
 }
 
 pub(super) struct ProviderPayloads {
@@ -41,12 +41,14 @@ pub(super) struct ProviderPayloads {
     pub(super) watchos_apns_payload: Option<Arc<ApnsPayload>>,
     pub(super) apns_collapse_id: Option<Arc<str>>,
     pub(super) apns_wakeup_title: Option<String>,
+    pub(super) apns_wakeup_body: Option<String>,
     pub(super) fcm_payload: Option<Arc<FcmPayload>>,
     pub(super) wns_payload: Option<Arc<WnsPayload>>,
 }
 
 pub(super) struct ResolvedProviderTarget<'a> {
     pub(super) device: &'a DeviceInfo,
+    pub(super) device_key: Arc<str>,
     pub(super) provider_audit_key: String,
     pub(super) provider_stats_key: Arc<str>,
     pub(super) wakeup_data_for_device: Arc<HashMap<String, String>>,
@@ -275,6 +277,9 @@ impl ProviderPayloads {
         let apns_collapse_id =
             has_apns.then(|| Arc::from(prepared.delivery_id.clone().into_boxed_str()));
         let apns_wakeup_title = has_apns.then(|| prepared.resolved_title.clone()).flatten();
+        let apns_wakeup_body = has_apns
+            .then(|| prepared.wakeup_data.get("body").cloned())
+            .flatten();
         let fcm_payload = has_android.then(|| {
             Arc::new(FcmPayload::new(
                 SharedStringMap::from(Arc::clone(&prepared.custom_data)),
@@ -295,6 +300,7 @@ impl ProviderPayloads {
             watchos_apns_payload,
             apns_collapse_id,
             apns_wakeup_title,
+            apns_wakeup_body,
             fcm_payload,
             wns_payload,
         }

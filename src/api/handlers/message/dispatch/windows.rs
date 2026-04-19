@@ -37,6 +37,7 @@ pub(super) async fn dispatch(
         channel_id: prepared.channel_id,
         correlation_id: Arc::clone(&prepared.correlation_id),
         delivery_id: Arc::clone(&prepared.delivery_id_ref),
+        device_key: Arc::clone(&target.device_key),
         device_token: Arc::from(target.device.token_str()),
         direct_payload: Arc::clone(&direct_payload),
         wakeup_payload: Some(Arc::clone(&wakeup_payload)),

@@ -133,6 +133,7 @@ impl ApnsPayload {
 
     pub fn wakeup(
         fallback_title: Option<String>,
+        fallback_body: Option<String>,
         thread_id: Option<String>,
         expiration: Option<i64>,
         data: impl Into<SharedStringMap>,
@@ -140,9 +141,12 @@ impl ApnsPayload {
         let title = fallback_title
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let body = fallback_body
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         Self {
             aps: Aps {
-                alert: Some(Alert { title, body: None }),
+                alert: Some(Alert { title, body }),
                 content_available: None,
                 sound: None,
                 mutable_content: Some(1),
@@ -233,6 +237,7 @@ mod tests {
     fn wakeup_payload_is_alert_with_mutable_content() {
         let payload = ApnsPayload::wakeup(
             Some("Wakeup title".to_string()),
+            Some("Wakeup body".to_string()),
             None,
             None,
             SharedStringMap::default(),
@@ -241,8 +246,20 @@ mod tests {
         assert_eq!(payload.aps.mutable_content, Some(1));
         assert_eq!(payload.priority(), 10);
         assert_eq!(
-            payload.aps.alert.and_then(|alert| alert.title),
-            Some("Wakeup title".to_string())
+            payload
+                .aps
+                .alert
+                .as_ref()
+                .and_then(|alert| alert.title.as_deref()),
+            Some("Wakeup title")
+        );
+        assert_eq!(
+            payload
+                .aps
+                .alert
+                .as_ref()
+                .and_then(|alert| alert.body.as_deref()),
+            Some("Wakeup body")
         );
     }
 }

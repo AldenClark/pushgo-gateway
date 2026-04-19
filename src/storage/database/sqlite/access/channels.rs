@@ -46,21 +46,19 @@ impl SqliteDb {
         }))
     }
 
-    pub(super) async fn subscribe_channel(
+    pub(super) async fn subscribe_channel_for_device_key(
         &self,
         channel_id: Option<[u8; 16]>,
         alias: Option<&str>,
         password_hash: &str,
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
+        _provider_token: &str,
+        _platform: Platform,
     ) -> StoreResult<SubscribeOutcome> {
-        let device_info = DeviceInfo::from_token(platform, device_token)?;
-        let device_id = device_info.device_id();
-        let token_raw = device_info.token_raw.to_vec();
-        let platform_code = platform.to_byte() as i16;
-        let platform_text = platform.name();
-        let channel_type = platform.channel_type();
-        let (token_hash, token_preview) = device_info.token_snapshot().into_parts();
+        let normalized_device_key = device_key.trim();
+        if normalized_device_key.is_empty() {
+            return Err(StoreError::DeviceNotFound);
+        }
         let now = Utc::now().timestamp();
 
         let mut conn = self.pool.acquire().await?;
@@ -88,38 +86,21 @@ impl SqliteDb {
             (new_id, true, alias.to_string())
         };
 
-        sqlx::query(
-            "INSERT INTO devices (device_id, token_raw, platform_code) VALUES (?, ?, ?) \
-             ON CONFLICT (device_id) DO UPDATE SET \
-             token_raw = EXCLUDED.token_raw, \
-             platform_code = EXCLUDED.platform_code",
-        )
-        .bind(&device_id[..])
-        .bind(&token_raw)
-        .bind(platform_code)
-        .execute(&mut *tx)
-        .await?;
+        let device_id = self
+            .resolve_device_key_route_device(normalized_device_key)
+            .await?
+            .ok_or(StoreError::DeviceNotFound)?;
 
         sqlx::query(
             "INSERT INTO channel_subscriptions \
-             (channel_id, device_id, platform, channel_type, device_key, provider_token, provider_token_hash, provider_token_preview, route_version, status, subscribed_via, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 'active', 'channel_subscribe', ?, ?) \
+             (channel_id, device_id, status, created_at, updated_at) \
+             VALUES (?, ?, 'active', ?, ?) \
              ON CONFLICT (channel_id, device_id) DO UPDATE SET \
-               platform = EXCLUDED.platform, \
-               channel_type = EXCLUDED.channel_type, \
-               provider_token = EXCLUDED.provider_token, \
-               provider_token_hash = EXCLUDED.provider_token_hash, \
-               provider_token_preview = EXCLUDED.provider_token_preview, \
                status = EXCLUDED.status, \
                updated_at = EXCLUDED.updated_at",
         )
         .bind(&channel_bytes)
-        .bind(&device_id[..])
-        .bind(platform_text)
-        .bind(channel_type)
-        .bind(device_info.token_str.as_ref())
-        .bind(&token_hash)
-        .bind(&token_preview)
+        .bind(device_id.as_slice())
         .bind(now)
         .bind(now)
         .execute(&mut *tx)
@@ -136,113 +117,20 @@ impl SqliteDb {
         })
     }
 
-    pub(super) async fn unsubscribe_channel(
+    pub(super) async fn unsubscribe_channel_for_device_key(
         &self,
         channel_id: [u8; 16],
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<bool> {
-        let device_info = DeviceInfo::from_token(platform, device_token)?;
-        let device_id = device_info.device_id();
+        let Some(device_id) = self.resolve_device_key_route_device(device_key).await? else {
+            return Ok(false);
+        };
         let result =
             sqlx::query("DELETE FROM channel_subscriptions WHERE channel_id = ? AND device_id = ?")
                 .bind(&channel_id[..])
-                .bind(&device_id[..])
+                .bind(device_id.as_slice())
                 .execute(&self.pool)
                 .await?;
         Ok(result.rows_affected() > 0)
-    }
-
-    pub(super) async fn retire_device(
-        &self,
-        device_token: &str,
-        platform: Platform,
-    ) -> StoreResult<usize> {
-        let device_info = DeviceInfo::from_token(platform, device_token)?;
-        let device_id = device_info.device_id();
-        let mut conn = self.pool.acquire().await?;
-        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-        let removed = sqlx::query("DELETE FROM channel_subscriptions WHERE device_id = ?")
-            .bind(&device_id[..])
-            .execute(&mut *tx)
-            .await?
-            .rows_affected() as usize;
-        sqlx::query("DELETE FROM devices WHERE device_id = ?")
-            .bind(&device_id[..])
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(removed)
-    }
-
-    pub(super) async fn migrate_device_subscriptions(
-        &self,
-        old_device_token: &str,
-        new_device_token: &str,
-        platform: Platform,
-    ) -> StoreResult<usize> {
-        let old_device_info = DeviceInfo::from_token(platform, old_device_token)?;
-        let old_device_id = old_device_info.device_id();
-        let new_device_info = DeviceInfo::from_token(platform, new_device_token)?;
-        let new_device_id = new_device_info.device_id();
-        let new_token_raw = new_device_info.token_raw.to_vec();
-        let new_platform_code = new_device_info.platform.to_byte() as i16;
-
-        if old_device_id == new_device_id {
-            return Ok(0);
-        }
-
-        let mut conn = self.pool.acquire().await?;
-        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-        sqlx::query(
-            "INSERT INTO devices (device_id, token_raw, platform_code) VALUES (?, ?, ?) \
-             ON CONFLICT (device_id) DO UPDATE SET \
-                token_raw = EXCLUDED.token_raw, \
-                platform_code = EXCLUDED.platform_code",
-        )
-        .bind(&new_device_id[..])
-        .bind(&new_token_raw)
-        .bind(new_platform_code)
-        .execute(&mut *tx)
-        .await?;
-
-        let moved = sqlx::query(
-            "INSERT INTO channel_subscriptions \
-             (channel_id, device_id, platform, channel_type, device_key, provider_token, provider_token_hash, provider_token_preview, route_version, status, subscribed_via, last_dispatch_at, last_acked_at, last_error_code, last_confirmed_at, created_at, updated_at) \
-             SELECT channel_id, ?, platform, channel_type, device_key, provider_token, provider_token_hash, provider_token_preview, route_version, status, subscribed_via, last_dispatch_at, last_acked_at, last_error_code, last_confirmed_at, created_at, ? \
-             FROM channel_subscriptions WHERE device_id = ? \
-             ON CONFLICT (channel_id, device_id) DO UPDATE SET \
-               platform = EXCLUDED.platform, \
-               channel_type = EXCLUDED.channel_type, \
-               device_key = EXCLUDED.device_key, \
-               provider_token = EXCLUDED.provider_token, \
-               provider_token_hash = EXCLUDED.provider_token_hash, \
-               provider_token_preview = EXCLUDED.provider_token_preview, \
-               route_version = EXCLUDED.route_version, \
-               status = EXCLUDED.status, \
-               subscribed_via = EXCLUDED.subscribed_via, \
-               last_dispatch_at = EXCLUDED.last_dispatch_at, \
-               last_acked_at = EXCLUDED.last_acked_at, \
-               last_error_code = EXCLUDED.last_error_code, \
-               last_confirmed_at = EXCLUDED.last_confirmed_at, \
-               updated_at = EXCLUDED.updated_at",
-        )
-        .bind(&new_device_id[..])
-        .bind(Utc::now().timestamp())
-        .bind(&old_device_id[..])
-        .execute(&mut *tx)
-        .await?
-        .rows_affected() as usize;
-
-        sqlx::query("DELETE FROM channel_subscriptions WHERE device_id = ?")
-            .bind(&old_device_id[..])
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM devices WHERE device_id = ?")
-            .bind(&old_device_id[..])
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(moved)
     }
 }

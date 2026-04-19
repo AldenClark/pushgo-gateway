@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     api::{ApiJson, Error, HttpResult, deserialize_empty_as_none},
     app::AppState,
-    routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
+    routing::{
+        DeviceChannelType, DeviceRouteRecord, default_route_for_platform, derive_private_device_id,
+    },
     storage::{DeviceInfo, DeviceRouteAuditWrite, DeviceRouteRecordRow, Platform},
 };
 
@@ -12,9 +14,16 @@ use super::shared::{normalized_optional_token, platform_from_channel_type, platf
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DeviceChannelUpsertRequest {
+pub(crate) struct DeviceRegisterRequest {
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub device_key: Option<String>,
+    pub platform: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DeviceChannelUpsertRequest {
+    pub device_key: String,
     pub channel_type: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub platform: Option<String>,
@@ -29,6 +38,21 @@ pub(crate) struct DeviceChannelDeleteRequest {
     pub channel_type: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProviderTokenRetireRequest {
+    pub platform: String,
+    pub provider_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DeviceRegisterResponse {
+    pub device_key: String,
+    pub issued_new_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_reason: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct DeviceChannelResponse {
     pub device_key: String,
@@ -40,7 +64,21 @@ pub(super) struct DeviceChannelResponse {
     pub issue_reason: Option<String>,
 }
 
+impl DeviceRegisterRequest {
+    fn requested_platform(&self) -> Result<Platform, Error> {
+        platform_from_str(self.platform.as_str())
+    }
+}
+
 impl DeviceChannelUpsertRequest {
+    fn device_key(&self) -> Result<&str, Error> {
+        let device_key = self.device_key.trim();
+        if device_key.is_empty() {
+            return Err(Error::validation("device_key is required"));
+        }
+        Ok(device_key)
+    }
+
     fn requested_platform(&self) -> Result<Option<Platform>, Error> {
         self.platform.as_deref().map(platform_from_str).transpose()
     }
@@ -115,6 +153,22 @@ impl DeviceChannelDeleteRequest {
     }
 }
 
+impl ProviderTokenRetireRequest {
+    fn requested_platform(&self) -> Result<Platform, Error> {
+        platform_from_str(self.platform.as_str())
+    }
+
+    fn normalized_provider_token(&self, platform: Platform) -> Result<&str, Error> {
+        let provider_token = self.provider_token.trim();
+        if provider_token.is_empty() {
+            return Err(Error::validation("provider_token is required"));
+        }
+        DeviceInfo::from_token(platform, provider_token)
+            .map_err(|_| Error::validation("invalid provider_token"))?;
+        Ok(provider_token)
+    }
+}
+
 impl DeviceRouteRecord {
     fn as_route_row(&self, device_key: &str) -> DeviceRouteRecordRow {
         DeviceRouteRecordRow::from_registry_record(device_key, self)
@@ -173,39 +227,24 @@ impl DeviceRouteCleanup<'_> {
             self.migrate_pending_deliveries(state, next_type).await?;
         }
 
-        match self.old_channel_type {
-            DeviceChannelType::Private => {
-                let device_id = derive_private_device_id(self.device_key);
-                state
-                    .store
-                    .delete_private_device_state(device_id)
-                    .await
-                    .map_err(|err| {
-                        Error::Internal(format!(
-                            "failed to cleanup old private channel state: {err}"
-                        ))
-                    })?;
-            }
-            DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns => {
-                if let Some(token) = self.old_provider_token {
-                    let platform =
-                        platform_from_channel_type(self.old_channel_type, self.device_platform)?;
-                    state
-                        .store
-                        .retire_device(token, platform)
-                        .await
-                        .map_err(|err| {
-                            Error::Internal(format!(
-                                "failed to retire old provider subscriptions: {err}"
-                            ))
-                        })?;
-                }
-            }
+        if self.next_channel_type.is_none()
+            && matches!(self.old_channel_type, DeviceChannelType::Private)
+        {
+            let device_id = derive_private_device_id(self.device_key);
+            state
+                .store
+                .delete_private_device_state(device_id)
+                .await
+                .map_err(|err| {
+                    Error::Internal(format!(
+                        "failed to cleanup old private channel state: {err}"
+                    ))
+                })?;
         }
         Ok(())
     }
 
-    async fn cleanup_same_provider_route(self, state: &AppState) -> Result<(), Error> {
+    async fn cleanup_same_provider_route(self, _state: &AppState) -> Result<(), Error> {
         if !matches!(
             self.old_channel_type,
             DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns
@@ -216,23 +255,6 @@ impl DeviceRouteCleanup<'_> {
         {
             return Ok(());
         }
-        let Some(old_token) = self.old_provider_token else {
-            return Ok(());
-        };
-        let platform = platform_from_channel_type(self.old_channel_type, self.device_platform)?;
-        if let Some(next_token) = self.next_provider_token {
-            state
-                .store
-                .migrate_device_subscriptions(old_token, next_token, platform)
-                .await
-        } else {
-            state.store.retire_device(old_token, platform).await
-        }
-        .map_err(|err| {
-            Error::Internal(format!(
-                "failed to cleanup old provider channel state: {err}"
-            ))
-        })?;
         Ok(())
     }
 
@@ -306,28 +328,30 @@ struct DeviceRouteChange<'a> {
 }
 
 impl DeviceRouteChange<'_> {
+    fn audit_entry(&self, action: &str, created_at: i64) -> DeviceRouteAuditWrite {
+        DeviceRouteAuditWrite {
+            device_key: self.device_key.to_string(),
+            action: action.to_string(),
+            old_platform: self.previous.map(|value| value.platform.name().to_string()),
+            new_platform: Some(self.next.platform.name().to_string()),
+            old_channel_type: self
+                .previous
+                .map(|value| value.channel_type.as_str().to_string()),
+            new_channel_type: Some(self.next.channel_type.as_str().to_string()),
+            old_provider_token: self.previous.and_then(|value| value.provider_token.clone()),
+            new_provider_token: self.next.provider_token.clone(),
+            issue_reason: self.issue_reason.map(ToString::to_string),
+            created_at,
+        }
+    }
+
     async fn persist(self, state: &AppState, action: &str) -> Result<(), Error> {
-        state
-            .store
-            .upsert_device_route(&self.next.as_route_row(self.device_key))
-            .await?;
         let now = chrono::Utc::now().timestamp();
+        let route = self.next.as_route_row(self.device_key);
+        let audit = self.audit_entry(action, now);
         state
             .store
-            .append_device_route_audit(&DeviceRouteAuditWrite {
-                device_key: self.device_key.to_string(),
-                action: action.to_string(),
-                old_platform: self.previous.map(|value| value.platform.name().to_string()),
-                new_platform: Some(self.next.platform.name().to_string()),
-                old_channel_type: self
-                    .previous
-                    .map(|value| value.channel_type.as_str().to_string()),
-                new_channel_type: Some(self.next.channel_type.as_str().to_string()),
-                old_provider_token: self.previous.and_then(|value| value.provider_token.clone()),
-                new_provider_token: self.next.provider_token.clone(),
-                issue_reason: self.issue_reason.map(ToString::to_string),
-                created_at: now,
-            })
+            .persist_device_route_change(&route, &audit)
             .await?;
         Ok(())
     }
@@ -355,73 +379,87 @@ pub(crate) async fn device_channel_upsert(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<DeviceChannelUpsertRequest>,
 ) -> HttpResult {
+    let device_key = payload.device_key()?;
+    let device_operation_guard = state.device_operation_guards.guard_for(device_key);
+    let _device_operation_lock = if let Some(ref guard) = device_operation_guard {
+        Some(guard.lock().await)
+    } else {
+        None
+    };
     let next_type = payload.requested_channel_type()?;
     let requested_platform = payload.requested_platform()?;
-
-    let resolved = DeviceKeyResolution::ensure_for_upsert(
-        &state,
-        payload.device_key.as_deref(),
-        requested_platform,
-    )
-    .await?;
-    let resolved_device_key = resolved.resolved_device_key;
-    let previous = resolved.previous;
+    let previous =
+        DeviceKeyResolution::resolve_existing_for_route(&state, device_key, requested_platform)
+            .await?;
     let next_provider_token = payload.normalized_provider_token(previous.platform, next_type)?;
     let next_provider_token_ref = normalized_optional_token(next_provider_token.as_deref());
     if previous.channel_type == next_type
         && previous.provider_token_ref() == next_provider_token_ref
     {
         previous
-            .persisted_change(
-                resolved_device_key.as_str(),
-                Some(&previous),
-                resolved.issue_reason,
-            )
+            .persisted_change(device_key, Some(&previous), None)
             .bind_private_mapping(&state)
             .await?;
         return Ok(crate::api::ok(DeviceChannelResponse {
-            device_key: resolved_device_key.to_string(),
+            device_key: device_key.to_string(),
             channel_type: previous.channel_type.as_str().to_string(),
             provider_token: previous.provider_token,
-            issued_new_key: resolved.issued_new_key,
-            issue_reason: resolved.issue_reason.map(ToString::to_string),
+            issued_new_key: false,
+            issue_reason: None,
         }));
     }
 
     previous
-        .cleanup(
-            resolved_device_key.as_str(),
-            Some(next_type),
-            next_provider_token_ref,
-        )
+        .cleanup(device_key, Some(next_type), next_provider_token_ref)
         .apply(&state)
         .await?;
 
     let updated = state
         .device_registry
-        .update_channel(resolved_device_key.as_str(), next_type, next_provider_token)
+        .update_channel(device_key, next_type, next_provider_token)
         .map_err(Error::Internal)?;
     updated
-        .persisted_change(
-            resolved_device_key.as_str(),
-            Some(&previous),
-            resolved.issue_reason,
-        )
+        .persisted_change(device_key, Some(&previous), None)
         .persist(&state, "route_upsert")
         .await?;
     updated
-        .persisted_change(
-            resolved_device_key.as_str(),
-            Some(&previous),
-            resolved.issue_reason,
-        )
+        .persisted_change(device_key, Some(&previous), None)
         .bind_private_mapping(&state)
         .await?;
 
     Ok(crate::api::ok(DeviceChannelResponse {
-        device_key: resolved_device_key,
+        device_key: device_key.to_string(),
         channel_type: updated.channel_type.as_str().to_string(),
         provider_token: updated.provider_token,
+        issued_new_key: false,
+        issue_reason: None,
+    }))
+}
+
+pub(crate) async fn device_register(
+    State(state): State<AppState>,
+    ApiJson(payload): ApiJson<DeviceRegisterRequest>,
+) -> HttpResult {
+    let requested_device_key = payload
+        .device_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let device_operation_guard = requested_device_key
+        .and_then(|device_key| state.device_operation_guards.guard_for(device_key));
+    let _device_operation_lock = if let Some(ref guard) = device_operation_guard {
+        Some(guard.lock().await)
+    } else {
+        None
+    };
+    let resolved = DeviceKeyResolution::ensure_registered(
+        &state,
+        payload.device_key.as_deref(),
+        payload.requested_platform()?,
+    )
+    .await?;
+    Ok(crate::api::ok(DeviceRegisterResponse {
+        device_key: resolved.resolved_device_key,
         issued_new_key: resolved.issued_new_key,
         issue_reason: resolved.issue_reason.map(ToString::to_string),
     }))
@@ -432,6 +470,12 @@ pub(crate) async fn device_channel_delete(
     ApiJson(payload): ApiJson<DeviceChannelDeleteRequest>,
 ) -> HttpResult {
     let device_key = payload.device_key()?;
+    let device_operation_guard = state.device_operation_guards.guard_for(device_key);
+    let _device_operation_lock = if let Some(ref guard) = device_operation_guard {
+        Some(guard.lock().await)
+    } else {
+        None
+    };
     let current_type = payload.requested_channel_type()?;
     let current = state
         .device_registry
@@ -467,18 +511,48 @@ pub(crate) async fn device_channel_delete(
     }))
 }
 
+pub(crate) async fn provider_token_retire(
+    State(state): State<AppState>,
+    ApiJson(payload): ApiJson<ProviderTokenRetireRequest>,
+) -> HttpResult {
+    let platform = payload.requested_platform()?;
+    let provider_token = payload.normalized_provider_token(platform)?;
+    if let Some(retired) = state
+        .device_registry
+        .retire_provider_token(platform, provider_token)
+    {
+        retired
+            .updated
+            .persisted_change(
+                retired.device_key.as_str(),
+                Some(&retired.previous),
+                Some("provider_token_retired"),
+            )
+            .persist(&state, "provider_token_retire")
+            .await?;
+    }
+    state
+        .store
+        .retire_provider_token(platform, provider_token)
+        .await
+        .map_err(|err| Error::Internal(format!("failed to retire provider token: {err}")))?;
+
+    Ok(crate::api::ok(serde_json::json!({
+        "retired": true
+    })))
+}
+
 struct DeviceKeyResolution {
     resolved_device_key: String,
-    previous: DeviceRouteRecord,
     issued_new_key: bool,
     issue_reason: Option<&'static str>,
 }
 
 impl DeviceKeyResolution {
-    async fn ensure_for_upsert(
+    async fn ensure_registered(
         state: &AppState,
         requested_device_key: Option<&str>,
-        requested_platform: Option<Platform>,
+        requested_platform: Platform,
     ) -> Result<Self, Error> {
         let requested_device_key = requested_device_key
             .map(str::trim)
@@ -486,23 +560,32 @@ impl DeviceKeyResolution {
         if let Some(device_key) = requested_device_key
             && let Some(route) = state.device_registry.get(device_key)
         {
-            if let Some(requested_platform) = requested_platform
-                && route.platform != requested_platform
-            {
+            if route.platform != requested_platform {
                 return Self::issue_new(
                     state,
-                    Some(requested_platform),
+                    requested_platform,
                     Some(device_key),
-                    Some(route.platform.name()),
+                    Some(&route),
                     "platform_mismatch",
                 )
                 .await;
             }
             return Ok(Self {
                 resolved_device_key: device_key.to_string(),
-                previous: route,
                 issued_new_key: false,
                 issue_reason: None,
+            });
+        }
+
+        if let Some(device_key) = requested_device_key
+            && let Some(replacement_device_key) = state
+                .device_registry
+                .resolve_replaced_device_key(device_key, requested_platform)
+        {
+            return Ok(Self {
+                resolved_device_key: replacement_device_key,
+                issued_new_key: true,
+                issue_reason: Some("platform_mismatch"),
             });
         }
 
@@ -520,49 +603,90 @@ impl DeviceKeyResolution {
         .await
     }
 
-    async fn issue_new(
+    async fn resolve_existing_for_route(
         state: &AppState,
+        requested_device_key: &str,
         requested_platform: Option<Platform>,
-        requested_device_key: Option<&str>,
-        existing_platform: Option<&str>,
-        issue_reason: &'static str,
-    ) -> Result<Self, Error> {
-        let platform = requested_platform.ok_or_else(|| {
-            Error::validation("platform is required when issuing a new device_key")
-        })?;
-        let resolved_device_key = state
-            .device_registry
-            .register_device(platform, None)
-            .map_err(Error::Internal)?;
+    ) -> Result<DeviceRouteRecord, Error> {
         let route = state
             .device_registry
-            .get(&resolved_device_key)
+            .get(requested_device_key)
             .ok_or_else(|| {
-                Error::Internal(
-                    "device route missing after channel upsert auto-register".to_string(),
-                )
+                Error::validation_code("device_key not found", "device_key_not_found")
             })?;
-        route
-            .persisted_change(resolved_device_key.as_str(), None, Some(issue_reason))
-            .persist(state, "route_issue_new_key")
-            .await?;
+        if let Some(platform) = requested_platform
+            && route.platform != platform
+        {
+            return Err(Error::validation_code(
+                "platform does not match device identity",
+                "platform_mismatch",
+            ));
+        }
+        Ok(route)
+    }
+
+    async fn issue_new(
+        state: &AppState,
+        requested_platform: Platform,
+        requested_device_key: Option<&str>,
+        previous_route: Option<&DeviceRouteRecord>,
+        issue_reason: &'static str,
+    ) -> Result<Self, Error> {
+        let resolved_device_key = state.device_registry.allocate_device_key();
+        let route = default_route_for_platform(requested_platform, chrono::Utc::now().timestamp());
+        let audit = route
+            .persisted_change(
+                resolved_device_key.as_str(),
+                previous_route,
+                Some(issue_reason),
+            )
+            .audit_entry("route_issue_new_key", chrono::Utc::now().timestamp());
+        let old_device_key = if issue_reason == "platform_mismatch" {
+            requested_device_key
+        } else {
+            None
+        };
+        state
+            .store
+            .replace_device_identity(
+                &route.as_route_row(resolved_device_key.as_str()),
+                old_device_key,
+                &audit,
+            )
+            .await
+            .map_err(|err| Error::Internal(format!("failed to replace device identity: {err}")))?;
+        state
+            .device_registry
+            .restore_route(resolved_device_key.as_str(), route)
+            .map_err(Error::Internal)?;
+        if let Some(old_device_key) = old_device_key
+            && old_device_key != resolved_device_key
+        {
+            state.device_registry.remove_device(old_device_key);
+            state.device_registry.remember_replaced_device_key(
+                old_device_key,
+                resolved_device_key.as_str(),
+                requested_platform,
+            );
+        }
 
         if state.diagnostics_api_enabled && issue_reason == "platform_mismatch" {
             let old_key = requested_device_key.unwrap_or("");
-            let old_platform = existing_platform.unwrap_or("");
+            let old_platform = previous_route
+                .map(|route| route.platform.name())
+                .unwrap_or("");
             crate::util::diagnostics_log(format_args!(
                 "device_key reissued: reason={} old_device_key={} old_platform={} requested_platform={} new_device_key={}",
                 issue_reason,
                 old_key,
                 old_platform,
-                platform.name(),
+                requested_platform.name(),
                 resolved_device_key
             ));
         }
 
         Ok(Self {
             resolved_device_key,
-            previous: route,
             issued_new_key: true,
             issue_reason: Some(issue_reason),
         })
@@ -573,7 +697,7 @@ impl DeviceKeyResolution {
 mod tests {
     use crate::{api::Error, routing::DeviceChannelType, storage::Platform};
 
-    use super::{DeviceChannelDeleteRequest, DeviceChannelUpsertRequest};
+    use super::{DeviceChannelDeleteRequest, DeviceChannelUpsertRequest, DeviceRegisterRequest};
 
     #[test]
     fn device_channel_delete_rejects_provider_token() {
@@ -609,9 +733,31 @@ mod tests {
             "channel_type":"private",
             "platform":"android"
         }"#;
-        let parsed = serde_json::from_str::<DeviceChannelUpsertRequest>(raw)
-            .expect("upsert request should allow missing device_key");
+        let parsed = serde_json::from_str::<DeviceChannelUpsertRequest>(raw);
+        assert!(parsed.is_err(), "route upsert should require device_key");
+    }
+
+    #[test]
+    fn device_register_allows_missing_device_key() {
+        let raw = r#"{
+            "platform":"android"
+        }"#;
+        let parsed = serde_json::from_str::<DeviceRegisterRequest>(raw)
+            .expect("register request should allow missing device_key");
         assert_eq!(parsed.device_key, None);
+    }
+
+    #[test]
+    fn device_register_rejects_provider_token() {
+        let raw = r#"{
+            "platform":"android",
+            "provider_token":"token-1"
+        }"#;
+        let parsed = serde_json::from_str::<DeviceRegisterRequest>(raw);
+        assert!(
+            parsed.is_err(),
+            "register request should not accept provider_token"
+        );
     }
 
     #[test]
@@ -646,7 +792,7 @@ mod tests {
     #[test]
     fn device_channel_upsert_private_rejects_provider_token() {
         let payload = DeviceChannelUpsertRequest {
-            device_key: None,
+            device_key: "dev-1".to_string(),
             channel_type: "private".to_string(),
             platform: Some("android".to_string()),
             provider_token: Some("token-1".to_string()),

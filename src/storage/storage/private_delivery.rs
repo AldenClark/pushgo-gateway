@@ -241,6 +241,9 @@ impl Storage {
                 .await?;
             migrated = migrated.saturating_add(1);
         }
+        if migrated > 0 {
+            let _cleared = self.db.clear_private_outbox_for_device(device_id).await?;
+        }
         Ok(migrated)
     }
 

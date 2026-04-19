@@ -4,7 +4,6 @@ use crate::{
     dispatch::{ProviderDeliveryPath, ProviderPullDelivery},
     routing::derive_private_device_id,
     storage::{DeliveryAuditPath, Platform},
-    util::encode_lower_hex_128,
 };
 
 use super::MAX_PROVIDER_TTL_SECONDS;
@@ -20,7 +19,7 @@ pub(crate) struct ProviderDeliverySelection {
 }
 
 pub(crate) struct ProviderRouteBinding {
-    pub(crate) provider_device_key: Option<String>,
+    pub(crate) provider_device_key: String,
     pub(crate) audit_device_key: ProviderAuditDeviceKey,
 }
 
@@ -89,19 +88,13 @@ impl ProviderRouteBinding {
         state: &AppState,
         platform: Platform,
         token: &str,
-        dispatch_device_key: Option<&str>,
+        dispatch_device_key: &str,
     ) -> Self {
         let provider_device_key = state
             .device_registry
-            .resolve_provider_route_by_token(platform, token)
-            .or_else(|| {
-                dispatch_device_key
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToString::to_string)
-            });
-        let audit_device_key =
-            ProviderAuditDeviceKey::resolve(provider_device_key.as_deref(), platform, token);
+            .resolve_provider_ingress_route(platform, token)
+            .unwrap_or_else(|| dispatch_device_key.trim().to_string());
+        let audit_device_key = ProviderAuditDeviceKey::resolve(provider_device_key.as_str());
         Self {
             provider_device_key,
             audit_device_key,
@@ -110,22 +103,13 @@ impl ProviderRouteBinding {
 }
 
 impl ProviderAuditDeviceKey {
-    fn resolve(route_device_key: Option<&str>, platform: Platform, token: &str) -> Self {
-        let value = route_device_key
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| {
-                let token_hash = blake3::hash(token.as_bytes());
-                let mut short = [0u8; 16];
-                short.copy_from_slice(&token_hash.as_bytes()[..16]);
-                format!(
-                    "provider:{}:{}",
-                    platform.name(),
-                    encode_lower_hex_128(&short)
-                )
-            });
-        Self(value)
+    fn resolve(route_device_key: &str) -> Self {
+        let normalized = route_device_key.trim();
+        debug_assert!(
+            !normalized.is_empty(),
+            "provider audit key should be derived from a stable device_key"
+        );
+        Self(normalized.to_string())
     }
 
     pub(crate) fn as_str(&self) -> &str {
@@ -156,7 +140,7 @@ impl ProviderDeliveryPath {
 impl ProviderPullDelivery {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_provider_target(
-        provider_device_key: Option<&str>,
+        provider_device_key: &str,
         platform: Platform,
         provider_token: &str,
         private_payload: &[u8],
@@ -168,10 +152,11 @@ impl ProviderPullDelivery {
         if normalized_token.is_empty() {
             return None;
         }
-        let device_id = provider_device_key
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(derive_private_device_id)?;
+        let normalized_device_key = provider_device_key.trim();
+        if normalized_device_key.is_empty() {
+            return None;
+        }
+        let device_id = derive_private_device_id(normalized_device_key);
         Some(Self {
             device_id,
             platform,
@@ -191,7 +176,7 @@ mod tests {
     use crate::routing::derive_private_device_id;
     use crate::storage::DeliveryAuditPath;
 
-    use super::{Platform, ProviderDeliverySelection, ProviderTtl};
+    use super::{Platform, ProviderAuditDeviceKey, ProviderDeliverySelection, ProviderTtl};
 
     #[test]
     fn provider_ttl_is_clamped_to_range() {
@@ -227,9 +212,9 @@ mod tests {
     }
 
     #[test]
-    fn provider_pull_delivery_requires_device_key() {
+    fn provider_pull_delivery_requires_non_empty_device_key() {
         let missing = ProviderPullDelivery::for_provider_target(
-            None,
+            "   ",
             Platform::ANDROID,
             "fcm-token",
             b"payload",
@@ -240,7 +225,7 @@ mod tests {
         assert!(missing.is_none());
 
         let present = ProviderPullDelivery::for_provider_target(
-            Some("device-key-1"),
+            "device-key-1",
             Platform::ANDROID,
             "fcm-token",
             b"payload",
@@ -250,5 +235,11 @@ mod tests {
         )
         .expect("delivery should be built");
         assert_eq!(present.device_id, derive_private_device_id("device-key-1"));
+    }
+
+    #[test]
+    fn provider_audit_device_key_uses_trimmed_device_key() {
+        let key = ProviderAuditDeviceKey::resolve(" provider-route-key ");
+        assert_eq!(key.as_str(), "provider-route-key");
     }
 }

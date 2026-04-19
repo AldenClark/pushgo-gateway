@@ -94,14 +94,3 @@ fn normalize_delivery_audit_error_code_truncates_and_trims() {
         .expect("normalized error code should be present");
     assert_eq!(normalized.len(), 64);
 }
-
-#[test]
-fn route_snapshot_fields_trims_empty_provider_token() {
-    let empty = RouteSnapshotFields::from_provider_token(Some("   "));
-    assert!(empty.token_hash.is_none());
-    assert!(empty.token_preview.is_none());
-
-    let populated = RouteSnapshotFields::from_provider_token(Some("abcdef123456"));
-    assert!(populated.token_hash.is_some());
-    assert_eq!(populated.token_preview.as_deref(), Some("abcdef***3456"));
-}

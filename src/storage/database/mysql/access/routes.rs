@@ -1,5 +1,59 @@
 use super::*;
 
+async fn upsert_device_route_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    route: &DeviceRouteRecordRow,
+) -> StoreResult<()> {
+    let values = route.persistence_values()?;
+    sqlx::query(
+        "INSERT INTO devices \
+         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         ON DUPLICATE KEY UPDATE \
+           token_raw = VALUES(token_raw), \
+           platform_code = VALUES(platform_code), \
+           device_key = VALUES(device_key), \
+           platform = VALUES(platform), \
+           channel_type = VALUES(channel_type), \
+           provider_token = VALUES(provider_token), \
+           route_updated_at = VALUES(route_updated_at)",
+    )
+    .bind(values.device_id.as_slice())
+    .bind(values.token_raw.as_slice())
+    .bind(values.platform_code)
+    .bind(&values.device_key)
+    .bind(&values.platform)
+    .bind(&values.channel_type)
+    .bind(values.provider_token.as_deref())
+    .bind(values.updated_at)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn insert_device_route_audit_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    audit: &DeviceRouteAuditWrite,
+) -> StoreResult<()> {
+    sqlx::query(
+        "INSERT INTO device_route_audit (device_key, action, old_platform, new_platform, old_channel_type, new_channel_type, old_provider_token, new_provider_token, issue_reason, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&audit.device_key)
+    .bind(&audit.action)
+    .bind(&audit.old_platform)
+    .bind(&audit.new_platform)
+    .bind(&audit.old_channel_type)
+    .bind(&audit.new_channel_type)
+    .bind(&audit.old_provider_token)
+    .bind(&audit.new_provider_token)
+    .bind(&audit.issue_reason)
+    .bind(audit.created_at)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 impl MySqlDb {
     pub(super) async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>> {
         let rows = sqlx::query(
@@ -29,91 +83,215 @@ impl MySqlDb {
         &self,
         route: &DeviceRouteRecordRow,
     ) -> StoreResult<()> {
-        let provider_token = route.provider_token.as_deref().and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-        let device_id = route.device_id_bytes()?;
-        let platform: Platform = route.platform.parse()?;
-        let (platform_code, token_raw) = if let Some(token) = provider_token.as_deref() {
-            let info = DeviceInfo::from_token(platform, token)?;
-            (platform.to_byte() as i16, info.token_raw.to_vec())
-        } else {
-            (
-                platform.to_byte() as i16,
-                route.device_key.trim().as_bytes().to_vec(),
-            )
-        };
-        let platform = route.platform.trim().to_ascii_lowercase();
-        let channel_type = route.channel_type.trim().to_ascii_lowercase();
-
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM devices WHERE device_key = ? AND device_id <> ?")
-            .bind(route.device_key.trim())
-            .bind(&device_id)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "INSERT INTO devices \
-             (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON DUPLICATE KEY UPDATE \
-               token_raw = VALUES(token_raw), \
-               platform_code = VALUES(platform_code), \
-               device_key = VALUES(device_key), \
-               platform = VALUES(platform), \
-               channel_type = VALUES(channel_type), \
-               provider_token = VALUES(provider_token), \
-               route_updated_at = VALUES(route_updated_at)",
-        )
-        .bind(&device_id)
-        .bind(token_raw.as_slice())
-        .bind(platform_code)
-        .bind(route.device_key.trim())
-        .bind(&platform)
-        .bind(&channel_type)
-        .bind(provider_token.as_deref())
-        .bind(route.updated_at)
-        .execute(&mut *tx)
-        .await?;
+        upsert_device_route_in_tx(&mut tx, route).await?;
         tx.commit().await?;
         Ok(())
     }
 
-    pub(super) async fn apply_route_snapshot(
+    pub(super) async fn persist_device_route_change(
         &self,
-        snapshot: &DeviceRouteSnapshot,
+        route: &DeviceRouteRecordRow,
+        audit: &DeviceRouteAuditWrite,
     ) -> StoreResult<()> {
-        let (token_hash, token_preview) =
-            RouteSnapshotFields::from_provider_token(snapshot.provider_token.as_deref())
-                .into_parts();
-        let now = Utc::now().timestamp();
-        sqlx::query(
-            "UPDATE channel_subscriptions \
-             SET platform = ?, \
-                 channel_type = ?, \
-                 device_key = ?, \
-                 provider_token = ?, \
-                 provider_token_hash = ?, \
-                 provider_token_preview = ?, \
-                 route_version = route_version + 1, \
-                 updated_at = ? \
-             WHERE device_id = ?",
+        let mut tx = self.pool.begin().await?;
+        upsert_device_route_in_tx(&mut tx, route).await?;
+        insert_device_route_audit_in_tx(&mut tx, audit).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(super) async fn replace_device_identity(
+        &self,
+        route: &DeviceRouteRecordRow,
+        old_device_key: Option<&str>,
+        audit: &DeviceRouteAuditWrite,
+    ) -> StoreResult<()> {
+        let values = route.persistence_values()?;
+        let old_key = old_device_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != values.device_key);
+        let old_device_id = old_key.map(|key| PrivateDeviceId::derive(key).to_vec());
+
+        let mut tx = self.pool.begin().await?;
+        let delivery_ids = if let Some(device_id) = old_device_id.as_deref() {
+            let rows = sqlx::query(
+                "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
+                 UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
+            )
+            .bind(device_id)
+            .bind(device_id)
+            .fetch_all(&mut *tx)
+            .await?;
+            rows.into_iter()
+                .map(|row| row.get("delivery_id"))
+                .collect::<Vec<String>>()
+        } else {
+            Vec::new()
+        };
+
+        upsert_device_route_in_tx(&mut tx, route).await?;
+        insert_device_route_audit_in_tx(&mut tx, audit).await?;
+
+        if let (Some(old_key), Some(device_id)) = (old_key, old_device_id.as_deref()) {
+            for statement in [
+                "DELETE FROM channel_subscriptions WHERE device_id = ?",
+                "DELETE FROM provider_pull_queue WHERE device_id = ?",
+                "DELETE FROM private_bindings WHERE device_id = ?",
+                "DELETE FROM private_outbox WHERE device_id = ?",
+                "DELETE FROM private_sessions WHERE device_id = ?",
+                "DELETE FROM private_device_keys WHERE device_id = ?",
+            ] {
+                sqlx::query(statement)
+                    .bind(device_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
+                .bind(old_key)
+                .bind(device_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
+                .bind(old_key)
+                .execute(&mut *tx)
+                .await?;
+            for delivery_id in &delivery_ids {
+                sqlx::query(
+                    "DELETE FROM private_payloads \
+                     WHERE delivery_id = ? \
+                       AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+                       AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
+                )
+                .bind(delivery_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(super) async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()> {
+        let normalized_key = device_key.trim();
+        if normalized_key.is_empty() {
+            return Ok(());
+        }
+        let device_id = PrivateDeviceId::derive(normalized_key).to_vec();
+        let mut tx = self.pool.begin().await?;
+        let delivery_rows = sqlx::query(
+            "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
+             UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
         )
-        .bind(snapshot.platform.name())
-        .bind(snapshot.channel_type.as_str())
-        .bind(snapshot.device_key.as_str())
-        .bind(snapshot.provider_token.as_deref())
-        .bind(token_hash.as_deref())
-        .bind(token_preview.as_deref())
-        .bind(now)
-        .bind(snapshot.device_id.as_slice())
-        .execute(&self.pool)
+        .bind(device_id.as_slice())
+        .bind(device_id.as_slice())
+        .fetch_all(&mut *tx)
         .await?;
+        let delivery_ids: Vec<String> = delivery_rows
+            .into_iter()
+            .map(|row| row.get("delivery_id"))
+            .collect();
+
+        for statement in [
+            "DELETE FROM channel_subscriptions WHERE device_id = ?",
+            "DELETE FROM provider_pull_queue WHERE device_id = ?",
+            "DELETE FROM private_bindings WHERE device_id = ?",
+            "DELETE FROM private_outbox WHERE device_id = ?",
+            "DELETE FROM private_sessions WHERE device_id = ?",
+            "DELETE FROM private_device_keys WHERE device_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
+            .bind(normalized_key)
+            .bind(device_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
+            .bind(normalized_key)
+            .execute(&mut *tx)
+            .await?;
+
+        for delivery_id in &delivery_ids {
+            sqlx::query(
+                "DELETE FROM private_payloads \
+                 WHERE delivery_id = ? \
+                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+                   AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
+            )
+            .bind(delivery_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(super) async fn retire_provider_token(
+        &self,
+        platform: Platform,
+        provider_token: &str,
+    ) -> StoreResult<()> {
+        let normalized_token = provider_token.trim();
+        if normalized_token.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().timestamp();
+        let platform_name = platform.name();
+        let platform_code = platform.to_byte() as i16;
+        let (token_hash, _) = ProviderTokenSnapshot::from_token(normalized_token).into_parts();
+        let mut tx = self.pool.begin().await?;
+        let delivery_rows = sqlx::query(
+            "SELECT delivery_id FROM provider_pull_queue WHERE platform = ? AND provider_token = ?",
+        )
+        .bind(platform_name)
+        .bind(normalized_token)
+        .fetch_all(&mut *tx)
+        .await?;
+        let delivery_ids: Vec<String> = delivery_rows
+            .into_iter()
+            .map(|row| row.get("delivery_id"))
+            .collect();
+
+        sqlx::query("DELETE FROM provider_pull_queue WHERE platform = ? AND provider_token = ?")
+            .bind(platform_name)
+            .bind(normalized_token)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM private_bindings WHERE platform = ? AND token_hash = ?")
+            .bind(platform_code)
+            .bind(&token_hash)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE devices \
+             SET token_raw = CAST(device_key AS BINARY), channel_type = 'private', provider_token = NULL, route_updated_at = ? \
+             WHERE platform = ? AND provider_token = ? AND device_key IS NOT NULL",
+        )
+        .bind(now)
+        .bind(platform_name)
+        .bind(normalized_token)
+        .execute(&mut *tx)
+        .await?;
+
+        for delivery_id in &delivery_ids {
+            sqlx::query(
+                "DELETE FROM private_payloads \
+                 WHERE delivery_id = ? \
+                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+                   AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
+            )
+            .bind(delivery_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -121,22 +299,9 @@ impl MySqlDb {
         &self,
         entry: &DeviceRouteAuditWrite,
     ) -> StoreResult<()> {
-        sqlx::query(
-            "INSERT INTO device_route_audit (device_key, action, old_platform, new_platform, old_channel_type, new_channel_type, old_provider_token, new_provider_token, issue_reason, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&entry.device_key)
-        .bind(&entry.action)
-        .bind(&entry.old_platform)
-        .bind(&entry.new_platform)
-        .bind(&entry.old_channel_type)
-        .bind(&entry.new_channel_type)
-        .bind(&entry.old_provider_token)
-        .bind(&entry.new_provider_token)
-        .bind(&entry.issue_reason)
-        .bind(entry.created_at)
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        insert_device_route_audit_in_tx(&mut tx, entry).await?;
+        tx.commit().await?;
         Ok(())
     }
 

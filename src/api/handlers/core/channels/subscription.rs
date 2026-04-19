@@ -86,10 +86,11 @@ pub(crate) async fn channel_subscribe(
             let platform = route.platform;
             state
                 .store
-                .subscribe_channel(
+                .subscribe_channel_for_device_key(
                     channel_id.map(ChannelId::into_inner),
                     channel_name.map(ChannelAlias::as_str),
                     password.as_str(),
+                    device_key,
                     provider_token,
                     platform,
                 )
@@ -150,15 +151,9 @@ pub(crate) async fn channel_unsubscribe(
             true
         }
         _ => {
-            let provider_token = route
-                .provider_token
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| Error::validation("provider_token required for provider channel"))?;
-            let platform = route.platform;
             state
                 .store
-                .unsubscribe_channel(channel_id.into_inner(), provider_token, platform)
+                .unsubscribe_channel_for_device_key(channel_id.into_inner(), device_key)
                 .await?
         }
     };

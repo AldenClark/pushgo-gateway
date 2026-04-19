@@ -11,7 +11,7 @@ pub(super) async fn dispatch_provider_devices(
             prepared.state,
             device.info.platform,
             device.info.token_str(),
-            device.device_key.as_deref(),
+            device.device_key.as_str(),
         );
         let provider_audit_key = provider_route.audit_device_key.as_str().to_string();
         let provider_stats_key = Arc::<str>::from(
@@ -28,7 +28,7 @@ pub(super) async fn dispatch_provider_devices(
             provider_pull_delivery_id.as_str(),
         ));
         let provider_pull_delivery = ProviderPullDelivery::for_provider_target(
-            provider_route.provider_device_key.as_deref(),
+            provider_route.provider_device_key.as_str(),
             device.info.platform,
             device.info.token_str(),
             &prepared.private_payload,
@@ -38,6 +38,7 @@ pub(super) async fn dispatch_provider_devices(
         );
         let target = ResolvedProviderTarget {
             device: &device.info,
+            device_key: Arc::<str>::from(provider_route.provider_device_key.into_boxed_str()),
             provider_audit_key,
             provider_stats_key,
             wakeup_data_for_device,

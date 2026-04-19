@@ -108,20 +108,15 @@ async fn get_text(app: axum::Router, path: &str) -> (StatusCode, String) {
 #[tokio::test]
 async fn mcp_legacy_send_requires_password() {
     let state = build_mcp_test_state(AuthMode::SharedToken(Arc::from("legacy-shared-token"))).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-legacy-password"),
-                "password-1234",
-                "android-token-mcp-legacy-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-legacy-password",
+        "mcp-legacy-password",
+        "password-1234",
+        "android-token-mcp-legacy-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
 
     let (status, body) = post_json_with_auth(
@@ -154,20 +149,15 @@ async fn mcp_legacy_send_requires_password() {
 #[tokio::test]
 async fn mcp_oauth_s256_authorize_and_send_success() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-oauth-send"),
-                "password-1234",
-                "android-token-mcp-oauth-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-oauth-send",
+        "mcp-oauth-send",
+        "password-1234",
+        "android-token-mcp-oauth-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token = oauth_access_token(
         app.clone(),
@@ -211,20 +201,15 @@ async fn mcp_oauth_s256_authorize_and_send_success() {
 #[tokio::test]
 async fn mcp_channel_unbind_does_not_require_password() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-oauth-unbind"),
-                "password-1234",
-                "android-token-mcp-oauth-unbind-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-oauth-unbind",
+        "mcp-oauth-unbind",
+        "password-1234",
+        "android-token-mcp-oauth-unbind-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token =
         oauth_access_token(app.clone(), channel_id.as_str(), "mcp:channels:manage").await;
@@ -308,20 +293,15 @@ async fn mcp_channel_unbind_does_not_require_password() {
 #[tokio::test]
 async fn mcp_refresh_token_cannot_escalate_scope() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-oauth-refresh"),
-                "password-1234",
-                "android-token-mcp-oauth-refresh-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-oauth-refresh",
+        "mcp-oauth-refresh",
+        "password-1234",
+        "android-token-mcp-oauth-refresh-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let code_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
@@ -371,20 +351,15 @@ async fn mcp_refresh_token_cannot_escalate_scope() {
 #[tokio::test]
 async fn mcp_send_requires_mcp_tools_scope() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-oauth-scope"),
-                "password-1234",
-                "android-token-mcp-oauth-scope-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-oauth-scope",
+        "mcp-oauth-scope",
+        "password-1234",
+        "android-token-mcp-oauth-scope-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token =
         oauth_access_token(app.clone(), channel_id.as_str(), "mcp:channels:manage").await;
@@ -428,20 +403,15 @@ async fn mcp_send_requires_mcp_tools_scope() {
 #[tokio::test]
 async fn mcp_bind_session_is_one_time() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-oauth-bind-once"),
-                "password-1234",
-                "android-token-mcp-oauth-bind-once-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-oauth-bind-once",
+        "mcp-oauth-bind-once",
+        "password-1234",
+        "android-token-mcp-oauth-bind-once-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token = oauth_access_token(
         app.clone(),
@@ -500,20 +470,15 @@ async fn mcp_bind_session_is_one_time() {
 #[tokio::test]
 async fn mcp_bind_status_marks_resources_changed_once() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-oauth-bind-status-once"),
-                "password-1234",
-                "android-token-mcp-oauth-bind-status-once-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-oauth-bind-status-once",
+        "mcp-oauth-bind-status-once",
+        "password-1234",
+        "android-token-mcp-oauth-bind-status-once-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token = oauth_access_token(
         app.clone(),
@@ -636,19 +601,15 @@ async fn mcp_bind_status_marks_resources_changed_once() {
 async fn mcp_grant_password_not_persisted_in_snapshot() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
     let store = state.store.clone();
-    let channel_id = crate::api::format_channel_id(
-        &store
-            .subscribe_channel(
-                None,
-                Some("mcp-oauth-encrypted-grant"),
-                "password-1234",
-                "android-token-mcp-oauth-encrypted-grant-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-oauth-encrypted-grant",
+        "mcp-oauth-encrypted-grant",
+        "password-1234",
+        "android-token-mcp-oauth-encrypted-grant-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let code_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
@@ -871,20 +832,15 @@ async fn predefined_client_can_authorize_without_registration() {
     state.mcp = Some(Arc::new(
         McpState::new(config, &state.auth, state.store.clone()).await,
     ));
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-static-client"),
-                "password-1234",
-                "android-token-mcp-static-client-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-static-client",
+        "mcp-static-client",
+        "password-1234",
+        "android-token-mcp-static-client-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let code_verifier = "static-client-verifier";
     let authorize_form = format!(
@@ -984,20 +940,15 @@ async fn mcp_requires_bearer_challenge_before_initialize() {
 #[tokio::test]
 async fn mcp_notifications_initialized_is_accepted() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("mcp-notify-init"),
-                "password-1234",
-                "android-token-mcp-notify-init-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-mcp-notify-init",
+        "mcp-notify-init",
+        "password-1234",
+        "android-token-mcp-notify-init-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token = oauth_access_token(app.clone(), channel_id.as_str(), "mcp:tools").await;
 
@@ -1050,20 +1001,15 @@ async fn mcp_notifications_initialized_is_accepted() {
 #[tokio::test]
 async fn mcp_resources_list_contains_authorized_channels() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("resource-channel"),
-                "password-1234",
-                "android-token-mcp-res-list-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-resource-channel",
+        "resource-channel",
+        "password-1234",
+        "android-token-mcp-res-list-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token = oauth_access_token(
         app.clone(),
@@ -1110,20 +1056,15 @@ async fn mcp_resources_list_contains_authorized_channels() {
 #[tokio::test]
 async fn mcp_resources_read_channels_returns_channel_name() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
-    let channel_id = crate::api::format_channel_id(
-        &state
-            .store
-            .subscribe_channel(
-                None,
-                Some("resource-channel-name"),
-                "password-1234",
-                "android-token-mcp-res-read-0001",
-                Platform::ANDROID,
-            )
-            .await
-            .expect("setup channel should succeed")
-            .channel_id,
-    );
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-resource-channel-name",
+        "resource-channel-name",
+        "password-1234",
+        "android-token-mcp-res-read-0001",
+        Platform::ANDROID,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let access_token = oauth_access_token(
         app.clone(),

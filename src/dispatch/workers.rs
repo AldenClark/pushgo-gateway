@@ -112,10 +112,9 @@ impl DispatchWorkerPool {
                     if dispatch.invalid_token {
                         let _ = runtime
                             .store
-                            .unsubscribe_channel(
+                            .unsubscribe_channel_for_device_key(
                                 job.channel_id,
-                                job.device_token.as_ref(),
-                                job.platform,
+                                job.device_key.as_ref(),
                             )
                             .await;
                         runtime
@@ -209,10 +208,9 @@ impl DispatchWorkerPool {
                     if dispatch.invalid_token {
                         let _ = runtime
                             .store
-                            .unsubscribe_channel(
+                            .unsubscribe_channel_for_device_key(
                                 job.channel_id,
-                                job.device_token.as_ref(),
-                                Platform::ANDROID,
+                                job.device_key.as_ref(),
                             )
                             .await;
                         runtime
@@ -289,10 +287,9 @@ impl DispatchWorkerPool {
                     if dispatch.invalid_token {
                         let _ = runtime
                             .store
-                            .unsubscribe_channel(
+                            .unsubscribe_channel_for_device_key(
                                 job.channel_id,
-                                job.device_token.as_ref(),
-                                Platform::WINDOWS,
+                                job.device_key.as_ref(),
                             )
                             .await;
                         runtime

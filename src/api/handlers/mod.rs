@@ -72,8 +72,13 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route("/thing/update", post(thing::thing_update_to_channel))
         .route("/thing/archive", post(thing::thing_archive_to_channel))
         .route("/thing/delete", post(thing::thing_delete_to_channel))
-        .route("/device/register", post(core::device_channel_upsert))
+        .route("/device/register", post(core::device_register))
+        .route("/channel/device", post(core::device_channel_upsert))
         .route("/channel/device/delete", post(core::device_channel_delete))
+        .route(
+            "/channel/device/provider-token/retire",
+            post(core::provider_token_retire),
+        )
         .route("/channel/sync", post(core::channel_sync))
         .route("/channel/subscribe", post(core::channel_subscribe))
         .route("/channel/unsubscribe", post(core::channel_unsubscribe))

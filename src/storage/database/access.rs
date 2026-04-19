@@ -19,31 +19,23 @@ pub trait ChannelQueryDatabaseAccess: Send + Sync {
 
 #[async_trait]
 pub trait ProviderSubscriptionDatabaseAccess: Send + Sync {
-    async fn subscribe_channel(
+    async fn subscribe_channel_for_device_key(
         &self,
         channel_id: Option<[u8; 16]>,
         alias: Option<&str>,
         password_hash: &str,
-        device_token: &str,
+        device_key: &str,
+        provider_token: &str,
         platform: Platform,
     ) -> StoreResult<SubscribeOutcome>;
-    async fn unsubscribe_channel(
+    async fn unsubscribe_channel_for_device_key(
         &self,
         channel_id: [u8; 16],
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<bool>;
-    async fn retire_device(&self, device_token: &str, platform: Platform) -> StoreResult<usize>;
-    async fn migrate_device_subscriptions(
+    async fn list_subscribed_channels_for_device_key(
         &self,
-        old_device_token: &str,
-        new_device_token: &str,
-        platform: Platform,
-    ) -> StoreResult<usize>;
-    async fn list_subscribed_channels_for_device(
-        &self,
-        device_token: &str,
-        platform: Platform,
+        device_key: &str,
     ) -> StoreResult<Vec<[u8; 16]>>;
 }
 
@@ -183,7 +175,23 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
 pub trait DeviceRouteDatabaseAccess: Send + Sync {
     async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>>;
     async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()>;
-    async fn apply_route_snapshot(&self, snapshot: &DeviceRouteSnapshot) -> StoreResult<()>;
+    async fn persist_device_route_change(
+        &self,
+        route: &DeviceRouteRecordRow,
+        audit: &DeviceRouteAuditWrite,
+    ) -> StoreResult<()>;
+    async fn replace_device_identity(
+        &self,
+        route: &DeviceRouteRecordRow,
+        old_device_key: Option<&str>,
+        audit: &DeviceRouteAuditWrite,
+    ) -> StoreResult<()>;
+    async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()>;
+    async fn retire_provider_token(
+        &self,
+        platform: Platform,
+        provider_token: &str,
+    ) -> StoreResult<()>;
     async fn append_device_route_audit(&self, entry: &DeviceRouteAuditWrite) -> StoreResult<()>;
     async fn append_subscription_audit(&self, entry: &SubscriptionAuditWrite) -> StoreResult<()>;
 }

@@ -60,6 +60,9 @@ impl IntoResponse for Error {
             Error::StoreError(StoreError::InvalidDeviceToken) => {
                 err(StatusCode::BAD_REQUEST, "invalid device token")
             }
+            Error::StoreError(StoreError::DeviceNotFound) => {
+                err(StatusCode::BAD_REQUEST, "device not found")
+            }
             Error::StoreError(StoreError::ChannelNotFound) => {
                 err(StatusCode::NOT_FOUND, "channel not found")
             }

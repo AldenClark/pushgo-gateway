@@ -170,19 +170,33 @@ async fn register_provider_device(client: &Client, gateway: &GatewayProcess) -> 
         .post(format!("{}/device/register", gateway.base_url()))
         .bearer_auth(&gateway.token)
         .json(&serde_json::json!({
-            "platform": "android",
-            "channel_type": "fcm",
-            "provider_token": token
+            "platform": "android"
         }))
         .send()
         .await
         .expect("device register should succeed");
     assert_eq!(response.status(), 200, "{}", gateway.logs());
     let body: Value = response.json().await.expect("response json should parse");
-    body["data"]["device_key"]
+    let device_key = body["data"]["device_key"]
         .as_str()
         .expect("device key should exist")
-        .to_string()
+        .to_string();
+
+    let route_response = client
+        .post(format!("{}/channel/device", gateway.base_url()))
+        .bearer_auth(&gateway.token)
+        .json(&serde_json::json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": token
+        }))
+        .send()
+        .await
+        .expect("device route upsert should succeed");
+    assert_eq!(route_response.status(), 200, "{}", gateway.logs());
+
+    device_key
 }
 
 async fn subscribe_channel(client: &Client, gateway: &GatewayProcess, device_key: &str) -> String {

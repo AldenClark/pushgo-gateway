@@ -172,15 +172,9 @@ async fn reconcile_synced_channels(
             }
         }
         DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns => {
-            let provider_token = route
-                .provider_token
-                .as_deref()
-                .filter(|token| !token.trim().is_empty())
-                .ok_or_else(|| Error::validation("provider channel requires provider_token"))?;
-            let platform = route.platform;
             let existing_channels = state
                 .store
-                .list_subscribed_channels_for_device(provider_token, platform)
+                .list_subscribed_channels_for_device_key(device_key)
                 .await
                 .map_err(|err| Error::Internal(err.to_string()))?;
             for channel_id in existing_channels {
@@ -189,7 +183,7 @@ async fn reconcile_synced_channels(
                 }
                 state
                     .store
-                    .unsubscribe_channel(channel_id, provider_token, platform)
+                    .unsubscribe_channel_for_device_key(channel_id, device_key)
                     .await
                     .map_err(|err| Error::Internal(err.to_string()))?;
             }
@@ -243,7 +237,14 @@ async fn sync_single_channel(
             let platform = route.platform;
             let outcome = state
                 .store
-                .subscribe_channel(Some(channel_id), None, password, provider_token, platform)
+                .subscribe_channel_for_device_key(
+                    Some(channel_id),
+                    None,
+                    password,
+                    device_key,
+                    provider_token,
+                    platform,
+                )
                 .await
                 .map_err(map_sync_store_error)?;
             append_subscription_audit(state, channel_id, device_key, "sync_subscribe", route)
@@ -259,6 +260,10 @@ fn map_sync_store_error(err: StoreError) -> (&'static str, String) {
         StoreError::InvalidDeviceToken => (
             "invalid_provider_token",
             "provider token is invalid for the current platform".to_string(),
+        ),
+        StoreError::DeviceNotFound => (
+            "device_not_found",
+            "device route is missing on gateway".to_string(),
         ),
         StoreError::ChannelPasswordMismatch => (
             "password_mismatch",

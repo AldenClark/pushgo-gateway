@@ -9,12 +9,6 @@ impl MySqlDb {
             .await?;
         let delivery_ids: Vec<String> = rows.into_iter().map(|r| r.get("delivery_id")).collect();
 
-        sqlx::query(
-            "DELETE FROM channel_subscriptions WHERE device_id = ? AND channel_type = 'private'",
-        )
-        .bind(&device_id[..])
-        .execute(&mut *tx)
-        .await?;
         sqlx::query("DELETE FROM private_bindings WHERE device_id = ?")
             .bind(&device_id[..])
             .execute(&mut *tx)

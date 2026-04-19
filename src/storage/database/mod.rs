@@ -8,6 +8,7 @@ mod backend_impls;
 mod access;
 #[path = "driver/mod.rs"]
 mod driver;
+pub(crate) mod migration;
 
 pub mod mysql;
 pub mod pg;

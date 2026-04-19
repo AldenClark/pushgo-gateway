@@ -14,6 +14,7 @@ use crate::{
 };
 use axum::Router;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub(crate) struct PrivateTransportProfile {
@@ -43,6 +44,7 @@ pub(crate) struct AppState {
     pub diagnostics_api_enabled: bool,
     pub public_base_url: Option<Arc<str>>,
     pub device_registry: Arc<DeviceRegistry>,
+    pub device_operation_guards: Arc<DeviceOperationGuards>,
     pub stats: Arc<StatsCollector>,
     pub private_transport_profile: PrivateTransportProfile,
     pub private: Option<Arc<PrivateState>>,
@@ -55,6 +57,26 @@ pub struct AppRuntime {
     pub private: Option<Arc<PrivateState>>,
 }
 
+#[derive(Default)]
+pub(crate) struct DeviceOperationGuards {
+    by_key: dashmap::DashMap<String, Arc<Mutex<()>>>,
+}
+
+impl DeviceOperationGuards {
+    pub fn guard_for(&self, device_key: &str) -> Option<Arc<Mutex<()>>> {
+        let normalized = device_key.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        Some(
+            self.by_key
+                .entry(normalized.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone(),
+        )
+    }
+}
+
 pub async fn build_app(
     args: &Args,
     apns: Arc<dyn ApnsClient>,
@@ -65,6 +87,7 @@ pub async fn build_app(
     let store = Storage::new(args.db_url.as_deref()).await?;
     let stats = StatsCollector::spawn(store.clone());
     let device_registry = Arc::new(DeviceRegistry::new());
+    let device_operation_guards = Arc::new(DeviceOperationGuards::default());
     restore_device_registry(&store, &device_registry).await?;
 
     let (dispatch, receivers) = DispatchChannels::new();
@@ -182,6 +205,7 @@ pub async fn build_app(
         diagnostics_api_enabled: args.diagnostics_api_enabled,
         public_base_url,
         device_registry,
+        device_operation_guards,
         stats,
         private_transport_profile,
         private: private.clone(),
