@@ -8,6 +8,13 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.2]
+
+### Improved
+- Release baseline now includes all gateway changes accumulated after `v1.2.1` and before this publication checkpoint.
+- Gateway runtime package/version metadata is aligned to `v1.2.2` for consistent rollout and diagnostics.
+- Release documentation and audit metadata are synchronized for this production release line.
+
 ## [v1.2.1]
 
 ### Improved
