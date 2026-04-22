@@ -42,7 +42,7 @@ jobs:
             -e SOURCE_BINARY_NAME="${SOURCE_BINARY_NAME}" \
             -v "${GITHUB_WORKSPACE}:/work" \
             -w /work \
-            debian:bookworm-slim \
+            debian:bookworm \
             bash -lc '
               set -eux
               export DEBIAN_FRONTEND=noninteractive
