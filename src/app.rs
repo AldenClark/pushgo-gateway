@@ -222,19 +222,18 @@ pub async fn build_app(
     }
     .spawn(receivers);
 
+    let public_base_url = normalize_mcp_public_base_url(args.public_base_url.as_deref())?
+        .map(|value| Arc::<str>::from(value.into_boxed_str()));
     let private_transport_profile = PrivateTransportProfile {
         quic_enabled: private_transports.quic,
         quic_port: private_transports.quic.then_some(args.private_quic_port),
         tcp_enabled: private_transports.tcp,
         tcp_port: args.private_tcp_port,
         wss_enabled: private_transports.wss,
-        wss_port: 443,
+        wss_port: derive_wss_advertised_port(public_base_url.as_deref()),
         wss_path: Arc::from("/private/ws"),
         ws_subprotocol: Arc::from("pushgo-private.v1"),
     };
-
-    let public_base_url = normalize_mcp_public_base_url(args.public_base_url.as_deref())?
-        .map(|value| Arc::<str>::from(value.into_boxed_str()));
 
     let mcp_state = if args.mcp_enabled {
         let predefined_clients =
@@ -289,6 +288,16 @@ fn normalize_mcp_public_base_url(
         .into());
     }
     Ok(Some(value.trim_end_matches('/').to_string()))
+}
+
+fn derive_wss_advertised_port(public_base_url: Option<&str>) -> u16 {
+    let Some(base_url) = public_base_url else {
+        return 443;
+    };
+    let Ok(parsed) = reqwest::Url::parse(base_url) else {
+        return 443;
+    };
+    parsed.port_or_known_default().unwrap_or(443)
 }
 
 fn parse_mcp_predefined_clients(
@@ -391,7 +400,7 @@ async fn backfill_private_binding_for_route(
 
 #[cfg(test)]
 mod tests {
-    use super::DeviceOperationGuards;
+    use super::{DeviceOperationGuards, derive_wss_advertised_port};
     use std::sync::Arc;
 
     #[test]
@@ -413,5 +422,30 @@ mod tests {
 
         guards.sweep_stale_entries(u64::MAX);
         assert!(guards.by_key.is_empty(), "stale slot should be reaped");
+    }
+
+    #[test]
+    fn derive_wss_advertised_port_uses_explicit_port_from_public_base_url() {
+        assert_eq!(
+            derive_wss_advertised_port(Some("https://pushgo.0b0.top:55555")),
+            55555
+        );
+    }
+
+    #[test]
+    fn derive_wss_advertised_port_uses_scheme_default_when_port_is_absent() {
+        assert_eq!(
+            derive_wss_advertised_port(Some("https://pushgo.0b0.top")),
+            443
+        );
+        assert_eq!(
+            derive_wss_advertised_port(Some("http://pushgo.0b0.top")),
+            80
+        );
+    }
+
+    #[test]
+    fn derive_wss_advertised_port_falls_back_to_443_without_public_base_url() {
+        assert_eq!(derive_wss_advertised_port(None), 443);
     }
 }

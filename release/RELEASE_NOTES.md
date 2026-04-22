@@ -8,6 +8,13 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.5]
+
+### Improved
+- Fixed private maintenance cleanup failures on some SQLite deployments by removing reliance on `DELETE ... LIMIT` SQL syntax variants that are not universally enabled.
+- Improved private transport profile consistency: when `PUSHGO_PUBLIC_BASE_URL` carries a custom port, advertised `wss_port` now matches that external port so clients can connect with the same endpoint semantics as `wss_url`.
+- Added test coverage for WSS advertised-port derivation to keep future profile changes safe.
+
 ## [v1.2.4]
 
 ### Changed

@@ -12,6 +12,18 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.5] - 2026-04-22
+
+### Changed
+- Bumped package/runtime version to `1.2.5` (release tag target: `v1.2.5`) and aligned lock metadata.
+- Fixed SQLite private maintenance cleanup SQL compatibility for environments where SQLite is built without `SQLITE_ENABLE_UPDATE_DELETE_LIMIT`:
+  - replaced `DELETE ... LIMIT ?` usage with rowid-subquery based bounded deletes in SQLite private dedupe cleanup paths.
+- Aligned private transport hints so advertised `wss_port` follows `PUSHGO_PUBLIC_BASE_URL` when an explicit port is present:
+  - `https://host:55555` now advertises `wss_port=55555`
+  - no explicit port keeps scheme default (`https -> 443`, `http -> 80`)
+  - missing/invalid base URL falls back to `443`.
+- Added targeted gateway unit tests covering WSS advertised-port derivation behavior.
+
 ## [v1.2.4] - 2026-04-22
 
 ### Changed

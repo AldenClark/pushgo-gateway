@@ -243,12 +243,21 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
-        let removed = sqlx::query("DELETE FROM semantic_id_registry WHERE created_at <= ? LIMIT ?")
-            .bind(before_ts)
-            .bind(limit as i64)
-            .execute(&self.pool)
-            .await?
-            .rows_affected() as usize;
+        let removed = sqlx::query(
+            "DELETE FROM semantic_id_registry \
+             WHERE rowid IN (\
+                SELECT rowid \
+                FROM semantic_id_registry \
+                WHERE created_at <= ? \
+                ORDER BY created_at ASC, rowid ASC \
+                LIMIT ?\
+             )",
+        )
+        .bind(before_ts)
+        .bind(limit as i64)
+        .execute(&self.pool)
+        .await?
+        .rows_affected() as usize;
         Ok(removed)
     }
 
@@ -257,13 +266,21 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
-        let removed =
-            sqlx::query("DELETE FROM dispatch_delivery_dedupe WHERE created_at <= ? LIMIT ?")
-                .bind(before_ts)
-                .bind(limit as i64)
-                .execute(&self.pool)
-                .await?
-                .rows_affected() as usize;
+        let removed = sqlx::query(
+            "DELETE FROM dispatch_delivery_dedupe \
+             WHERE rowid IN (\
+                SELECT rowid \
+                FROM dispatch_delivery_dedupe \
+                WHERE created_at <= ? \
+                ORDER BY created_at ASC, rowid ASC \
+                LIMIT ?\
+             )",
+        )
+        .bind(before_ts)
+        .bind(limit as i64)
+        .execute(&self.pool)
+        .await?
+        .rows_affected() as usize;
         Ok(removed)
     }
 
