@@ -49,7 +49,8 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends \
                 ca-certificates curl build-essential pkg-config \
-                gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+                gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
+                libc6-dev-arm64-cross libc6-dev-armhf-cross
               rm -rf /var/lib/apt/lists/*
               curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
               . "$HOME/.cargo/env"
