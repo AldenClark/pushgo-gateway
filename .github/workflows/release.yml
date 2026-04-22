@@ -84,6 +84,11 @@ jobs:
               ./target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} --help >/dev/null
             '
 
+      - name: Fix workspace permissions after Dockerized GNU build
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" target
+          chmod -R u+rwX target
+
       - name: Build release binaries (musl)
         run: |
           cat > Cross.toml <<'EOF'
