@@ -145,33 +145,6 @@ impl Default for DeviceOperationGuards {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DeviceOperationGuards;
-    use std::sync::Arc;
-
-    #[test]
-    fn device_operation_guards_reuse_live_lock_and_reap_stale_slots() {
-        let guards = DeviceOperationGuards::default();
-
-        let first = guards.guard_for(" device-a ").expect("guard should exist");
-        let second = guards
-            .guard_for("device-a")
-            .expect("guard should be reused");
-        assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(guards.by_key.len(), 1);
-
-        guards.sweep_stale_entries(u64::MAX);
-        assert_eq!(guards.by_key.len(), 1, "live guard must not be reaped");
-
-        drop(first);
-        drop(second);
-
-        guards.sweep_stale_entries(u64::MAX);
-        assert!(guards.by_key.is_empty(), "stale slot should be reaped");
-    }
-}
-
 pub async fn build_app(
     args: &Args,
     apns: Arc<dyn ApnsClient>,
@@ -192,10 +165,16 @@ pub async fn build_app(
         None => AuthMode::Disabled,
         Some(token) => AuthMode::SharedToken(Arc::from(token)),
     };
+    let private_transports = args.private_transports()?;
+    let private_channel_enabled = private_transports.any_enabled();
 
     let private_config = PrivateConfig {
-        private_quic_bind: Some(args.private_quic_bind.clone()),
-        private_tcp_bind: Some(args.private_tcp_bind.clone()),
+        private_quic_bind: private_transports
+            .quic
+            .then(|| args.private_quic_bind.clone()),
+        private_tcp_bind: private_transports
+            .tcp
+            .then(|| args.private_tcp_bind.clone()),
         tcp_tls_offload: args.private_tcp_tls_offload,
         tcp_proxy_protocol: args.private_tcp_proxy_protocol,
         private_tls_cert_path: args.private_tls_cert_path.clone(),
@@ -217,7 +196,7 @@ pub async fn build_app(
         gateway_token: args.token.clone(),
     }
     .normalized();
-    let private = if args.private_channel_enabled {
+    let private = if private_channel_enabled {
         let state = Arc::new(PrivateState::new(
             store.clone(),
             private_config,
@@ -244,11 +223,11 @@ pub async fn build_app(
     .spawn(receivers);
 
     let private_transport_profile = PrivateTransportProfile {
-        quic_enabled: true,
-        quic_port: Some(args.private_quic_port),
-        tcp_enabled: true,
+        quic_enabled: private_transports.quic,
+        quic_port: private_transports.quic.then_some(args.private_quic_port),
+        tcp_enabled: private_transports.tcp,
         tcp_port: args.private_tcp_port,
-        wss_enabled: true,
+        wss_enabled: private_transports.wss,
         wss_port: 443,
         wss_path: Arc::from("/private/ws"),
         ws_subprotocol: Arc::from("pushgo-private.v1"),
@@ -278,7 +257,7 @@ pub async fn build_app(
     let state = AppState {
         dispatch,
         auth: auth.clone(),
-        private_channel_enabled: args.private_channel_enabled,
+        private_channel_enabled,
         diagnostics_api_enabled: observability.diagnostics_api_enabled,
         trace_logs_enabled: observability.trace_logs_enabled,
         public_base_url,
@@ -408,4 +387,31 @@ async fn backfill_private_binding_for_route(
         .bind_private_token(device_id, route.platform, token)
         .await
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceOperationGuards;
+    use std::sync::Arc;
+
+    #[test]
+    fn device_operation_guards_reuse_live_lock_and_reap_stale_slots() {
+        let guards = DeviceOperationGuards::default();
+
+        let first = guards.guard_for(" device-a ").expect("guard should exist");
+        let second = guards
+            .guard_for("device-a")
+            .expect("guard should be reused");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(guards.by_key.len(), 1);
+
+        guards.sweep_stale_entries(u64::MAX);
+        assert_eq!(guards.by_key.len(), 1, "live guard must not be reaped");
+
+        drop(first);
+        drop(second);
+
+        guards.sweep_stale_entries(u64::MAX);
+        assert!(guards.by_key.is_empty(), "stale slot should be reaped");
+    }
 }

@@ -33,11 +33,13 @@ In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_UR
 
 ### 2) Parameter dependency map
 
-- `--private-channel-enabled=true` is the master switch. If disabled, private routes/runtime are unavailable.
+- `--private-transports` is the master switch for private runtime. It supports `true`/`false` and explicit sets like `quic,tcp,wss`.
+- Private runtime has no implicit fallback: only transports listed in `--private-transports` are enabled.
 - `--private-*-bind` always means the local listener address owned by gateway.
 - `--private-*-port` always means the port advertised to app clients via `/gateway/profile` (`transport` hints).
-- QUIC and gateway-terminated Raw TCP both require `--private-tls-cert` + `--private-tls-key`.
-- `--private-tcp-tls-offload=true` only changes Raw TCP; QUIC still needs gateway-side TLS materials.
+- If `quic` is enabled, `--private-tls-cert` + `--private-tls-key` are required.
+- If `tcp` is enabled and `--private-tcp-tls-offload=false`, `--private-tls-cert` + `--private-tls-key` are required.
+- `--private-tcp-tls-offload=true` only changes Raw TCP to plain mode behind edge TLS termination.
 - WSS has no separate bind flag; it rides on `--http-addr` and is typically exposed by edge TLS.
 
 ## MCP Runtime Model
@@ -60,7 +62,7 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--token`                         | `PUSHGO_TOKEN`                         | None                       | No                | Public API auth token (`Authorization: Bearer <token>` first; fallback `?token=<token>` only when Authorization is absent) |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
-| `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | No                | Master switch for private transport                    |
+| `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss`) |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | No                | Observability matrix profile (`prod_min`/`ops`/`incident`/`debug`) |
 | `--trace-log-file`                | `PUSHGO_TRACE_LOG_FILE`                | `logs/pushgo-gateway-trace.log` | No           | Trace JSONL file path when trace logs are enabled      |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
@@ -79,9 +81,9 @@ Advanced env-only runtime tunables are listed in a separate section below.
 
 | CLI Flag                    | Env                              | Default | Required          | Description                                         |
 | --------------------------- | -------------------------------- | ------- | ----------------- | --------------------------------------------------- |
-| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | None    | Conditionally yes | Shared TLS cert PEM for QUIC and Raw TCP            |
-| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | None    | Conditionally yes | Shared TLS key PEM for QUIC and Raw TCP             |
-| `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | No                | Whether Raw TCP TLS is offloaded at the edge proxy  |
+| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | None    | Conditional       | TLS cert PEM required by `quic`, and by `tcp` when `private-tcp-tls-offload=false` |
+| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | None    | Conditional       | TLS key PEM required by `quic`, and by `tcp` when `private-tcp-tls-offload=false`  |
+| `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | No                | Whether Raw TCP TLS is offloaded at the edge proxy (offload=true means gateway Raw TCP is plain) |
 | `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | No            | Expect PROXY protocol v1 on Raw TCP ingress          |
 
 ### Private Runtime Limits
@@ -272,7 +274,7 @@ Group=pushgo
 WorkingDirectory=/opt/pushgo-gateway
 ExecStart=/opt/pushgo-gateway/pushgo-gateway \
   --http-addr 0.0.0.0:6666 \
-  --private-channel-enabled \
+  --private-transports quic,tcp,wss \
   --private-quic-bind 127.0.0.1:5223 \
   --private-quic-port 443 \
   --private-tcp-bind 127.0.0.1:5223 \
@@ -326,7 +328,7 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_HTTP_ADDR=0.0.0.0:6666 \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
-  -e PUSHGO_PRIVATE_CHANNEL_ENABLED=true \
+  -e PUSHGO_PRIVATE_TRANSPORTS=quic,tcp,wss \
   -e PUSHGO_MCP_ENABLED=true \
   -e PUSHGO_PUBLIC_BASE_URL='https://gateway.example.com' \
   -e PUSHGO_MCP_PREDEFINED_CLIENTS='chatgpt-prod:replace-me' \
@@ -385,11 +387,13 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 
 ### 2) 参数依赖关系
 
-- `--private-channel-enabled=true` 是私有传输总开关；关闭时，私有路由与运行时均不可用。
+- `--private-transports` 是私有传输总开关，支持 `true/false` 与显式集合（例如 `quic,tcp,wss`）。
+- 私有传输不做隐式回退：只有 `--private-transports` 显式列出的传输会启用。
 - `--private-*-bind` 一律表示 gateway 本机监听地址。
 - `--private-*-port` 一律表示通过 `/gateway/profile`（`transport` 提示）对 app 下发的对外端口。
-- QUIC 与网关终止 TLS 的 Raw TCP 共享 `--private-tls-cert` + `--private-tls-key`。
-- `--private-tcp-tls-offload=true` 只影响 Raw TCP；QUIC 仍然需要 gateway 侧 TLS 材料。
+- 启用 `quic` 时，必须配置 `--private-tls-cert` + `--private-tls-key`。
+- 启用 `tcp` 且 `--private-tcp-tls-offload=false` 时，也必须配置 `--private-tls-cert` + `--private-tls-key`。
+- `--private-tcp-tls-offload=true` 仅表示 Raw TCP 由边缘层卸载 TLS，gateway 侧按明文处理。
 - WSS 没有单独 bind 参数，始终复用 `--http-addr` 对应的 HTTP 入口。
 
 ## MCP 运行模型
@@ -412,7 +416,7 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--token`                         | `PUSHGO_TOKEN`                         | 无                         | 否       | 公共 API 鉴权 token（优先 `Authorization: Bearer <token>`；仅当 Authorization 缺失时回退 `?token=<token>`） |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
-| `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | 否       | 私有传输总开关                                       |
+| `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss`）      |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | 否       | 可观测矩阵档位（`prod_min`/`ops`/`incident`/`debug`） |
 | `--trace-log-file`                | `PUSHGO_TRACE_LOG_FILE`                | `logs/pushgo-gateway-trace.log` | 否  | trace JSONL 文件路径（仅在 trace 开启时使用）        |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
@@ -431,9 +435,9 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 
 | CLI Flag                    | Env                              | 默认值 | 必填     | 说明                                       |
 | --------------------------- | -------------------------------- | ------ | -------- | ------------------------------------------ |
-| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | 无     | 条件必填 | QUIC 与 Raw TCP 共享证书 PEM               |
-| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | 无     | 条件必填 | QUIC 与 Raw TCP 共享私钥 PEM               |
-| `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | 否       | Raw TCP 是否由边缘代理卸载 TLS            |
+| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | 无     | 条件必填 | `quic` 必需；`tcp` 在 `private-tcp-tls-offload=false` 时必需 |
+| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | 无     | 条件必填 | `quic` 必需；`tcp` 在 `private-tcp-tls-offload=false` 时必需 |
+| `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | 否       | Raw TCP 是否由边缘代理卸载 TLS（offload=true 时 gateway 侧明文） |
 | `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | 否   | Raw TCP 入站是否要求 PROXY protocol v1    |
 
 ### Private Runtime Limits
@@ -624,7 +628,7 @@ Group=pushgo
 WorkingDirectory=/opt/pushgo-gateway
 ExecStart=/opt/pushgo-gateway/pushgo-gateway \
   --http-addr 0.0.0.0:6666 \
-  --private-channel-enabled \
+  --private-transports quic,tcp,wss \
   --private-quic-bind 127.0.0.1:5223 \
   --private-quic-port 443 \
   --private-tcp-bind 127.0.0.1:5223 \
@@ -678,7 +682,7 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_HTTP_ADDR=0.0.0.0:6666 \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
-  -e PUSHGO_PRIVATE_CHANNEL_ENABLED=true \
+  -e PUSHGO_PRIVATE_TRANSPORTS=quic,tcp,wss \
   -e PUSHGO_MCP_ENABLED=true \
   -e PUSHGO_PUBLIC_BASE_URL='https://gateway.example.com' \
   -e PUSHGO_MCP_PREDEFINED_CLIENTS='chatgpt-prod:replace-me' \

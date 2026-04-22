@@ -5,7 +5,7 @@ use tokio::{net::TcpListener, signal};
 
 use pushgo_gateway::{
     app::{AppRuntime, build_app},
-    args::{Args, ObservabilityConfig},
+    args::{Args, ObservabilityConfig, PrivateTransports},
     private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
 };
@@ -25,6 +25,7 @@ const FCM_SEND_BASE_URL: &str = "https://fcm.googleapis.com";
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse().normalized();
+    let private_transports = args.private_transports()?;
     let observability = args.observability_config();
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
     pushgo_gateway::util::set_trace_logs_mode(observability.trace_logs_enabled);
@@ -36,6 +37,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let token_service_url = args.token_service_url.trim().to_string();
     print_startup_diagnostics(
         &args,
+        private_transports,
         &observability,
         apns_endpoint,
         token_service_url.as_str(),
@@ -43,7 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     let client = reqwest::Client::builder()
-        .user_agent("pushgo-gateway/1.2.3")
+        .user_agent(concat!("pushgo-gateway/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|err| pushgo_gateway::Error::Internal(err.to_string()))?;
@@ -120,6 +122,7 @@ fn apns_endpoint(sandbox_mode: bool) -> &'static str {
 
 fn print_startup_diagnostics(
     args: &Args,
+    private_transports: PrivateTransports,
     observability: &ObservabilityConfig,
     apns_endpoint: &str,
     token_service_url: &str,
@@ -128,7 +131,10 @@ fn print_startup_diagnostics(
     pushgo_gateway::util::TraceEvent::new("gateway.startup")
         .field_str("http_addr", args.http_addr.as_str())
         .field_bool("sandbox_mode", args.sandbox_mode)
-        .field_bool("private_channel_enabled", args.private_channel_enabled)
+        .field_bool("private_channel_enabled", private_transports.any_enabled())
+        .field_bool("private_transport_quic_enabled", private_transports.quic)
+        .field_bool("private_transport_tcp_enabled", private_transports.tcp)
+        .field_bool("private_transport_wss_enabled", private_transports.wss)
         .field_str("observability_profile", observability.profile.as_str())
         .field_bool(
             "diagnostics_api_enabled",

@@ -138,7 +138,7 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
   --http-addr "127.0.0.1:${HTTP_PORT}" \
   --db-url "$DB_URL" \
   --token "$TOKEN" \
-  --private-channel-enabled \
+  --private-transports quic,tcp,wss \
   --private-tcp-bind "127.0.0.1:${PRIVATE_TCP_PORT}" \
   --private-tcp-port "$PRIVATE_TCP_PORT" \
   --private-tcp-tls-offload \

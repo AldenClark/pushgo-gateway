@@ -1,4 +1,8 @@
 use clap::Parser;
+use std::{
+    io::{Error as IoError, ErrorKind},
+    net::SocketAddr,
+};
 
 const DEFAULT_TRACE_LOG_FILE: &str = "logs/pushgo-gateway-trace.log";
 
@@ -16,6 +20,38 @@ pub struct ObservabilityConfig {
     pub diagnostics_api_enabled: bool,
     pub trace_logs_enabled: bool,
     pub stats_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrivateTransports {
+    pub quic: bool,
+    pub tcp: bool,
+    pub wss: bool,
+}
+
+impl PrivateTransports {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            quic: false,
+            tcp: false,
+            wss: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn all() -> Self {
+        Self {
+            quic: true,
+            tcp: true,
+            wss: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn any_enabled(self) -> bool {
+        self.quic || self.tcp || self.wss
+    }
 }
 
 impl ObservabilityProfile {
@@ -94,13 +130,15 @@ pub struct Args {
     )]
     pub token_service_url: String,
 
-    /// Enable private channel module (HTTP private routes + realtime transport).
+    /// Private transport switch. Supports:
+    /// - boolean form: true/false
+    /// - explicit set: none or comma-separated quic,tcp,wss
     #[arg(
-        env = "PUSHGO_PRIVATE_CHANNEL_ENABLED",
-        long = "private-channel-enabled",
+        env = "PUSHGO_PRIVATE_TRANSPORTS",
+        long = "private-transports",
         default_value = "false"
     )]
-    pub private_channel_enabled: bool,
+    pub private_transports: String,
 
     /// Observability profile controlling diagnostics/tracing/stats defaults.
     #[arg(
@@ -160,11 +198,11 @@ pub struct Args {
     )]
     pub private_quic_port: u16,
 
-    /// TLS certificate path (PEM) shared by private QUIC and private TCP listeners.
+    /// TLS certificate path (PEM) used by private QUIC and by private TCP when TLS is gateway-terminated.
     #[arg(env = "PUSHGO_PRIVATE_TLS_CERT", long = "private-tls-cert")]
     pub private_tls_cert_path: Option<String>,
 
-    /// TLS private key path (PEM) shared by private QUIC and private TCP listeners.
+    /// TLS private key path (PEM) used by private QUIC and by private TCP when TLS is gateway-terminated.
     #[arg(env = "PUSHGO_PRIVATE_TLS_KEY", long = "private-tls-key")]
     pub private_tls_key_path: Option<String>,
 
@@ -386,7 +424,72 @@ impl Args {
         if self.trace_log_file.is_empty() {
             self.trace_log_file = DEFAULT_TRACE_LOG_FILE.to_string();
         }
+        self.private_transports = self.private_transports.trim().to_string();
+        if self.private_transports.is_empty() {
+            self.private_transports = "false".to_string();
+        }
         self
+    }
+
+    pub fn private_transports(&self) -> Result<PrivateTransports, IoError> {
+        let transports = parse_private_transports(self.private_transports.as_str())?;
+        self.validate_private_transport_dependencies(transports)?;
+        Ok(transports)
+    }
+
+    fn validate_private_transport_dependencies(
+        &self,
+        transports: PrivateTransports,
+    ) -> Result<(), IoError> {
+        let cert_set = self.private_tls_cert_path.is_some();
+        let key_set = self.private_tls_key_path.is_some();
+        if cert_set ^ key_set {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY must be configured together",
+            ));
+        }
+
+        let tls_identity_ready = cert_set && key_set;
+        if transports.quic && !tls_identity_ready {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "PUSHGO_PRIVATE_TRANSPORTS includes `quic`, but PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY are required",
+            ));
+        }
+        if transports.tcp && !self.private_tcp_tls_offload && !tls_identity_ready {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "PUSHGO_PRIVATE_TRANSPORTS includes `tcp` with PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false, but PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY are required",
+            ));
+        }
+        if transports.quic {
+            validate_bind_addr(
+                "PUSHGO_PRIVATE_QUIC_BIND",
+                self.private_quic_bind.as_str(),
+                "PUSHGO_PRIVATE_TRANSPORTS includes `quic`, but PUSHGO_PRIVATE_QUIC_BIND must be a valid socket address",
+            )?;
+            if self.private_quic_port == 0 {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    "PUSHGO_PRIVATE_TRANSPORTS includes `quic`, but PUSHGO_PRIVATE_QUIC_PORT must be greater than 0",
+                ));
+            }
+        }
+        if transports.tcp {
+            validate_bind_addr(
+                "PUSHGO_PRIVATE_TCP_BIND",
+                self.private_tcp_bind.as_str(),
+                "PUSHGO_PRIVATE_TRANSPORTS includes `tcp`, but PUSHGO_PRIVATE_TCP_BIND must be a valid socket address",
+            )?;
+            if self.private_tcp_port == 0 {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    "PUSHGO_PRIVATE_TRANSPORTS includes `tcp`, but PUSHGO_PRIVATE_TCP_PORT must be greater than 0",
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -421,11 +524,63 @@ fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
     })
 }
 
+fn parse_private_transports(raw: &str) -> Result<PrivateTransports, IoError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() || matches!(normalized.as_str(), "false" | "off" | "disabled" | "none")
+    {
+        return Ok(PrivateTransports::none());
+    }
+    if matches!(normalized.as_str(), "true" | "on" | "enabled" | "all") {
+        return Ok(PrivateTransports::all());
+    }
+
+    let mut transports = PrivateTransports::none();
+    let mut has_token = false;
+    for token in normalized
+        .split([',', ';', '|', ' '])
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        has_token = true;
+        match token {
+            "quic" => transports.quic = true,
+            "tcp" => transports.tcp = true,
+            "wss" => transports.wss = true,
+            unknown => {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "invalid private transport `{unknown}` in PUSHGO_PRIVATE_TRANSPORTS (expected true/false/none or quic,tcp,wss)"
+                    ),
+                ));
+            }
+        }
+    }
+
+    if !has_token {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "PUSHGO_PRIVATE_TRANSPORTS is empty after parsing",
+        ));
+    }
+    Ok(transports)
+}
+
+fn validate_bind_addr(env_name: &str, raw: &str, message: &str) -> Result<SocketAddr, IoError> {
+    let normalized = raw.trim();
+    normalized.parse::<SocketAddr>().map_err(|err| {
+        IoError::new(
+            ErrorKind::InvalidInput,
+            format!("{message}: {env_name}=`{normalized}` ({err})"),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{Args, ObservabilityProfile, normalize_optional_non_empty};
+    use super::{Args, ObservabilityProfile, PrivateTransports, normalize_optional_non_empty};
 
     #[test]
     fn normalize_optional_non_empty_treats_empty_and_whitespace_as_missing() {
@@ -494,5 +649,172 @@ mod tests {
         ])
         .normalized();
         assert_eq!(args.trace_log_file, super::DEFAULT_TRACE_LOG_FILE);
+    }
+
+    #[test]
+    fn private_transports_supports_boolean_switch() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=true",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--private-tls-cert",
+            "/tmp/cert.pem",
+            "--private-tls-key",
+            "/tmp/key.pem",
+        ])
+        .normalized();
+        assert_eq!(
+            args.private_transports()
+                .expect("private transports should parse"),
+            PrivateTransports::all()
+        );
+    }
+
+    #[test]
+    fn private_transports_supports_explicit_list() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=tcp,wss",
+            "--private-tcp-tls-offload",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        assert_eq!(
+            args.private_transports()
+                .expect("private transports should parse"),
+            PrivateTransports {
+                quic: false,
+                tcp: true,
+                wss: true,
+            }
+        );
+    }
+
+    #[test]
+    fn private_transports_rejects_quic_without_tls_identity() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=quic",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let error = args
+            .private_transports()
+            .expect_err("quic without tls identity must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("PUSHGO_PRIVATE_TRANSPORTS includes `quic`")
+        );
+    }
+
+    #[test]
+    fn private_transports_rejects_partial_tls_identity() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=wss",
+            "--private-tls-cert",
+            "/tmp/cert.pem",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let error = args
+            .private_transports()
+            .expect_err("partial tls identity must fail");
+        assert!(error.to_string().contains(
+            "PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY must be configured together"
+        ));
+    }
+
+    #[test]
+    fn private_transports_rejects_tcp_without_tls_identity_when_offload_disabled() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=tcp",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let error = args
+            .private_transports()
+            .expect_err("tcp without tls identity must fail when offload is disabled");
+        assert!(error.to_string().contains(
+            "PUSHGO_PRIVATE_TRANSPORTS includes `tcp` with PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false"
+        ));
+    }
+
+    #[test]
+    fn private_transports_rejects_invalid_bind_addr_for_enabled_transport() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=tcp",
+            "--private-tcp-bind",
+            "invalid-bind",
+            "--private-tcp-tls-offload",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let error = args
+            .private_transports()
+            .expect_err("invalid tcp bind should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("PUSHGO_PRIVATE_TRANSPORTS includes `tcp`, but PUSHGO_PRIVATE_TCP_BIND must be a valid socket address")
+        );
+    }
+
+    #[test]
+    fn private_transports_rejects_zero_port_for_enabled_transport() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=quic",
+            "--private-quic-port",
+            "0",
+            "--private-tls-cert",
+            "/tmp/cert.pem",
+            "--private-tls-key",
+            "/tmp/key.pem",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let error = args
+            .private_transports()
+            .expect_err("zero quic port should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("PUSHGO_PRIVATE_TRANSPORTS includes `quic`, but PUSHGO_PRIVATE_QUIC_PORT must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn private_transports_ignores_disabled_transport_bind_validation() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=wss",
+            "--private-quic-bind",
+            "invalid-quic-bind",
+            "--private-tcp-bind",
+            "invalid-tcp-bind",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        assert_eq!(
+            args.private_transports()
+                .expect("disabled quic/tcp bind should not block wss-only config"),
+            PrivateTransports {
+                quic: false,
+                tcp: false,
+                wss: true,
+            }
+        );
     }
 }

@@ -266,6 +266,17 @@
           <strong>/message</strong>, <strong>/event/*</strong>,
           <strong>/thing/*</strong>.
         </p>
+        <p class="callout">
+          私有传输运行参数（QUIC/TCP/WSS）不在本页；请参考 gateway README 的
+          “Private Transport Model / CLI Reference”，并使用
+          <code>PUSHGO_PRIVATE_TRANSPORTS</code>（或
+          <code>--private-transports</code>）做显式启停配置。
+          <br />
+          Private runtime configuration (QUIC/TCP/WSS) is not covered on this
+          page. See gateway README sections “Private Transport Model / CLI
+          Reference” and use <code>PUSHGO_PRIVATE_TRANSPORTS</code> (or
+          <code>--private-transports</code>) for explicit transport enablement.
+        </p>
         <div class="quick-nav">
           <a href="#global">全局格式 / Global</a>
           <a href="#message">消息 / Message</a>
@@ -294,6 +305,13 @@
           <code>32KB</code> (<code>DefaultBodyLimit::max(32 * 1024)</code>).
           Business IDs (<code>message_id/event_id/thing_id</code>) are generated
           by gateway and currently use 32-char lowercase hex strings.
+        </p>
+        <p class="note">
+          当前发送类接口请求模型启用了严格 JSON 解析（<code>deny_unknown_fields</code>）：
+          未声明字段会触发 400。<br />
+          Current push endpoint request models use strict JSON parsing
+          (<code>deny_unknown_fields</code>): undeclared fields are rejected with
+          HTTP 400.
         </p>
 
         <h3>请求头<br />Request headers</h3>
@@ -466,6 +484,19 @@
                 <code>thing_id</code>。有值时视为对象下消息。<br />Optional
                 thing ID; use the <code>thing_id</code> returned by gateway. It
                 marks the message as thing-scoped.
+              </td>
+            </tr>
+            <tr>
+              <td><code>occurred_at</code></td>
+              <td>条件必填<br />Conditional</td>
+              <td>number | string</td>
+              <td>
+                业务发生时间（Unix 秒）。默认可省略；但当 <code>thing_id</code>
+                存在（对象下消息）时必须提供，否则返回
+                <code>occurred_at_required_for_thing_scoped_message</code>。<br />
+                Business occurred-at timestamp in Unix seconds. Optional by
+                default; required when <code>thing_id</code> is present
+                (thing-scoped message), otherwise request is rejected.
               </td>
             </tr>
             <tr>
@@ -822,13 +853,12 @@
             </tr>
             <tr>
               <td><code>event_time</code></td>
-              <td>否<br />No</td>
+              <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                事件时间（Unix
-                秒）；如果比当前事件记录更早，可能不会覆盖现有内容。<br />Event
-                time in Unix seconds; older timestamps may not overwrite
-                existing event content.
+                事件时间（Unix 秒），作为本次事件分发的业务发生时间。<br />Event
+                time in Unix seconds, used as the occurred-at timestamp of this
+                event dispatch.
               </td>
             </tr>
             <tr>
@@ -846,9 +876,9 @@
               <td>否<br />No</td>
               <td>object</td>
               <td>
-                本次请求的附加信息，不会改变已有事件/对象的属性。<br />Extra
-                info for this request only; it does not change existing
-                event/thing attributes.
+                本次请求附加信息（仅允许 string/number/bool）；key ≤ 64，value ≤
+                512。<br />Request-scoped metadata (string/number/bool only);
+                key ≤ 64, value ≤ 512.
               </td>
             </tr>
             <tr>
@@ -959,13 +989,12 @@
             </tr>
             <tr>
               <td><code>event_time</code></td>
-              <td>否<br />No</td>
+              <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                事件时间（Unix
-                秒）；如果比当前事件记录更早，可能不会覆盖现有内容。<br />Event
-                time in Unix seconds; older timestamps may not overwrite
-                existing event content.
+                事件时间（Unix 秒），作为本次事件分发的业务发生时间。<br />Event
+                time in Unix seconds, used as the occurred-at timestamp of this
+                event dispatch.
               </td>
             </tr>
             <tr>
@@ -1003,8 +1032,8 @@
               <td>否<br />No</td>
               <td>string</td>
               <td>
-                可选对象 ID；事件创建后不能改归属，也不能“后补”归属。<br />Optional
-                thing ID; event ownership cannot be changed or added later.
+                可选对象 ID；用于本次事件分发的关联信息。<br />Optional thing ID
+                for this event dispatch.
               </td>
             </tr>
             <tr>
@@ -1012,9 +1041,9 @@
               <td>否<br />No</td>
               <td>object</td>
               <td>
-                本次请求的附加信息，不会改变已有事件/对象的属性。<br />Extra
-                info for this request only; it does not change existing
-                event/thing attributes.
+                本次请求附加信息（仅允许 string/number/bool）；key ≤ 64，value ≤
+                512。<br />Request-scoped metadata (string/number/bool only);
+                key ≤ 64, value ≤ 512.
               </td>
             </tr>
             <tr>
@@ -1037,8 +1066,7 @@
           <br />
           Extra rules: update requires
           <code>event_id/status/message/severity</code>;
-          <code>started_at</code> and <code>ended_at</code> are not allowed;
-          older <code>event_time</code> may not overwrite existing data.
+          <code>started_at</code> and <code>ended_at</code> are not allowed.
         </p>
         <table>
           <thead>
@@ -1118,13 +1146,12 @@
             </tr>
             <tr>
               <td><code>event_time</code></td>
-              <td>否<br />No</td>
+              <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                事件时间（Unix
-                秒）；如果比当前事件记录更早，可能不会覆盖现有内容。<br />Event
-                time in Unix seconds; older timestamps may not overwrite
-                existing event content.
+                事件时间（Unix 秒），作为本次事件分发的业务发生时间。<br />Event
+                time in Unix seconds, used as the occurred-at timestamp of this
+                event dispatch.
               </td>
             </tr>
             <tr>
@@ -1141,8 +1168,8 @@
               <td>否<br />No</td>
               <td>string</td>
               <td>
-                可选对象 ID；事件创建后不能改归属，也不能“后补”归属。<br />Optional
-                thing ID; event ownership cannot be changed or added later.
+                可选对象 ID；用于本次事件分发的关联信息。<br />Optional thing ID
+                for this event dispatch.
               </td>
             </tr>
             <tr>
@@ -1150,9 +1177,9 @@
               <td>否<br />No</td>
               <td>object</td>
               <td>
-                本次请求的附加信息，不会改变已有事件/对象的属性。<br />Extra
-                info for this request only; it does not change existing
-                event/thing attributes.
+                本次请求附加信息（仅允许 string/number/bool）；key ≤ 64，value ≤
+                512。<br />Request-scoped metadata (string/number/bool only);
+                key ≤ 64, value ≤ 512.
               </td>
             </tr>
             <tr>
@@ -1228,9 +1255,14 @@
           <tbody>
             <tr>
               <td><code>title</code></td>
-              <td>否<br />No</td>
+              <td>建议<br />Recommended</td>
               <td>string</td>
-              <td>对象标题。<br />Thing title.</td>
+              <td>
+                建议在 create 传入（产品语义上用于对象主标题）；当前网关不会因缺失
+                <code>title</code> 拒绝请求。<br />Recommended on create as
+                the primary thing title in product semantics; current gateway
+                does not reject create when <code>title</code> is missing.
+              </td>
             </tr>
             <tr>
               <td><code>description</code></td>
@@ -1298,13 +1330,12 @@
             </tr>
             <tr>
               <td><code>observed_at</code></td>
-              <td>否<br />No</td>
+              <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix
-                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
-                time in Unix seconds; older timestamps may not overwrite
-                existing thing content.
+                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
+                time in Unix seconds, used as the occurred-at timestamp of this
+                thing dispatch.
               </td>
             </tr>
             <tr>
@@ -1312,9 +1343,9 @@
               <td>否<br />No</td>
               <td>object</td>
               <td>
-                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
-                this request only; it does not directly overwrite thing
-                attributes.
+                本次请求附加信息（仅允许 string/number/bool）；key ≤ 64，value ≤
+                512。<br />Request-scoped metadata (string/number/bool only);
+                key ≤ 64, value ≤ 512.
               </td>
             </tr>
             <tr>
@@ -1440,13 +1471,12 @@
             </tr>
             <tr>
               <td><code>observed_at</code></td>
-              <td>否<br />No</td>
+              <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix
-                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
-                time in Unix seconds; older timestamps may not overwrite
-                existing thing content.
+                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
+                time in Unix seconds, used as the occurred-at timestamp of this
+                thing dispatch.
               </td>
             </tr>
             <tr>
@@ -1454,9 +1484,9 @@
               <td>否<br />No</td>
               <td>object</td>
               <td>
-                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
-                this request only; it does not directly overwrite thing
-                attributes.
+                本次请求附加信息（仅允许 string/number/bool）；key ≤ 64，value ≤
+                512。<br />Request-scoped metadata (string/number/bool only);
+                key ≤ 64, value ≤ 512.
               </td>
             </tr>
             <tr>
@@ -1579,13 +1609,12 @@
             </tr>
             <tr>
               <td><code>observed_at</code></td>
-              <td>否<br />No</td>
+              <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix
-                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
-                time in Unix seconds; older timestamps may not overwrite
-                existing thing content.
+                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
+                time in Unix seconds, used as the occurred-at timestamp of this
+                thing dispatch.
               </td>
             </tr>
             <tr>
@@ -1593,9 +1622,9 @@
               <td>否<br />No</td>
               <td>object</td>
               <td>
-                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
-                this request only; it does not directly overwrite thing
-                attributes.
+                本次请求附加信息（仅允许 string/number/bool）；key ≤ 64，value ≤
+                512。<br />Request-scoped metadata (string/number/bool only);
+                key ≤ 64, value ≤ 512.
               </td>
             </tr>
             <tr>
@@ -1724,13 +1753,12 @@
             </tr>
             <tr>
               <td><code>observed_at</code></td>
-              <td>否<br />No</td>
+              <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix
-                秒）；如果比对象当前记录更早，可能不会覆盖现有内容。<br />Observed
-                time in Unix seconds; older timestamps may not overwrite
-                existing thing content.
+                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
+                time in Unix seconds, used as the occurred-at timestamp of this
+                thing dispatch.
               </td>
             </tr>
             <tr>
@@ -1738,9 +1766,9 @@
               <td>否<br />No</td>
               <td>object</td>
               <td>
-                本次请求的附加信息，不会直接改写对象属性。<br />Extra info for
-                this request only; it does not directly overwrite thing
-                attributes.
+                本次请求附加信息（仅允许 string/number/bool）；key ≤ 64，value ≤
+                512。<br />Request-scoped metadata (string/number/bool only);
+                key ≤ 64, value ≤ 512.
               </td>
             </tr>
             <tr>

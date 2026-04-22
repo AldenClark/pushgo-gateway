@@ -109,17 +109,17 @@ jobs:
         run: |
           mkdir -p dist
           mkdir -p dist-docker
-          cp target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-amd64-gnu
-          cp target/aarch64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-arm64-gnu
-          cp target/armv7-unknown-linux-gnueabihf/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-armv7-gnu
-          cp target/x86_64-unknown-linux-musl/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-amd64-musl
-          cp target/aarch64-unknown-linux-musl/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-arm64-musl
-          cp target/armv7-unknown-linux-musleabihf/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-armv7-musl
-          cp dist/${BINARY_NAME}-amd64-gnu dist-docker/${BINARY_NAME}-amd64-gnu
-          cp dist/${BINARY_NAME}-arm64-gnu dist-docker/${BINARY_NAME}-arm64-gnu
-          cp dist/${BINARY_NAME}-armv7-gnu dist-docker/${BINARY_NAME}-armv7-gnu
-          chmod +x dist/${BINARY_NAME}-amd64-gnu dist/${BINARY_NAME}-arm64-gnu dist/${BINARY_NAME}-armv7-gnu
-          chmod +x dist/${BINARY_NAME}-amd64-musl dist/${BINARY_NAME}-arm64-musl dist/${BINARY_NAME}-armv7-musl
+          cp target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-amd64-gnu
+          cp target/aarch64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-arm64-gnu
+          cp target/armv7-unknown-linux-gnueabihf/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-armv7-gnu
+          cp target/x86_64-unknown-linux-musl/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-amd64-musl
+          cp target/aarch64-unknown-linux-musl/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-arm64-musl
+          cp target/armv7-unknown-linux-musleabihf/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-armv7-musl
+          cp target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist-docker/${BINARY_NAME}-amd64-gnu
+          cp target/aarch64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist-docker/${BINARY_NAME}-arm64-gnu
+          cp target/armv7-unknown-linux-gnueabihf/release/${SOURCE_BINARY_NAME} dist-docker/${BINARY_NAME}-armv7-gnu
+          chmod +x dist/${BINARY_NAME}-linux-amd64-gnu dist/${BINARY_NAME}-linux-arm64-gnu dist/${BINARY_NAME}-linux-armv7-gnu
+          chmod +x dist/${BINARY_NAME}-linux-amd64-musl dist/${BINARY_NAME}-linux-arm64-musl dist/${BINARY_NAME}-linux-armv7-musl
           chmod +x dist-docker/${BINARY_NAME}-amd64-gnu dist-docker/${BINARY_NAME}-arm64-gnu dist-docker/${BINARY_NAME}-armv7-gnu
           ls -l dist
 
@@ -259,7 +259,7 @@ jobs:
           release_body=""
           if [[ -n "$section_body" ]]; then
             release_notes_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${release_notes_file}"
-            release_body="# ${GITHUB_REF_NAME}"$'\n\n'"Source: [${release_notes_file}](${release_notes_url}) [$section]"$'\n\n'"$section_body"
+            release_body="Source: [${release_notes_file}](${release_notes_url}) [$section]"$'\n\n'"$section_body"
           fi
           {
             echo "RELEASE_CHANGELOG_BODY<<__PUSHGO_GATEWAY_RELEASE_BODY_EOF__"
@@ -281,9 +281,9 @@ jobs:
           body: ${{ env.RELEASE_CHANGELOG_BODY }}
           prerelease: ${{ steps.tag.outputs.prerelease }}
           files: |
-            dist/${{ env.BINARY_NAME }}-amd64-gnu
-            dist/${{ env.BINARY_NAME }}-arm64-gnu
-            dist/${{ env.BINARY_NAME }}-armv7-gnu
-            dist/${{ env.BINARY_NAME }}-amd64-musl
-            dist/${{ env.BINARY_NAME }}-arm64-musl
-            dist/${{ env.BINARY_NAME }}-armv7-musl
+            dist/${{ env.BINARY_NAME }}-linux-amd64-gnu
+            dist/${{ env.BINARY_NAME }}-linux-arm64-gnu
+            dist/${{ env.BINARY_NAME }}-linux-armv7-gnu
+            dist/${{ env.BINARY_NAME }}-linux-amd64-musl
+            dist/${{ env.BINARY_NAME }}-linux-arm64-musl
+            dist/${{ env.BINARY_NAME }}-linux-armv7-musl

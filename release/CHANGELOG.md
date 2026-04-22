@@ -12,6 +12,28 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.4] - 2026-04-22
+
+### Changed
+- Bumped package/runtime version to `1.2.4` (release tag target: `v1.2.4`) and aligned lock metadata.
+- This `v1.2.4` publication includes all current code/doc/workflow/test changes in the `gateway` repository at release cut time.
+- Switched private transport entry config from legacy boolean `PUSHGO_PRIVATE_CHANNEL_ENABLED` to explicit `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`, with parser support for `true/false/none` and explicit transport sets (`quic,tcp,wss`).
+- Added transport-aware dependency validation in CLI args normalization path:
+  - `quic` requires `PUSHGO_PRIVATE_TLS_CERT` + `PUSHGO_PRIVATE_TLS_KEY`
+  - `tcp` requires cert/key only when `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false`
+  - partial TLS identity is rejected early.
+- Updated app/runtime wiring so private runtime, QUIC bind, TCP bind, and profile transport flags are all driven by the parsed transport set.
+- Tightened private router behavior:
+  - `/private/ws` route is mounted only when `wss` transport is enabled
+  - websocket handler returns `503` when WSS transport is disabled
+  - added route coverage tests for WSS-disabled state.
+- Updated release audit and blackbox coverage to use `--private-transports quic,tcp,wss` where full private transport matrix is required.
+- Refreshed gateway docs (`readme.md`, `src/api/docs.html`) and self-hosting website docs (EN/ZH + generated `dist`) to document explicit transport selection and certificate dependency rules.
+- Refreshed release workflow:
+  - GitHub Release body no longer repeats tag heading already provided by release title
+  - uploaded release binaries now include explicit OS marker in filenames (for example `pushgo-gateway-linux-amd64-gnu`).
+- Replaced hardcoded `pushgo-gateway/<version>` user-agent strings with `env!("CARGO_PKG_VERSION")` binding to keep runtime UA aligned with package version on every release bump.
+
 ## [v1.2.3] - 2026-04-22
 
 ### Changed

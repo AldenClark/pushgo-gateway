@@ -24,7 +24,7 @@ pub(crate) fn build_router(state: AppState, docs_html: &'static str) -> Router {
         router = router.merge(handlers::diagnostics_router());
     }
 
-    if state.private_channel_enabled {
+    if state.private_transport_profile.wss_enabled {
         router = router.merge(handlers::private_router());
     }
 

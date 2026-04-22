@@ -79,6 +79,23 @@ async fn private_profile_route_is_not_available() {
 }
 
 #[tokio::test]
+async fn private_ws_route_is_not_mounted_when_wss_transport_disabled() {
+    let state = build_private_without_wss_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/private/ws")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("router should handle request");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn gateway_profile_route_reports_private_disabled_when_private_module_off() {
     let state = build_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");

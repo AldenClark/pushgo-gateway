@@ -138,6 +138,12 @@ async fn build_private_test_state() -> AppState {
     state
 }
 
+async fn build_private_without_wss_test_state() -> AppState {
+    let mut state = build_private_test_state().await;
+    state.private_transport_profile.wss_enabled = false;
+    state
+}
+
 async fn build_diagnostics_test_state() -> AppState {
     let mut state = build_test_state().await;
     state.diagnostics_api_enabled = true;

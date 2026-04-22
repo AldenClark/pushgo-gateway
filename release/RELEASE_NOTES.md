@@ -8,6 +8,15 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.4]
+
+### Changed
+- This `v1.2.4` release is scoped to all current changes in the `gateway` repository at release cut time.
+- Private transport configuration is now explicit: use `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports` (`none`, `wss`, `quic,tcp,wss`, etc.) instead of the legacy boolean switch.
+- Runtime behavior now follows selected transports strictly: `/private/ws` is mounted only when `wss` is enabled, and QUIC/TCP listeners start only when those transports are selected.
+- TLS dependency checks are transport-aware: `quic` requires cert+key; `tcp` requires cert+key only when `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false`; `wss` does not require private cert/key.
+- Self-hosting and gateway docs have been refreshed to reflect the new transport model and certificate rules.
+
 ## [v1.2.3]
 
 ### Improved

@@ -53,6 +53,12 @@ pub(crate) async fn private_ws(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    if !state.private_transport_profile.wss_enabled {
+        return crate::api::err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private wss transport is disabled",
+        );
+    }
     if !state.private_channel_enabled {
         return crate::api::err(
             StatusCode::SERVICE_UNAVAILABLE,

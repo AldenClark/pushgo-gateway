@@ -35,7 +35,7 @@ pub struct ApnsService {
 impl ApnsService {
     pub fn new(token_provider: Arc<dyn ApnsTokenProvider>, endpoint: &str) -> Result<Self, Error> {
         let client = Client::builder()
-            .user_agent("pushgo-gateway/1.2.3")
+            .user_agent(concat!("pushgo-gateway/", env!("CARGO_PKG_VERSION")))
             .timeout(APNS_TIMEOUT)
             .build()
             .map_err(|err| Error::Internal(err.to_string()))?;
