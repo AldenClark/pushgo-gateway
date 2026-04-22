@@ -7,6 +7,8 @@ impl PrivateHub {
         sent_at: i64,
         expires_at: i64,
     ) -> Result<EnqueuePrivateMessageOutcome, crate::Error> {
+        // Serialize capacity check + enqueue to avoid TOCTOU over-admission.
+        let _enqueue_gate = self.enqueue_gate.lock().await;
         let now = chrono::Utc::now().timestamp();
         let device_pending = self
             .store

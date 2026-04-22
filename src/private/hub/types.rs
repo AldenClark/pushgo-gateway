@@ -15,6 +15,7 @@ pub struct PrivateHub {
     hot_messages: DashMap<String, PrivateMessage>,
     hot_order: Mutex<VecDeque<String>>,
     resume_state: DashMap<DeviceId, ResumeState>,
+    enqueue_gate: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, Clone)]

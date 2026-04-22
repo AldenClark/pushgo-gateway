@@ -8,11 +8,13 @@ use std::{
 
 use reqwest::Client;
 use serde_json::Value;
+use sqlx::Row;
 use tempfile::TempDir;
 
 struct GatewayProcess {
     child: Child,
     _dir: TempDir,
+    db_url: String,
     log_path: PathBuf,
     http_port: u16,
     token: String,
@@ -23,6 +25,7 @@ impl GatewayProcess {
         let http_port = free_port();
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let db_path = dir.path().join("gateway-provider-ingress.sqlite");
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
         let log_path = dir.path().join("gateway-provider-ingress.log");
         let token = "blackbox-provider-token".to_string();
 
@@ -31,10 +34,11 @@ impl GatewayProcess {
             .arg("--http-addr")
             .arg(format!("127.0.0.1:{http_port}"))
             .arg("--db-url")
-            .arg(format!("sqlite://{}?mode=rwc", db_path.to_string_lossy()))
+            .arg(db_url.clone())
             .arg("--token")
             .arg(&token)
-            .arg("--diagnostics-api-enabled")
+            .arg("--observability-profile")
+            .arg("ops")
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
             .spawn()
@@ -43,6 +47,7 @@ impl GatewayProcess {
         let gateway = Self {
             child,
             _dir: dir,
+            db_url,
             log_path,
             http_port,
             token,
@@ -103,8 +108,7 @@ async fn provider_ingress_pull_and_ack_work_end_to_end() {
 
     send_message(&client, &gateway, &channel_id, "op-provider-ack-001").await;
     let mut known_delivery_ids = HashSet::new();
-    let first_delivery_id =
-        wait_for_delivery_id(&client, &gateway, &channel_id, &known_delivery_ids).await;
+    let first_delivery_id = wait_for_delivery_id(&gateway, &known_delivery_ids).await;
     known_delivery_ids.insert(first_delivery_id.clone());
 
     assert!(ack_message_with_retry(&client, &gateway, &device_key, &first_delivery_id).await);
@@ -125,11 +129,9 @@ async fn provider_ingress_pull_and_ack_work_end_to_end() {
 
     send_message(&client, &gateway, &channel_id, "op-provider-pull-all-001").await;
     send_message(&client, &gateway, &channel_id, "op-provider-pull-all-002").await;
-    let second_delivery_id =
-        wait_for_delivery_id(&client, &gateway, &channel_id, &known_delivery_ids).await;
+    let second_delivery_id = wait_for_delivery_id(&gateway, &known_delivery_ids).await;
     known_delivery_ids.insert(second_delivery_id.clone());
-    let third_delivery_id =
-        wait_for_delivery_id(&client, &gateway, &channel_id, &known_delivery_ids).await;
+    let third_delivery_id = wait_for_delivery_id(&gateway, &known_delivery_ids).await;
     known_delivery_ids.insert(third_delivery_id.clone());
 
     let single_pull = pull_messages(
@@ -242,41 +244,27 @@ async fn send_message(client: &Client, gateway: &GatewayProcess, channel_id: &st
     let _: Value = response.json().await.expect("response json should parse");
 }
 
-async fn wait_for_delivery_id(
-    client: &Client,
-    gateway: &GatewayProcess,
-    channel_id: &str,
-    excluded: &HashSet<String>,
-) -> String {
+async fn wait_for_delivery_id(gateway: &GatewayProcess, excluded: &HashSet<String>) -> String {
+    let pool = sqlx::SqlitePool::connect(&gateway.db_url)
+        .await
+        .expect("sqlite pool should connect");
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let diagnostics_url = format!(
-            "{}/diagnostics/dispatch?limit=200&channel_id={channel_id}",
-            gateway.base_url()
-        );
-        let response = client
-            .get(diagnostics_url)
-            .bearer_auth(&gateway.token)
-            .send()
-            .await
-            .expect("diagnostics request should succeed");
-        if response.status().is_success() {
-            let body: Value = response
-                .json()
-                .await
-                .expect("diagnostics response should parse");
-            if let Some(entries) = body["data"]["entries"].as_array() {
-                for entry in entries {
-                    let delivery_id = entry["delivery_id"].as_str().unwrap_or("").trim();
-                    if !delivery_id.is_empty() && !excluded.contains(delivery_id) {
-                        return delivery_id.to_string();
-                    }
-                }
+        let rows = sqlx::query(
+            "SELECT delivery_id FROM provider_pull_queue ORDER BY created_at ASC, delivery_id ASC",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("provider_pull_queue query should succeed");
+        for row in rows {
+            let delivery_id: String = row.get("delivery_id");
+            if !delivery_id.trim().is_empty() && !excluded.contains(delivery_id.as_str()) {
+                return delivery_id;
             }
         }
         assert!(
             Instant::now() < deadline,
-            "delivery id not found in diagnostics\n{}",
+            "delivery id not found in provider_pull_queue\n{}",
             gateway.logs()
         );
         tokio::time::sleep(Duration::from_millis(100)).await;

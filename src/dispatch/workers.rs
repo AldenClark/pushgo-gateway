@@ -1,5 +1,6 @@
 use super::runtime::ProviderDispatchFailureLog;
 use super::*;
+use crate::stats::StatsCollector;
 
 pub(crate) struct DispatchWorkerDeps {
     pub apns: Arc<dyn ApnsClient>,
@@ -7,7 +8,7 @@ pub(crate) struct DispatchWorkerDeps {
     pub wns: Arc<dyn WnsClient>,
     pub store: Storage,
     pub private: Option<Arc<PrivateState>>,
-    pub audit: Arc<DispatchAuditLog>,
+    pub stats: Arc<StatsCollector>,
 }
 
 impl DispatchWorkerDeps {
@@ -15,7 +16,7 @@ impl DispatchWorkerDeps {
         let runtime = DispatchWorkerRuntime {
             store: self.store,
             private: self.private,
-            audit: self.audit,
+            stats: self.stats,
         };
         let pool = DispatchWorkerPool {
             apns: self.apns,

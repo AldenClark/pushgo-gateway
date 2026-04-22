@@ -1,6 +1,6 @@
 use super::*;
 use crate::storage::database::{
-    DeliveryAuditDatabaseAccess, DeviceRouteDatabaseAccess, PrivateMessageDatabaseAccess,
+    DeviceRouteDatabaseAccess, PrivateMessageDatabaseAccess, StatsDatabaseAccess,
     SystemStateDatabaseAccess,
 };
 
@@ -92,18 +92,6 @@ impl Storage {
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
         Ok(())
-    }
-
-    pub async fn append_delivery_audit(&self, entry: &DeliveryAuditWrite) -> StoreResult<()> {
-        let normalized = entry.normalized();
-        self.db.append_delivery_audit(&normalized).await
-    }
-
-    pub async fn append_delivery_audit_batch(
-        &self,
-        entries: &[DeliveryAuditWrite],
-    ) -> StoreResult<()> {
-        self.db.append_delivery_audit_batch(entries).await
     }
 
     pub async fn append_subscription_audit(

@@ -321,13 +321,15 @@ impl Storage {
             .ack_private_delivery(item.device_id, original_delivery_id)
             .await
         {
-            crate::util::diagnostics_log(format_args!(
-                "provider pull cleanup private outbox ack failed delivery_id={} original_delivery_id={} device_id={} error={}",
-                item.delivery_id,
-                original_delivery_id,
-                crate::util::encode_crockford_base32_128(&item.device_id),
-                err,
-            ));
+            crate::util::TraceEvent::new("provider.pull_private_outbox_ack_failed")
+                .field_redacted("delivery_id", item.delivery_id.as_str())
+                .field_redacted("original_delivery_id", original_delivery_id)
+                .field_redacted(
+                    "device_id",
+                    crate::util::encode_crockford_base32_128(&item.device_id),
+                )
+                .field_str("error", err.to_string())
+                .emit();
         }
     }
 }

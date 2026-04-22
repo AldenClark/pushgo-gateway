@@ -350,8 +350,10 @@ impl PrivateState {
                     break;
                 }
                 if engine.consume_resync_request() {
-                    if let Err(_err) = runtime.resync_fallback_tasks(&mut scheduler, 200_000).await
-                    {
+                    if let Err(err) = runtime.resync_fallback_tasks(&mut scheduler, 200_000).await {
+                        crate::util::TraceEvent::new("private.fallback_resync_failed")
+                            .field_str("error", err.to_string())
+                            .emit();
                     }
                     engine.sync_scheduler_depth(&state, &scheduler);
                 }
@@ -379,7 +381,13 @@ impl PrivateState {
                                 max_lag_ms = max_lag_ms.max((lag_secs as u64).saturating_mul(1000));
                                 match key {
                                     SchedulerTaskKey::Maintenance => {
-                                        if let Err(_err) = runtime.run_maintenance_tick().await {}
+                                        if let Err(err) = runtime.run_maintenance_tick().await {
+                                            crate::util::TraceEvent::new(
+                                                "private.maintenance_tick_failed",
+                                            )
+                                            .field_str("error", err.to_string())
+                                            .emit();
+                                        }
                                         scheduler.schedule_maintenance(
                                             now.saturating_add(MAINTENANCE_INTERVAL_SECS),
                                         );
@@ -389,7 +397,7 @@ impl PrivateState {
                                 }
                             }
                             if run_claim_worker
-                                && let Err(_err) =
+                                && let Err(err) =
                                     runtime.run_claim_ack_drain(
                                         &mut scheduler,
                                         1024,
@@ -398,11 +406,16 @@ impl PrivateState {
                                     )
                                     .await
                             {
+                                crate::util::TraceEvent::new(
+                                    "private.claim_ack_drain_active_failed",
+                                )
+                                .field_str("error", err.to_string())
+                                .emit();
                             }
                             if max_lag_ms > 0 {
                                 state.metrics.mark_task_lag_ms(max_lag_ms);
                             }
-                        } else if let Err(_err) =
+                        } else if let Err(err) =
                             runtime.run_claim_ack_drain(
                                 &mut scheduler,
                                 256,
@@ -411,6 +424,9 @@ impl PrivateState {
                             )
                             .await
                         {
+                            crate::util::TraceEvent::new("private.claim_ack_drain_idle_failed")
+                                .field_str("error", err.to_string())
+                                .emit();
                         }
                         engine.sync_scheduler_depth(&state, &scheduler);
                     }

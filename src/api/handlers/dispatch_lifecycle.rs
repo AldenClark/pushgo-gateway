@@ -31,6 +31,7 @@ pub(crate) struct NotificationDispatchSummary {
     pub delivery_id: String,
     pub partial_failure: bool,
     pub private_enqueue_too_busy: bool,
+    pub has_dispatch_attempt: bool,
 }
 
 impl NotificationDispatchSummary {
@@ -46,7 +47,7 @@ impl NotificationDispatchSummary {
     }
 
     fn dedupe_action(&self) -> DispatchOpDedupeAction {
-        if self.partial_failure || self.private_enqueue_too_busy {
+        if !self.has_dispatch_attempt && (self.partial_failure || self.private_enqueue_too_busy) {
             DispatchOpDedupeAction::ClearPending
         } else {
             DispatchOpDedupeAction::FinalizeSent
@@ -66,6 +67,7 @@ impl DispatchOpGuard {
             delivery_id,
             partial_failure: false,
             private_enqueue_too_busy: false,
+            has_dispatch_attempt: true,
         }
     }
 
@@ -203,6 +205,7 @@ mod tests {
             delivery_id: "delivery".to_string(),
             partial_failure: true,
             private_enqueue_too_busy: false,
+            has_dispatch_attempt: true,
         };
         assert_eq!(
             partial.failure_error_message(),
@@ -227,6 +230,7 @@ mod tests {
             delivery_id: "delivery".to_string(),
             partial_failure: false,
             private_enqueue_too_busy: false,
+            has_dispatch_attempt: true,
         };
         assert_eq!(
             success.dedupe_action(),
@@ -239,6 +243,15 @@ mod tests {
         };
         assert_eq!(
             partial.dedupe_action(),
+            DispatchOpDedupeAction::FinalizeSent
+        );
+
+        let no_attempt_partial = NotificationDispatchSummary {
+            has_dispatch_attempt: false,
+            ..partial
+        };
+        assert_eq!(
+            no_attempt_partial.dedupe_action(),
             DispatchOpDedupeAction::ClearPending
         );
     }

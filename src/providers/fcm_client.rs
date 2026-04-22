@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use reqwest::Client;
 use serde::Deserialize;
+use tokio::time::sleep;
 
 use crate::{
     Error,
@@ -11,6 +12,8 @@ use crate::{
 };
 
 const FCM_TIMEOUT: Duration = Duration::from_secs(60);
+const FCM_MAX_RETRY: usize = 3;
+const FCM_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 
 pub struct FcmService {
     client: Client,
@@ -40,19 +43,6 @@ impl FcmService {
         payload: Arc<FcmPayload>,
         prepared_body: Option<Arc<[u8]>>,
     ) -> DispatchResult {
-        let access = match self.token_provider.token_info().await {
-            Ok(access) => access,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(err),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
-        };
-
         let body = match prepared_body {
             Some(body) => body,
             None => match payload.encoded_body(device_token) {
@@ -69,6 +59,55 @@ impl FcmService {
             },
         };
 
+        let mut attempt = 0usize;
+        let mut backoff = FCM_INITIAL_BACKOFF;
+        let mut force_fresh_token = false;
+
+        loop {
+            attempt += 1;
+            let access = match if force_fresh_token {
+                self.token_provider.token_info_fresh().await
+            } else {
+                self.token_provider.token_info().await
+            } {
+                Ok(access) => access,
+                Err(err) => {
+                    return DispatchResult {
+                        success: false,
+                        status_code: 0,
+                        error: Some(err),
+                        invalid_token: false,
+                        payload_too_large: false,
+                    };
+                }
+            };
+
+            let dispatch = self.send_once(&access, body.as_ref()).await;
+            if dispatch.success {
+                return dispatch;
+            }
+
+            let status_code = dispatch.status_code;
+            if (status_code == 401 || status_code == 403)
+                && !force_fresh_token
+                && attempt < FCM_MAX_RETRY
+            {
+                force_fresh_token = true;
+                continue;
+            }
+
+            let retryable = is_fcm_retryable_status(status_code) && attempt < FCM_MAX_RETRY;
+            if !retryable {
+                return dispatch;
+            }
+
+            force_fresh_token = false;
+            sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(5));
+        }
+    }
+
+    async fn send_once(&self, access: &crate::providers::FcmAccess, body: &[u8]) -> DispatchResult {
         let endpoint = format!(
             "{}/v1/projects/{}/messages:send",
             self.base_url, access.project_id
@@ -79,7 +118,7 @@ impl FcmService {
             .post(&endpoint)
             .bearer_auth(access.token.token.as_ref())
             .header("content-type", "application/json")
-            .body(body.as_ref().to_vec())
+            .body(body.to_vec())
             .send()
             .await
         {
@@ -97,30 +136,30 @@ impl FcmService {
 
         let status = response.status();
         let status_code = status.as_u16();
-        let body = response.bytes().await.unwrap_or_default();
+        let response_body = response.bytes().await.unwrap_or_default();
 
-        if !status.is_success() {
-            let message =
-                body_message(&body).unwrap_or_else(|| format!("FCM error, status {status_code}"));
+        if status.is_success() {
             return DispatchResult {
-                success: false,
+                success: true,
                 status_code,
-                error: Some(Error::Upstream {
-                    provider: "FCM",
-                    status: status_code,
-                    message,
-                }),
-                invalid_token: is_fcm_token_invalid(status_code, &body),
-                payload_too_large: is_fcm_payload_too_large(status_code, &body),
+                error: None,
+                invalid_token: false,
+                payload_too_large: false,
             };
         }
 
+        let message = body_message(&response_body)
+            .unwrap_or_else(|| format!("FCM error, status {status_code}"));
         DispatchResult {
-            success: true,
+            success: false,
             status_code,
-            error: None,
-            invalid_token: false,
-            payload_too_large: false,
+            error: Some(Error::Upstream {
+                provider: "FCM",
+                status: status_code,
+                message,
+            }),
+            invalid_token: is_fcm_token_invalid(status_code, &response_body),
+            payload_too_large: is_fcm_payload_too_large(status_code, &response_body),
         }
     }
 
@@ -133,6 +172,10 @@ impl FcmService {
         let access = self.token_provider.token_info_fresh().await?;
         Ok(access.token)
     }
+}
+
+fn is_fcm_retryable_status(status_code: u16) -> bool {
+    status_code == 0 || matches!(status_code, 429 | 500 | 503 | 504)
 }
 
 fn is_fcm_payload_too_large(status_code: u16, body: &[u8]) -> bool {

@@ -215,37 +215,4 @@ impl PostgresDb {
         tx.commit().await?;
         Ok(out)
     }
-
-    pub(super) async fn append_delivery_audit_batch(
-        &self,
-        entries: &[DeliveryAuditWrite],
-    ) -> StoreResult<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await?;
-        for entry in entries {
-            let audit_id = crate::util::generate_hex_id_128();
-            sqlx::query(
-                "INSERT INTO delivery_audit \
-                 (audit_id, delivery_id, channel_id, device_key, entity_type, entity_id, op_id, path, status, error_code, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-            )
-            .bind(&audit_id)
-            .bind(entry.delivery_id.trim())
-            .bind(&entry.channel_id[..])
-            .bind(entry.device_key.trim())
-            .bind(entry.entity_type.as_deref())
-            .bind(entry.entity_id.as_deref())
-            .bind(entry.op_id.as_deref())
-            .bind(entry.path.as_str())
-            .bind(entry.status.as_str())
-            .bind(entry.error_code.as_deref())
-            .bind(entry.created_at)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
 }

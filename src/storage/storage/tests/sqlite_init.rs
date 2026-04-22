@@ -59,42 +59,6 @@ async fn sqlite_new_creates_parent_directories() {
 }
 
 #[tokio::test]
-async fn sqlite_init_heals_missing_delivery_audit_audit_id_column() {
-    let ctx = setup_sqlite_storage_with_custom_schema(
-        "sqlite-heal-delivery-audit",
-        &[ "CREATE TABLE IF NOT EXISTS delivery_audit (delivery_id TEXT NOT NULL, channel_id BLOB NOT NULL, device_key TEXT NOT NULL, entity_type TEXT, entity_id TEXT, op_id TEXT, path TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, created_at INTEGER NOT NULL)" ],
-    )
-    .await;
-
-    let write = DeliveryAuditWrite {
-        delivery_id: "delivery-heal-audit-id-1".to_string(),
-        channel_id: [7; 16],
-        device_key: "device-heal-audit-id-1".to_string(),
-        entity_type: Some("message".to_string()),
-        entity_id: Some("msg-heal-audit-id-1".to_string()),
-        op_id: Some("op-heal-audit-id-1".to_string()),
-        path: DeliveryAuditPath::Provider,
-        status: DeliveryAuditStatus::Enqueued,
-        error_code: None,
-        created_at: chrono::Utc::now().timestamp(),
-    };
-    ctx.storage
-        .append_delivery_audit(&write)
-        .await
-        .expect("append delivery audit should succeed after init healing");
-
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
-        .await
-        .expect("sqlite test connection should succeed");
-    let audit_id_is_set: i64 =
-        sqlx::query_scalar("SELECT COUNT(1) FROM delivery_audit WHERE audit_id IS NOT NULL")
-            .fetch_one(&mut conn)
-            .await
-            .expect("delivery audit count should be queryable");
-    assert_eq!(audit_id_is_set, 1);
-}
-
-#[tokio::test]
 async fn sqlite_init_accepts_previous_schema_version_and_upgrades_meta() {
     let ctx = setup_sqlite_storage_with_custom_schema(
         "sqlite-schema-version-upgrade",
@@ -134,7 +98,7 @@ async fn sqlite_init_keeps_current_schema_version_and_backfills_new_tables() {
         "sqlite-schema-version-current-backfill",
         &[
             "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
-            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-17-gateway-v8')",
+            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-22-gateway-v9')",
         ],
     )
     .await;
@@ -160,8 +124,41 @@ async fn sqlite_init_keeps_current_schema_version_and_backfills_new_tables() {
 }
 
 #[tokio::test]
+async fn sqlite_init_upgrades_v8_schema_and_drops_legacy_delivery_audit_table() {
+    let ctx = setup_sqlite_storage_with_custom_schema(
+        "sqlite-schema-version-v8-upgrade-drop-delivery-audit",
+        &[
+            "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-17-gateway-v8')",
+            "CREATE TABLE IF NOT EXISTS delivery_audit (audit_id TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, created_at INTEGER NOT NULL)",
+        ],
+    )
+    .await;
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let has_delivery_audit: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='delivery_audit'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("sqlite master query should succeed");
+    assert_eq!(has_delivery_audit, 0);
+
+    let meta: Option<String> = sqlx::query_scalar(
+        "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = 'schema_version'",
+    )
+    .fetch_optional(&mut conn)
+    .await
+    .expect("schema meta query should succeed");
+    assert_eq!(meta.as_deref(), Some(STORAGE_SCHEMA_VERSION));
+}
+
+#[tokio::test]
 async fn sqlite_init_records_current_schema_migration() {
     let ctx = setup_sqlite_storage_without_bootstrap("sqlite-schema-migration-ledger").await;
+    let latest = crate::storage::database::migration::latest_schema_migration();
     let mut conn = SqliteConnection::connect(&ctx.db_url)
         .await
         .expect("sqlite test connection should succeed");
@@ -169,17 +166,20 @@ async fn sqlite_init_records_current_schema_migration() {
     let row: (String, String, i64) = sqlx::query_as(
         "SELECT migration_id, target_schema_version, success \
          FROM pushgo_schema_migrations \
-         WHERE migration_id = '20260417_001_device_identity_v8'",
+         WHERE migration_id = ?",
     )
+    .bind(latest.id)
     .fetch_one(&mut conn)
     .await
     .expect("current migration ledger row should exist");
+    assert_eq!(row.0, latest.id);
     assert_eq!(row.1, STORAGE_SCHEMA_VERSION);
     assert_eq!(row.2, 1);
 }
 
 #[tokio::test]
 async fn sqlite_init_rejects_current_migration_checksum_drift() {
+    let latest = crate::storage::database::migration::latest_schema_migration();
     let dir = tempdir().expect("tempdir should be created");
     let db_path = dir.path().join("sqlite-schema-migration-checksum.sqlite");
     std::fs::File::create(&db_path).expect("sqlite db file should be created");
@@ -188,17 +188,25 @@ async fn sqlite_init_rejects_current_migration_checksum_drift() {
     let mut conn = SqliteConnection::connect(&db_url)
         .await
         .expect("sqlite bootstrap connection should succeed");
-    for stmt in [
+    let setup_statements = vec![
         "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
-        "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-17-gateway-v8')",
+        "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-22-gateway-v9')",
         "CREATE TABLE IF NOT EXISTS pushgo_schema_migrations (migration_id TEXT PRIMARY KEY, description TEXT NOT NULL, checksum TEXT NOT NULL, target_schema_version TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, execution_ms INTEGER NOT NULL, success INTEGER NOT NULL, error TEXT)",
-        "INSERT INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error) VALUES ('20260417_001_device_identity_v8', 'tampered', 'sha256:tampered', '2026-04-17-gateway-v8', 1, 1, 0, 1, NULL)",
-    ] {
+    ];
+    for stmt in setup_statements {
         sqlx::query(stmt)
             .execute(&mut conn)
             .await
             .expect("custom schema statement should succeed");
     }
+    sqlx::query(
+        "INSERT INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error) VALUES (?, 'tampered', 'sha256:tampered', ?, 1, 1, 0, 1, NULL)",
+    )
+    .bind(latest.id)
+    .bind(STORAGE_SCHEMA_VERSION)
+    .execute(&mut conn)
+    .await
+    .expect("tampered migration row should be inserted");
     drop(conn);
 
     let err = Storage::new(Some(db_url.as_str()))

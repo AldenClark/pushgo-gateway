@@ -6,15 +6,10 @@ use hashbrown::HashMap;
 use crate::{
     api::{Error, format_channel_id},
     app::AppState,
-    dispatch::{
-        DispatchError, ProviderDeliveryPath, ProviderPullDelivery, audit::DispatchAuditRecord,
-    },
+    dispatch::{DispatchError, ProviderDeliveryPath, ProviderPullDelivery},
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
     stats::DeviceDispatchDelta,
-    storage::{
-        DeliveryAuditPath, DeliveryAuditStatus, DeliveryAuditWrite, DeviceId, DeviceInfo,
-        DispatchTarget, Platform,
-    },
+    storage::{DeviceId, DeviceInfo, DispatchTarget, Platform},
     util::{SharedStringMap, encode_lower_hex_128, generate_hex_id_128},
 };
 
@@ -34,25 +29,19 @@ use crate::api::handlers::watch_light::quantize_watch_payload;
 
 mod android;
 mod apple;
-mod audit;
 mod private;
 mod provider;
+mod tracing;
 mod types;
 mod windows;
 
-use audit::{
-    append_delivery_audit_best_effort, record_provider_cache_enqueue_failed,
-    record_provider_enqueue_failed, record_provider_enqueued, record_provider_path_rejected,
-};
 use private::enqueue_private_deliveries;
 use provider::dispatch_provider_devices;
+use tracing::{
+    record_provider_cache_enqueue_failed, record_provider_enqueue_failed, record_provider_enqueued,
+    record_provider_path_rejected,
+};
 use types::{DispatchProgress, PreparedDispatch, ProviderPayloads, ResolvedProviderTarget};
-
-const AUDIT_PATH_PRIVATE_OUTBOX: DeliveryAuditPath = DeliveryAuditPath::PrivateOutbox;
-const AUDIT_PATH_PROVIDER: DeliveryAuditPath = DeliveryAuditPath::Provider;
-const AUDIT_STATUS_ENQUEUED: DeliveryAuditStatus = DeliveryAuditStatus::Enqueued;
-const AUDIT_STATUS_ENQUEUE_FAILED: DeliveryAuditStatus = DeliveryAuditStatus::EnqueueFailed;
-const AUDIT_STATUS_PATH_REJECTED: DeliveryAuditStatus = DeliveryAuditStatus::PathRejected;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_entity_notification(

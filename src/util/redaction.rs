@@ -1,12 +1,6 @@
 use std::fmt;
 
-use super::runtime_flags::{is_diagnostics_mode, is_sandbox_mode};
-
-pub fn diagnostics_log(args: fmt::Arguments<'_>) {
-    if is_diagnostics_mode() {
-        eprintln!("{args}");
-    }
-}
+use super::runtime_flags::is_sandbox_mode;
 
 pub fn redact_text(value: &str) -> String {
     if is_sandbox_mode() {

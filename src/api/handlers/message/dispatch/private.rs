@@ -25,23 +25,6 @@ pub(super) async fn enqueue_private_deliveries(
             Ok(()) => {
                 progress.private_enqueue_stats.record_success();
                 progress.record_private_success(device_id);
-                append_delivery_audit_best_effort(
-                    prepared.state,
-                    prepared.correlation_id.as_ref(),
-                    &DeliveryAuditWrite {
-                        delivery_id: prepared.delivery_id.clone(),
-                        channel_id: prepared.channel_id,
-                        device_key: format!("private:{}", encode_lower_hex_128(&device_id)),
-                        entity_type: Some(prepared.entity_type.to_string()),
-                        entity_id: Some(prepared.entity_id.clone()),
-                        op_id: Some(prepared.op_id.clone()),
-                        path: AUDIT_PATH_PRIVATE_OUTBOX,
-                        status: AUDIT_STATUS_ENQUEUED,
-                        error_code: None,
-                        created_at: prepared.sent_at,
-                    },
-                )
-                .await;
                 if private_dispatch.state.hub.is_online(device_id) {
                     let delivered = private_dispatch.state.hub.try_deliver_to_device(
                         device_id,
@@ -64,23 +47,13 @@ pub(super) async fn enqueue_private_deliveries(
                     &err,
                 );
                 private_dispatch.state.metrics.mark_enqueue_failure();
-                append_delivery_audit_best_effort(
-                    prepared.state,
-                    prepared.correlation_id.as_ref(),
-                    &DeliveryAuditWrite {
-                        delivery_id: prepared.delivery_id.clone(),
-                        channel_id: prepared.channel_id,
-                        device_key: format!("private:{}", encode_lower_hex_128(&device_id)),
-                        entity_type: Some(prepared.entity_type.to_string()),
-                        entity_id: Some(prepared.entity_id.clone()),
-                        op_id: Some(prepared.op_id.clone()),
-                        path: AUDIT_PATH_PRIVATE_OUTBOX,
-                        status: AUDIT_STATUS_ENQUEUE_FAILED,
-                        error_code: Some("private_enqueue_failed".to_string()),
-                        created_at: prepared.sent_at,
-                    },
-                )
-                .await;
+                crate::util::TraceEvent::new("dispatch.private_enqueue_failed")
+                    .field_redacted("correlation_id", prepared.correlation_id.as_ref())
+                    .field_redacted("delivery_id", prepared.delivery_id.as_str())
+                    .field_redacted("channel_id", prepared.channel_id_value.as_str())
+                    .field_redacted("device_id", encode_lower_hex_128(&device_id))
+                    .field_str("error", err.to_string())
+                    .emit();
             }
         }
     }

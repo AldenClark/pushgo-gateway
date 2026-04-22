@@ -1,5 +1,68 @@
 use clap::Parser;
 
+const DEFAULT_TRACE_LOG_FILE: &str = "logs/pushgo-gateway-trace.log";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservabilityProfile {
+    ProdMin,
+    Ops,
+    Incident,
+    Debug,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ObservabilityConfig {
+    pub profile: ObservabilityProfile,
+    pub diagnostics_api_enabled: bool,
+    pub trace_logs_enabled: bool,
+    pub stats_enabled: bool,
+}
+
+impl ObservabilityProfile {
+    #[inline]
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "prod-min" | "prod_min" | "minimal" => Some(Self::ProdMin),
+            "ops" => Some(Self::Ops),
+            "incident" => Some(Self::Incident),
+            "debug" => Some(Self::Debug),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProdMin => "prod_min",
+            Self::Ops => "ops",
+            Self::Incident => "incident",
+            Self::Debug => "debug",
+        }
+    }
+
+    fn defaults(self) -> ObservabilityConfig {
+        match self {
+            Self::ProdMin => ObservabilityConfig {
+                profile: self,
+                diagnostics_api_enabled: false,
+                trace_logs_enabled: false,
+                stats_enabled: true,
+            },
+            Self::Ops => ObservabilityConfig {
+                profile: self,
+                diagnostics_api_enabled: true,
+                trace_logs_enabled: false,
+                stats_enabled: true,
+            },
+            Self::Incident | Self::Debug => ObservabilityConfig {
+                profile: self,
+                diagnostics_api_enabled: true,
+                trace_logs_enabled: true,
+                stats_enabled: true,
+            },
+        }
+    }
+}
+
 #[derive(Parser, Debug, Clone)]
 #[command(name = "pushgo-gateway", version, about = "PushGo 推送网关")]
 pub struct Args {
@@ -39,13 +102,42 @@ pub struct Args {
     )]
     pub private_channel_enabled: bool,
 
-    /// Enable diagnostics API namespace (`/diagnostics/*`).
+    /// Observability profile controlling diagnostics/tracing/stats defaults.
     #[arg(
-        env = "PUSHGO_DIAGNOSTICS_API_ENABLED",
-        long = "diagnostics-api-enabled",
-        default_value = "false"
+        env = "PUSHGO_OBSERVABILITY_PROFILE",
+        long = "observability-profile",
+        default_value = "prod_min"
     )]
-    pub diagnostics_api_enabled: bool,
+    pub observability_profile: String,
+
+    /// Override diagnostics API switch from observability profile.
+    #[arg(
+        env = "PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED",
+        long = "observability-diagnostics-api-enabled"
+    )]
+    pub observability_diagnostics_api_enabled: Option<bool>,
+
+    /// Override trace log switch from observability profile.
+    #[arg(
+        env = "PUSHGO_OBSERVABILITY_TRACE_LOGS_ENABLED",
+        long = "observability-trace-logs-enabled"
+    )]
+    pub observability_trace_logs_enabled: Option<bool>,
+
+    /// Override stats collection switch from observability profile.
+    #[arg(
+        env = "PUSHGO_OBSERVABILITY_STATS_ENABLED",
+        long = "observability-stats-enabled"
+    )]
+    pub observability_stats_enabled: Option<bool>,
+
+    /// Trace event file path (JSONL). Used when trace logs are enabled.
+    #[arg(
+        env = "PUSHGO_TRACE_LOG_FILE",
+        long = "trace-log-file",
+        default_value = DEFAULT_TRACE_LOG_FILE
+    )]
+    pub trace_log_file: String,
 
     /// Database URL. Supported schemes: sqlite://, postgres://, postgresql://, pg://, mysql://.
     /// This value is required.
@@ -286,7 +378,34 @@ impl Args {
         self.private_tls_key_path = normalize_optional_non_empty(self.private_tls_key_path);
         self.public_base_url = normalize_optional_non_empty(self.public_base_url);
         self.mcp_predefined_clients = normalize_optional_non_empty(self.mcp_predefined_clients);
+        self.observability_profile = self.observability_profile.trim().to_string();
+        if self.observability_profile.is_empty() {
+            self.observability_profile = ObservabilityProfile::ProdMin.as_str().to_string();
+        }
+        self.trace_log_file = self.trace_log_file.trim().to_string();
+        if self.trace_log_file.is_empty() {
+            self.trace_log_file = DEFAULT_TRACE_LOG_FILE.to_string();
+        }
         self
+    }
+
+    #[must_use]
+    pub fn observability_config(&self) -> ObservabilityConfig {
+        let profile = ObservabilityProfile::parse(self.observability_profile.as_str())
+            .unwrap_or(ObservabilityProfile::ProdMin);
+        let mut config = profile.defaults();
+
+        if let Some(enabled) = self.observability_diagnostics_api_enabled {
+            config.diagnostics_api_enabled = enabled;
+        }
+        if let Some(enabled) = self.observability_trace_logs_enabled {
+            config.trace_logs_enabled = enabled;
+        }
+        if let Some(enabled) = self.observability_stats_enabled {
+            config.stats_enabled = enabled;
+        }
+
+        config
     }
 }
 
@@ -304,7 +423,9 @@ fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_optional_non_empty;
+    use clap::Parser;
+
+    use super::{Args, ObservabilityProfile, normalize_optional_non_empty};
 
     #[test]
     fn normalize_optional_non_empty_treats_empty_and_whitespace_as_missing() {
@@ -319,5 +440,59 @@ mod tests {
             normalize_optional_non_empty(Some(" sqlite:///data/pushgo.db  ".to_string())),
             Some("sqlite:///data/pushgo.db".to_string())
         );
+    }
+
+    #[test]
+    fn prod_min_profile_is_default_minimal_matrix() {
+        let args = Args::parse_from(["pushgo-gateway", "--db-url", "sqlite:///tmp/pushgo.db"])
+            .normalized();
+        let config = args.observability_config();
+        assert_eq!(config.profile, ObservabilityProfile::ProdMin);
+        assert!(!config.diagnostics_api_enabled);
+        assert!(!config.trace_logs_enabled);
+        assert!(config.stats_enabled);
+    }
+
+    #[test]
+    fn profile_defaults_and_overrides_apply() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--observability-profile=ops",
+            "--observability-trace-logs-enabled=true",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let config = args.observability_config();
+        assert_eq!(config.profile, ObservabilityProfile::Ops);
+        assert!(config.diagnostics_api_enabled);
+        assert!(config.trace_logs_enabled);
+        assert!(config.stats_enabled);
+    }
+
+    #[test]
+    fn invalid_profile_falls_back_to_prod_min() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--observability-profile=unknown-mode",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let config = args.observability_config();
+        assert_eq!(config.profile, ObservabilityProfile::ProdMin);
+    }
+
+    #[test]
+    fn trace_log_file_blank_falls_back_to_default() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--trace-log-file",
+            "   ",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        assert_eq!(args.trace_log_file, super::DEFAULT_TRACE_LOG_FILE);
     }
 }

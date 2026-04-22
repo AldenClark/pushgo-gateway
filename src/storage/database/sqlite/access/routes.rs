@@ -330,66 +330,6 @@ impl SqliteDb {
         Ok(())
     }
 
-    pub(super) async fn append_delivery_audit(
-        &self,
-        entry: &DeliveryAuditWrite,
-    ) -> StoreResult<()> {
-        let audit_id = crate::util::generate_hex_id_128();
-        sqlx::query(
-            "INSERT INTO delivery_audit \
-             (audit_id, delivery_id, channel_id, device_key, entity_type, entity_id, op_id, path, status, error_code, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&audit_id)
-        .bind(entry.delivery_id.trim())
-        .bind(&entry.channel_id[..])
-        .bind(entry.device_key.trim())
-        .bind(entry.entity_type.as_deref())
-        .bind(entry.entity_id.as_deref())
-        .bind(entry.op_id.as_deref())
-        .bind(entry.path.as_str())
-        .bind(entry.status.as_str())
-        .bind(entry.error_code.as_deref())
-        .bind(entry.created_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub(super) async fn append_delivery_audit_batch(
-        &self,
-        entries: &[DeliveryAuditWrite],
-    ) -> StoreResult<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.pool.acquire().await?;
-        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-        for entry in entries {
-            let audit_id = crate::util::generate_hex_id_128();
-            sqlx::query(
-                "INSERT INTO delivery_audit \
-                 (audit_id, delivery_id, channel_id, device_key, entity_type, entity_id, op_id, path, status, error_code, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&audit_id)
-            .bind(entry.delivery_id.trim())
-            .bind(&entry.channel_id[..])
-            .bind(entry.device_key.trim())
-            .bind(entry.entity_type.as_deref())
-            .bind(entry.entity_id.as_deref())
-            .bind(entry.op_id.as_deref())
-            .bind(entry.path.as_str())
-            .bind(entry.status.as_str())
-            .bind(entry.error_code.as_deref())
-            .bind(entry.created_at)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
     pub(super) async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()> {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
@@ -467,6 +407,20 @@ impl SqliteDb {
             .bind(row.private_outbox_depth_max)
             .bind(row.dedupe_pending_max)
             .bind(row.active_private_sessions_max)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for row in &batch.ops {
+            sqlx::query(
+                "INSERT INTO ops_stats_hourly \
+                 (bucket_hour, metric_key, metric_value) \
+                 VALUES (?, ?, ?) \
+                 ON CONFLICT (bucket_hour, metric_key) DO UPDATE SET \
+                   metric_value = ops_stats_hourly.metric_value + excluded.metric_value",
+            )
+            .bind(row.bucket_hour.as_str())
+            .bind(row.metric_key.trim())
+            .bind(row.metric_value)
             .execute(&mut *tx)
             .await?;
         }

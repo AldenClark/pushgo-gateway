@@ -33,6 +33,7 @@ impl PrivateHub {
             hot_messages: DashMap::new(),
             hot_order: Mutex::new(VecDeque::new()),
             resume_state: DashMap::new(),
+            enqueue_gate: tokio::sync::Mutex::new(()),
         }
     }
 

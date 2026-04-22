@@ -1,10 +1,7 @@
 use crate::{
     api::router::build_router,
     args::Args,
-    dispatch::{
-        DeliveryAuditCollector, DeliveryAuditMode, DispatchChannels, DispatchWorkerDeps,
-        audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog, DispatchAuditMode},
-    },
+    dispatch::{DispatchChannels, DispatchWorkerDeps},
     mcp::{McpConfig, McpPredefinedClientConfig, McpState},
     private::{PrivateConfig, PrivateState},
     providers::{ApnsClient, FcmClient, WnsClient},
@@ -13,7 +10,12 @@ use crate::{
     storage::{DeviceRouteRecordRow, Storage},
 };
 use axum::Router;
-use std::sync::Arc;
+use scc::HashMap as ConcurrentHashMap;
+use std::sync::{
+    Arc, OnceLock, Weak,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -37,11 +39,10 @@ pub(crate) enum AuthMode {
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub dispatch: DispatchChannels,
-    pub dispatch_audit: Arc<DispatchAuditLog>,
-    pub delivery_audit: Arc<DeliveryAuditCollector>,
     pub auth: AuthMode,
     pub private_channel_enabled: bool,
     pub diagnostics_api_enabled: bool,
+    pub trace_logs_enabled: bool,
     pub public_base_url: Option<Arc<str>>,
     pub device_registry: Arc<DeviceRegistry>,
     pub device_operation_guards: Arc<DeviceOperationGuards>,
@@ -57,23 +58,117 @@ pub struct AppRuntime {
     pub private: Option<Arc<PrivateState>>,
 }
 
-#[derive(Default)]
 pub(crate) struct DeviceOperationGuards {
-    by_key: dashmap::DashMap<String, Arc<Mutex<()>>>,
+    by_key: ConcurrentHashMap<Arc<str>, DeviceOperationGuardSlot>,
+    access_count: AtomicUsize,
+}
+
+struct DeviceOperationGuardSlot {
+    guard: Weak<Mutex<()>>,
+    last_seen_ms: AtomicU64,
 }
 
 impl DeviceOperationGuards {
+    const CLEANUP_INTERVAL: usize = 256;
+    const STALE_IDLE_TTL_MS: u64 = 5 * 60 * 1000;
+
+    fn monotonic_now_ms() -> u64 {
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_millis() as u64
+    }
+
     pub fn guard_for(&self, device_key: &str) -> Option<Arc<Mutex<()>>> {
         let normalized = device_key.trim();
         if normalized.is_empty() {
             return None;
         }
-        Some(
-            self.by_key
-                .entry(normalized.to_string())
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone(),
-        )
+
+        let now_ms = Self::monotonic_now_ms();
+        if let Some(Some(guard)) = self.by_key.read_sync(normalized, |_, slot| {
+            slot.last_seen_ms.store(now_ms, Ordering::Relaxed);
+            slot.guard.upgrade()
+        }) {
+            self.maybe_cleanup(now_ms);
+            return Some(guard);
+        }
+
+        let normalized: Arc<str> = Arc::from(normalized);
+        let guard = match self.by_key.entry_sync(Arc::clone(&normalized)) {
+            scc::hash_map::Entry::Occupied(mut entry) => {
+                let slot = entry.get_mut();
+                slot.last_seen_ms.store(now_ms, Ordering::Relaxed);
+                if let Some(existing) = slot.guard.upgrade() {
+                    existing
+                } else {
+                    let replacement = Arc::new(Mutex::new(()));
+                    slot.guard = Arc::downgrade(&replacement);
+                    replacement
+                }
+            }
+            scc::hash_map::Entry::Vacant(entry) => {
+                let guard = Arc::new(Mutex::new(()));
+                entry.insert_entry(DeviceOperationGuardSlot {
+                    guard: Arc::downgrade(&guard),
+                    last_seen_ms: AtomicU64::new(now_ms),
+                });
+                guard
+            }
+        };
+
+        self.maybe_cleanup(now_ms);
+        Some(guard)
+    }
+
+    fn maybe_cleanup(&self, now_ms: u64) {
+        let access = self.access_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if !access.is_multiple_of(Self::CLEANUP_INTERVAL) {
+            return;
+        }
+        self.sweep_stale_entries(now_ms);
+    }
+
+    fn sweep_stale_entries(&self, now_ms: u64) {
+        self.by_key.retain_sync(|_, slot| {
+            let idle_for_ms = now_ms.saturating_sub(slot.last_seen_ms.load(Ordering::Relaxed));
+            let is_stale = slot.guard.strong_count() == 0 && idle_for_ms >= Self::STALE_IDLE_TTL_MS;
+            !is_stale
+        });
+    }
+}
+
+impl Default for DeviceOperationGuards {
+    fn default() -> Self {
+        Self {
+            by_key: ConcurrentHashMap::default(),
+            access_count: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceOperationGuards;
+    use std::sync::Arc;
+
+    #[test]
+    fn device_operation_guards_reuse_live_lock_and_reap_stale_slots() {
+        let guards = DeviceOperationGuards::default();
+
+        let first = guards.guard_for(" device-a ").expect("guard should exist");
+        let second = guards
+            .guard_for("device-a")
+            .expect("guard should be reused");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(guards.by_key.len(), 1);
+
+        guards.sweep_stale_entries(u64::MAX);
+        assert_eq!(guards.by_key.len(), 1, "live guard must not be reaped");
+
+        drop(first);
+        drop(second);
+
+        guards.sweep_stale_entries(u64::MAX);
+        assert!(guards.by_key.is_empty(), "stale slot should be reaped");
     }
 }
 
@@ -85,29 +180,13 @@ pub async fn build_app(
     docs_html: &'static str,
 ) -> Result<AppRuntime, Box<dyn std::error::Error>> {
     let store = Storage::new(args.db_url.as_deref()).await?;
-    let stats = StatsCollector::spawn(store.clone());
+    let observability = args.observability_config();
+    let stats = StatsCollector::spawn_with_mode(store.clone(), observability.stats_enabled);
     let device_registry = Arc::new(DeviceRegistry::new());
     let device_operation_guards = Arc::new(DeviceOperationGuards::default());
     restore_device_registry(&store, &device_registry).await?;
 
     let (dispatch, receivers) = DispatchChannels::new();
-    let dispatch_audit = Arc::new(DispatchAuditLog::new(
-        DEFAULT_DISPATCH_AUDIT_CAPACITY,
-        if args.diagnostics_api_enabled {
-            DispatchAuditMode::Enabled
-        } else {
-            DispatchAuditMode::Disabled
-        },
-    ));
-    let delivery_audit = DeliveryAuditCollector::spawn(
-        if args.diagnostics_api_enabled {
-            DeliveryAuditMode::Enabled
-        } else {
-            DeliveryAuditMode::Disabled
-        },
-        store.clone(),
-        Arc::clone(&dispatch_audit),
-    );
 
     let auth = match args.token.as_deref() {
         None => AuthMode::Disabled,
@@ -160,7 +239,7 @@ pub async fn build_app(
         wns: Arc::clone(&wns),
         store: store.clone(),
         private: private.clone(),
-        audit: dispatch_audit.clone(),
+        stats: Arc::clone(&stats),
     }
     .spawn(receivers);
 
@@ -198,11 +277,10 @@ pub async fn build_app(
 
     let state = AppState {
         dispatch,
-        dispatch_audit,
-        delivery_audit,
         auth: auth.clone(),
         private_channel_enabled: args.private_channel_enabled,
-        diagnostics_api_enabled: args.diagnostics_api_enabled,
+        diagnostics_api_enabled: observability.diagnostics_api_enabled,
+        trace_logs_enabled: observability.trace_logs_enabled,
         public_base_url,
         device_registry,
         device_operation_guards,
@@ -289,10 +367,10 @@ async fn restore_device_registry(
         if let Err(err) =
             backfill_private_binding_for_route(store, &route.device_key, &record).await
         {
-            crate::util::diagnostics_log(format_args!(
-                "restore private binding failed device_key={} error={}",
-                route.device_key, err
-            ));
+            crate::util::TraceEvent::new("gateway.restore_private_binding_failed")
+                .field_redacted("device_key", route.device_key.as_str())
+                .field_str("error", &err)
+                .emit();
         }
     }
     Ok(())

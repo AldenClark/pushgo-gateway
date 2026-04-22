@@ -63,42 +63,16 @@ impl McpRpcService<'_> {
     }
 
     fn recent_channel_summaries(&self, channel_id: &str) -> Value {
-        let entries = self.state.dispatch_audit.list_recent(
-            crate::dispatch::audit::DispatchAuditFilter {
-                limit: CHANNEL_RECENT_SUMMARY_LIMIT,
-                correlation_id: None,
-                delivery_id: None,
-                channel_id: Some(channel_id),
-            },
-        );
-        let mut recent = Vec::with_capacity(entries.len());
-        let mut message_summaries = Vec::new();
-        let mut event_summaries = Vec::new();
-        for entry in entries {
-            let kind = classify_summary_kind(&entry.stage, entry.path.as_deref());
-            let summary = json!({
-                "timestamp_ms": entry.timestamp_ms,
-                "kind": kind,
-                "stage": entry.stage,
-                "path": entry.path,
-                "success": entry.success,
-                "status_code": entry.status_code,
-                "detail": entry.detail,
-                "correlation_id": entry.correlation_id,
-                "delivery_id": entry.delivery_id
-            });
-            if kind == "message" {
-                message_summaries.push(summary.clone());
-            } else if kind == "event" {
-                event_summaries.push(summary.clone());
-            }
-            recent.push(summary);
-        }
         json!({
             "recent_limit": CHANNEL_RECENT_SUMMARY_LIMIT,
-            "recent_summaries": recent,
-            "message_summaries": message_summaries,
-            "event_summaries": event_summaries
+            "source": "trace_and_stats",
+            "recent_summaries": [],
+            "message_summaries": [],
+            "event_summaries": [],
+            "note": format!(
+                "channel {} recent timeline moved to trace logs and ops stats",
+                channel_id
+            )
         })
     }
 
@@ -383,29 +357,6 @@ impl McpRpcService<'_> {
         let payload = parse_status_response(&body)?;
         Ok(json!({"status": status, "payload": payload}))
     }
-}
-
-fn classify_summary_kind(stage: &str, path: Option<&str>) -> &'static str {
-    let stage = stage.to_ascii_lowercase();
-    let path = path.map(str::to_ascii_lowercase);
-    if stage.contains("event")
-        || path
-            .as_deref()
-            .is_some_and(|value| value.contains("/event"))
-    {
-        return "event";
-    }
-    if stage.contains("message")
-        || stage.contains("dispatch")
-        || path.as_deref().is_some_and(|value| {
-            value.contains("/message")
-                || value.contains("/push")
-                || value.contains("/send")
-        })
-    {
-        return "message";
-    }
-    "unknown"
 }
 
 fn parse_status_response(body: &[u8]) -> Result<Value, String> {

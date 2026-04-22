@@ -86,10 +86,17 @@ impl SqliteDb {
             (new_id, true, alias.to_string())
         };
 
-        let device_id = self
-            .resolve_device_key_route_device(normalized_device_key)
-            .await?
-            .ok_or(StoreError::DeviceNotFound)?;
+        let device_id = sqlx::query(
+            "SELECT device_id \
+             FROM devices \
+             WHERE device_key = ? \
+             LIMIT 1",
+        )
+        .bind(normalized_device_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|row| row.get::<Vec<u8>, _>("device_id"))
+        .ok_or(StoreError::DeviceNotFound)?;
 
         sqlx::query(
             "INSERT INTO channel_subscriptions \

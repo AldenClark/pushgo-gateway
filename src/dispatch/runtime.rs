@@ -1,10 +1,15 @@
 use super::*;
+use crate::stats::{
+    OPS_METRIC_DISPATCH_INVALID_TOKEN_CLEANUP_LOOKUP_FAILED,
+    OPS_METRIC_DISPATCH_INVALID_TOKEN_CLEANUP_OUTBOX_CLEAR_FAILED,
+    OPS_METRIC_DISPATCH_PROVIDER_SEND_FAILED, StatsCollector,
+};
 
 #[derive(Clone)]
 pub(super) struct DispatchWorkerRuntime {
     pub(super) store: Storage,
     pub(super) private: Option<Arc<PrivateState>>,
-    pub(super) audit: Arc<DispatchAuditLog>,
+    pub(super) stats: Arc<StatsCollector>,
 }
 
 pub(super) struct ProviderDispatchFailureLog<'a> {
@@ -32,15 +37,18 @@ impl DispatchWorkerRuntime {
         {
             Ok(value) => value,
             Err(err) => {
-                crate::util::diagnostics_log(format_args!(
-                    "invalid token cleanup lookup failed provider={} correlation_id={} channel_id={} platform={} device_token={} error={}",
-                    provider,
-                    correlation_id,
-                    channel_id,
-                    platform.name(),
-                    redact_device_token(device_token),
-                    err,
-                ));
+                self.stats.record_ops_counter_now(
+                    OPS_METRIC_DISPATCH_INVALID_TOKEN_CLEANUP_LOOKUP_FAILED,
+                    1,
+                );
+                crate::util::TraceEvent::new("dispatch.invalid_token_cleanup_lookup_failed")
+                    .field_str("provider", provider)
+                    .field_redacted("correlation_id", correlation_id)
+                    .field_redacted("channel_id", channel_id)
+                    .field_str("platform", platform.name())
+                    .field_redacted("device_token", redact_device_token(device_token))
+                    .field_str("error", err.to_string())
+                    .emit();
                 return;
             }
         };
@@ -57,15 +65,18 @@ impl DispatchWorkerRuntime {
                 .map_err(|err| crate::Error::Internal(err.to_string()))
         };
         if let Err(err) = cleared_result {
-            crate::util::diagnostics_log(format_args!(
-                "invalid token cleanup outbox clear failed provider={} correlation_id={} channel_id={} platform={} device_id={} error={}",
-                provider,
-                correlation_id,
-                channel_id,
-                platform.name(),
-                encode_crockford_base32_128(&device_id),
-                err,
-            ));
+            self.stats.record_ops_counter_now(
+                OPS_METRIC_DISPATCH_INVALID_TOKEN_CLEANUP_OUTBOX_CLEAR_FAILED,
+                1,
+            );
+            crate::util::TraceEvent::new("dispatch.invalid_token_cleanup_outbox_clear_failed")
+                .field_str("provider", provider)
+                .field_redacted("correlation_id", correlation_id)
+                .field_redacted("channel_id", channel_id)
+                .field_str("platform", platform.name())
+                .field_redacted("device_id", encode_crockford_base32_128(&device_id))
+                .field_str("error", err.to_string())
+                .emit();
         }
     }
 
@@ -74,24 +85,28 @@ impl DispatchWorkerRuntime {
         failure: ProviderDispatchFailureLog<'_>,
         dispatch: &DispatchResult,
     ) {
+        self.stats
+            .record_ops_counter_now(OPS_METRIC_DISPATCH_PROVIDER_SEND_FAILED, 1);
         let error = dispatch
             .error
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| "unknown".to_string());
-        crate::util::diagnostics_log(format_args!(
-            "provider dispatch failed provider={} correlation_id={} channel_id={} path={} platform={} device_token={} status_code={} invalid_token={} payload_too_large={} error={}",
-            failure.provider,
-            failure.correlation_id,
-            failure.channel_id,
-            failure.path.as_str(),
-            failure.platform.map(Platform::name).unwrap_or("unknown"),
-            redact_device_token(failure.device_token),
-            dispatch.status_code,
-            dispatch.invalid_token,
-            dispatch.payload_too_large,
-            error,
-        ));
+        crate::util::TraceEvent::new("dispatch.provider_send_failed")
+            .field_str("provider", failure.provider)
+            .field_redacted("correlation_id", failure.correlation_id)
+            .field_redacted("channel_id", failure.channel_id)
+            .field_str("path", failure.path.as_str())
+            .field_str(
+                "platform",
+                failure.platform.map(Platform::name).unwrap_or("unknown"),
+            )
+            .field_redacted("device_token", redact_device_token(failure.device_token))
+            .field_u64("status_code", dispatch.status_code.into())
+            .field_bool("invalid_token", dispatch.invalid_token)
+            .field_bool("payload_too_large", dispatch.payload_too_large)
+            .field_str("error", error)
+            .emit();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -106,21 +121,28 @@ impl DispatchWorkerRuntime {
         device_token: &str,
         dispatch: &DispatchResult,
     ) {
-        self.audit.record(DispatchAuditRecord {
-            stage: "provider_send_result",
-            correlation_id,
-            delivery_id: Some(delivery_id),
-            channel_id: Some(channel_id),
-            provider: Some(provider),
-            platform,
-            path: Some(path.as_str()),
-            device_token: Some(device_token),
-            success: Some(dispatch.success),
-            status_code: Some(dispatch.status_code),
-            invalid_token: Some(dispatch.invalid_token),
-            payload_too_large: Some(dispatch.payload_too_large),
-            detail: dispatch.error.as_ref().map(|err| err.to_string().into()),
-        });
+        let error = dispatch
+            .error
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        crate::util::TraceEvent::new("dispatch.provider_send_result")
+            .field_str("provider", provider)
+            .field_redacted("correlation_id", correlation_id)
+            .field_redacted("delivery_id", delivery_id)
+            .field_redacted("channel_id", channel_id)
+            .field_str("path", path.as_str())
+            .field_str(
+                "platform",
+                platform.map(Platform::name).unwrap_or("unknown"),
+            )
+            .field_redacted("device_token", redact_device_token(device_token))
+            .field_bool("success", dispatch.success)
+            .field_u64("status_code", dispatch.status_code.into())
+            .field_bool("invalid_token", dispatch.invalid_token)
+            .field_bool("payload_too_large", dispatch.payload_too_large)
+            .field_str("error", error)
+            .emit();
     }
 }
 

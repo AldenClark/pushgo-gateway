@@ -146,7 +146,7 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
   --private-quic-port "$PRIVATE_QUIC_PORT" \
   --private-tls-cert "$CERT_FILE" \
   --private-tls-key "$KEY_FILE" \
-  --diagnostics-api-enabled \
+  --observability-profile ops \
   >"$LOG_FILE" 2>&1 &
 GW_PID=$!
 
@@ -214,8 +214,8 @@ SYNC_SUCCESS="$(extract_field "$REQUEST_BODY" '.data.success')"
 SYNC_FAILED="$(extract_field "$REQUEST_BODY" '.data.failed')"
 write_case "channel_sync.partial" "$SYNC_STATUS" "success=${SYNC_SUCCESS},failed=${SYNC_FAILED}"
 
-request "GET" "$BASE_URL" "/diagnostics/dispatch" "valid" "application/json" ""
-write_case "diagnostics_dispatch.enabled" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
+request "GET" "$BASE_URL" "/diagnostics/private/metrics" "valid" "application/json" ""
+write_case "diagnostics_private_metrics.enabled" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
 
 echo "OUT_FILE=$OUT_FILE"
 echo "LOG_FILE=$LOG_FILE"

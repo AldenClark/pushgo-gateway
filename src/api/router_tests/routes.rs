@@ -148,56 +148,37 @@ async fn gateway_profile_route_reports_private_transport_when_enabled() {
 }
 
 #[tokio::test]
-async fn diagnostics_dispatch_route_returns_empty_entries_by_default() {
-    let state = build_diagnostics_test_state().await;
-    let app = super::super::build_router(state, "<html>docs</html>");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/diagnostics/dispatch")
-                .body(Body::empty())
-                .expect("request should build"),
-        )
-        .await
-        .expect("router should handle request");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
-    let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
-    assert_eq!(
-        response_data(&value)
-            .get("count")
-            .and_then(Value::as_u64)
-            .expect("count should be present"),
-        0
-    );
-    assert_eq!(
-        response_data(&value)
-            .get("entries")
-            .and_then(Value::as_array)
-            .expect("entries should be present")
-            .len(),
-        0
-    );
-}
-
-#[tokio::test]
-async fn diagnostics_dispatch_route_is_locked_when_disabled() {
+async fn diagnostics_private_metrics_route_is_locked_when_disabled() {
     let state = build_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/diagnostics/dispatch")
+                .uri("/diagnostics/private/metrics")
                 .body(Body::empty())
                 .expect("request should build"),
         )
         .await
         .expect("router should handle request");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn diagnostics_private_metrics_route_is_available_when_enabled() {
+    let state = build_diagnostics_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/diagnostics/private/metrics")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("router should handle request");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

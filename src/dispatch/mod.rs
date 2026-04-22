@@ -2,10 +2,6 @@ use std::sync::Arc;
 
 use flume::{Receiver, Sender, TrySendError};
 
-pub(crate) mod audit;
-
-use self::audit::{DispatchAuditLog, DispatchAuditRecord};
-
 use crate::{
     private::PrivateState,
     providers::{
@@ -18,8 +14,6 @@ use crate::{
 
 #[path = "config.rs"]
 mod config;
-#[path = "delivery_audit.rs"]
-mod delivery_audit;
 #[path = "runtime.rs"]
 mod runtime;
 #[path = "types.rs"]
@@ -28,7 +22,6 @@ mod types;
 mod workers;
 
 use config::DispatchRuntimeConfig;
-pub(crate) use delivery_audit::{DeliveryAuditCollector, DeliveryAuditMode};
 use runtime::DispatchWorkerRuntime;
 pub(crate) use types::{
     ApnsJob, DispatchChannels, DispatchError, DispatchWorkerReceivers, FcmJob,

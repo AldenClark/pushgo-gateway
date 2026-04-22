@@ -9,8 +9,6 @@ pub(super) struct PreparedDispatch<'a> {
     pub(super) delivery_id_ref: Arc<str>,
     pub(super) correlation_id: Arc<str>,
     pub(super) sent_at: i64,
-    pub(super) entity_type: &'a str,
-    pub(super) entity_id: String,
     pub(super) resolved_title: Option<String>,
     pub(super) resolved_body: Option<String>,
     pub(super) severity: PayloadSeverity,
@@ -49,7 +47,6 @@ pub(super) struct ProviderPayloads {
 pub(super) struct ResolvedProviderTarget<'a> {
     pub(super) device: &'a DeviceInfo,
     pub(super) device_key: Arc<str>,
-    pub(super) provider_audit_key: String,
     pub(super) provider_stats_key: Arc<str>,
     pub(super) wakeup_data_for_device: Arc<HashMap<String, String>>,
     pub(super) provider_pull_delivery: Option<ProviderPullDelivery>,
@@ -187,8 +184,6 @@ impl<'a> PreparedDispatch<'a> {
             delivery_id_ref,
             correlation_id,
             sent_at,
-            entity_type,
-            entity_id,
             resolved_title,
             resolved_body,
             severity,
@@ -230,6 +225,8 @@ impl<'a> PreparedDispatch<'a> {
             delivery_id: self.delivery_id.clone(),
             partial_failure: progress.rejected > 0 || progress.private_enqueue_stats.has_failures(),
             private_enqueue_too_busy: progress.private_enqueue_stats.is_too_busy(),
+            has_dispatch_attempt: !progress.private_enqueued.is_empty()
+                || progress.provider_attempted > 0,
         }
     }
 }

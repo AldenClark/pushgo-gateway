@@ -18,7 +18,11 @@ const MAX_WSS_FRAME_BYTES: usize = (32 * 1024) + 2;
 pub async fn serve_ws_socket(socket: WebSocket, state: Arc<PrivateState>) {
     let app = PushgoServerApp::new(Arc::clone(&state));
     let io = AxumWsIo::new(socket);
-    if let Err(_err) = serve_wss_embedded(default_server_config(), app, io).await {}
+    if let Err(err) = serve_wss_embedded(default_server_config(), app, io).await {
+        crate::util::TraceEvent::new("private.wss_session_terminated_with_error")
+            .field_str("error", err.to_string())
+            .emit();
+    }
 }
 
 struct AxumWsIo {

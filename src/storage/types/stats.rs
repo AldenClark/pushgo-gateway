@@ -39,10 +39,18 @@ pub struct GatewayStatsHourlyDelta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct OpsStatsHourlyDelta {
+    pub bucket_hour: String,
+    pub metric_key: String,
+    pub metric_value: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct StatsBatchWrite {
     pub channels: Vec<ChannelStatsDailyDelta>,
     pub devices: Vec<DeviceStatsDailyDelta>,
     pub gateway: Vec<GatewayStatsHourlyDelta>,
+    pub ops: Vec<OpsStatsHourlyDelta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -670,19 +670,18 @@ impl DeviceKeyResolution {
             );
         }
 
-        if state.diagnostics_api_enabled && issue_reason == "platform_mismatch" {
+        if state.trace_logs_enabled && issue_reason == "platform_mismatch" {
             let old_key = requested_device_key.unwrap_or("");
             let old_platform = previous_route
                 .map(|route| route.platform.name())
                 .unwrap_or("");
-            crate::util::diagnostics_log(format_args!(
-                "device_key reissued: reason={} old_device_key={} old_platform={} requested_platform={} new_device_key={}",
-                issue_reason,
-                old_key,
-                old_platform,
-                requested_platform.name(),
-                resolved_device_key
-            ));
+            crate::util::TraceEvent::new("device.route_reissued")
+                .field_str("reason", issue_reason)
+                .field_redacted("old_device_key", old_key)
+                .field_str("old_platform", old_platform)
+                .field_str("requested_platform", requested_platform.name())
+                .field_redacted("new_device_key", resolved_device_key.as_str())
+                .emit();
         }
 
         Ok(Self {

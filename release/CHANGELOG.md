@@ -16,9 +16,16 @@ PushGo Gateway policy:
 
 ### Changed
 - Bumped package/runtime version to `1.2.3` (release tag target: `v1.2.3`), including Cargo package metadata and gateway user-agent identifiers.
+- Migrated runtime observability configuration from a standalone diagnostics switch to profile-driven controls (`prod_min/ops/incident/debug`) with override flags and trace-log file configuration.
+- Reworked runtime telemetry pipeline around structured trace events and sampled high-signal emissions (startup/listening, dispatch failures, private transport failures, HTTP 5xx, panic hook).
+- Refactored stats collection and persistence paths to align dispatch/private/provider/runtime counters with the new observability model.
+- Consolidated diagnostics routing/surfaces around private-channel operational endpoints and removed legacy diagnostics handler wiring.
+- Removed deprecated delivery-audit modules/tables/typed access paths and aligned storage abstractions/backends/tests with the observability v9 schema direction.
+- Updated storage schema migration catalog with `20260422_001_observability_v9` to finalize diagnostics + tracing + stats matrix transitions.
 - Updated release binary build script to compile GNU artifacts inside `debian:bookworm-slim`, aligning glibc baseline with runtime images.
 - Updated local Docker source-build script to use `debian:bookworm-slim` for both build and runtime stages, keeping container baselines consistent.
-- Updated release documentation to align with the `v1.2.3` publication target.
+- Removed `zero-data-loss-gate` GitHub workflow from this release line.
+- Refreshed README and release documentation to match the full `v1.2.3` publication scope.
 
 ## [v1.2.2] - 2026-04-19
 

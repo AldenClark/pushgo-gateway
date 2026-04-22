@@ -3,7 +3,7 @@ use crate::{
     app::AppState,
     dispatch::{ProviderDeliveryPath, ProviderPullDelivery},
     routing::derive_private_device_id,
-    storage::{DeliveryAuditPath, Platform},
+    storage::Platform,
 };
 
 use super::MAX_PROVIDER_TTL_SECONDS;
@@ -20,13 +20,13 @@ pub(crate) struct ProviderDeliverySelection {
 
 pub(crate) struct ProviderRouteBinding {
     pub(crate) provider_device_key: String,
-    pub(crate) audit_device_key: ProviderAuditDeviceKey,
+    pub(crate) stats_device_key: ProviderStatsDeviceKey,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProviderTtl(u32);
 
-pub(crate) struct ProviderAuditDeviceKey(String);
+pub(crate) struct ProviderStatsDeviceKey(String);
 
 impl ProviderDeliverySelection {
     pub(crate) fn within_platform_limit(platform: Platform, len: usize) -> bool {
@@ -94,20 +94,20 @@ impl ProviderRouteBinding {
             .device_registry
             .resolve_provider_ingress_route(platform, token)
             .unwrap_or_else(|| dispatch_device_key.trim().to_string());
-        let audit_device_key = ProviderAuditDeviceKey::resolve(provider_device_key.as_str());
+        let stats_device_key = ProviderStatsDeviceKey::resolve(provider_device_key.as_str());
         Self {
             provider_device_key,
-            audit_device_key,
+            stats_device_key,
         }
     }
 }
 
-impl ProviderAuditDeviceKey {
+impl ProviderStatsDeviceKey {
     fn resolve(route_device_key: &str) -> Self {
         let normalized = route_device_key.trim();
         debug_assert!(
             !normalized.is_empty(),
-            "provider audit key should be derived from a stable device_key"
+            "provider stats key should be derived from a stable device_key"
         );
         Self(normalized.to_string())
     }
@@ -125,15 +125,6 @@ impl ProviderTtl {
 
     pub(crate) fn into_inner(self) -> u32 {
         self.0
-    }
-}
-
-impl ProviderDeliveryPath {
-    pub(crate) fn audit_path(self) -> DeliveryAuditPath {
-        match self {
-            Self::Direct => DeliveryAuditPath::Direct,
-            Self::WakeupPull => DeliveryAuditPath::WakeupPull,
-        }
     }
 }
 
@@ -171,12 +162,10 @@ impl ProviderPullDelivery {
 
 #[cfg(test)]
 mod tests {
-    use crate::dispatch::ProviderDeliveryPath;
     use crate::dispatch::ProviderPullDelivery;
     use crate::routing::derive_private_device_id;
-    use crate::storage::DeliveryAuditPath;
 
-    use super::{Platform, ProviderAuditDeviceKey, ProviderDeliverySelection, ProviderTtl};
+    use super::{Platform, ProviderDeliverySelection, ProviderStatsDeviceKey, ProviderTtl};
 
     #[test]
     fn provider_ttl_is_clamped_to_range() {
@@ -197,18 +186,6 @@ mod tests {
             Platform::WINDOWS,
             5120
         ));
-    }
-
-    #[test]
-    fn provider_delivery_path_maps_to_audit_path() {
-        assert_eq!(
-            ProviderDeliveryPath::Direct.audit_path(),
-            DeliveryAuditPath::Direct
-        );
-        assert_eq!(
-            ProviderDeliveryPath::WakeupPull.audit_path(),
-            DeliveryAuditPath::WakeupPull
-        );
     }
 
     #[test]
@@ -238,8 +215,8 @@ mod tests {
     }
 
     #[test]
-    fn provider_audit_device_key_uses_trimmed_device_key() {
-        let key = ProviderAuditDeviceKey::resolve(" provider-route-key ");
+    fn provider_stats_device_key_uses_trimmed_device_key() {
+        let key = ProviderStatsDeviceKey::resolve(" provider-route-key ");
         assert_eq!(key.as_str(), "provider-route-key");
     }
 }

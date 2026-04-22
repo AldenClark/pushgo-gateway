@@ -14,10 +14,7 @@ use tower::ServiceExt;
 
 use crate::{
     app::{AppState, AuthMode, DeviceOperationGuards},
-    dispatch::{
-        DeliveryAuditCollector, DeliveryAuditMode, DispatchChannels,
-        audit::{DEFAULT_DISPATCH_AUDIT_CAPACITY, DispatchAuditLog, DispatchAuditMode},
-    },
+    dispatch::DispatchChannels,
     mcp::{McpConfig, McpState},
     routing::{DeviceRegistry, DeviceRouteRecord},
     stats::StatsCollector,
@@ -46,27 +43,17 @@ async fn build_test_state() -> AppState {
         .await
         .expect("sqlite test store should initialize");
     let (dispatch, _receivers) = DispatchChannels::new();
+    let stats = StatsCollector::spawn(store.clone());
     AppState {
         dispatch,
-        dispatch_audit: Arc::new(DispatchAuditLog::new(
-            DEFAULT_DISPATCH_AUDIT_CAPACITY,
-            DispatchAuditMode::Disabled,
-        )),
-        delivery_audit: DeliveryAuditCollector::spawn(
-            DeliveryAuditMode::Disabled,
-            store.clone(),
-            Arc::new(DispatchAuditLog::new(
-                DEFAULT_DISPATCH_AUDIT_CAPACITY,
-                DispatchAuditMode::Disabled,
-            )),
-        ),
         auth: AuthMode::Disabled,
         private_channel_enabled: false,
         diagnostics_api_enabled: false,
+        trace_logs_enabled: false,
         public_base_url: Some(Arc::from("https://sandbox.pushgo.dev")),
         device_registry: Arc::new(DeviceRegistry::new()),
         device_operation_guards: Arc::new(DeviceOperationGuards::default()),
-        stats: StatsCollector::spawn(store.clone()),
+        stats,
         private_transport_profile: crate::app::PrivateTransportProfile {
             quic_enabled: true,
             quic_port: Some(443),

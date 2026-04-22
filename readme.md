@@ -61,7 +61,8 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | No                | Master switch for private transport                    |
-| `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | No                | Enable `/diagnostics/*` namespace and diagnostics logs |
+| `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | No                | Observability matrix profile (`prod_min`/`ops`/`incident`/`debug`) |
+| `--trace-log-file`                | `PUSHGO_TRACE_LOG_FILE`                | `logs/pushgo-gateway-trace.log` | No           | Trace JSONL file path when trace logs are enabled      |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
 | `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | None                       | No                | External HTTPS base URL used for MCP/OAuth issuer URLs and advertised WSS URL |
 
@@ -120,11 +121,29 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | ------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
 | `PUSHGO_DISPATCH_WORKER_COUNT`              | Auto                                   | Dispatch worker count (clamped 2~256; auto is `cpu*2`, clamped 4~64)       |
 | `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | Auto                                   | Dispatch queue capacity (clamped 256~131072; auto is `workers*64`)          |
-| `PUSHGO_DELIVERY_AUDIT_CHANNEL_CAPACITY`    | `16384`                                | Delivery-audit async queue capacity (512~262144)                            |
-| `PUSHGO_DELIVERY_AUDIT_BATCH_SIZE`          | `256`                                  | Delivery-audit batch flush size (16~4096)                                   |
-| `PUSHGO_DELIVERY_AUDIT_FLUSH_INTERVAL_MS`   | `50`                                   | Delivery-audit periodic flush interval in milliseconds (10~2000)            |
 | `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | In-process APNS max concurrent sends                                        |
 | `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | Dispatch-target cache TTL in milliseconds (200~10000)                       |
+| `PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED` | None                                | Optional override for diagnostics API switch                                 |
+| `PUSHGO_OBSERVABILITY_TRACE_LOGS_ENABLED`      | None                                | Optional override for trace logs switch                                      |
+| `PUSHGO_OBSERVABILITY_STATS_ENABLED`           | None                                | Optional override for stats collection                                       |
+| `PUSHGO_TRACE_LOG_FILE`                       | `logs/pushgo-gateway-trace.log`    | Trace JSONL file path for replay (used when trace logs are enabled)         |
+
+### Operations Stats (DB)
+
+`stats` is persisted for operations reporting (not only business semantics).
+In addition to existing channel/device/gateway aggregates, gateway now writes operational hourly counters into `ops_stats_hourly` (`bucket_hour`, `metric_key`, `metric_value`), e.g. provider send failures, HTTP 5xx responses, and invalid-token cleanup failures.
+
+### Trace Event Output
+
+When trace logs are enabled (for example `--observability-profile incident`), gateway emits one JSON event per line to the trace log file (`--trace-log-file` / `PUSHGO_TRACE_LOG_FILE`).
+Each event contains fixed envelope fields (`ts_ms`, `component`, `event`) and a whitelist of typed fields.
+Potentially sensitive identifiers are emitted through redacted fields.
+
+Example:
+
+```json
+{"ts_ms":1713750000000,"component":"gateway","event":"dispatch.provider_send_failed","provider":"fcm","status_code":503,"invalid_token":false}
+```
 
 ## Nginx / LB Deployment Reference
 
@@ -394,7 +413,8 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
 | `--private-channel-enabled`       | `PUSHGO_PRIVATE_CHANNEL_ENABLED`       | `false`                    | 否       | 私有传输总开关                                       |
-| `--diagnostics-api-enabled`       | `PUSHGO_DIAGNOSTICS_API_ENABLED`       | `false`                    | 否       | 开启 `/diagnostics/*` 诊断接口与诊断日志             |
+| `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | 否       | 可观测矩阵档位（`prod_min`/`ops`/`incident`/`debug`） |
+| `--trace-log-file`                | `PUSHGO_TRACE_LOG_FILE`                | `logs/pushgo-gateway-trace.log` | 否  | trace JSONL 文件路径（仅在 trace 开启时使用）        |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
 | `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | 无                         | 否       | MCP/OAuth issuer URL 与 WSS 对外提示使用的外部 HTTPS 基准地址 |
 
@@ -453,11 +473,29 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
 | `PUSHGO_DISPATCH_WORKER_COUNT`              | 自动                                   | 分发 worker 数量（2~256；自动为 `cpu*2`，并限制在 4~64）                |
 | `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | 自动                                   | 分发队列容量（256~131072；自动为 `workers*64`）                          |
-| `PUSHGO_DELIVERY_AUDIT_CHANNEL_CAPACITY`    | `16384`                                | delivery-audit 异步队列容量（512~262144）                                 |
-| `PUSHGO_DELIVERY_AUDIT_BATCH_SIZE`          | `256`                                  | delivery-audit 批量刷写条数（16~4096）                                    |
-| `PUSHGO_DELIVERY_AUDIT_FLUSH_INTERVAL_MS`   | `50`                                   | delivery-audit 定时刷写间隔（毫秒，10~2000）                              |
 | `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | 进程内 APNS 最大发送并发数                                                |
 | `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | dispatch targets 缓存 TTL（毫秒，200~10000）                              |
+| `PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED` | 无                                 | 可选覆盖 diagnostics API 开关                                             |
+| `PUSHGO_OBSERVABILITY_TRACE_LOGS_ENABLED`      | 无                                 | 可选覆盖 trace 日志开关                                                   |
+| `PUSHGO_OBSERVABILITY_STATS_ENABLED`           | 无                                 | 可选覆盖统计采集开关                                                      |
+| `PUSHGO_TRACE_LOG_FILE`                       | `logs/pushgo-gateway-trace.log`    | trace JSONL 回放日志文件路径（trace 开启时生效）                           |
+
+### 运营统计（入库）
+
+这里的 `stats` 定位为运营统计支撑（不是纯业务统计）。  
+除现有 channel/device/gateway 聚合外，gateway 还会把运营向小时计数写入 `ops_stats_hourly`（`bucket_hour`、`metric_key`、`metric_value`），例如 provider 发送失败、HTTP 5xx、invalid-token 清理失败等指标。
+
+### Trace 事件输出
+
+开启 trace 日志（例如 `--observability-profile incident`）后，gateway 会向 trace 日志文件（`--trace-log-file` / `PUSHGO_TRACE_LOG_FILE`）输出一行一个 JSON 事件。
+每条事件固定包含 `ts_ms`、`component`、`event`，并附带白名单字段。
+可能涉及敏感标识的字段会走脱敏输出。
+
+示例：
+
+```json
+{"ts_ms":1713750000000,"component":"gateway","event":"dispatch.provider_send_failed","provider":"fcm","status_code":503,"invalid_token":false}
+```
 
 ## Nginx / LB 部署参考
 

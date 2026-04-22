@@ -1,6 +1,7 @@
 use crate::storage::{
-    STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_LEGACY, STORAGE_SCHEMA_VERSION_OLDER_LEGACY,
-    STORAGE_SCHEMA_VERSION_OLDEST_LEGACY, STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
+    STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_LEGACY, STORAGE_SCHEMA_VERSION_MIGRATABLE,
+    STORAGE_SCHEMA_VERSION_OLDER_LEGACY, STORAGE_SCHEMA_VERSION_OLDEST_LEGACY,
+    STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
 };
 
 pub(crate) const DEVICE_IDENTITY_V8_MIGRATION: SchemaMigrationDefinition =
@@ -8,10 +9,19 @@ pub(crate) const DEVICE_IDENTITY_V8_MIGRATION: SchemaMigrationDefinition =
         id: "20260417_001_device_identity_v8",
         description: "Hard-cut gateway runtime schema for device-key identity and provider route separation",
         checksum: "sha256:426de3f380802b8706ddd10151d30d4ba8286fddb234eeefc7800c42d7860a29",
+        target_schema_version: STORAGE_SCHEMA_VERSION_MIGRATABLE,
+    };
+
+pub(crate) const OBSERVABILITY_V9_MIGRATION: SchemaMigrationDefinition =
+    SchemaMigrationDefinition {
+        id: "20260422_001_observability_v9",
+        description: "Drop deprecated delivery_audit table and finalize diagnostics + tracing + stats matrix",
+        checksum: "sha256:8f4cb15c7dc5a328a88f596f59eaec157045a78287cf27a52f88f0a5518f5e47",
         target_schema_version: STORAGE_SCHEMA_VERSION,
     };
 
-pub(crate) const SCHEMA_MIGRATIONS: &[SchemaMigrationDefinition] = &[DEVICE_IDENTITY_V8_MIGRATION];
+pub(crate) const SCHEMA_MIGRATIONS: &[SchemaMigrationDefinition] =
+    &[DEVICE_IDENTITY_V8_MIGRATION, OBSERVABILITY_V9_MIGRATION];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SchemaMigrationDefinition {
@@ -57,6 +67,9 @@ impl SchemaMigrationPlan {
             },
             None => SchemaMigrationAction::FreshInstall,
             Some(version) if version == STORAGE_SCHEMA_VERSION => {
+                SchemaMigrationAction::BackfillCurrent
+            }
+            Some(version) if version == STORAGE_SCHEMA_VERSION_MIGRATABLE => {
                 SchemaMigrationAction::BackfillCurrent
             }
             Some(version) if is_legacy_hard_cut_version(version) => {
@@ -167,23 +180,22 @@ fn is_legacy_hard_cut_version(version: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppliedSchemaMigration, DEVICE_IDENTITY_V8_MIGRATION, SCHEMA_MIGRATIONS,
-        SchemaMigrationAction, SchemaMigrationPlan, latest_schema_migration,
+        AppliedSchemaMigration, DEVICE_IDENTITY_V8_MIGRATION, OBSERVABILITY_V9_MIGRATION,
+        SCHEMA_MIGRATIONS, SchemaMigrationAction, SchemaMigrationPlan, latest_schema_migration,
         pending_schema_migrations, validate_applied_schema_migrations,
     };
-    use crate::storage::{STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_PREVIOUS};
+    use crate::storage::{
+        STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_MIGRATABLE, STORAGE_SCHEMA_VERSION_PREVIOUS,
+    };
 
     #[test]
     fn migration_catalog_exposes_latest_schema_version() {
-        assert_eq!(latest_schema_migration(), DEVICE_IDENTITY_V8_MIGRATION);
+        assert_eq!(latest_schema_migration(), OBSERVABILITY_V9_MIGRATION);
         assert_eq!(
             latest_schema_migration().target_schema_version,
             STORAGE_SCHEMA_VERSION
         );
-        assert_eq!(
-            SCHEMA_MIGRATIONS.last(),
-            Some(&DEVICE_IDENTITY_V8_MIGRATION)
-        );
+        assert_eq!(SCHEMA_MIGRATIONS.last(), Some(&OBSERVABILITY_V9_MIGRATION));
     }
 
     #[test]
@@ -194,10 +206,13 @@ mod tests {
             plan.action,
             SchemaMigrationAction::HardResetRuntime {
                 reason: "legacy_runtime_without_schema_meta",
-                migration: DEVICE_IDENTITY_V8_MIGRATION,
+                migration: OBSERVABILITY_V9_MIGRATION,
             }
         );
-        assert_eq!(plan.pending_migrations, vec![DEVICE_IDENTITY_V8_MIGRATION]);
+        assert_eq!(
+            plan.pending_migrations,
+            vec![DEVICE_IDENTITY_V8_MIGRATION, OBSERVABILITY_V9_MIGRATION]
+        );
     }
 
     #[test]
@@ -210,15 +225,36 @@ mod tests {
 
     #[test]
     fn current_version_backfills() {
+        let applied = vec![
+            AppliedSchemaMigration {
+                id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
+                checksum: DEVICE_IDENTITY_V8_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+            AppliedSchemaMigration {
+                id: OBSERVABILITY_V9_MIGRATION.id.to_string(),
+                checksum: OBSERVABILITY_V9_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+        ];
+        let plan = SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION), true, &applied)
+            .expect("plan should resolve");
+        assert_eq!(plan.action, SchemaMigrationAction::BackfillCurrent);
+        assert!(plan.pending_migrations.is_empty());
+    }
+
+    #[test]
+    fn v8_schema_version_backfills_to_v9_in_place() {
         let applied = vec![AppliedSchemaMigration {
             id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
             checksum: DEVICE_IDENTITY_V8_MIGRATION.checksum.to_string(),
             success: true,
         }];
-        let plan = SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION), true, &applied)
-            .expect("plan should resolve");
+        let plan =
+            SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION_MIGRATABLE), true, &applied)
+                .expect("plan should resolve");
         assert_eq!(plan.action, SchemaMigrationAction::BackfillCurrent);
-        assert!(plan.pending_migrations.is_empty());
+        assert_eq!(plan.pending_migrations, vec![OBSERVABILITY_V9_MIGRATION]);
     }
 
     #[test]
@@ -237,11 +273,18 @@ mod tests {
 
     #[test]
     fn pending_migrations_excludes_recorded_rows() {
-        let pending = pending_schema_migrations(&[AppliedSchemaMigration {
-            id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
-            checksum: DEVICE_IDENTITY_V8_MIGRATION.checksum.to_string(),
-            success: true,
-        }]);
+        let pending = pending_schema_migrations(&[
+            AppliedSchemaMigration {
+                id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
+                checksum: DEVICE_IDENTITY_V8_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+            AppliedSchemaMigration {
+                id: OBSERVABILITY_V9_MIGRATION.id.to_string(),
+                checksum: OBSERVABILITY_V9_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+        ]);
         assert!(pending.is_empty());
     }
 }

@@ -161,12 +161,12 @@ impl MySqlDb {
 
     pub(super) async fn automation_reset(&self) -> StoreResult<()> {
         let tables = vec![
-            "delivery_audit",
             "subscription_audit",
             "device_route_audit",
             "channel_stats_daily",
             "device_stats_daily",
             "gateway_stats_hourly",
+            "ops_stats_hourly",
             "dispatch_op_dedupe",
             "dispatch_delivery_dedupe",
             "semantic_id_registry",

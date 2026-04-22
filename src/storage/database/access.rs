@@ -197,16 +197,7 @@ pub trait DeviceRouteDatabaseAccess: Send + Sync {
 }
 
 #[async_trait]
-pub trait DeliveryAuditDatabaseAccess: Send + Sync {
-    async fn append_delivery_audit(&self, entry: &DeliveryAuditWrite) -> StoreResult<()>;
-
-    async fn append_delivery_audit_batch(&self, entries: &[DeliveryAuditWrite]) -> StoreResult<()> {
-        for entry in entries {
-            self.append_delivery_audit(entry).await?;
-        }
-        Ok(())
-    }
-
+pub trait StatsDatabaseAccess: Send + Sync {
     async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()>;
 }
 
@@ -282,7 +273,7 @@ pub trait DatabaseAccess:
     ChannelDatabaseAccess
     + PrivateMessageDatabaseAccess
     + DeviceRouteDatabaseAccess
-    + DeliveryAuditDatabaseAccess
+    + StatsDatabaseAccess
     + ProviderPullDatabaseAccess
     + DedupeDatabaseAccess
     + SystemStateDatabaseAccess
@@ -295,7 +286,7 @@ impl<T> DatabaseAccess for T where
     T: ChannelDatabaseAccess
         + PrivateMessageDatabaseAccess
         + DeviceRouteDatabaseAccess
-        + DeliveryAuditDatabaseAccess
+        + StatsDatabaseAccess
         + ProviderPullDatabaseAccess
         + DedupeDatabaseAccess
         + SystemStateDatabaseAccess

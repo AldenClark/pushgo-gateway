@@ -10,9 +10,9 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
-    "CREATE TABLE IF NOT EXISTS delivery_audit (audit_id TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, channel_id BLOB NOT NULL, device_key TEXT NOT NULL, entity_type TEXT, entity_id TEXT, op_id TEXT, path TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, created_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS channel_stats_daily (channel_id BLOB NOT NULL, bucket_date TEXT NOT NULL, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_enqueued INTEGER NOT NULL DEFAULT 0, provider_attempted INTEGER NOT NULL DEFAULT 0, provider_failed INTEGER NOT NULL DEFAULT 0, provider_success INTEGER NOT NULL DEFAULT 0, private_realtime_delivered INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (channel_id, bucket_date))",
     "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour TEXT PRIMARY KEY, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_outbox_depth_max INTEGER NOT NULL DEFAULT 0, dedupe_pending_max INTEGER NOT NULL DEFAULT 0, active_private_sessions_max INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS ops_stats_hourly (bucket_hour TEXT NOT NULL, metric_key TEXT NOT NULL, metric_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bucket_hour, metric_key))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
 ];
@@ -38,9 +38,6 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
-    "CREATE INDEX IF NOT EXISTS delivery_audit_delivery_created_idx ON delivery_audit (delivery_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS delivery_audit_channel_created_idx ON delivery_audit (channel_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS delivery_audit_device_created_idx ON delivery_audit (device_key, created_at)",
 ];
 
 const SQLITE_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
@@ -318,18 +315,15 @@ impl SqliteDb {
             "ALTER TABLE provider_pull_queue ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
         )
         .await?;
-        self.ensure_sqlite_column(
-            "delivery_audit",
-            "audit_id",
-            "ALTER TABLE delivery_audit ADD COLUMN audit_id TEXT",
-        )
-        .await?;
         for stmt in SQLITE_BASE_INDEX_STATEMENTS
             .iter()
             .chain(SQLITE_RUNTIME_INDEX_STATEMENTS.iter())
         {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        sqlx::query("DROP TABLE IF EXISTS delivery_audit")
+            .execute(&self.pool)
+            .await?;
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
             .await?;

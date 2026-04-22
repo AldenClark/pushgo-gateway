@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{StoreError, StoreResult};
 
-pub const STORAGE_SCHEMA_VERSION: &str = "2026-04-17-gateway-v8";
+pub const STORAGE_SCHEMA_VERSION: &str = "2026-04-22-gateway-v9";
+pub const STORAGE_SCHEMA_VERSION_MIGRATABLE: &str = "2026-04-17-gateway-v8";
 pub const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-04-16-gateway-v7";
 pub const STORAGE_SCHEMA_VERSION_LEGACY: &str = "2026-04-13-gateway-v6";
 pub const STORAGE_SCHEMA_VERSION_OLDER_LEGACY: &str = "2026-03-26-gateway-v5";

@@ -356,21 +356,10 @@ macro_rules! impl_backend_device_route_access {
     };
 }
 
-macro_rules! impl_backend_delivery_audit_access {
+macro_rules! impl_backend_stats_access {
     ($backend:ty) => {
         #[async_trait]
-        impl crate::storage::database::DeliveryAuditDatabaseAccess for $backend {
-            async fn append_delivery_audit(&self, entry: &DeliveryAuditWrite) -> StoreResult<()> {
-                <$backend>::append_delivery_audit(self, entry).await
-            }
-
-            async fn append_delivery_audit_batch(
-                &self,
-                entries: &[DeliveryAuditWrite],
-            ) -> StoreResult<()> {
-                <$backend>::append_delivery_audit_batch(self, entries).await
-            }
-
+        impl crate::storage::database::StatsDatabaseAccess for $backend {
             async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()> {
                 <$backend>::apply_stats_batch(self, batch).await
             }
@@ -544,7 +533,7 @@ macro_rules! impl_backend_database_access {
         impl_backend_private_channel_access!($backend);
         impl_backend_private_message_access!($backend);
         impl_backend_device_route_access!($backend);
-        impl_backend_delivery_audit_access!($backend);
+        impl_backend_stats_access!($backend);
         impl_backend_provider_pull_access!($backend);
         impl_backend_dedupe_access!($backend);
         impl_backend_system_state_access!($backend);

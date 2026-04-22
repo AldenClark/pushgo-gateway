@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use reqwest::Client;
+use tokio::time::sleep;
 
 use crate::{
     Error,
@@ -12,6 +13,8 @@ use crate::{
 const WNS_TIMEOUT: Duration = Duration::from_secs(60);
 const WNS_TYPE: &str = "wns/raw";
 const WNS_CONTENT_TYPE: &str = "application/octet-stream";
+const WNS_MAX_RETRY: usize = 3;
+const WNS_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 
 pub struct WnsService {
     client: Client,
@@ -37,19 +40,6 @@ impl WnsService {
         device_token: &str,
         payload: Arc<WnsPayload>,
     ) -> DispatchResult {
-        let token = match self.token_provider.token_info().await {
-            Ok(info) => info,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(err),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
-        };
-
         let body = match payload.encoded_body() {
             Ok(body) => body,
             Err(err) => {
@@ -65,69 +55,63 @@ impl WnsService {
 
         let priority = payload.priority();
         let ttl_seconds = payload.ttl_seconds();
-        match self
-            .send_request(
-                device_token,
-                token.token.as_ref(),
-                body.clone(),
-                priority,
-                ttl_seconds,
-            )
-            .await
-        {
-            Ok(result) if result.status_code == 401 => {
-                self.retry_with_fresh_token(device_token, body, priority, ttl_seconds)
-                    .await
-            }
-            Ok(result) => result,
-            Err(err) => DispatchResult {
-                success: false,
-                status_code: 0,
-                error: Some(err),
-                invalid_token: false,
-                payload_too_large: false,
-            },
-        }
-    }
+        let mut attempt = 0usize;
+        let mut backoff = WNS_INITIAL_BACKOFF;
+        let mut force_fresh_token = false;
 
-    async fn retry_with_fresh_token(
-        &self,
-        device_token: &str,
-        body: Arc<[u8]>,
-        priority: Option<u8>,
-        ttl_seconds: Option<u32>,
-    ) -> DispatchResult {
-        let token = match self.token_provider.token_info_fresh().await {
-            Ok(info) => info,
-            Err(err) => {
-                return DispatchResult {
+        loop {
+            attempt += 1;
+            let token = match if force_fresh_token {
+                self.token_provider.token_info_fresh().await
+            } else {
+                self.token_provider.token_info().await
+            } {
+                Ok(info) => info,
+                Err(err) => {
+                    return DispatchResult {
+                        success: false,
+                        status_code: 0,
+                        error: Some(err),
+                        invalid_token: false,
+                        payload_too_large: false,
+                    };
+                }
+            };
+
+            let dispatch = self
+                .send_request(
+                    device_token,
+                    token.token.as_ref(),
+                    body.clone(),
+                    priority,
+                    ttl_seconds,
+                )
+                .await
+                .unwrap_or_else(|err| DispatchResult {
                     success: false,
                     status_code: 0,
                     error: Some(err),
                     invalid_token: false,
                     payload_too_large: false,
-                };
+                });
+            if dispatch.success {
+                return dispatch;
             }
-        };
 
-        match self
-            .send_request(
-                device_token,
-                token.token.as_ref(),
-                body,
-                priority,
-                ttl_seconds,
-            )
-            .await
-        {
-            Ok(result) => result,
-            Err(err) => DispatchResult {
-                success: false,
-                status_code: 0,
-                error: Some(err),
-                invalid_token: false,
-                payload_too_large: false,
-            },
+            let status_code = dispatch.status_code;
+            if status_code == 401 && !force_fresh_token && attempt < WNS_MAX_RETRY {
+                force_fresh_token = true;
+                continue;
+            }
+
+            let retryable = is_wns_retryable_status(status_code) && attempt < WNS_MAX_RETRY;
+            if !retryable {
+                return dispatch;
+            }
+
+            force_fresh_token = false;
+            sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(5));
         }
     }
 
@@ -222,6 +206,10 @@ fn is_wns_token_invalid(status_code: u16) -> bool {
 
 fn is_wns_payload_too_large(status_code: u16) -> bool {
     status_code == 413
+}
+
+fn is_wns_retryable_status(status_code: u16) -> bool {
+    status_code == 0 || matches!(status_code, 429 | 500 | 503 | 504)
 }
 
 fn response_body_text(body: &[u8]) -> Option<String> {

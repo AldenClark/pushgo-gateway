@@ -4,7 +4,7 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::storage::database::migration::DEVICE_IDENTITY_V8_MIGRATION;
+use crate::storage::database::migration::latest_schema_migration;
 
 struct DockerContainer {
     name: String,
@@ -148,6 +148,7 @@ async fn postgres_init_records_current_schema_migration() {
     };
     wait_for_postgres(&db_url).await;
 
+    let latest = latest_schema_migration();
     let _storage = Storage::new(Some(db_url.as_str()))
         .await
         .expect("postgres storage should initialize");
@@ -159,12 +160,12 @@ async fn postgres_init_records_current_schema_migration() {
          FROM pushgo_schema_migrations \
          WHERE migration_id = $1",
     )
-    .bind(DEVICE_IDENTITY_V8_MIGRATION.id)
+    .bind(latest.id)
     .fetch_one(&mut conn)
     .await
     .expect("postgres migration ledger row should exist");
-    assert_eq!(row.0, DEVICE_IDENTITY_V8_MIGRATION.id);
-    assert_eq!(row.1, DEVICE_IDENTITY_V8_MIGRATION.checksum);
+    assert_eq!(row.0, latest.id);
+    assert_eq!(row.1, latest.checksum);
     assert!(row.2);
 }
 
@@ -175,21 +176,29 @@ async fn postgres_init_rejects_current_migration_checksum_drift() {
     };
     wait_for_postgres(&db_url).await;
 
+    let latest = latest_schema_migration();
     let mut conn = PgConnection::connect(&db_url)
         .await
         .expect("postgres setup connection should succeed");
     for stmt in [
         "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL)",
-        "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-17-gateway-v8') \
+        "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-22-gateway-v9') \
          ON CONFLICT (meta_key) DO UPDATE SET meta_value = EXCLUDED.meta_value",
         "CREATE TABLE IF NOT EXISTS pushgo_schema_migrations (migration_id VARCHAR(128) PRIMARY KEY, description TEXT NOT NULL, checksum VARCHAR(255) NOT NULL, target_schema_version VARCHAR(255) NOT NULL, started_at BIGINT NOT NULL, finished_at BIGINT NOT NULL, execution_ms BIGINT NOT NULL, success BOOLEAN NOT NULL, error TEXT)",
-        "INSERT INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error) VALUES ('20260417_001_device_identity_v8', 'tampered', 'sha256:tampered', '2026-04-17-gateway-v8', 1, 1, 0, TRUE, NULL)",
     ] {
         sqlx::query(stmt)
             .execute(&mut conn)
             .await
             .expect("postgres setup statement should succeed");
     }
+    sqlx::query(
+        "INSERT INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error) VALUES ($1, 'tampered', 'sha256:tampered', $2, 1, 1, 0, TRUE, NULL)",
+    )
+    .bind(latest.id)
+    .bind(crate::storage::STORAGE_SCHEMA_VERSION)
+    .execute(&mut conn)
+    .await
+    .expect("postgres tampered migration row should be inserted");
     conn.close().await.expect("postgres close should succeed");
 
     let err = Storage::new(Some(db_url.as_str()))
@@ -205,6 +214,7 @@ async fn mysql_init_records_current_schema_migration() {
     };
     wait_for_mysql(&db_url).await;
 
+    let latest = latest_schema_migration();
     let _storage = Storage::new(Some(db_url.as_str()))
         .await
         .expect("mysql storage should initialize");
@@ -216,12 +226,12 @@ async fn mysql_init_records_current_schema_migration() {
          FROM pushgo_schema_migrations \
          WHERE migration_id = ?",
     )
-    .bind(DEVICE_IDENTITY_V8_MIGRATION.id)
+    .bind(latest.id)
     .fetch_one(&mut conn)
     .await
     .expect("mysql migration ledger row should exist");
-    assert_eq!(row.0, DEVICE_IDENTITY_V8_MIGRATION.id);
-    assert_eq!(row.1, DEVICE_IDENTITY_V8_MIGRATION.checksum);
+    assert_eq!(row.0, latest.id);
+    assert_eq!(row.1, latest.checksum);
     assert_eq!(row.2, 1);
 }
 
@@ -232,20 +242,28 @@ async fn mysql_init_rejects_current_migration_checksum_drift() {
     };
     wait_for_mysql(&db_url).await;
 
+    let latest = latest_schema_migration();
     let mut conn = MySqlConnection::connect(&db_url)
         .await
         .expect("mysql setup connection should succeed");
     for stmt in [
         "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL) ENGINE=InnoDB",
-        "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-17-gateway-v8') ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)",
+        "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-22-gateway-v9') ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)",
         "CREATE TABLE IF NOT EXISTS pushgo_schema_migrations (migration_id VARCHAR(128) PRIMARY KEY, description TEXT NOT NULL, checksum VARCHAR(255) NOT NULL, target_schema_version VARCHAR(255) NOT NULL, started_at BIGINT NOT NULL, finished_at BIGINT NOT NULL, execution_ms BIGINT NOT NULL, success TINYINT NOT NULL, error TEXT NULL) ENGINE=InnoDB",
-        "INSERT INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error) VALUES ('20260417_001_device_identity_v8', 'tampered', 'sha256:tampered', '2026-04-17-gateway-v8', 1, 1, 0, 1, NULL)",
     ] {
         sqlx::query(stmt)
             .execute(&mut conn)
             .await
             .expect("mysql setup statement should succeed");
     }
+    sqlx::query(
+        "INSERT INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error) VALUES (?, 'tampered', 'sha256:tampered', ?, 1, 1, 0, 1, NULL)",
+    )
+    .bind(latest.id)
+    .bind(crate::storage::STORAGE_SCHEMA_VERSION)
+    .execute(&mut conn)
+    .await
+    .expect("mysql tampered migration row should be inserted");
     conn.close().await.expect("mysql close should succeed");
 
     let err = Storage::new(Some(db_url.as_str()))

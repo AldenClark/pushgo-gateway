@@ -11,9 +11,11 @@ Policy:
 ## [v1.2.3]
 
 ### Improved
-- Gateway runtime package/version metadata is aligned to `v1.2.3` for consistent rollout, diagnostics, and user-agent identification.
-- Linux container build and runtime baselines are now aligned on Debian bookworm-slim to reduce libc drift risks during deployment.
-- Release documentation is synchronized with this publication checkpoint for clearer operator-facing release tracking.
+- Gateway now ships the full observability refresh in `v1.2.3`: profile-driven diagnostics/tracing/stats behavior, structured trace events, and tighter startup/runtime telemetry.
+- Diagnostics surfaces are streamlined around private-channel operational endpoints, while dispatch/runtime telemetry is unified into stats + trace paths for clearer production triage.
+- Runtime/storage migration for this release line is synchronized with observability cleanup, including deprecated delivery-audit path removal and schema/state convergence.
+- Linux release artifact and runtime container baselines are aligned on Debian `bookworm-slim` to reduce libc drift risks during deployment.
+- This release entry now reflects the complete gateway optimization set currently in the repository (not only the initial version-bump subset).
 
 ## [v1.2.2]
 

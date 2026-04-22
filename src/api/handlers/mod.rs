@@ -1,7 +1,6 @@
 pub(crate) mod channel;
 pub(crate) mod channel_auth;
 pub(crate) mod core;
-pub(crate) mod diagnostics;
 pub(crate) mod dispatch_lifecycle;
 pub(crate) mod entity_input;
 pub(crate) mod event;
@@ -91,10 +90,6 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
 
 pub(crate) fn diagnostics_router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/diagnostics/dispatch",
-            get(diagnostics::diagnostics_dispatch),
-        )
         .route(
             "/diagnostics/private/metrics",
             get(private::private_metrics),

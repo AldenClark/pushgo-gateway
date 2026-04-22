@@ -10,9 +10,9 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) PRIMARY KEY, semantic_id VARCHAR(128) NOT NULL UNIQUE, source VARCHAR(64), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT, expires_at BIGINT)",
-    "CREATE TABLE IF NOT EXISTS delivery_audit (audit_id VARCHAR(128) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, channel_id BYTEA NOT NULL, device_key VARCHAR(255) NOT NULL, entity_type VARCHAR(32), entity_id VARCHAR(255), op_id VARCHAR(128), path VARCHAR(32) NOT NULL, status VARCHAR(32) NOT NULL, error_code VARCHAR(64), created_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS channel_stats_daily (channel_id BYTEA NOT NULL, bucket_date VARCHAR(10) NOT NULL, messages_routed BIGINT NOT NULL DEFAULT 0, deliveries_attempted BIGINT NOT NULL DEFAULT 0, deliveries_acked BIGINT NOT NULL DEFAULT 0, private_enqueued BIGINT NOT NULL DEFAULT 0, provider_attempted BIGINT NOT NULL DEFAULT 0, provider_failed BIGINT NOT NULL DEFAULT 0, provider_success BIGINT NOT NULL DEFAULT 0, private_realtime_delivered BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (channel_id, bucket_date))",
     "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour VARCHAR(16) PRIMARY KEY, messages_routed BIGINT NOT NULL DEFAULT 0, deliveries_attempted BIGINT NOT NULL DEFAULT 0, deliveries_acked BIGINT NOT NULL DEFAULT 0, private_outbox_depth_max BIGINT NOT NULL DEFAULT 0, dedupe_pending_max BIGINT NOT NULL DEFAULT 0, active_private_sessions_max BIGINT NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS ops_stats_hourly (bucket_hour VARCHAR(16) NOT NULL, metric_key VARCHAR(128) NOT NULL, metric_value BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (bucket_hour, metric_key))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL)",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key VARCHAR(64) PRIMARY KEY, state_json TEXT NOT NULL, updated_at BIGINT NOT NULL)",
 ];
@@ -38,9 +38,6 @@ const PG_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
-    "CREATE INDEX IF NOT EXISTS delivery_audit_delivery_created_idx ON delivery_audit (delivery_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS delivery_audit_channel_created_idx ON delivery_audit (channel_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS delivery_audit_device_created_idx ON delivery_audit (device_key, created_at)",
 ];
 
 const PG_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
@@ -292,18 +289,15 @@ impl PostgresDb {
             "ALTER TABLE provider_pull_queue ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0",
         )
         .await?;
-        self.ensure_pg_column(
-            "delivery_audit",
-            "audit_id",
-            "ALTER TABLE delivery_audit ADD COLUMN audit_id VARCHAR(128)",
-        )
-        .await?;
         for stmt in PG_BASE_INDEX_STATEMENTS
             .iter()
             .chain(PG_RUNTIME_INDEX_STATEMENTS.iter())
         {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        sqlx::query("DROP TABLE IF EXISTS delivery_audit")
+            .execute(&self.pool)
+            .await?;
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
             .await?;
