@@ -5,7 +5,7 @@ use tokio::{net::TcpListener, signal};
 
 use pushgo_gateway::{
     app::{AppRuntime, build_app},
-    args::{Args, ObservabilityConfig},
+    args::Args,
     private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
 };
@@ -25,22 +25,11 @@ const FCM_SEND_BASE_URL: &str = "https://fcm.googleapis.com";
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse().normalized();
-    let observability = args.observability_config();
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
-    pushgo_gateway::util::set_trace_logs_mode(observability.trace_logs_enabled);
-    if observability.trace_logs_enabled {
-        pushgo_gateway::util::set_trace_log_file(args.trace_log_file.as_str())?;
-    }
-    pushgo_gateway::util::install_panic_trace_hook();
+    pushgo_gateway::util::set_diagnostics_mode(args.diagnostics_api_enabled);
     let apns_endpoint = apns_endpoint(args.sandbox_mode);
     let token_service_url = args.token_service_url.trim().to_string();
-    print_startup_diagnostics(
-        &args,
-        &observability,
-        apns_endpoint,
-        token_service_url.as_str(),
-        args.trace_log_file.as_str(),
-    );
+    print_startup_diagnostics(&args, apns_endpoint, token_service_url.as_str());
 
     let client = reqwest::Client::builder()
         .user_agent("pushgo-gateway/1.2.3")
@@ -71,9 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let addr: SocketAddr = args.http_addr.parse()?;
 
     let listener = TcpListener::bind(addr).await?;
-    pushgo_gateway::util::TraceEvent::new("gateway.listening")
-        .field_str("http_addr", addr.to_string())
-        .emit();
+    pushgo_gateway::util::diagnostics_log(format_args!("gateway listening on {}", addr));
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -118,27 +105,15 @@ fn apns_endpoint(sandbox_mode: bool) -> &'static str {
     }
 }
 
-fn print_startup_diagnostics(
-    args: &Args,
-    observability: &ObservabilityConfig,
-    apns_endpoint: &str,
-    token_service_url: &str,
-    trace_log_file: &str,
-) {
-    pushgo_gateway::util::TraceEvent::new("gateway.startup")
-        .field_str("http_addr", args.http_addr.as_str())
-        .field_bool("sandbox_mode", args.sandbox_mode)
-        .field_bool("private_channel_enabled", args.private_channel_enabled)
-        .field_str("observability_profile", observability.profile.as_str())
-        .field_bool(
-            "diagnostics_api_enabled",
-            observability.diagnostics_api_enabled,
-        )
-        .field_bool("trace_logs_enabled", observability.trace_logs_enabled)
-        .field_bool("stats_enabled", observability.stats_enabled)
-        .field_bool("mcp_enabled", args.mcp_enabled)
-        .field_str("apns_endpoint", apns_endpoint)
-        .field_str("token_service_url", token_service_url)
-        .field_str("trace_log_file", trace_log_file)
-        .emit();
+fn print_startup_diagnostics(args: &Args, apns_endpoint: &str, token_service_url: &str) {
+    pushgo_gateway::util::diagnostics_log(format_args!(
+        "gateway startup: http_addr={} sandbox_mode={} private_channel_enabled={} diagnostics_api_enabled={} mcp_enabled={} apns_endpoint={} token_service_url={}",
+        args.http_addr,
+        args.sandbox_mode,
+        args.private_channel_enabled,
+        args.diagnostics_api_enabled,
+        args.mcp_enabled,
+        apns_endpoint,
+        token_service_url
+    ));
 }
