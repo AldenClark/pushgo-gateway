@@ -8,6 +8,13 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.3]
+
+### Improved
+- Gateway runtime package/version metadata is aligned to `v1.2.3` for consistent rollout, diagnostics, and user-agent identification.
+- Linux container build and runtime baselines are now aligned on Debian bookworm-slim to reduce libc drift risks during deployment.
+- Release documentation is synchronized with this publication checkpoint for clearer operator-facing release tracking.
+
 ## [v1.2.2]
 
 ### Improved

@@ -29,30 +29,59 @@ jobs:
 
       - name: Add cross compilation targets
         run: |
-          rustup target add x86_64-unknown-linux-gnu
-          rustup target add aarch64-unknown-linux-gnu
-          rustup target add armv7-unknown-linux-gnueabihf
           rustup target add x86_64-unknown-linux-musl
           rustup target add aarch64-unknown-linux-musl
           rustup target add armv7-unknown-linux-musleabihf
 
-      - name: Install linkers for GNU targets
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          sudo apt-get install -y gcc-arm-linux-gnueabihf
-
       - name: Install cross for musl targets
         run: cargo install cross --locked
 
-      - name: Build release binaries (GNU)
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      - name: Build release binaries (GNU in Debian 12 / glibc 2.36)
         run: |
-          cargo build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target x86_64-unknown-linux-gnu
-          cargo build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target aarch64-unknown-linux-gnu
-          cargo build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target armv7-unknown-linux-gnueabihf
+          docker run --rm \
+            -e SOURCE_BINARY_NAME="${SOURCE_BINARY_NAME}" \
+            -v "${GITHUB_WORKSPACE}:/work" \
+            -w /work \
+            debian:bookworm-slim \
+            bash -lc '
+              set -eux
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                ca-certificates curl build-essential pkg-config \
+                gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+              rm -rf /var/lib/apt/lists/*
+              curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+              . "$HOME/.cargo/env"
+              rustup target add \
+                x86_64-unknown-linux-gnu \
+                aarch64-unknown-linux-gnu \
+                armv7-unknown-linux-gnueabihf
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+                CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+                cargo build --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target x86_64-unknown-linux-gnu
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+                CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+                cargo build --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target aarch64-unknown-linux-gnu
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+                CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+                cargo build --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target armv7-unknown-linux-gnueabihf
+            '
+
+      - name: Verify amd64 GNU binary loads in bookworm-slim
+        run: |
+          docker run --rm \
+            -e SOURCE_BINARY_NAME="${SOURCE_BINARY_NAME}" \
+            -v "${GITHUB_WORKSPACE}:/work" \
+            -w /work \
+            debian:bookworm-slim \
+            bash -lc '
+              set -eux
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates
+              rm -rf /var/lib/apt/lists/*
+              ./target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} --help >/dev/null
+            '
 
       - name: Build release binaries (musl)
         run: |

@@ -12,6 +12,14 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.3] - 2026-04-22
+
+### Changed
+- Bumped package/runtime version to `1.2.3` (release tag target: `v1.2.3`), including Cargo package metadata and gateway user-agent identifiers.
+- Updated release binary build script to compile GNU artifacts inside `debian:bookworm-slim`, aligning glibc baseline with runtime images.
+- Updated local Docker source-build script to use `debian:bookworm-slim` for both build and runtime stages, keeping container baselines consistent.
+- Updated release documentation to align with the `v1.2.3` publication target.
+
 ## [v1.2.2] - 2026-04-19
 
 ### Changed
