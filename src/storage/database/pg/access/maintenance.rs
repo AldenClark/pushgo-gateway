@@ -108,7 +108,7 @@ impl PostgresDb {
         dedupe_key: &str,
         delivery_id: &str,
     ) -> StoreResult<bool> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         let result = sqlx::query(
             "UPDATE dispatch_op_dedupe \
              SET state = $1, sent_at = $2, updated_at = $2 \
@@ -148,7 +148,7 @@ impl PostgresDb {
     ) -> StoreResult<()> {
         sqlx::query("UPDATE dispatch_delivery_dedupe SET state = $1, updated_at = $2 WHERE dedupe_key = $3 AND delivery_id = $4")
             .bind(DedupeState::Sent.as_str())
-            .bind(Utc::now().timestamp())
+            .bind(Utc::now().timestamp_millis())
             .bind(dedupe_key)
             .bind(delivery_id)
             .execute(&self.pool)
@@ -221,7 +221,7 @@ impl PostgresDb {
     }
 
     pub(super) async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         sqlx::query(
             "INSERT INTO mcp_state (state_key, state_json, updated_at) VALUES ($1, $2, $3) \
              ON CONFLICT(state_key) DO UPDATE SET state_json = EXCLUDED.state_json, updated_at = EXCLUDED.updated_at",

@@ -96,3 +96,55 @@ where
 
     deserializer.deserialize_any(LenientI64Visitor)
 }
+
+fn normalize_unix_timestamp_millis(value: i64) -> i64 {
+    const MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
+    if value.unsigned_abs() >= MILLIS_THRESHOLD as u64 {
+        value
+    } else {
+        value.saturating_mul(1000)
+    }
+}
+
+pub(crate) fn deserialize_unix_ts_millis_lenient<'de, D>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_i64_lenient(deserializer)
+        .map(|value| value.map(normalize_unix_timestamp_millis))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deserialize_unix_ts_millis_lenient;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    struct TsPayload {
+        #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
+        ts: Option<i64>,
+    }
+
+    #[test]
+    fn deserialize_unix_ts_millis_lenient_accepts_seconds() {
+        let payload: TsPayload =
+            serde_json::from_str(r#"{"ts":1710000000}"#).expect("json should parse");
+        assert_eq!(payload.ts, Some(1_710_000_000_000));
+    }
+
+    #[test]
+    fn deserialize_unix_ts_millis_lenient_keeps_milliseconds() {
+        let payload: TsPayload =
+            serde_json::from_str(r#"{"ts":1710000000123}"#).expect("json should parse");
+        assert_eq!(payload.ts, Some(1_710_000_000_123));
+    }
+
+    #[test]
+    fn deserialize_unix_ts_millis_lenient_accepts_numeric_string() {
+        let payload: TsPayload =
+            serde_json::from_str(r#"{"ts":"1710000000456"}"#).expect("json should parse");
+        assert_eq!(payload.ts, Some(1_710_000_000_456));
+    }
+}

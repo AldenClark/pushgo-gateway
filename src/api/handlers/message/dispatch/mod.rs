@@ -16,9 +16,9 @@ use crate::{
 use super::{
     ids::{DeliveryId, OpId, SemanticScope, wakeup_data_with_delivery_id},
     payload::{
-        CustomPayloadData, EntityKind, MAX_PROVIDER_TTL_SECONDS, PAYLOAD_VERSION, PayloadSeverity,
-        ProviderDeliverySelection, ProviderRouteBinding, ProviderTtl, SCHEMA_VERSION,
-        StandardFields,
+        CustomPayloadData, EntityKind, MAX_PROVIDER_TTL_MILLIS, MAX_PROVIDER_TTL_SECONDS,
+        PAYLOAD_VERSION, PayloadSeverity, ProviderDeliverySelection, ProviderRouteBinding,
+        ProviderTtl, SCHEMA_VERSION, StandardFields,
     },
     stats::{PrivateEnqueueStats, emit_dispatch_stats, merge_device_dispatch_delta},
 };
@@ -61,7 +61,7 @@ pub(crate) async fn dispatch_entity_notification(
     let op_id = OpId::parse(&op_id)?.into_inner();
     let trace_id = generate_hex_id_128();
     let channel_id_value = format_channel_id(&channel_id);
-    let sent_at = Utc::now().timestamp();
+    let sent_at = Utc::now().timestamp_millis();
     let delivery_id = DeliveryId::reserve(state, sent_at).await?.into_inner();
     let correlation_id = Arc::<str>::from(trace_id.into_boxed_str());
     let delivery_id_ref = Arc::<str>::from(delivery_id.clone().into_boxed_str());

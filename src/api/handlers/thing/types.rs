@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
-use crate::api::{deserialize_empty_as_none, deserialize_i64_lenient};
+use crate::api::{
+    deserialize_empty_as_none, deserialize_unix_ts_millis_lenient,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(super) struct ThingLocation {
@@ -24,11 +26,17 @@ pub(super) struct ThingProfile {
     pub(super) primary_image: Option<String>,
     #[serde(default)]
     pub(super) images: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_i64_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_unix_ts_millis_lenient"
+    )]
     pub(super) created_at: Option<i64>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub(super) state: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_i64_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_unix_ts_millis_lenient"
+    )]
     pub(super) deleted_at: Option<i64>,
     #[serde(default)]
     pub(super) external_ids: BTreeMap<String, String>,
@@ -61,6 +69,7 @@ pub(super) struct ThingMutablePayloadFields {
     pub(super) primary_image: Option<String>,
     #[serde(default)]
     pub(super) images: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) observed_at: Option<i64>,
     #[serde(default)]
     pub(super) attrs: JsonMap<String, JsonValue>,
@@ -76,6 +85,7 @@ pub(super) struct ThingMutablePayloadFields {
 pub(crate) struct ThingCreateRequest {
     #[serde(flatten)]
     pub(super) common: ThingCommonFields,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) created_at: Option<i64>,
     #[serde(flatten)]
     pub(super) payload: ThingMutablePayloadFields,
@@ -107,6 +117,7 @@ pub(crate) struct ThingDeleteRequest {
     #[serde(flatten)]
     pub(super) common: ThingCommonFields,
     pub(super) thing_id: String,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) deleted_at: Option<i64>,
     #[serde(flatten)]
     pub(super) payload: ThingMutablePayloadFields,

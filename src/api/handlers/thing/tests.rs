@@ -108,3 +108,33 @@ fn thing_create_accepts_missing_op_id() {
     let parsed = serde_json::from_str::<ThingCreateRequest>(raw);
     assert!(parsed.is_ok(), "thing create should accept missing op_id");
 }
+
+#[test]
+fn thing_create_normalizes_timestamps_to_millis() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "title":"name",
+        "created_at":"1710000000123",
+        "observed_at":1710000000456
+    }"#;
+    let parsed =
+        serde_json::from_str::<ThingCreateRequest>(raw).expect("thing create should parse payload");
+    assert_eq!(parsed.created_at, Some(1_710_000_000_123));
+    assert_eq!(parsed.payload.observed_at, Some(1_710_000_000_456));
+}
+
+#[test]
+fn thing_delete_normalizes_deleted_at_to_millis() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "thing_id":"thing-1",
+        "deleted_at":1710000000789,
+        "observed_at":"1710000000999"
+    }"#;
+    let parsed =
+        serde_json::from_str::<ThingDeleteRequest>(raw).expect("thing delete should parse payload");
+    assert_eq!(parsed.deleted_at, Some(1_710_000_000_789));
+    assert_eq!(parsed.payload.observed_at, Some(1_710_000_000_999));
+}

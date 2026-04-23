@@ -39,7 +39,7 @@ impl MySqlDb {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND expires_at <= ?")
             .bind(device_id.as_slice())
             .bind(now)

@@ -253,8 +253,8 @@ impl Storage {
         ack_timeout_secs: u64,
     ) -> StoreResult<usize> {
         const BATCH_SIZE: usize = 512;
-        let now = chrono::Utc::now().timestamp();
-        let next_attempt_at = now.saturating_add(ack_timeout_secs.max(1) as i64);
+        let now = chrono::Utc::now().timestamp_millis();
+        let next_attempt_at = now.saturating_add(ack_timeout_secs.max(1) as i64 * 1000);
         let mut migrated = 0usize;
 
         loop {

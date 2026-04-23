@@ -9,7 +9,7 @@ pub(super) async fn append_subscription_audit(
     action: &str,
     route: &DeviceRouteRecord,
 ) -> Result<(), Error> {
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     state
         .store
         .append_subscription_audit(&SubscriptionAuditWrite {

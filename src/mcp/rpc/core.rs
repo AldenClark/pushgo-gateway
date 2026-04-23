@@ -40,14 +40,13 @@ impl McpRpcService<'_> {
         }
     }
 
-    pub(super) async fn attach_channel_context(
-        &self,
-        value: &mut Value,
-        channel_id: &str,
-    ) {
+    pub(super) async fn attach_channel_context(&self, value: &mut Value, channel_id: &str) {
         let channel_name = self.channel_name(channel_id).await;
         if let Some(map) = value.as_object_mut() {
-            map.insert("channel_id".to_string(), Value::String(channel_id.to_string()));
+            map.insert(
+                "channel_id".to_string(),
+                Value::String(channel_id.to_string()),
+            );
             map.insert(
                 "channel_name".to_string(),
                 channel_name
@@ -165,10 +164,7 @@ impl McpRpcService<'_> {
                 let mut payload = channel;
                 if let Some(map) = payload.as_object_mut() {
                     let recent = self.recent_channel_summaries(channel_id);
-                    map.insert(
-                        "recent_message_event_summary".to_string(),
-                        recent,
-                    );
+                    map.insert("recent_message_event_summary".to_string(), recent);
                 }
                 let text = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
                 return Ok(json!({
@@ -199,11 +195,11 @@ impl McpRpcService<'_> {
                   "password": {"type":"string","description":"legacy 模式必填，OAuth2 模式禁止"},
                   "op_id": {"type":"string","description":"可选幂等键，不传由 gateway 生成"},
                   "thing_id": {"type":"string","description":"可选 thing 作用域"},
-                  "occurred_at": {"type":"integer","description":"可选，秒级时间戳"},
+                  "occurred_at": {"type":"integer","description":"可选，支持 Unix 秒/毫秒时间戳，网关归一化为毫秒"},
                   "title": {"type":"string","description":"标题"},
                   "body": {"type":"string","description":"正文"},
                   "severity": {"type":"string","description":"等级"},
-                  "ttl": {"type":"integer","description":"TTL 秒"},
+                  "ttl": {"type":"integer","description":"可选过期时间，支持 Unix 秒/毫秒时间戳，网关归一化为毫秒"},
                   "url": {"type":"string","description":"跳转链接"},
                   "images": {"type":"array","items":{"type":"string"},"description":"图片 URL 列表"},
                   "ciphertext": {"type":"string","description":"可选密文"},

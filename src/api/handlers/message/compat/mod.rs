@@ -26,13 +26,14 @@ pub(crate) struct MessageGetQuery {
     op_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     thing_id: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_i64_lenient")]
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     occurred_at: Option<i64>,
     title: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     body: Option<String>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     severity: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     ttl: Option<i64>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     url: Option<String>,
@@ -62,8 +63,9 @@ pub(crate) struct CompatNtfyQuery {
     pub url: Option<String>,
     pub op_id: Option<String>,
     pub thing_id: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_i64_lenient")]
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub occurred_at: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub ttl: Option<i64>,
     pub images: Option<String>,
     pub tags: Option<String>,

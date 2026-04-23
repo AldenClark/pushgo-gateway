@@ -205,12 +205,12 @@ impl FallbackTaskEngine {
         self.rx.lock().take()
     }
 
-    fn schedule(&self, device_id: DeviceId, delivery_id: String, due_at_unix_secs: i64) -> bool {
+    fn schedule(&self, device_id: DeviceId, delivery_id: String, due_at_unix_millis: i64) -> bool {
         let sent = self
             .tx
             .try_send(FallbackTaskCommand::schedule(
                 FallbackTaskKey::new(device_id, delivery_id),
-                due_at_unix_secs,
+                due_at_unix_millis,
             ))
             .is_ok();
         if !sent {
@@ -282,7 +282,7 @@ enum SchedulerTaskKey {
 enum FallbackTaskCommand {
     Schedule {
         key: FallbackTaskKey,
-        due_at_unix_secs: i64,
+        due_at_unix_millis: i64,
     },
     Cancel {
         key: FallbackTaskKey,
@@ -290,10 +290,10 @@ enum FallbackTaskCommand {
 }
 
 impl FallbackTaskCommand {
-    fn schedule(key: FallbackTaskKey, due_at_unix_secs: i64) -> Self {
+    fn schedule(key: FallbackTaskKey, due_at_unix_millis: i64) -> Self {
         Self::Schedule {
             key,
-            due_at_unix_secs,
+            due_at_unix_millis,
         }
     }
 
@@ -304,7 +304,7 @@ impl FallbackTaskCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FallbackTaskEntry {
-    due_at_unix_secs: i64,
+    due_at_unix_millis: i64,
     sequence: u64,
     key: SchedulerTaskKey,
 }
@@ -312,8 +312,8 @@ struct FallbackTaskEntry {
 impl Ord for FallbackTaskEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         other
-            .due_at_unix_secs
-            .cmp(&self.due_at_unix_secs)
+            .due_at_unix_millis
+            .cmp(&self.due_at_unix_millis)
             .then_with(|| other.sequence.cmp(&self.sequence))
     }
 }
@@ -340,8 +340,8 @@ impl PrivateState {
             runtime.seed_fallback_tasks(&mut scheduler).await;
             scheduler.schedule_maintenance(
                 chrono::Utc::now()
-                    .timestamp()
-                    .saturating_add(MAINTENANCE_INTERVAL_SECS),
+                    .timestamp_millis()
+                    .saturating_add(MAINTENANCE_INTERVAL_SECS * 1000),
             );
             engine.sync_scheduler_depth(&state, &scheduler);
 
@@ -358,7 +358,7 @@ impl PrivateState {
                     engine.sync_scheduler_depth(&state, &scheduler);
                 }
                 let wake_at =
-                    FallbackRuntime::wake_at(scheduler.next_due_unix_secs().unwrap_or(i64::MAX));
+                    FallbackRuntime::wake_at(scheduler.next_due_unix_millis().unwrap_or(i64::MAX));
 
                 tokio::select! {
                     maybe_cmd = rx.recv_async() => {
@@ -371,14 +371,14 @@ impl PrivateState {
                     _ = engine.resync_notify.notified() => {}
                     _ = state.wait_for_shutdown() => break,
                     _ = tokio::time::sleep_until(wake_at) => {
-                        let now = chrono::Utc::now().timestamp();
+                        let now = chrono::Utc::now().timestamp_millis();
                         let due_tasks = scheduler.pop_due(now, 1024);
                         if !due_tasks.is_empty() {
                             let mut max_lag_ms = 0u64;
                             let mut run_claim_worker = false;
-                            for (key, due_at_unix_secs) in due_tasks {
-                                let lag_secs = now.saturating_sub(due_at_unix_secs);
-                                max_lag_ms = max_lag_ms.max((lag_secs as u64).saturating_mul(1000));
+                            for (key, due_at_unix_millis) in due_tasks {
+                                let lag_millis = now.saturating_sub(due_at_unix_millis);
+                                max_lag_ms = max_lag_ms.max(lag_millis as u64);
                                 match key {
                                     SchedulerTaskKey::Maintenance => {
                                         if let Err(err) = runtime.run_maintenance_tick().await {
@@ -389,7 +389,7 @@ impl PrivateState {
                                             .emit();
                                         }
                                         scheduler.schedule_maintenance(
-                                            now.saturating_add(MAINTENANCE_INTERVAL_SECS),
+                                            now.saturating_add(MAINTENANCE_INTERVAL_SECS * 1000),
                                         );
                                         run_claim_worker = true;
                                     }

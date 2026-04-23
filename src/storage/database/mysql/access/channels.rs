@@ -59,7 +59,7 @@ impl MySqlDb {
         if normalized_device_key.is_empty() {
             return Err(StoreError::DeviceNotFound);
         }
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
 
         let mut tx = self.pool.begin().await?;
 

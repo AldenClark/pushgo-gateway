@@ -9,7 +9,7 @@ pub(super) async fn enqueue_private_deliveries(
     };
     let private_expires_at = prepared
         .effective_ttl
-        .unwrap_or(prepared.sent_at + prepared.private_default_ttl_secs);
+        .unwrap_or(prepared.sent_at + prepared.private_default_ttl_secs * 1000);
     for device_id in private_dispatch.subscribers.iter().copied() {
         match private_dispatch
             .state

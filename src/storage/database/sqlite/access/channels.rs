@@ -59,7 +59,7 @@ impl SqliteDb {
         if normalized_device_key.is_empty() {
             return Err(StoreError::DeviceNotFound);
         }
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
 
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;

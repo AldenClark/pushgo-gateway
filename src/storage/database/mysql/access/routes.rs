@@ -241,7 +241,7 @@ impl MySqlDb {
         if normalized_token.is_empty() {
             return Ok(());
         }
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         let platform_name = platform.name();
         let platform_code = platform.to_byte() as i16;
         let (token_hash, _) = ProviderTokenSnapshot::from_token(normalized_token).into_parts();

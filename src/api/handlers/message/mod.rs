@@ -6,7 +6,7 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::{
     api::{
-        ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_i64_lenient,
+        ApiJson, Error, HttpResult, deserialize_empty_as_none, deserialize_unix_ts_millis_lenient,
         validate_channel_password,
     },
     app::AppState,
@@ -39,11 +39,12 @@ pub(crate) struct MessageIntent {
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub op_id: Option<String>,
     pub thing_id: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_i64_lenient")]
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub occurred_at: Option<i64>,
     pub title: String,
     pub body: Option<String>,
     pub severity: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub ttl: Option<i64>,
     pub url: Option<String>,
     #[serde(default)]
@@ -184,7 +185,7 @@ pub(crate) async fn dispatch_message_authorized_intent(
             )
         })?
     } else {
-        occurred_at.unwrap_or_else(|| Utc::now().timestamp())
+        occurred_at.unwrap_or_else(|| Utc::now().timestamp_millis())
     };
     let normalized_body = OptionalText::normalize_owned(body);
     let normalized_url = OptionalText::normalize_owned(url);

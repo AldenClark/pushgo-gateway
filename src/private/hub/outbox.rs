@@ -9,7 +9,7 @@ impl PrivateHub {
     ) -> Result<EnqueuePrivateMessageOutcome, crate::Error> {
         // Serialize capacity check + enqueue to avoid TOCTOU over-admission.
         let _enqueue_gate = self.enqueue_gate.lock().await;
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let device_pending = self
             .store
             .count_private_outbox_for_device(device_id)
@@ -67,7 +67,7 @@ impl PrivateHub {
             last_attempt_at: None,
             acked_at: None,
             fallback_sent_at: None,
-            next_attempt_at: sent_at.saturating_add(self.ack_timeout_secs.max(1)),
+            next_attempt_at: sent_at.saturating_add(self.ack_timeout_secs.max(1) * 1000),
             last_error_code: None,
             last_error_detail: None,
             updated_at: now,

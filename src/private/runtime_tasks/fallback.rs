@@ -12,15 +12,13 @@ impl FallbackAttemptPolicy {
         Self {
             max_attempts: config.fallback_max_attempts,
             ack_timeout_secs: config.ack_timeout_secs.max(1),
-            max_backoff_secs: config.fallback_max_backoff_secs.max(config.ack_timeout_secs.max(1)),
+            max_backoff_secs: config
+                .fallback_max_backoff_secs
+                .max(config.ack_timeout_secs.max(1)),
         }
     }
 
-    pub(super) fn should_drop_attempt(
-        self,
-        next_attempt: u32,
-        budget: AttemptBudget,
-    ) -> bool {
+    pub(super) fn should_drop_attempt(self, next_attempt: u32, budget: AttemptBudget) -> bool {
         matches!(budget, AttemptBudget::Enforced)
             && self.max_attempts > 0
             && next_attempt >= self.max_attempts
@@ -34,7 +32,7 @@ impl FallbackAttemptPolicy {
         let exp = next_attempt.saturating_sub(1).min(8);
         let mut delay_secs = self.ack_timeout_secs.saturating_mul(1u64 << exp);
         delay_secs = delay_secs.min(self.max_backoff_secs);
-        now + delay_secs as i64
+        now + delay_secs as i64 * 1000
     }
 }
 
@@ -75,7 +73,8 @@ impl FallbackPayloadContext {
         device_id: DeviceId,
         delivery_id: &str,
     ) -> bool {
-        state.hub
+        state
+            .hub
             .deliver_to_device(
                 device_id,
                 crate::private::protocol::DeliverEnvelope {
@@ -95,12 +94,12 @@ impl FallbackRuntime {
         }
     }
 
-    pub(super) fn wake_at(unix_secs: i64) -> TokioInstant {
-        let now_unix = chrono::Utc::now().timestamp();
-        if unix_secs <= now_unix {
+    pub(super) fn wake_at(unix_millis: i64) -> TokioInstant {
+        let now_unix_millis = chrono::Utc::now().timestamp_millis();
+        if unix_millis <= now_unix_millis {
             TokioInstant::now()
         } else {
-            TokioInstant::now() + Duration::from_secs((unix_secs - now_unix) as u64)
+            TokioInstant::now() + Duration::from_millis((unix_millis - now_unix_millis) as u64)
         }
     }
 
@@ -122,9 +121,9 @@ impl FallbackRuntime {
             if online_devices.is_empty() {
                 break;
             }
-            let now = chrono::Utc::now().timestamp();
+            let now = chrono::Utc::now().timestamp_millis();
             let claim_until =
-                now.saturating_add(self.state.config.ack_timeout_secs.clamp(5, 120) as i64);
+                now.saturating_add(self.state.config.ack_timeout_secs.clamp(5, 120) as i64 * 1000);
             let remaining_budget = max_processed_total.saturating_sub(processed_total);
             if remaining_budget == 0 {
                 break;
@@ -155,7 +154,8 @@ impl FallbackRuntime {
                 for outbox in claimed {
                     processed = processed.saturating_add(1);
                     processed_total = processed_total.saturating_add(1);
-                    self.run_claimed_fallback_task(device_id, &outbox, now).await?;
+                    self.run_claimed_fallback_task(device_id, &outbox, now)
+                        .await?;
                     if processed >= round_budget || processed_total >= max_processed_total {
                         break;
                     }
@@ -204,8 +204,8 @@ impl FallbackRuntime {
 
     pub(super) async fn run_maintenance_tick(&self) -> Result<(), crate::Error> {
         const DELIVERY_DEDUPE_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
-        let now = chrono::Utc::now().timestamp();
-        let dedupe_before = now - DELIVERY_DEDUPE_RETENTION_SECS;
+        let now = chrono::Utc::now().timestamp_millis();
+        let dedupe_before = now - DELIVERY_DEDUPE_RETENTION_SECS * 1000;
         let cleanup: MaintenanceCleanupStats = self
             .state
             .hub
@@ -299,7 +299,7 @@ impl FallbackRuntime {
 
         if sent {
             let next_attempt_at =
-                now.saturating_add(self.state.config.ack_timeout_secs.max(1) as i64);
+                now.saturating_add(self.state.config.ack_timeout_secs.max(1) as i64 * 1000);
             let _ = self
                 .state
                 .mark_fallback_sent(device_id, outbox.delivery_id.as_str(), next_attempt_at)
@@ -323,7 +323,10 @@ impl FallbackRuntime {
         budget: AttemptBudget,
     ) -> Result<i64, crate::Error> {
         let next_attempt = outbox.attempts.saturating_add(1);
-        if self.attempt_policy.should_drop_attempt(next_attempt, budget) {
+        if self
+            .attempt_policy
+            .should_drop_attempt(next_attempt, budget)
+        {
             self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str())
                 .await?;
             return Ok(now);
@@ -342,11 +345,13 @@ impl FallbackRuntime {
         device_id: DeviceId,
         delivery_id: &str,
     ) -> Result<(), crate::Error> {
-        let _ = self.state.drop_terminal_delivery(device_id, delivery_id).await?;
+        let _ = self
+            .state
+            .drop_terminal_delivery(device_id, delivery_id)
+            .await?;
         self.state.metrics.mark_fallback_tick(1, 0, 0, 1);
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -359,9 +364,7 @@ mod tests {
         private::{PrivateConfig, PrivateState, protocol::PrivatePayloadEnvelope},
         routing::{DeviceRegistry, derive_private_device_id},
         stats::StatsCollector,
-        storage::{
-            OUTBOX_STATUS_PENDING, OUTBOX_STATUS_SENT, PrivateMessage, Storage,
-        },
+        storage::{OUTBOX_STATUS_PENDING, OUTBOX_STATUS_SENT, PrivateMessage, Storage},
     };
     use flume::bounded;
     use hashbrown::HashMap;
@@ -480,9 +483,9 @@ mod tests {
         let device_key = "fallback-runtime-device";
         let device_id = derive_private_device_id(device_key);
         let delivery_id = "delivery-redeliver-1";
-        let now = chrono::Utc::now().timestamp();
-        let sent_at = now - 3;
-        let expires_at = now + 60;
+        let now = chrono::Utc::now().timestamp_millis();
+        let sent_at = now - 3_000;
+        let expires_at = now + 60_000;
         let channel_id = crate::api::format_channel_id(&[0x42; 16]);
         let payload = private_message_with_data(
             HashMap::from([
@@ -538,9 +541,9 @@ mod tests {
         let device_key = "fallback-runtime-failure-device";
         let device_id = derive_private_device_id(device_key);
         let delivery_id = "delivery-redeliver-failure-1";
-        let now = chrono::Utc::now().timestamp();
-        let sent_at = now - 3;
-        let expires_at = now + 60;
+        let now = chrono::Utc::now().timestamp_millis();
+        let sent_at = now - 3_000;
+        let expires_at = now + 60_000;
         let channel_id = crate::api::format_channel_id(&[0x24; 16]);
         let payload = private_message_with_data(
             HashMap::from([

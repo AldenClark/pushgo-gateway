@@ -43,7 +43,7 @@ impl DeviceRegistry {
         platform: Platform,
         device_key: Option<&str>,
     ) -> Result<String, String> {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         if let Some(key) = device_key.map(str::trim).filter(|value| !value.is_empty())
             && state.by_device.contains_key(key)
@@ -102,7 +102,7 @@ impl DeviceRegistry {
         channel_type: DeviceChannelType,
         provider_token: Option<String>,
     ) -> Result<DeviceRouteRecord, String> {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         let old_key = state
             .by_device
@@ -141,7 +141,7 @@ impl DeviceRegistry {
         device_key: &str,
         channel_type: DeviceChannelType,
     ) -> Result<DeviceRouteRecord, String> {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         let old_key = {
             let rec = state
@@ -192,7 +192,7 @@ impl DeviceRegistry {
         {
             return;
         }
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         state.purge_expired_replaced_device_keys(now);
         state.replaced_device_keys.insert(
@@ -214,7 +214,7 @@ impl DeviceRegistry {
         if key.is_empty() {
             return None;
         }
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         state.purge_expired_replaced_device_keys(now);
         let replaced = state.replaced_device_keys.get(key)?;
@@ -231,7 +231,7 @@ impl DeviceRegistry {
         provider_token: &str,
     ) -> Option<RetiredProviderRoute> {
         let provider_key = ProviderIngressKey::new(platform, provider_token)?;
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         let device_key = state.provider_ingress_index.remove(&provider_key)?;
         let previous = state.by_device.get(device_key.as_str())?.clone();

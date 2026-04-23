@@ -551,7 +551,15 @@ fn merge_ops_hourly_bucket_delta(
 }
 
 fn time_buckets(ts: i64) -> (String, String) {
-    let dt = Utc.timestamp_opt(ts, 0).single().unwrap_or_else(Utc::now);
+    let normalized_seconds = if ts.unsigned_abs() >= 1_000_000_000_000u64 {
+        ts / 1000
+    } else {
+        ts
+    };
+    let dt = Utc
+        .timestamp_opt(normalized_seconds, 0)
+        .single()
+        .unwrap_or_else(Utc::now);
     (
         dt.format("%Y-%m-%d").to_string(),
         dt.format("%Y-%m-%dT%H").to_string(),

@@ -114,7 +114,7 @@ pub(crate) struct ResolvedSemanticId {
 impl ResolvedSemanticId {
     pub(crate) async fn resolve_create(state: &AppState, dedupe_key: &str) -> Result<Self, Error> {
         const MAX_ATTEMPTS: usize = 8;
-        let created_at = Utc::now().timestamp();
+        let created_at = Utc::now().timestamp_millis();
         for _ in 0..MAX_ATTEMPTS {
             let semantic_id = generate_hex_id_128();
             match state

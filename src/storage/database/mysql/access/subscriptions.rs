@@ -187,7 +187,7 @@ impl MySqlDb {
     ) -> StoreResult<()> {
         sqlx::query("UPDATE channels SET alias = ?, updated_at = ? WHERE channel_id = ?")
             .bind(alias)
-            .bind(Utc::now().timestamp())
+            .bind(Utc::now().timestamp_millis())
             .bind(&channel_id[..])
             .execute(&self.pool)
             .await?;
@@ -201,7 +201,7 @@ impl MySqlDb {
         password_hash: &str,
     ) -> StoreResult<SubscribeOutcome> {
         let mut tx = self.pool.begin().await?;
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         let (actual_id, created, actual_alias) = if let Some(id) = channel_id {
             let row = sqlx::query("SELECT alias FROM channels WHERE channel_id = ?")
                 .bind(&id[..])
@@ -235,7 +235,7 @@ impl MySqlDb {
         channel_id: [u8; 16],
         device_id: DeviceId,
     ) -> StoreResult<()> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         sqlx::query(
             "INSERT INTO channel_subscriptions (channel_id, device_id, status, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?) \

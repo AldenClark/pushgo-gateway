@@ -39,7 +39,7 @@ impl PostgresDb {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = $1 AND expires_at <= $2")
             .bind(device_id.as_slice())
             .bind(now)

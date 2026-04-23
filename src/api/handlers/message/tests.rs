@@ -225,3 +225,15 @@ fn provider_pull_delivery_id_is_not_device_derived() {
     let second = wakeup_data_with_delivery_id(&HashMap::new(), "delivery-fixed");
     assert_eq!(first, second);
 }
+
+#[test]
+fn message_intent_normalizes_occurred_at_to_millis() {
+    let raw = r#"{
+        "channel_id":"06J0FZG1Y8XGG14VTQ4Y3G10MR",
+        "password":"pass-123",
+        "title":"sample",
+        "occurred_at":"1710000000123"
+    }"#;
+    let parsed = serde_json::from_str::<MessageIntent>(raw).expect("message intent should parse");
+    assert_eq!(parsed.occurred_at, Some(1_710_000_000_123));
+}

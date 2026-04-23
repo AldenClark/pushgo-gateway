@@ -41,7 +41,7 @@ impl SqliteDb {
         message: &PrivateMessage,
     ) -> StoreResult<()> {
         let size = message.size as i64;
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         sqlx::query(
             "INSERT INTO private_payloads (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?) \
@@ -290,7 +290,7 @@ impl SqliteDb {
         platform: Platform,
         token: &str,
     ) -> StoreResult<()> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         let (token_hash, _) = ProviderTokenSnapshot::from_token(token).into_parts();
         sqlx::query(
             "INSERT INTO private_bindings (device_id, platform, provider_token, token_hash, created_at, updated_at) \

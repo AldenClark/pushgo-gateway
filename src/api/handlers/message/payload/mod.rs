@@ -9,3 +9,4 @@ pub(crate) use provider::{ProviderDeliverySelection, ProviderRouteBinding, Provi
 pub(crate) const PAYLOAD_VERSION: &str = "1";
 pub(crate) const SCHEMA_VERSION: &str = "1";
 pub(crate) const MAX_PROVIDER_TTL_SECONDS: i64 = 2_592_000;
+pub(crate) const MAX_PROVIDER_TTL_MILLIS: i64 = MAX_PROVIDER_TTL_SECONDS * 1000;

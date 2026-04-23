@@ -112,7 +112,7 @@ impl SqliteDb {
         dedupe_key: &str,
         delivery_id: &str,
     ) -> StoreResult<bool> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         let result = sqlx::query(
             "UPDATE dispatch_op_dedupe \
              SET state = ?, sent_at = ?, updated_at = ? \
@@ -153,7 +153,7 @@ impl SqliteDb {
     ) -> StoreResult<()> {
         sqlx::query("UPDATE dispatch_delivery_dedupe SET state = ?, updated_at = ? WHERE dedupe_key = ? AND delivery_id = ?")
             .bind(DedupeState::Sent.as_str())
-            .bind(Utc::now().timestamp())
+            .bind(Utc::now().timestamp_millis())
             .bind(dedupe_key)
             .bind(delivery_id)
             .execute(&self.pool)
@@ -223,7 +223,7 @@ impl SqliteDb {
     }
 
     pub(super) async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()> {
-        let now = Utc::now().timestamp();
+        let now = Utc::now().timestamp_millis();
         sqlx::query(
             "INSERT INTO mcp_state (state_key, state_json, updated_at) VALUES ('default', ?, ?) \
              ON CONFLICT(state_key) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",

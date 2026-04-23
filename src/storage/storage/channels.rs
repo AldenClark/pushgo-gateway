@@ -90,7 +90,7 @@ impl Storage {
         channel_id: [u8; 16],
         effective_at: i64,
     ) -> StoreResult<Vec<DispatchTarget>> {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let use_cache = (effective_at - now).abs() <= 5;
 
         if use_cache && let Some(entry) = self.cache.get_channel_dispatch_targets(channel_id) {

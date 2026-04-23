@@ -13,8 +13,8 @@ impl FallbackScheduler {
         match cmd {
             FallbackTaskCommand::Schedule {
                 key,
-                due_at_unix_secs,
-            } => self.schedule(key, due_at_unix_secs),
+                due_at_unix_millis,
+            } => self.schedule(key, due_at_unix_millis),
             FallbackTaskCommand::Cancel { key } => {
                 if self
                     .active
@@ -28,12 +28,12 @@ impl FallbackScheduler {
         }
     }
 
-    pub(super) fn schedule(&mut self, key: FallbackTaskKey, due_at_unix_secs: i64) {
-        self.schedule_task(SchedulerTaskKey::Fallback(key), due_at_unix_secs);
+    pub(super) fn schedule(&mut self, key: FallbackTaskKey, due_at_unix_millis: i64) {
+        self.schedule_task(SchedulerTaskKey::Fallback(key), due_at_unix_millis);
     }
 
-    pub(super) fn schedule_maintenance(&mut self, due_at_unix_secs: i64) {
-        self.schedule_task(SchedulerTaskKey::Maintenance, due_at_unix_secs);
+    pub(super) fn schedule_maintenance(&mut self, due_at_unix_millis: i64) {
+        self.schedule_task(SchedulerTaskKey::Maintenance, due_at_unix_millis);
     }
 
     pub(super) fn replace_fallback_tasks<I>(&mut self, entries: I)
@@ -43,8 +43,8 @@ impl FallbackScheduler {
         self.active
             .retain(|key, _| matches!(key, SchedulerTaskKey::Maintenance));
         self.fallback_depth = 0;
-        for (key, due_at_unix_secs) in entries {
-            self.schedule(key, due_at_unix_secs);
+        for (key, due_at_unix_millis) in entries {
+            self.schedule(key, due_at_unix_millis);
         }
         self.compact();
     }
@@ -53,17 +53,17 @@ impl FallbackScheduler {
     where
         I: IntoIterator<Item = (FallbackTaskKey, i64)>,
     {
-        for (key, due_at_unix_secs) in entries {
-            self.schedule(key, due_at_unix_secs);
+        for (key, due_at_unix_millis) in entries {
+            self.schedule(key, due_at_unix_millis);
         }
         self.compact();
     }
 
-    fn schedule_task(&mut self, key: SchedulerTaskKey, due_at_unix_secs: i64) {
+    fn schedule_task(&mut self, key: SchedulerTaskKey, due_at_unix_millis: i64) {
         if self
             .active
             .get(&key)
-            .is_some_and(|(existing_due, _)| *existing_due == due_at_unix_secs)
+            .is_some_and(|(existing_due, _)| *existing_due == due_at_unix_millis)
         {
             return;
         }
@@ -72,21 +72,21 @@ impl FallbackScheduler {
         let is_fallback = matches!(key, SchedulerTaskKey::Fallback(_));
         let previous = self
             .active
-            .insert(key.clone(), (due_at_unix_secs, sequence));
+            .insert(key.clone(), (due_at_unix_millis, sequence));
         if is_fallback && previous.is_none() {
             self.fallback_depth = self.fallback_depth.saturating_add(1);
         }
         self.heap.push(FallbackTaskEntry {
-            due_at_unix_secs,
+            due_at_unix_millis,
             sequence,
             key,
         });
         self.maybe_compact();
     }
 
-    pub(super) fn next_due_unix_secs(&mut self) -> Option<i64> {
+    pub(super) fn next_due_unix_millis(&mut self) -> Option<i64> {
         self.prune_stale();
-        self.heap.peek().map(|entry| entry.due_at_unix_secs)
+        self.heap.peek().map(|entry| entry.due_at_unix_millis)
     }
 
     pub(super) fn pop_due(&mut self, now: i64, max_batch: usize) -> Vec<(SchedulerTaskKey, i64)> {
@@ -96,14 +96,14 @@ impl FallbackScheduler {
             let Some(top) = self.heap.peek() else {
                 break;
             };
-            if top.due_at_unix_secs > now {
+            if top.due_at_unix_millis > now {
                 break;
             }
             let top = self.heap.pop().expect("heap peeked");
             let Some((active_due, active_seq)) = self.active.get(&top.key).copied() else {
                 continue;
             };
-            if active_seq != top.sequence || active_due != top.due_at_unix_secs {
+            if active_seq != top.sequence || active_due != top.due_at_unix_millis {
                 continue;
             }
             if self.active.remove(&top.key).is_some()
@@ -111,7 +111,7 @@ impl FallbackScheduler {
             {
                 self.fallback_depth = self.fallback_depth.saturating_sub(1);
             }
-            out.push((top.key, top.due_at_unix_secs));
+            out.push((top.key, top.due_at_unix_millis));
         }
         self.maybe_compact();
         out
@@ -123,7 +123,7 @@ impl FallbackScheduler {
                 self.heap.pop();
                 continue;
             };
-            if active_seq != top.sequence || active_due != top.due_at_unix_secs {
+            if active_seq != top.sequence || active_due != top.due_at_unix_millis {
                 self.heap.pop();
                 continue;
             }
@@ -157,9 +157,9 @@ impl FallbackScheduler {
 
     fn compact(&mut self) {
         let mut rebuilt = BinaryHeap::with_capacity(self.active.len().saturating_add(8));
-        for (key, (due_at_unix_secs, sequence)) in &self.active {
+        for (key, (due_at_unix_millis, sequence)) in &self.active {
             rebuilt.push(FallbackTaskEntry {
-                due_at_unix_secs: *due_at_unix_secs,
+                due_at_unix_millis: *due_at_unix_millis,
                 sequence: *sequence,
                 key: key.clone(),
             });

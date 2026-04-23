@@ -491,11 +491,11 @@
               <td>条件必填<br />Conditional</td>
               <td>number | string</td>
               <td>
-                业务发生时间（Unix 秒）。默认可省略；但当 <code>thing_id</code>
+                业务发生时间（支持 Unix 秒/毫秒，网关内部归一化为毫秒）。默认可省略；但当 <code>thing_id</code>
                 存在（对象下消息）时必须提供，否则返回
                 <code>occurred_at_required_for_thing_scoped_message</code>。<br />
-                Business occurred-at timestamp in Unix seconds. Optional by
-                default; required when <code>thing_id</code> is present
+                Business occurred-at timestamp accepts Unix seconds or milliseconds and is normalized to milliseconds.
+                Optional by default; required when <code>thing_id</code> is present
                 (thing-scoped message), otherwise request is rejected.
               </td>
             </tr>
@@ -572,8 +572,8 @@
               <td>否<br />No</td>
               <td>number</td>
               <td>
-                Unix 秒级过期时间；最大按 28 天处理。<br />Unix epoch seconds;
-                capped to 28 days.
+                过期时间（支持 Unix 秒/毫秒，网关内部归一化为毫秒）；最大按 28 天处理。<br />
+                Expire-at timestamp accepts Unix seconds or milliseconds and is normalized to milliseconds; capped to 28 days.
               </td>
             </tr>
             <tr>
@@ -849,16 +849,15 @@
               <td><code>started_at</code></td>
               <td>否<br />No</td>
               <td>number</td>
-              <td>开始时间（Unix 秒）。<br />Start time.</td>
+              <td>开始时间（支持 Unix 秒/毫秒，网关内部归一化为毫秒）。<br />Start time (Unix seconds or milliseconds; normalized to milliseconds).</td>
             </tr>
             <tr>
               <td><code>event_time</code></td>
               <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                事件时间（Unix 秒），作为本次事件分发的业务发生时间。<br />Event
-                time in Unix seconds, used as the occurred-at timestamp of this
-                event dispatch.
+                事件时间（支持 Unix 秒/毫秒），作为本次事件分发的业务发生时间；网关内部归一化为毫秒。<br />Event
+                time accepts Unix seconds or milliseconds and is normalized to milliseconds for dispatch.
               </td>
             </tr>
             <tr>
@@ -992,9 +991,8 @@
               <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                事件时间（Unix 秒），作为本次事件分发的业务发生时间。<br />Event
-                time in Unix seconds, used as the occurred-at timestamp of this
-                event dispatch.
+                事件时间（支持 Unix 秒/毫秒），作为本次事件分发的业务发生时间；网关内部归一化为毫秒。<br />Event
+                time accepts Unix seconds or milliseconds and is normalized to milliseconds for dispatch.
               </td>
             </tr>
             <tr>
@@ -1149,9 +1147,8 @@
               <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                事件时间（Unix 秒），作为本次事件分发的业务发生时间。<br />Event
-                time in Unix seconds, used as the occurred-at timestamp of this
-                event dispatch.
+                事件时间（支持 Unix 秒/毫秒），作为本次事件分发的业务发生时间；网关内部归一化为毫秒。<br />Event
+                time accepts Unix seconds or milliseconds and is normalized to milliseconds for dispatch.
               </td>
             </tr>
             <tr>
@@ -1159,8 +1156,8 @@
               <td>否<br />No</td>
               <td>number</td>
               <td>
-                结束时间（Unix 秒，仅 close 可传）。<br />End time in Unix
-                seconds (close-only).
+                结束时间（支持 Unix 秒/毫秒，仅 close 可传），网关内部归一化为毫秒。<br />
+                End time accepts Unix seconds or milliseconds (close-only) and is normalized to milliseconds.
               </td>
             </tr>
             <tr>
@@ -1298,7 +1295,7 @@
               <td><code>created_at</code></td>
               <td>否<br />No</td>
               <td>number</td>
-              <td>创建时间（Unix 秒）。<br />Create time.</td>
+              <td>创建时间（支持 Unix 秒/毫秒，网关内部归一化为毫秒）。<br />Create time (Unix seconds or milliseconds; normalized to milliseconds).</td>
             </tr>
             <tr>
               <td><code>external_ids</code></td>
@@ -1333,9 +1330,8 @@
               <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
-                time in Unix seconds, used as the occurred-at timestamp of this
-                thing dispatch.
+                观测时间（支持 Unix 秒/毫秒），作为本次对象分发的业务发生时间；网关内部归一化为毫秒。<br />Observed
+                time accepts Unix seconds or milliseconds and is normalized to milliseconds for dispatch.
               </td>
             </tr>
             <tr>
@@ -1474,9 +1470,8 @@
               <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
-                time in Unix seconds, used as the occurred-at timestamp of this
-                thing dispatch.
+                观测时间（支持 Unix 秒/毫秒），作为本次对象分发的业务发生时间；网关内部归一化为毫秒。<br />Observed
+                time accepts Unix seconds or milliseconds and is normalized to milliseconds for dispatch.
               </td>
             </tr>
             <tr>
@@ -1612,9 +1607,8 @@
               <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
-                time in Unix seconds, used as the occurred-at timestamp of this
-                thing dispatch.
+                观测时间（支持 Unix 秒/毫秒），作为本次对象分发的业务发生时间；网关内部归一化为毫秒。<br />Observed
+                time accepts Unix seconds or milliseconds and is normalized to milliseconds for dispatch.
               </td>
             </tr>
             <tr>
@@ -1749,16 +1743,15 @@
               <td><code>deleted_at</code></td>
               <td>否<br />No</td>
               <td>number</td>
-              <td>删除时间（Unix 秒）。<br />Delete time.</td>
+              <td>删除时间（支持 Unix 秒/毫秒，网关内部归一化为毫秒）。<br />Delete time (Unix seconds or milliseconds; normalized to milliseconds).</td>
             </tr>
             <tr>
               <td><code>observed_at</code></td>
               <td>是<br />Yes</td>
               <td>number</td>
               <td>
-                观测时间（Unix 秒），作为本次对象分发的业务发生时间。<br />Observed
-                time in Unix seconds, used as the occurred-at timestamp of this
-                thing dispatch.
+                观测时间（支持 Unix 秒/毫秒），作为本次对象分发的业务发生时间；网关内部归一化为毫秒。<br />Observed
+                time accepts Unix seconds or milliseconds and is normalized to milliseconds for dispatch.
               </td>
             </tr>
             <tr>

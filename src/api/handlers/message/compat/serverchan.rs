@@ -9,7 +9,7 @@ impl CompatServerChanPayload {
             password: key.password,
             op_id: self.op_id,
             thing_id: None,
-            occurred_at: Some(Utc::now().timestamp()),
+            occurred_at: Some(Utc::now().timestamp_millis()),
             title: self
                 .title
                 .or(self.text)

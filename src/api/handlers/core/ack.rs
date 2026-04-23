@@ -32,7 +32,7 @@ pub(crate) async fn messages_ack(
         return Err(Error::validation("delivery_id is required"));
     }
     let device_id = derive_private_device_id(device_key);
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     let removed = state
         .store
         .ack_provider_item(device_id, delivery_id, now)

@@ -6,7 +6,7 @@ use crate::{
     storage::Platform,
 };
 
-use super::MAX_PROVIDER_TTL_SECONDS;
+use super::{MAX_PROVIDER_TTL_MILLIS, MAX_PROVIDER_TTL_SECONDS};
 
 const APNS_PROVIDER_PAYLOAD_LIMIT_BYTES: usize = 4096;
 const FCM_PROVIDER_PAYLOAD_LIMIT_BYTES: usize = 4096;
@@ -119,8 +119,9 @@ impl ProviderStatsDeviceKey {
 
 impl ProviderTtl {
     pub(crate) fn remaining(sent_at: i64, expires_at: i64) -> Self {
-        let remaining = (expires_at - sent_at).clamp(0, MAX_PROVIDER_TTL_SECONDS);
-        Self(remaining as u32)
+        let remaining_millis = (expires_at - sent_at).clamp(0, MAX_PROVIDER_TTL_MILLIS);
+        let remaining_secs = (remaining_millis / 1000).clamp(0, MAX_PROVIDER_TTL_SECONDS);
+        Self(remaining_secs as u32)
     }
 
     pub(crate) fn into_inner(self) -> u32 {
@@ -171,7 +172,7 @@ mod tests {
     fn provider_ttl_is_clamped_to_range() {
         assert_eq!(ProviderTtl::remaining(10, 5).into_inner(), 0);
         assert_eq!(
-            ProviderTtl::remaining(0, super::MAX_PROVIDER_TTL_SECONDS * 2).into_inner(),
+            ProviderTtl::remaining(0, super::MAX_PROVIDER_TTL_MILLIS * 2).into_inner(),
             super::MAX_PROVIDER_TTL_SECONDS as u32
         );
     }

@@ -346,7 +346,7 @@ impl DeviceRouteChange<'_> {
     }
 
     async fn persist(self, state: &AppState, action: &str) -> Result<(), Error> {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let route = self.next.as_route_row(self.device_key);
         let audit = self.audit_entry(action, now);
         state
@@ -633,14 +633,15 @@ impl DeviceKeyResolution {
         issue_reason: &'static str,
     ) -> Result<Self, Error> {
         let resolved_device_key = state.device_registry.allocate_device_key();
-        let route = default_route_for_platform(requested_platform, chrono::Utc::now().timestamp());
+        let route =
+            default_route_for_platform(requested_platform, chrono::Utc::now().timestamp_millis());
         let audit = route
             .persisted_change(
                 resolved_device_key.as_str(),
                 previous_route,
                 Some(issue_reason),
             )
-            .audit_entry("route_issue_new_key", chrono::Utc::now().timestamp());
+            .audit_entry("route_issue_new_key", chrono::Utc::now().timestamp_millis());
         let old_device_key = if issue_reason == "platform_mismatch" {
             requested_device_key
         } else {

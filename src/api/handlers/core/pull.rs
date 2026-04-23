@@ -36,7 +36,7 @@ pub(crate) async fn messages_pull(
         return Err(Error::validation("device_key is required"));
     }
     let device_id = derive_private_device_id(device_key);
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
 
     let raw_items = if let Some(delivery_id) = payload.delivery_id.as_deref() {
         let delivery_id = delivery_id.trim();

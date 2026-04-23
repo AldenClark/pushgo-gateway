@@ -73,6 +73,8 @@ const SQLITE_RUNTIME_DROP_STATEMENTS: &[&str] = &[
     "DROP TABLE IF EXISTS device_route_audit",
     "DROP TABLE IF EXISTS device_stats_daily",
 ];
+const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
+const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 
 impl SqliteDb {
     pub async fn new(db_url: &str) -> StoreResult<Self> {
@@ -349,6 +351,7 @@ impl SqliteDb {
         )
         .execute(&self.pool)
         .await?;
+        self.normalize_sqlite_epoch_columns_to_millis_once().await?;
 
         self.store_sqlite_schema_version(STORAGE_SCHEMA_VERSION)
             .await?;
@@ -385,6 +388,90 @@ impl SqliteDb {
         .bind(version)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn normalize_sqlite_epoch_columns_to_millis_once(&self) -> StoreResult<()> {
+        const TARGET_COLUMNS: &[(&str, &[&str])] = &[
+            ("channels", &["created_at", "updated_at"]),
+            (
+                "private_payloads",
+                &["sent_at", "expires_at", "created_at", "updated_at"],
+            ),
+            (
+                "dispatch_delivery_dedupe",
+                &["created_at", "updated_at", "expires_at"],
+            ),
+            (
+                "dispatch_op_dedupe",
+                &["created_at", "updated_at", "sent_at", "expires_at"],
+            ),
+            (
+                "semantic_id_registry",
+                &["created_at", "updated_at", "last_seen_at", "expires_at"],
+            ),
+            ("mcp_state", &["updated_at"]),
+            ("devices", &["route_updated_at"]),
+            ("private_device_keys", &["issued_at", "valid_until"]),
+            ("private_sessions", &["expires_at"]),
+            (
+                "private_outbox",
+                &[
+                    "occurred_at",
+                    "created_at",
+                    "claimed_at",
+                    "first_sent_at",
+                    "last_attempt_at",
+                    "acked_at",
+                    "fallback_sent_at",
+                    "next_attempt_at",
+                    "updated_at",
+                ],
+            ),
+            ("private_bindings", &["created_at", "updated_at"]),
+            ("channel_subscriptions", &["created_at", "updated_at"]),
+            (
+                "provider_pull_queue",
+                &["sent_at", "expires_at", "created_at", "updated_at"],
+            ),
+            ("device_route_audit", &["created_at"]),
+            ("subscription_audit", &["created_at"]),
+        ];
+
+        let mut tx = self.pool.begin().await?;
+        let marker_exists: Option<String> =
+            sqlx::query_scalar("SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = ?")
+                .bind(EPOCH_NORMALIZATION_META_KEY)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if marker_exists.is_some() {
+            tx.commit().await?;
+            return Ok(());
+        }
+
+        for (table, columns) in TARGET_COLUMNS {
+            for column in *columns {
+                let sql = format!(
+                    "UPDATE {table} \
+                     SET {column} = {column} * 1000 \
+                     WHERE {column} IS NOT NULL AND ABS({column}) < ?"
+                );
+                sqlx::query(&sql)
+                    .bind(EPOCH_MILLIS_THRESHOLD)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+
+        sqlx::query(
+            "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES (?, ?) \
+             ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value",
+        )
+        .bind(EPOCH_NORMALIZATION_META_KEY)
+        .bind("1")
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 

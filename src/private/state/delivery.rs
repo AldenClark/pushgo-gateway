@@ -21,7 +21,7 @@ impl PrivateState {
         self.schedule_fallback(
             device_id,
             delivery_id.to_string(),
-            sent_at + self.config.ack_timeout_secs.max(1) as i64,
+            sent_at + self.config.ack_timeout_secs.max(1) as i64 * 1000,
         );
         Ok(())
     }
@@ -86,7 +86,7 @@ impl PrivateState {
                     format!("private:{}", encode_lower_hex_128(&device_id)),
                     channel_id,
                     1,
-                    chrono::Utc::now().timestamp(),
+                    chrono::Utc::now().timestamp_millis(),
                 );
             }
         }

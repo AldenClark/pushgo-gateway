@@ -5,10 +5,10 @@ impl PrivateState {
         &self,
         device_id: DeviceId,
         delivery_id: impl Into<String>,
-        due_at_unix_secs: i64,
+        due_at_unix_millis: i64,
     ) {
         if let Some(engine) = &self.fallback_tasks {
-            if !engine.schedule(device_id, delivery_id.into(), due_at_unix_secs) {
+            if !engine.schedule(device_id, delivery_id.into(), due_at_unix_millis) {
                 self.metrics.mark_enqueue_failure();
             }
             self.metrics.mark_task_queue_depth(engine.depth());

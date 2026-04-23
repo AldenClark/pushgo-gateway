@@ -100,8 +100,7 @@ impl<'a> PreparedDispatch<'a> {
             .map(ToString::to_string);
 
         let severity = PayloadSeverity::normalize(severity);
-        let effective_ttl =
-            ttl.map(|expires_at| expires_at.min(sent_at + MAX_PROVIDER_TTL_SECONDS));
+        let effective_ttl = ttl.map(|expires_at| expires_at.min(sent_at + MAX_PROVIDER_TTL_MILLIS));
         let ttl_seconds = effective_ttl
             .map(|expires_at| ProviderTtl::remaining(sent_at, expires_at).into_inner());
         let dispatch_targets = state
@@ -202,7 +201,7 @@ impl<'a> PreparedDispatch<'a> {
 
     pub(super) fn provider_pull_expires_at(&self) -> i64 {
         self.effective_ttl
-            .unwrap_or(self.sent_at + self.private_default_ttl_secs)
+            .unwrap_or(self.sent_at + self.private_default_ttl_secs * 1000)
     }
 
     pub(super) fn emit_stats(&self, progress: DispatchProgress) -> NotificationDispatchSummary {

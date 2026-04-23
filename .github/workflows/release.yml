@@ -16,8 +16,8 @@ env:
   SOURCE_BINARY_NAME: pushgo-gateway
 
 jobs:
-  build-binaries:
-    name: Build release binaries (x86_64 + aarch64 + arm32v7, gnu + musl)
+  build-gnu-binaries:
+    name: "Build release binaries (GNU: x86_64 + aarch64 + arm32v7)"
     runs-on: ubuntu-latest
 
     steps:
@@ -26,15 +26,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Add cross compilation targets
-        run: |
-          rustup target add x86_64-unknown-linux-musl
-          rustup target add aarch64-unknown-linux-musl
-          rustup target add armv7-unknown-linux-musleabihf
-
-      - name: Install cross for musl targets
-        run: cargo install cross --locked
 
       - name: Build release binaries (GNU in Debian 12 / glibc 2.36)
         run: |
@@ -89,35 +80,104 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" target
           chmod -R u+rwX target
 
-      - name: Build release binaries (musl)
+      - name: Collect GNU binaries
+        run: |
+          mkdir -p out-gnu
+          cp target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} out-gnu/${BINARY_NAME}-linux-amd64-gnu
+          cp target/aarch64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} out-gnu/${BINARY_NAME}-linux-arm64-gnu
+          cp target/armv7-unknown-linux-gnueabihf/release/${SOURCE_BINARY_NAME} out-gnu/${BINARY_NAME}-linux-armv7-gnu
+          chmod +x out-gnu/${BINARY_NAME}-linux-amd64-gnu out-gnu/${BINARY_NAME}-linux-arm64-gnu out-gnu/${BINARY_NAME}-linux-armv7-gnu
+          ls -l out-gnu
+
+      - name: Upload GNU binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pushgo-gnu-binaries
+          path: out-gnu
+
+  build-musl-binaries:
+    name: "Build release binary (musl: ${{ matrix.target }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            arch: amd64
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main
+          - target: aarch64-unknown-linux-musl
+            arch: arm64
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main
+          - target: armv7-unknown-linux-musleabihf
+            arch: armv7
+            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add cross compilation target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross for musl target
+        run: cargo install cross --locked
+
+      - name: Build release binary (musl)
         run: |
           cat > Cross.toml <<'EOF'
-          [target.x86_64-unknown-linux-musl]
-          image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:main"
-
-          [target.aarch64-unknown-linux-musl]
-          image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:main"
-
-          [target.armv7-unknown-linux-musleabihf]
-          image = "ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main"
+          [target.${{ matrix.target }}]
+          image = "${{ matrix.image }}"
           EOF
-          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target x86_64-unknown-linux-musl
-          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target aarch64-unknown-linux-musl
-          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target armv7-unknown-linux-musleabihf
+          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target ${{ matrix.target }}
 
-      - name: Collect binaries for artifacts and Docker
+      - name: Collect musl binary
+        run: |
+          mkdir -p out-musl
+          cp target/${{ matrix.target }}/release/${SOURCE_BINARY_NAME} out-musl/${BINARY_NAME}-linux-${{ matrix.arch }}-musl
+          chmod +x out-musl/${BINARY_NAME}-linux-${{ matrix.arch }}-musl
+          ls -l out-musl
+
+      - name: Upload musl binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pushgo-musl-${{ matrix.arch }}
+          path: out-musl
+
+  assemble-binaries:
+    name: Assemble release and Docker binary artifacts
+    runs-on: ubuntu-latest
+    needs: [build-gnu-binaries, build-musl-binaries]
+
+    steps:
+      - name: Download GNU binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: pushgo-gnu-binaries
+          path: inputs/gnu
+
+      - name: Download musl binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pushgo-musl-*
+          merge-multiple: true
+          path: inputs/musl
+
+      - name: Assemble binaries for release and Docker
         run: |
           mkdir -p dist
           mkdir -p dist-docker
-          cp target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-amd64-gnu
-          cp target/aarch64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-arm64-gnu
-          cp target/armv7-unknown-linux-gnueabihf/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-armv7-gnu
-          cp target/x86_64-unknown-linux-musl/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-amd64-musl
-          cp target/aarch64-unknown-linux-musl/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-arm64-musl
-          cp target/armv7-unknown-linux-musleabihf/release/${SOURCE_BINARY_NAME} dist/${BINARY_NAME}-linux-armv7-musl
-          cp target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist-docker/${BINARY_NAME}-amd64-gnu
-          cp target/aarch64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} dist-docker/${BINARY_NAME}-arm64-gnu
-          cp target/armv7-unknown-linux-gnueabihf/release/${SOURCE_BINARY_NAME} dist-docker/${BINARY_NAME}-armv7-gnu
+          cp inputs/gnu/${BINARY_NAME}-linux-amd64-gnu dist/${BINARY_NAME}-linux-amd64-gnu
+          cp inputs/gnu/${BINARY_NAME}-linux-arm64-gnu dist/${BINARY_NAME}-linux-arm64-gnu
+          cp inputs/gnu/${BINARY_NAME}-linux-armv7-gnu dist/${BINARY_NAME}-linux-armv7-gnu
+          cp inputs/musl/${BINARY_NAME}-linux-amd64-musl dist/${BINARY_NAME}-linux-amd64-musl
+          cp inputs/musl/${BINARY_NAME}-linux-arm64-musl dist/${BINARY_NAME}-linux-arm64-musl
+          cp inputs/musl/${BINARY_NAME}-linux-armv7-musl dist/${BINARY_NAME}-linux-armv7-musl
+          cp inputs/gnu/${BINARY_NAME}-linux-amd64-gnu dist-docker/${BINARY_NAME}-amd64-gnu
+          cp inputs/gnu/${BINARY_NAME}-linux-arm64-gnu dist-docker/${BINARY_NAME}-arm64-gnu
+          cp inputs/gnu/${BINARY_NAME}-linux-armv7-gnu dist-docker/${BINARY_NAME}-armv7-gnu
           chmod +x dist/${BINARY_NAME}-linux-amd64-gnu dist/${BINARY_NAME}-linux-arm64-gnu dist/${BINARY_NAME}-linux-armv7-gnu
           chmod +x dist/${BINARY_NAME}-linux-amd64-musl dist/${BINARY_NAME}-linux-arm64-musl dist/${BINARY_NAME}-linux-armv7-musl
           chmod +x dist-docker/${BINARY_NAME}-amd64-gnu dist-docker/${BINARY_NAME}-arm64-gnu dist-docker/${BINARY_NAME}-armv7-gnu
@@ -138,7 +198,7 @@ jobs:
   docker:
     name: Build & push multi-arch Docker image to GHCR
     runs-on: ubuntu-latest
-    needs: build-binaries
+    needs: assemble-binaries
 
     steps:
       - name: Checkout source
@@ -195,7 +255,7 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-binaries, docker]
+    needs: [assemble-binaries, docker]
 
     steps:
       - name: Checkout source
