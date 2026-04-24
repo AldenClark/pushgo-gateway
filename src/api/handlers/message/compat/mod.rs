@@ -68,6 +68,7 @@ pub(crate) struct CompatNtfyQuery {
     #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub ttl: Option<i64>,
     pub images: Option<String>,
+    pub ciphertext: Option<String>,
     pub tags: Option<String>,
     pub metadata: Option<String>,
 }
@@ -85,6 +86,7 @@ pub(crate) struct CompatServerChanPayload {
     pub desp: Option<String>,
     pub body: Option<String>,
     pub url: Option<String>,
+    pub ciphertext: Option<String>,
     pub op_id: Option<String>,
     pub metadata: Option<String>,
 }
@@ -112,6 +114,7 @@ pub(crate) struct CompatBarkV1Query {
     pub icon: Option<String>,
     pub group: Option<String>,
     pub images: Option<String>,
+    pub ciphertext: Option<String>,
     pub tags: Option<String>,
     pub metadata: Option<String>,
 }
@@ -130,6 +133,7 @@ pub(crate) struct CompatBarkV2Payload {
     pub group: Option<String>,
     #[serde(default)]
     pub images: Vec<String>,
+    pub ciphertext: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_metadata_map")]

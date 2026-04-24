@@ -23,13 +23,13 @@ async fn enqueue_provider_pull_item(
     delivery_id: &str,
     title: &str,
 ) {
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     let payload = make_provider_payload(delivery_id, title);
     let message = PrivateMessage {
         payload: payload.clone(),
         size: payload.len(),
         sent_at: now,
-        expires_at: now + 300,
+        expires_at: now + 300_000,
     };
     let device_id = derive_private_device_id(device_key);
     state

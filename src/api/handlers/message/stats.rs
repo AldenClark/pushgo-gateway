@@ -15,6 +15,7 @@ const PRIVATE_ENQUEUE_TOO_BUSY_MIN_CEIL: usize = 16;
 pub(super) struct PrivateEnqueueStats {
     pub attempted: usize,
     failed: usize,
+    too_busy_failed: usize,
 }
 
 impl PrivateEnqueueStats {
@@ -26,10 +27,13 @@ impl PrivateEnqueueStats {
         &mut self,
         _stage: &str,
         _device_id: [u8; 16],
-        _error: &crate::Error,
+        error: &crate::Error,
     ) {
         self.attempted = self.attempted.saturating_add(1);
         self.failed = self.failed.saturating_add(1);
+        if matches!(error, crate::Error::TooBusy) {
+            self.too_busy_failed = self.too_busy_failed.saturating_add(1);
+        }
     }
 
     pub(super) fn has_failures(self) -> bool {
@@ -37,15 +41,16 @@ impl PrivateEnqueueStats {
     }
 
     pub(super) fn is_too_busy(self) -> bool {
-        if self.attempted == 0 || self.failed == 0 {
+        if self.attempted == 0 || self.too_busy_failed == 0 {
             return false;
         }
         let dynamic_min_failed = (self.attempted / 4).clamp(
             PRIVATE_ENQUEUE_TOO_BUSY_MIN_FLOOR,
             PRIVATE_ENQUEUE_TOO_BUSY_MIN_CEIL,
         );
-        self.failed >= dynamic_min_failed
-            && self.failed * 100 >= self.attempted * PRIVATE_ENQUEUE_TOO_BUSY_FAIL_RATIO_PERCENT
+        self.too_busy_failed >= dynamic_min_failed
+            && self.too_busy_failed * 100
+                >= self.attempted * PRIVATE_ENQUEUE_TOO_BUSY_FAIL_RATIO_PERCENT
     }
 }
 
@@ -106,4 +111,38 @@ pub(super) fn emit_dispatch_stats(
             })
             .collect(),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PrivateEnqueueStats;
+
+    #[test]
+    fn too_busy_threshold_ignores_non_too_busy_failures() {
+        let mut stats = PrivateEnqueueStats::default();
+        for _ in 0..8 {
+            stats.record_failure(
+                "private.enqueue",
+                [0; 16],
+                &crate::Error::Internal("io".into()),
+            );
+        }
+        assert!(stats.has_failures());
+        assert!(
+            !stats.is_too_busy(),
+            "non-TooBusy failures must not trigger too-busy safety threshold"
+        );
+    }
+
+    #[test]
+    fn too_busy_threshold_tracks_too_busy_ratio() {
+        let mut stats = PrivateEnqueueStats::default();
+        for _ in 0..4 {
+            stats.record_failure("private.enqueue", [1; 16], &crate::Error::TooBusy);
+        }
+        for _ in 0..4 {
+            stats.record_success();
+        }
+        assert!(stats.is_too_busy());
+    }
 }

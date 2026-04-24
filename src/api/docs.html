@@ -642,7 +642,7 @@
           </li>
         </ul>
 
-        <h4>3) 解密后 JSON 结构（iOS 当前实现）<br />3) JSON structure after decrypt (current iOS implementation)</h4>
+        <h4>3) 解密后 JSON 结构（客户端统一实现）<br />3) JSON structure after decrypt (cross-client behavior)</h4>
         <p>
           客户端解密 <code>ciphertext</code> 后会按 JSON 解码，当前识别字段为：<br />
           After decrypting <code>ciphertext</code>, client decodes JSON and currently recognizes:
@@ -674,6 +674,30 @@
                 Optional. Client trims and deduplicates values before applying.
               </td>
             </tr>
+            <tr>
+              <td><code>url</code></td>
+              <td>string</td>
+              <td>
+                可选。存在且有效时覆盖 payload 中的 <code>url</code>。<br />
+                Optional. When valid and non-empty, overrides payload <code>url</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>event_profile_json</code> / <code>thing_profile_json</code></td>
+              <td>object 或 JSON 字符串<br />object or JSON-stringified object</td>
+              <td>
+                可选。用于覆盖事件/对象概要快照，客户端会归一化为 JSON 字符串后继续后续流程。<br />
+                Optional. Overrides event/thing profile snapshot. Clients normalize to JSON string before downstream parsing.
+              </td>
+            </tr>
+            <tr>
+              <td><code>event_attrs_json</code> / <code>thing_attrs_json</code></td>
+              <td>object 或 JSON 字符串<br />object or JSON-stringified object</td>
+              <td>
+                可选。用于覆盖事件/对象属性快照，客户端会归一化为 JSON 字符串后继续后续流程。<br />
+                Optional. Overrides event/thing attrs snapshot. Clients normalize to JSON string before downstream parsing.
+              </td>
+            </tr>
           </tbody>
         </table>
 
@@ -681,6 +705,9 @@
         <pre>{
   "title": "Encrypted title",
   "body": "Encrypted body",
+  "url": "https://safe.example/open",
+  "event_profile_json": {"title":"Encrypted Event","message":"Encrypted body"},
+  "event_attrs_json": {"name":{"label":"名称","value":"泵站A"}},
   "images": [
     "https://cdn.example.com/a.png",
     "https://cdn.example.com/b.png"
@@ -773,6 +800,10 @@
           <br />
           Thing-scoped events are merged into top-level event APIs; optional
           <code>thing_id</code> decides whether the event belongs to a thing.
+        </p>
+        <p class="callout">
+          <code>/event/*</code> 请求支持可选 <code>ciphertext</code>，网关仅透传密文；路由与优先级字段（如 <code>channel_id/event_id/thing_id/severity</code>）建议保持明文。<br />
+          <code>/event/*</code> accepts optional <code>ciphertext</code>. Gateway only forwards it; routing/priority fields (for example <code>channel_id/event_id/thing_id/severity</code>) should remain plaintext.
         </p>
 
         <h3><code>POST /event/create</code></h3>
@@ -1237,6 +1268,10 @@
 
       <section id="thing">
         <h2>对象推送接口<br />Thing Push APIs</h2>
+        <p class="callout">
+          <code>/thing/*</code> 请求支持可选 <code>ciphertext</code>，网关仅透传密文；路由字段（如 <code>channel_id/thing_id</code>）建议保持明文。<br />
+          <code>/thing/*</code> accepts optional <code>ciphertext</code>. Gateway only forwards it; routing fields (for example <code>channel_id/thing_id</code>) should remain plaintext.
+        </p>
 
         <h3><code>POST /thing/create</code></h3>
         <p>作用：创建对象并推送。<br />Purpose: create a thing.<br /></p>

@@ -23,7 +23,7 @@ impl CompatBarkV1Query {
             ttl: None,
             url: self.url,
             images: split_query_list(self.images.as_deref()),
-            ciphertext: None,
+            ciphertext: self.ciphertext,
             tags: split_query_list(self.tags.as_deref()),
             metadata,
         })
@@ -59,7 +59,7 @@ impl CompatBarkV2Payload {
             ttl: None,
             url: self.url,
             images: self.images,
-            ciphertext: None,
+            ciphertext: self.ciphertext,
             tags: self.tags,
             metadata,
         }

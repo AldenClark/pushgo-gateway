@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
-use crate::api::{
-    deserialize_empty_as_none, deserialize_unix_ts_millis_lenient,
-};
+use crate::api::{deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(super) struct EventProfile {
@@ -21,15 +19,9 @@ pub(super) struct EventProfile {
     pub(super) tags: Vec<String>,
     #[serde(default)]
     pub(super) images: Vec<String>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_unix_ts_millis_lenient"
-    )]
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) started_at: Option<i64>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_unix_ts_millis_lenient"
-    )]
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) ended_at: Option<i64>,
 }
 
@@ -57,6 +49,8 @@ pub(super) struct EventPayloadFields {
     pub(super) tags: Option<Vec<String>>,
     #[serde(default)]
     pub(super) images: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
+    pub(super) ciphertext: Option<String>,
     #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) started_at: Option<i64>,
     #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]

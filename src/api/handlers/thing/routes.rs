@@ -87,6 +87,8 @@ async fn thing_to_channel_with_action(
         payload.payload.mutable.primary_image.as_deref(),
         "primary_image",
     )?;
+    let normalized_ciphertext =
+        OptionalText::normalize(payload.payload.mutable.ciphertext.as_deref());
     let normalized_description =
         OptionalText::normalize(payload.payload.mutable.description.as_deref());
     ExtensionObjectRef::new(&payload.payload.mutable.attrs, "attrs").validate()?;
@@ -103,12 +105,15 @@ async fn thing_to_channel_with_action(
             Error::validation_code("observed_at is required", "observed_at_required")
         })?;
 
-    let mut custom_data = HashMap::with_capacity(1);
+    let mut custom_data = HashMap::with_capacity(2);
     if !payload.payload.mutable.metadata.is_empty() {
         custom_data.insert(
             "metadata".to_string(),
             MetadataEntries::new(&payload.payload.mutable.metadata).encode()?,
         );
+    }
+    if let Some(ciphertext) = normalized_ciphertext.as_ref() {
+        custom_data.insert("ciphertext".to_string(), ciphertext.clone());
     }
 
     let mut merged_profile = ThingProfile::default();

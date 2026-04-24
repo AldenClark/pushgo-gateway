@@ -102,6 +102,7 @@ async fn event_to_channel_with_action(
         .transpose()?;
     let normalized_images =
         NormalizedImageUrls::parse(&payload.payload.images, "images")?.into_inner();
+    let normalized_ciphertext = OptionalText::normalize(payload.payload.ciphertext.as_deref());
     let normalized_description = OptionalText::normalize(payload.payload.description.as_deref());
 
     ExtensionObjectRef::new(&payload.payload.attrs, "attrs").validate()?;
@@ -114,12 +115,15 @@ async fn event_to_channel_with_action(
         &normalized_severity,
     )?;
 
-    let mut custom_data = HashMap::with_capacity(1);
+    let mut custom_data = HashMap::with_capacity(2);
     if !payload.payload.metadata.is_empty() {
         custom_data.insert(
             "metadata".to_string(),
             MetadataEntries::new(&payload.payload.metadata).encode()?,
         );
+    }
+    if let Some(ciphertext) = normalized_ciphertext.as_ref() {
+        custom_data.insert("ciphertext".to_string(), ciphertext.clone());
     }
 
     let event_time = payload

@@ -22,13 +22,13 @@ async fn seed_private_pending_delivery(
     delivery_id: &str,
     title: &str,
 ) {
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     let payload = make_provider_payload(delivery_id, title);
     let message = PrivateMessage {
         payload: payload.clone(),
         size: payload.len(),
         sent_at: now,
-        expires_at: now + 300,
+        expires_at: now + 300_000,
     };
     state
         .store
@@ -67,13 +67,13 @@ async fn seed_provider_pending_delivery(
     title: &str,
     provider_token: &str,
 ) {
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     let payload = make_provider_payload(delivery_id, title);
     let message = PrivateMessage {
         payload: payload.clone(),
         size: payload.len(),
         sent_at: now,
-        expires_at: now + 300,
+        expires_at: now + 300_000,
     };
     state
         .store
@@ -528,7 +528,7 @@ async fn provider_token_retire_removes_only_old_token_state() {
     let device_id = derive_private_device_id(&device_key);
     let remaining = state
         .store
-        .pull_provider_items(device_id, chrono::Utc::now().timestamp(), 10)
+        .pull_provider_items(device_id, chrono::Utc::now().timestamp_millis(), 10)
         .await
         .expect("provider pull should succeed");
     assert_eq!(remaining.len(), 1);
@@ -739,7 +739,7 @@ async fn route_switch_private_to_provider_migrates_pending_deliveries() {
 
     let mut migrated = state
         .store
-        .pull_provider_items(device_id, chrono::Utc::now().timestamp(), 10)
+        .pull_provider_items(device_id, chrono::Utc::now().timestamp_millis(), 10)
         .await
         .expect("provider queue pull should succeed");
     migrated.sort_by(|left, right| left.delivery_id.cmp(&right.delivery_id));
@@ -803,7 +803,7 @@ async fn route_switch_provider_to_private_migrates_pending_deliveries() {
     let device_id = derive_private_device_id(&device_key);
     let provider_after_switch = state
         .store
-        .pull_provider_items(device_id, chrono::Utc::now().timestamp(), 10)
+        .pull_provider_items(device_id, chrono::Utc::now().timestamp_millis(), 10)
         .await
         .expect("provider queue pull should succeed");
     assert!(

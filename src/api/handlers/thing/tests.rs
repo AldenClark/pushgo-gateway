@@ -138,3 +138,19 @@ fn thing_delete_normalizes_deleted_at_to_millis() {
     assert_eq!(parsed.deleted_at, Some(1_710_000_000_789));
     assert_eq!(parsed.payload.observed_at, Some(1_710_000_000_999));
 }
+
+#[test]
+fn thing_create_accepts_ciphertext_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "observed_at":1710000000999,
+        "ciphertext":"encrypted-payload"
+    }"#;
+    let parsed =
+        serde_json::from_str::<ThingCreateRequest>(raw).expect("thing create should parse payload");
+    assert_eq!(
+        parsed.payload.ciphertext.as_deref(),
+        Some("encrypted-payload")
+    );
+}

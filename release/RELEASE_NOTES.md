@@ -8,6 +8,12 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.6]
+
+### Changed
+- This `v1.2.6` release is scoped to all current changes in the `gateway` repository since `v1.2.5`, including both committed and currently pending (previously uncommitted) updates included in this release cut.
+- Runtime package/version metadata is now aligned to `v1.2.6` for consistent release tagging and diagnostics labeling.
+
 ## [v1.2.5]
 
 ### Improved

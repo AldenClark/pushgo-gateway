@@ -299,9 +299,18 @@ impl DeviceRouteCleanup<'_> {
                     .as_ref()
                     .map(|private| private.config.ack_timeout_secs)
                     .unwrap_or(30);
+                let max_pending_per_device = state
+                    .private
+                    .as_ref()
+                    .map(|private| private.config.max_pending_per_device)
+                    .unwrap_or(usize::MAX);
                 let migrated = state
                     .store
-                    .migrate_provider_pending_to_private_outbox(device_id, ack_timeout_secs)
+                    .migrate_provider_pending_to_private_outbox(
+                        device_id,
+                        ack_timeout_secs,
+                        max_pending_per_device,
+                    )
                     .await
                     .map_err(|err| {
                         Error::Internal(format!(

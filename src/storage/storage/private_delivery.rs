@@ -251,16 +251,26 @@ impl Storage {
         &self,
         device_id: DeviceId,
         ack_timeout_secs: u64,
+        max_pending_per_device: usize,
     ) -> StoreResult<usize> {
         const BATCH_SIZE: usize = 512;
+        let existing_pending = self.db.count_private_outbox_for_device(device_id).await?;
+        let mut remaining_capacity = max_pending_per_device.saturating_sub(existing_pending);
+        if remaining_capacity == 0 {
+            return Ok(0);
+        }
         let now = chrono::Utc::now().timestamp_millis();
         let next_attempt_at = now.saturating_add(ack_timeout_secs.max(1) as i64 * 1000);
         let mut migrated = 0usize;
 
         loop {
+            let batch_size = remaining_capacity.min(BATCH_SIZE);
+            if batch_size == 0 {
+                break;
+            }
             let items = self
                 .db
-                .pull_provider_items(device_id, now, BATCH_SIZE)
+                .pull_provider_items(device_id, now, batch_size)
                 .await?;
             if items.is_empty() {
                 break;
@@ -293,8 +303,12 @@ impl Storage {
                 };
                 self.db.enqueue_private_outbox(device_id, &entry).await?;
                 migrated = migrated.saturating_add(1);
+                remaining_capacity = remaining_capacity.saturating_sub(1);
+                if remaining_capacity == 0 {
+                    break;
+                }
             }
-            if items.len() < BATCH_SIZE {
+            if items.len() < batch_size || remaining_capacity == 0 {
                 break;
             }
         }

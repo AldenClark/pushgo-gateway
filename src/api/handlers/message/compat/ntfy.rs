@@ -44,7 +44,7 @@ impl CompatNtfyQuery {
             ttl: self.ttl,
             url: self.url,
             images: split_query_list(self.images.as_deref()),
-            ciphertext: None,
+            ciphertext: self.ciphertext,
             tags: split_query_list(self.tags.as_deref()),
             metadata: parse_query_metadata(self.metadata.as_deref())?,
         })

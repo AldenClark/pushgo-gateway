@@ -112,8 +112,7 @@ pub(crate) fn deserialize_unix_ts_millis_lenient<'de, D>(
 where
     D: serde::Deserializer<'de>,
 {
-    deserialize_i64_lenient(deserializer)
-        .map(|value| value.map(normalize_unix_timestamp_millis))
+    deserialize_i64_lenient(deserializer).map(|value| value.map(normalize_unix_timestamp_millis))
 }
 
 #[cfg(test)]

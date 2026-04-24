@@ -29,6 +29,8 @@ struct EventArgs {
     #[serde(default)]
     images: Vec<String>,
     #[serde(default)]
+    ciphertext: Option<String>,
+    #[serde(default)]
     started_at: Option<i64>,
     #[serde(default)]
     ended_at: Option<i64>,
@@ -54,6 +56,7 @@ impl EventArgs {
             "severity": self.severity,
             "tags": self.tags,
             "images": self.images,
+            "ciphertext": self.ciphertext,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "attrs": self.attrs,
@@ -93,6 +96,8 @@ struct ThingArgs {
     #[serde(default)]
     images: Vec<String>,
     #[serde(default)]
+    ciphertext: Option<String>,
+    #[serde(default)]
     observed_at: Option<i64>,
     #[serde(default)]
     attrs: serde_json::Map<String, Value>,
@@ -117,6 +122,7 @@ impl ThingArgs {
             "location_value": self.location_value,
             "primary_image": self.primary_image,
             "images": self.images,
+            "ciphertext": self.ciphertext,
             "observed_at": self.observed_at,
             "attrs": self.attrs,
             "metadata": self.metadata,

@@ -231,7 +231,7 @@ async fn sqlite_init_heals_missing_devices_route_columns() {
         platform: "android".to_string(),
         channel_type: "fcm".to_string(),
         provider_token: Some("android-heal-route-token-1".to_string()),
-        updated_at: chrono::Utc::now().timestamp(),
+        updated_at: chrono::Utc::now().timestamp_millis(),
     };
     ctx.storage
         .upsert_device_route(&route)
@@ -258,14 +258,14 @@ async fn sqlite_init_creates_missing_provider_pull_tables() {
     )
     .await;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     let device_id: DeviceId = [9; 16];
     let delivery_id = "delivery-heal-provider-table-1";
     let message = PrivateMessage {
         payload: vec![11, 22, 33],
         size: 3,
         sent_at: now,
-        expires_at: now + 300,
+        expires_at: now + 300_000,
     };
     ctx.storage
         .enqueue_provider_pull_item(
@@ -301,13 +301,13 @@ async fn sqlite_init_hard_resets_provider_pull_queue_without_schema_meta() {
     )
     .await;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     let delivery_id = "legacy-provider-pull-shared-delivery-1";
     let payload = PrivateMessage {
         payload: vec![1, 3, 5, 7],
         size: 4,
         sent_at: now,
-        expires_at: now + 600,
+        expires_at: now + 600_000,
     };
     let device_a: DeviceId = [3; 16];
     let device_b: DeviceId = [4; 16];
@@ -379,7 +379,7 @@ async fn sqlite_init_heals_missing_private_outbox_columns() {
     )
     .await;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_millis();
     let device_id: DeviceId = [8; 16];
     let entry = PrivateOutboxEntry {
         delivery_id: "delivery-heal-outbox-1".to_string(),
@@ -439,7 +439,7 @@ async fn sqlite_init_upgrades_v7_channel_subscription_shape() {
 
     let targets = ctx
         .storage
-        .list_channel_dispatch_targets(subscribe.channel_id, chrono::Utc::now().timestamp())
+        .list_channel_dispatch_targets(subscribe.channel_id, chrono::Utc::now().timestamp_millis())
         .await
         .expect("dispatch target listing should succeed");
     assert_eq!(targets.len(), 1);

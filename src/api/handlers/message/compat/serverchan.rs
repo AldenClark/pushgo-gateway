@@ -19,7 +19,7 @@ impl CompatServerChanPayload {
             ttl: None,
             url: self.url,
             images: Vec::new(),
-            ciphertext: None,
+            ciphertext: self.ciphertext,
             tags: Vec::new(),
             metadata,
         })

@@ -12,6 +12,13 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.6] - 2026-04-24
+
+### Changed
+- Bumped package/runtime version to `1.2.6` (release tag target: `v1.2.6`) and aligned lock metadata.
+- This `v1.2.6` publication is intentionally scoped to the full gateway snapshot after `v1.2.5`, including both already committed changes and release-window pending changes.
+- Release documentation was updated to reflect the all-in scope for this release cut.
+
 ## [v1.2.5] - 2026-04-22
 
 ### Changed
