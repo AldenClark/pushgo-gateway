@@ -203,15 +203,14 @@ impl FallbackRuntime {
     }
 
     pub(super) async fn run_maintenance_tick(&self) -> Result<(), crate::Error> {
-        const DELIVERY_DEDUPE_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
         let now = chrono::Utc::now().timestamp_millis();
-        let dedupe_before = now - DELIVERY_DEDUPE_RETENTION_SECS * 1000;
         let cleanup: MaintenanceCleanupStats = self
             .state
             .hub
-            .run_maintenance_cleanup(now, dedupe_before)
+            .run_maintenance_cleanup(now, self.state.config.maintenance_cleanup)
             .await?;
-        if cleanup.private_outbox_pruned > 0
+        emit_maintenance_cleanup_stats(&cleanup);
+        if (cleanup.private_outbox_pruned > 0 || cleanup.provider_pull_pruned > 0)
             && let Some(engine) = &self.state.fallback_tasks
         {
             engine.request_resync();
@@ -354,6 +353,41 @@ impl FallbackRuntime {
     }
 }
 
+fn emit_maintenance_cleanup_stats(cleanup: &MaintenanceCleanupStats) {
+    let total = cleanup
+        .private_sessions_pruned
+        .saturating_add(cleanup.private_outbox_pruned)
+        .saturating_add(cleanup.provider_pull_pruned)
+        .saturating_add(cleanup.orphan_devices_pruned)
+        .saturating_add(cleanup.stale_subscriptions_pruned)
+        .saturating_add(cleanup.soft_deleted_devices_pruned)
+        .saturating_add(cleanup.orphan_channels_pruned)
+        .saturating_add(cleanup.audit_rows_pruned)
+        .saturating_add(cleanup.hourly_stats_pruned)
+        .saturating_add(cleanup.daily_stats_pruned);
+    if total == 0 {
+        return;
+    }
+    crate::util::TraceEvent::new("private.maintenance_cleanup")
+        .field_u64("private_sessions_pruned", cleanup.private_sessions_pruned as u64)
+        .field_u64("private_outbox_pruned", cleanup.private_outbox_pruned as u64)
+        .field_u64("provider_pull_pruned", cleanup.provider_pull_pruned as u64)
+        .field_u64("orphan_devices_pruned", cleanup.orphan_devices_pruned as u64)
+        .field_u64(
+            "stale_subscriptions_pruned",
+            cleanup.stale_subscriptions_pruned as u64,
+        )
+        .field_u64(
+            "soft_deleted_devices_pruned",
+            cleanup.soft_deleted_devices_pruned as u64,
+        )
+        .field_u64("orphan_channels_pruned", cleanup.orphan_channels_pruned as u64)
+        .field_u64("audit_rows_pruned", cleanup.audit_rows_pruned as u64)
+        .field_u64("hourly_stats_pruned", cleanup.hourly_stats_pruned as u64)
+        .field_u64("daily_stats_pruned", cleanup.daily_stats_pruned as u64)
+        .emit();
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -364,7 +398,10 @@ mod tests {
         private::{PrivateConfig, PrivateState, protocol::PrivatePayloadEnvelope},
         routing::{DeviceRegistry, derive_private_device_id},
         stats::StatsCollector,
-        storage::{OUTBOX_STATUS_PENDING, OUTBOX_STATUS_SENT, PrivateMessage, Storage},
+        storage::{
+            MaintenanceCleanupConfig, OUTBOX_STATUS_PENDING, OUTBOX_STATUS_SENT, PrivateMessage,
+            Storage,
+        },
     };
     use flume::bounded;
     use hashbrown::HashMap;
@@ -417,6 +454,7 @@ mod tests {
             retransmit_max_retries: 3,
             hot_cache_capacity: 64,
             default_ttl_secs: 60,
+            maintenance_cleanup: MaintenanceCleanupConfig::default(),
             gateway_token: None,
         }
         .normalized()

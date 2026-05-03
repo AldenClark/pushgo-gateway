@@ -41,6 +41,21 @@ impl Storage {
         self.db.list_private_outbox(device_id, limit).await
     }
 
+    pub async fn evict_oldest_pending_private_outbox_for_device(
+        &self,
+        device_id: DeviceId,
+    ) -> StoreResult<Option<String>> {
+        self.db
+            .evict_oldest_pending_private_outbox_for_device(device_id)
+            .await
+    }
+
+    pub async fn evict_oldest_pending_private_outbox_global(
+        &self,
+    ) -> StoreResult<Option<(DeviceId, String)>> {
+        self.db.evict_oldest_pending_private_outbox_global().await
+    }
+
     pub async fn count_private_outbox_for_device(&self, device_id: DeviceId) -> StoreResult<usize> {
         self.db.count_private_outbox_for_device(device_id).await
     }

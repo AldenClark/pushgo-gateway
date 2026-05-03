@@ -39,6 +39,22 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, list_private_outbox(device_id, limit))
     }
 
+    async fn evict_oldest_pending_private_outbox_for_device(
+        &self,
+        device_id: DeviceId,
+    ) -> StoreResult<Option<String>> {
+        delegate_db_async!(
+            self,
+            evict_oldest_pending_private_outbox_for_device(device_id)
+        )
+    }
+
+    async fn evict_oldest_pending_private_outbox_global(
+        &self,
+    ) -> StoreResult<Option<(DeviceId, String)>> {
+        delegate_db_async!(self, evict_oldest_pending_private_outbox_global())
+    }
+
     async fn count_private_outbox_for_device(&self, device_id: DeviceId) -> StoreResult<usize> {
         delegate_db_async!(self, count_private_outbox_for_device(device_id))
     }

@@ -113,7 +113,7 @@ impl MySqlDb {
             out.push(PrivateOutboxEntry {
                 delivery_id: r.get("delivery_id"),
                 status: r.get("status"),
-                attempts: r.get::<u32, _>("attempts"),
+                attempts: decode_mysql_attempts(&r),
                 occurred_at: r.get("occurred_at"),
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),

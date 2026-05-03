@@ -111,17 +111,105 @@ impl Storage {
     pub async fn run_maintenance_cleanup(
         &self,
         now: i64,
-        dedupe_before: i64,
+        config: MaintenanceCleanupConfig,
     ) -> StoreResult<MaintenanceCleanupStats> {
-        let _ = self.db.cleanup_private_sessions(now).await?;
+        let config = config.normalized();
+        let private_sessions_pruned = self.db.cleanup_private_sessions(now).await?;
         let private_outbox_pruned = self.cleanup_private_expired_data(now, 2048).await?;
-        let _ = self
+        let stale_private_outbox_pruned = self
+            .db
+            .cleanup_stale_private_outbox(
+                config.private_stale_outbox_before(now),
+                config.delete_batch,
+            )
+            .await?;
+        let provider_pull_pruned = self
+            .db
+            .cleanup_expired_provider_pull_queue(now, config.provider_pull_expired_batch)
+            .await?;
+        let _pending_dedupe_pruned = self
             .cleanup_pending_op_dedupe(now - OP_DEDUPE_PENDING_STALE_SECS, 2048)
             .await?;
-        let _ = self.cleanup_semantic_id_dedupe(dedupe_before, 2048).await?;
-        let _ = self.cleanup_delivery_dedupe(dedupe_before, 2048).await?;
+        let dedupe_before = config.dedupe_before(now);
+        let _semantic_dedupe_pruned = self.cleanup_semantic_id_dedupe(dedupe_before, 2048).await?;
+        let _delivery_dedupe_pruned = self.cleanup_delivery_dedupe(dedupe_before, 2048).await?;
+
+        let orphan_devices_pruned = self
+            .db
+            .cleanup_orphan_devices(config.orphan_device_before(now), config.delete_batch)
+            .await?;
+        let stale_subscriptions_pruned = if config.stale_subscription_cleanup_enabled {
+            self.db
+                .cleanup_stale_subscriptions(
+                    config.stale_subscription_before(now),
+                    now,
+                    config.delete_batch,
+                )
+                .await?
+        } else {
+            0
+        };
+        let soft_deleted_devices_pruned = if config.soft_deleted_device_cleanup_enabled {
+            self.db
+                .cleanup_soft_deleted_devices(
+                    config.soft_deleted_device_before(now),
+                    config.delete_batch,
+                )
+                .await?
+        } else {
+            0
+        };
+        let orphan_channels_pruned = if config.orphan_channel_cleanup_enabled {
+            self.db
+                .cleanup_orphan_channels(config.orphan_channel_before(now), config.delete_batch)
+                .await?
+        } else {
+            0
+        };
+        let audit_rows_pruned = if config.audit_retention_cleanup_enabled {
+            self.db
+                .cleanup_audit_rows(config.audit_before(now), config.delete_batch)
+                .await?
+        } else {
+            0
+        };
+        let (hourly_stats_pruned, daily_stats_pruned) = if config.stats_retention_cleanup_enabled {
+            let hourly = self
+                .db
+                .cleanup_hourly_stats(
+                    config.hourly_stats_before(now).as_str(),
+                    config.delete_batch,
+                )
+                .await?;
+            let daily = self
+                .db
+                .cleanup_daily_stats(config.daily_stats_before(now).as_str(), config.delete_batch)
+                .await?;
+            (hourly, daily)
+        } else {
+            (0, 0)
+        };
+        let private_outbox_pruned =
+            private_outbox_pruned.saturating_add(stale_private_outbox_pruned);
+        if stale_subscriptions_pruned > 0
+            || soft_deleted_devices_pruned > 0
+            || orphan_devices_pruned > 0
+            || orphan_channels_pruned > 0
+        {
+            self.cache.clear_devices();
+            self.cache.invalidate_all_channel_devices();
+        }
         Ok(MaintenanceCleanupStats {
+            private_sessions_pruned,
             private_outbox_pruned,
+            provider_pull_pruned,
+            orphan_devices_pruned,
+            stale_subscriptions_pruned,
+            soft_deleted_devices_pruned,
+            orphan_channels_pruned,
+            audit_rows_pruned,
+            hourly_stats_pruned,
+            daily_stats_pruned,
         })
     }
 }

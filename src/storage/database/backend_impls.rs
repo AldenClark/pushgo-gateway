@@ -182,6 +182,19 @@ macro_rules! impl_backend_private_message_access {
                 <$backend>::list_private_outbox(self, device_id, limit).await
             }
 
+            async fn evict_oldest_pending_private_outbox_for_device(
+                &self,
+                device_id: DeviceId,
+            ) -> StoreResult<Option<String>> {
+                <$backend>::evict_oldest_pending_private_outbox_for_device(self, device_id).await
+            }
+
+            async fn evict_oldest_pending_private_outbox_global(
+                &self,
+            ) -> StoreResult<Option<(DeviceId, String)>> {
+                <$backend>::evict_oldest_pending_private_outbox_global(self).await
+            }
+
             async fn count_private_outbox_for_device(
                 &self,
                 device_id: DeviceId,
@@ -521,6 +534,75 @@ macro_rules! impl_backend_system_state_access {
 
             async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()> {
                 <$backend>::save_mcp_state_json(self, state_json).await
+            }
+
+            async fn cleanup_expired_provider_pull_queue(
+                &self,
+                before_ts: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_expired_provider_pull_queue(self, before_ts, limit).await
+            }
+
+            async fn cleanup_stale_private_outbox(
+                &self,
+                before_ts: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_stale_private_outbox(self, before_ts, limit).await
+            }
+
+            async fn cleanup_orphan_devices(
+                &self,
+                before_ts: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_orphan_devices(self, before_ts, limit).await
+            }
+
+            async fn cleanup_stale_subscriptions(
+                &self,
+                before_ts: i64,
+                now: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_stale_subscriptions(self, before_ts, now, limit).await
+            }
+
+            async fn cleanup_soft_deleted_devices(
+                &self,
+                before_ts: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_soft_deleted_devices(self, before_ts, limit).await
+            }
+
+            async fn cleanup_orphan_channels(
+                &self,
+                before_ts: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_orphan_channels(self, before_ts, limit).await
+            }
+
+            async fn cleanup_audit_rows(&self, before_ts: i64, limit: usize) -> StoreResult<usize> {
+                <$backend>::cleanup_audit_rows(self, before_ts, limit).await
+            }
+
+            async fn cleanup_hourly_stats(
+                &self,
+                before_bucket: &str,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_hourly_stats(self, before_bucket, limit).await
+            }
+
+            async fn cleanup_daily_stats(
+                &self,
+                before_bucket: &str,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_daily_stats(self, before_bucket, limit).await
             }
         }
     };

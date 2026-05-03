@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use hashbrown::HashMap;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use crate::{private::protocol::PrivatePayloadEnvelope, util::build_provider_wakeup_data};
@@ -59,13 +59,6 @@ pub(crate) struct EncodedPrivatePayload(pub(crate) Vec<u8>);
 pub(crate) struct ProviderNotificationText {
     pub(crate) title: Option<String>,
     pub(crate) body: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProviderProfileSnapshot {
-    title: Option<String>,
-    description: Option<String>,
-    message: Option<String>,
 }
 
 impl PayloadSeverity {
@@ -267,8 +260,6 @@ impl CustomPayloadData {
             "event_time",
             "event_title",
             "event_description",
-            "event_profile_json",
-            "event_attrs_json",
             "event_unset_json",
             "severity",
             "tags",
@@ -276,8 +267,6 @@ impl CustomPayloadData {
             "started_at",
             "ended_at",
             "thing_id",
-            "thing_profile_json",
-            "thing_attrs_json",
             "thing_unset_json",
             "image",
             "primary_image",
@@ -328,8 +317,7 @@ impl<'a> EntityKind<'a> {
         match self.apple_thread_prefix() {
             "event" => ProviderNotificationText {
                 title: normalize_optional_text(explicit_title).or_else(|| {
-                    profile_snapshot(payload, "event_profile_json")
-                        .and_then(|profile| normalize_optional_string(profile.title))
+                    map_text(payload, "title")
                         .or_else(|| map_text(payload, "event_title"))
                         .or_else(|| {
                             map_text(payload, "event_id")
@@ -338,21 +326,15 @@ impl<'a> EntityKind<'a> {
                         })
                 }),
                 body: normalize_optional_text(explicit_body).or_else(|| {
-                    profile_snapshot(payload, "event_profile_json")
-                        .and_then(|profile| {
-                            normalize_optional_string(profile.message)
-                                .or_else(|| normalize_optional_string(profile.description))
-                        })
+                    map_text(payload, "message")
+                        .or_else(|| map_text(payload, "description"))
                         .or_else(|| default_event_body(payload))
                 }),
             },
             "thing" => ProviderNotificationText {
                 title: normalize_optional_text(explicit_title).or_else(|| {
                     thing_name_from_attrs(payload)
-                        .or_else(|| {
-                            profile_snapshot(payload, "thing_profile_json")
-                                .and_then(|profile| normalize_optional_string(profile.title))
-                        })
+                        .or_else(|| map_text(payload, "title"))
                         .or_else(|| {
                             map_text(payload, "thing_id")
                                 .or_else(|| map_text(payload, "entity_id"))
@@ -360,13 +342,9 @@ impl<'a> EntityKind<'a> {
                         })
                 }),
                 body: normalize_optional_text(explicit_body).or_else(|| {
-                    profile_snapshot(payload, "thing_profile_json")
-                        .and_then(|profile| normalize_optional_string(profile.message))
+                    map_text(payload, "message")
                         .or_else(|| thing_attribute_update_body(payload))
-                        .or_else(|| {
-                            profile_snapshot(payload, "thing_profile_json")
-                                .and_then(|profile| normalize_optional_string(profile.description))
-                        })
+                        .or_else(|| map_text(payload, "description"))
                         .or_else(|| Some("Updated".to_string()))
                 }),
             },
@@ -414,23 +392,12 @@ fn normalize_optional_text(value: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
 fn map_text(data: &HashMap<String, String>, key: &str) -> Option<String> {
     data.get(key)
         .map(String::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn profile_snapshot(data: &HashMap<String, String>, key: &str) -> Option<ProviderProfileSnapshot> {
-    let raw = data.get(key)?;
-    serde_json::from_str::<ProviderProfileSnapshot>(raw).ok()
 }
 
 fn default_event_body(data: &HashMap<String, String>) -> Option<String> {
@@ -443,7 +410,7 @@ fn default_event_body(data: &HashMap<String, String>) -> Option<String> {
 }
 
 fn thing_name_from_attrs(data: &HashMap<String, String>) -> Option<String> {
-    let raw = data.get("thing_attrs_json")?;
+    let raw = data.get("attrs")?;
     let object = serde_json::from_str::<serde_json::Map<String, JsonValue>>(raw).ok()?;
     for key in ["name", "thing_name", "名称"] {
         if let Some(value) = object.get(key)
@@ -456,7 +423,7 @@ fn thing_name_from_attrs(data: &HashMap<String, String>) -> Option<String> {
 }
 
 fn thing_attribute_update_body(data: &HashMap<String, String>) -> Option<String> {
-    let raw = data.get("thing_attrs_json")?;
+    let raw = data.get("attrs")?;
     let object = serde_json::from_str::<serde_json::Map<String, JsonValue>>(raw).ok()?;
     let mut pairs: Vec<(String, String)> = object
         .iter()

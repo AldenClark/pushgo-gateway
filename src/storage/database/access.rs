@@ -114,6 +114,13 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
         device_id: DeviceId,
         limit: usize,
     ) -> StoreResult<Vec<PrivateOutboxEntry>>;
+    async fn evict_oldest_pending_private_outbox_for_device(
+        &self,
+        device_id: DeviceId,
+    ) -> StoreResult<Option<String>>;
+    async fn evict_oldest_pending_private_outbox_global(
+        &self,
+    ) -> StoreResult<Option<(DeviceId, String)>>;
     async fn count_private_outbox_for_device(&self, device_id: DeviceId) -> StoreResult<usize>;
     async fn cleanup_private_expired_data(
         &self,
@@ -267,6 +274,32 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
     async fn automation_counts(&self) -> StoreResult<AutomationCounts>;
     async fn load_mcp_state_json(&self) -> StoreResult<Option<String>>;
     async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()>;
+    async fn cleanup_expired_provider_pull_queue(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize>;
+    async fn cleanup_stale_private_outbox(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize>;
+    async fn cleanup_orphan_devices(&self, before_ts: i64, limit: usize) -> StoreResult<usize>;
+    async fn cleanup_stale_subscriptions(
+        &self,
+        before_ts: i64,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize>;
+    async fn cleanup_soft_deleted_devices(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize>;
+    async fn cleanup_orphan_channels(&self, before_ts: i64, limit: usize) -> StoreResult<usize>;
+    async fn cleanup_audit_rows(&self, before_ts: i64, limit: usize) -> StoreResult<usize>;
+    async fn cleanup_hourly_stats(&self, before_bucket: &str, limit: usize) -> StoreResult<usize>;
+    async fn cleanup_daily_stats(&self, before_bucket: &str, limit: usize) -> StoreResult<usize>;
 }
 
 pub trait DatabaseAccess:

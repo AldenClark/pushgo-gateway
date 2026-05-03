@@ -15,7 +15,7 @@ impl MySqlDb {
 
         Ok(row.map(|r| PrivateMessage {
             payload: r.get("payload_blob"),
-            size: r.get::<u32, _>("payload_size") as usize,
+            size: decode_mysql_payload_size(&r),
             sent_at: r.get("sent_at"),
             expires_at: r.get("expires_at"),
         }))

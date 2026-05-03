@@ -3,6 +3,8 @@ use crate::storage::database::{
     ChannelQueryDatabaseAccess, PrivateChannelDatabaseAccess, ProviderSubscriptionDatabaseAccess,
 };
 
+const DISPATCH_TARGETS_CACHE_EFFECTIVE_AT_SKEW_MS: i64 = 5;
+
 impl Storage {
     pub async fn subscribe_channel_for_device_key(
         &self,
@@ -91,7 +93,7 @@ impl Storage {
         effective_at: i64,
     ) -> StoreResult<Vec<DispatchTarget>> {
         let now = chrono::Utc::now().timestamp_millis();
-        let use_cache = (effective_at - now).abs() <= 5;
+        let use_cache = (effective_at - now).abs() <= DISPATCH_TARGETS_CACHE_EFFECTIVE_AT_SKEW_MS;
 
         if use_cache && let Some(entry) = self.cache.get_channel_dispatch_targets(channel_id) {
             let age_ms = chrono::Utc::now().timestamp_millis() - entry.cached_at_ms;

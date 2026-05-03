@@ -172,13 +172,6 @@ async fn thing_to_channel_with_action(
     } else {
         Some(merged_profile)
     };
-    let resolved_profile_json = merged_profile
-        .as_ref()
-        .map(|profile| {
-            serde_json::to_string(profile).map_err(|err| Error::validation(err.to_string()))
-        })
-        .transpose()?;
-
     let mut final_attrs = JsonMap::new();
     for (key, value) in &payload.payload.mutable.attrs {
         if value.is_null() {
@@ -197,12 +190,51 @@ async fn thing_to_channel_with_action(
     );
 
     let dispatch_summary = {
-        let mut extra = HashMap::with_capacity(4);
+        let mut extra = HashMap::with_capacity(20);
         extra.insert("occurred_at".to_string(), observed_at.to_string());
         extra.insert("thing_id".to_string(), thing_id.clone());
-        extra.insert("thing_attrs_json".to_string(), final_attrs_json.clone());
-        if let Some(value) = resolved_profile_json.as_ref() {
-            extra.insert("thing_profile_json".to_string(), value.clone());
+        extra.insert("attrs".to_string(), final_attrs_json.clone());
+        if let Some(profile) = merged_profile.as_ref() {
+            if let Some(value) = profile.title.as_deref() {
+                extra.insert("title".to_string(), value.to_string());
+            }
+            if let Some(value) = profile.description.as_deref() {
+                extra.insert("description".to_string(), value.to_string());
+            }
+            if !profile.tags.is_empty()
+                && let Ok(serialized) = serde_json::to_string(&profile.tags)
+            {
+                extra.insert("tags".to_string(), serialized);
+            }
+            if let Some(value) = profile.primary_image.as_deref() {
+                extra.insert("primary_image".to_string(), value.to_string());
+            }
+            if !profile.images.is_empty()
+                && let Ok(serialized) = serde_json::to_string(&profile.images)
+            {
+                extra.insert("images".to_string(), serialized);
+            }
+            if let Some(value) = profile.created_at {
+                extra.insert("created_at".to_string(), value.to_string());
+            }
+            if let Some(value) = profile.state.as_deref() {
+                extra.insert("state".to_string(), value.to_string());
+            }
+            if let Some(value) = profile.deleted_at {
+                extra.insert("deleted_at".to_string(), value.to_string());
+            }
+            if !profile.external_ids.is_empty()
+                && let Ok(serialized) = serde_json::to_string(&profile.external_ids)
+            {
+                extra.insert("external_ids".to_string(), serialized);
+            }
+            if let Some(location) = profile.location.as_ref() {
+                extra.insert("location_type".to_string(), location.location_type.clone());
+                extra.insert("location_value".to_string(), location.value.clone());
+                if let Ok(serialized) = serde_json::to_string(location) {
+                    extra.insert("location".to_string(), serialized);
+                }
+            }
         }
 
         Some(

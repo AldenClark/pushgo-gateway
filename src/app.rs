@@ -7,7 +7,7 @@ use crate::{
     providers::{ApnsClient, FcmClient, WnsClient},
     routing::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord, derive_private_device_id},
     stats::StatsCollector,
-    storage::{DeviceRouteRecordRow, Storage},
+    storage::{DeviceRouteRecordRow, MaintenanceCleanupConfig, Storage},
 };
 use axum::Router;
 use scc::HashMap as ConcurrentHashMap;
@@ -77,7 +77,7 @@ impl DeviceOperationGuards {
         START.get_or_init(Instant::now).elapsed().as_millis() as u64
     }
 
-    pub fn guard_for(&self, device_key: &str) -> Option<Arc<Mutex<()>>> {
+    pub(crate) fn guard_for(&self, device_key: &str) -> Option<Arc<Mutex<()>>> {
         let normalized = device_key.trim();
         if normalized.is_empty() {
             return None;
@@ -193,6 +193,24 @@ pub async fn build_app(
         retransmit_max_retries: args.private_retx_max_retries,
         hot_cache_capacity: args.private_hot_cache_capacity,
         default_ttl_secs: args.private_default_ttl_secs,
+        maintenance_cleanup: MaintenanceCleanupConfig {
+            provider_pull_expired_batch: args.provider_pull_expired_batch,
+            private_stale_outbox_ttl_secs: days_to_secs(args.private_stale_outbox_ttl_days),
+            orphan_device_ttl_secs: days_to_secs(args.orphan_device_ttl_days),
+            stale_subscription_ttl_secs: days_to_secs(args.stale_subscription_ttl_days),
+            soft_deleted_device_ttl_secs: days_to_secs(args.soft_deleted_device_ttl_days),
+            orphan_channel_ttl_secs: days_to_secs(args.orphan_channel_ttl_days),
+            dedupe_retention_secs: days_to_secs(args.dedupe_retention_days),
+            audit_retention_secs: days_to_secs(args.audit_retention_days),
+            hourly_stats_retention_secs: days_to_secs(args.hourly_stats_retention_days),
+            daily_stats_retention_secs: days_to_secs(args.daily_stats_retention_days),
+            delete_batch: args.maintenance_delete_batch,
+            stale_subscription_cleanup_enabled: args.stale_subscription_cleanup_enabled,
+            soft_deleted_device_cleanup_enabled: args.soft_deleted_device_cleanup_enabled,
+            orphan_channel_cleanup_enabled: args.orphan_channel_cleanup_enabled,
+            audit_retention_cleanup_enabled: args.audit_retention_cleanup_enabled,
+            stats_retention_cleanup_enabled: args.stats_retention_cleanup_enabled,
+        },
         gateway_token: args.token.clone(),
     }
     .normalized();
@@ -288,6 +306,11 @@ fn normalize_mcp_public_base_url(
         .into());
     }
     Ok(Some(value.trim_end_matches('/').to_string()))
+}
+
+fn days_to_secs(days: i64) -> i64 {
+    const DAY_SECS: i64 = 24 * 60 * 60;
+    days.saturating_mul(DAY_SECS)
 }
 
 fn derive_wss_advertised_port(public_base_url: Option<&str>) -> u16 {

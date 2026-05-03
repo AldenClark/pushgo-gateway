@@ -683,19 +683,11 @@
               </td>
             </tr>
             <tr>
-              <td><code>event_profile_json</code> / <code>thing_profile_json</code></td>
-              <td>object 或 JSON 字符串<br />object or JSON-stringified object</td>
+              <td><code>description/status/message/tags/started_at/ended_at/attrs</code></td>
+              <td>string/number/object 或 JSON 字符串<br />string/number/object or JSON-stringified value</td>
               <td>
-                可选。用于覆盖事件/对象概要快照，客户端会归一化为 JSON 字符串后继续后续流程。<br />
-                Optional. Overrides event/thing profile snapshot. Clients normalize to JSON string before downstream parsing.
-              </td>
-            </tr>
-            <tr>
-              <td><code>event_attrs_json</code> / <code>thing_attrs_json</code></td>
-              <td>object 或 JSON 字符串<br />object or JSON-stringified object</td>
-              <td>
-                可选。用于覆盖事件/对象属性快照，客户端会归一化为 JSON 字符串后继续后续流程。<br />
-                Optional. Overrides event/thing attrs snapshot. Clients normalize to JSON string before downstream parsing.
+                可选。事件/对象语义字段直接使用同名键，不再使用 legacy profile/attrs 包装字段。<br />
+                Optional. Use canonical event/thing keys directly; legacy profile/attrs wrapper keys are not supported.
               </td>
             </tr>
           </tbody>
@@ -706,8 +698,9 @@
   "title": "Encrypted title",
   "body": "Encrypted body",
   "url": "https://safe.example/open",
-  "event_profile_json": {"title":"Encrypted Event","message":"Encrypted body"},
-  "event_attrs_json": {"name":{"label":"名称","value":"泵站A"}},
+  "description": "Encrypted event summary",
+  "message": "Encrypted event body",
+  "attrs": {"name":{"label":"名称","value":"泵站A"}},
   "images": [
     "https://cdn.example.com/a.png",
     "https://cdn.example.com/b.png"

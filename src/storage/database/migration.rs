@@ -50,7 +50,7 @@ pub(crate) struct SchemaMigrationPlan {
 }
 
 impl SchemaMigrationPlan {
-    pub fn for_state(
+    pub(crate) fn for_state(
         current_version: Option<&str>,
         legacy_runtime_tables_present: bool,
         applied_migrations: &[AppliedSchemaMigration],
@@ -93,7 +93,7 @@ impl SchemaMigrationPlan {
         })
     }
 
-    pub fn hard_reset_migration(&self) -> Option<SchemaMigrationDefinition> {
+    pub(crate) fn hard_reset_migration(&self) -> Option<SchemaMigrationDefinition> {
         match self.action {
             SchemaMigrationAction::HardResetRuntime { migration, .. } => Some(migration),
             _ => None,

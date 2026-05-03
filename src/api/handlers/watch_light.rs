@@ -35,8 +35,18 @@ impl WatchEntityKind {
 }
 
 impl WatchProfile {
-    fn parse(raw: Option<&String>) -> Option<Self> {
-        raw.and_then(|text| serde_json::from_str::<WatchProfile>(text).ok())
+    fn from_payload(payload: &HashMap<String, String>, is_thing: bool) -> Self {
+        let image = if is_thing {
+            Self::field(payload.get("image")).or_else(|| Self::field(payload.get("primary_image")))
+        } else {
+            Self::field(payload.get("image"))
+        };
+        Self {
+            title: Self::field(payload.get("title")),
+            description: Self::field(payload.get("description")),
+            image,
+            severity: Self::field(payload.get("severity")),
+        }
     }
 
     fn field(value: Option<&String>) -> Option<String> {
@@ -108,7 +118,7 @@ impl<'a> WatchLightPayload<'a> {
     }
 
     fn event_payload(&self) -> HashMap<String, String> {
-        let profile = WatchProfile::parse(self.payload.get("event_profile_json"));
+        let profile = WatchProfile::from_payload(self.payload, false);
         let Some(event_id) = self.field("event_id").or_else(|| self.field("entity_id")) else {
             return HashMap::new();
         };
@@ -117,38 +127,31 @@ impl<'a> WatchLightPayload<'a> {
         output.insert("event_id".to_string(), event_id.clone());
         output.insert(
             "title".to_string(),
-            WatchProfile::field(profile.as_ref().and_then(|value| value.title.as_ref()))
+            profile.title
                 .or_else(|| self.field("title"))
                 .unwrap_or(event_id),
         );
         Self::insert_if_present(
             &mut output,
             "body",
-            WatchProfile::field(
-                profile
-                    .as_ref()
-                    .and_then(|value| value.description.as_ref()),
-            )
-            .or_else(|| self.field("body")),
+            profile.description.or_else(|| self.field("body")),
         );
         Self::insert_if_present(&mut output, "event_state", self.field("event_state"));
         Self::insert_if_present(
             &mut output,
             "image",
-            WatchProfile::field(profile.as_ref().and_then(|value| value.image.as_ref()))
-                .or_else(|| self.field("image")),
+            profile.image.or_else(|| self.field("image")),
         );
         Self::insert_if_present(
             &mut output,
             "severity",
-            WatchProfile::field(profile.as_ref().and_then(|value| value.severity.as_ref()))
-                .or_else(|| self.field("severity")),
+            profile.severity.or_else(|| self.field("severity")),
         );
         output
     }
 
     fn thing_payload(&self) -> HashMap<String, String> {
-        let profile = WatchProfile::parse(self.payload.get("thing_profile_json"));
+        let profile = WatchProfile::from_payload(self.payload, true);
         let Some(thing_id) = self.field("thing_id").or_else(|| self.field("entity_id")) else {
             return HashMap::new();
         };
@@ -157,29 +160,25 @@ impl<'a> WatchLightPayload<'a> {
         output.insert("thing_id".to_string(), thing_id.clone());
         output.insert(
             "title".to_string(),
-            WatchProfile::field(profile.as_ref().and_then(|value| value.title.as_ref()))
+            profile.title
                 .or_else(|| self.field("title"))
                 .unwrap_or(thing_id),
         );
         Self::insert_if_present(
             &mut output,
             "body",
-            WatchProfile::field(
-                profile
-                    .as_ref()
-                    .and_then(|value| value.description.as_ref()),
-            )
-            .or_else(|| self.field("body")),
+            profile.description.or_else(|| self.field("body")),
         );
         Self::insert_if_present(
             &mut output,
-            "thing_attrs_json",
-            self.field("thing_attrs_json"),
+            "attrs",
+            self.field("attrs"),
         );
         Self::insert_if_present(
             &mut output,
             "image",
-            WatchProfile::field(profile.as_ref().and_then(|value| value.image.as_ref()))
+            profile
+                .image
                 .or_else(|| self.field("image"))
                 .or_else(|| self.field("primary_image")),
         );
@@ -223,10 +222,9 @@ mod tests {
         let mut payload = HashMap::new();
         payload.insert("entity_type".to_string(), "event".to_string());
         payload.insert("event_id".to_string(), "evt-1".to_string());
-        payload.insert(
-            "event_profile_json".to_string(),
-            r#"{"title":"Alarm","description":"Door open","severity":"high"}"#.to_string(),
-        );
+        payload.insert("title".to_string(), "Alarm".to_string());
+        payload.insert("description".to_string(), "Door open".to_string());
+        payload.insert("severity".to_string(), "high".to_string());
         payload.insert("channel_id".to_string(), "ch-1".to_string());
         let output = quantize_watch_payload(&payload);
         assert_eq!(

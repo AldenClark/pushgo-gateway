@@ -84,11 +84,9 @@ impl MySqlDb {
                 });
 
             if channel_type.eq_ignore_ascii_case("private") {
-                if raw_device_id.len() == 16 {
-                    let mut id = [0u8; 16];
-                    id.copy_from_slice(&raw_device_id);
+                if let Some(id) = PrivateDeviceId::parse_compat(&raw_device_id) {
                     out.push(DispatchTarget::Private {
-                        device_id: id,
+                        device_id: id.into_inner(),
                         device_key,
                     });
                 }
@@ -282,10 +280,8 @@ impl MySqlDb {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let bytes: Vec<u8> = row.get("device_id");
-            if bytes.len() == 16 {
-                let mut id = [0u8; 16];
-                id.copy_from_slice(&bytes);
-                out.push(id);
+            if let Some(id) = PrivateDeviceId::parse_compat(&bytes) {
+                out.push(id.into_inner());
             }
         }
         Ok(out)
@@ -308,10 +304,8 @@ impl MySqlDb {
 
         if let Some(r) = row {
             let bytes: Vec<u8> = r.get("device_id");
-            if bytes.len() == 16 {
-                let mut id = [0u8; 16];
-                id.copy_from_slice(&bytes);
-                return Ok(Some(id));
+            if let Some(id) = PrivateDeviceId::parse_compat(&bytes) {
+                return Ok(Some(id.into_inner()));
             }
         }
         Ok(None)

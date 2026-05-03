@@ -1,6 +1,302 @@
 use super::*;
 
 impl SqliteDb {
+    pub(super) async fn cleanup_expired_provider_pull_queue(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let selected = select_delivery_keys(
+            &mut tx,
+            "SELECT device_id, delivery_id FROM provider_pull_queue \
+             WHERE expires_at <= ? \
+             ORDER BY expires_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT ?",
+            before_ts,
+            limit,
+        )
+        .await?;
+        let mut deleted = 0usize;
+        for (device_id, delivery_id) in &selected {
+            deleted = deleted.saturating_add(
+                sqlx::query(
+                    "DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?",
+                )
+                .bind(device_id.as_slice())
+                .bind(delivery_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize,
+            );
+            delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
+        }
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
+    pub(super) async fn cleanup_stale_private_outbox(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let selected = select_delivery_keys(
+            &mut tx,
+            "SELECT device_id, delivery_id FROM private_outbox \
+             WHERE updated_at <= ? \
+             ORDER BY updated_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT ?",
+            before_ts,
+            limit,
+        )
+        .await?;
+        let mut deleted = 0usize;
+        for (device_id, delivery_id) in &selected {
+            deleted = deleted.saturating_add(
+                sqlx::query(
+                    "DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND updated_at <= ?",
+                )
+                    .bind(device_id.as_slice())
+                    .bind(delivery_id)
+                    .bind(before_ts)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected() as usize,
+            );
+            delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
+        }
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
+    pub(super) async fn cleanup_orphan_devices(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        self.cleanup_devices_by_query(
+            "SELECT device_id, device_key FROM devices d \
+             WHERE d.route_updated_at IS NOT NULL AND d.route_updated_at <= ? \
+               AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id) \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = d.device_id) \
+               AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = d.device_id) \
+               AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = d.device_id) \
+             ORDER BY d.route_updated_at ASC, d.device_key ASC LIMIT ?",
+            before_ts,
+            limit,
+        )
+        .await
+    }
+
+    pub(super) async fn cleanup_stale_subscriptions(
+        &self,
+        before_ts: i64,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let result = sqlx::query(
+            "UPDATE channel_subscriptions \
+             SET status = 'inactive', updated_at = ? \
+             WHERE rowid IN ( \
+               SELECT s.rowid FROM channel_subscriptions s \
+               JOIN devices d ON d.device_id = s.device_id \
+               WHERE s.status = 'active' AND s.updated_at <= ? \
+                 AND d.route_updated_at IS NOT NULL AND d.route_updated_at <= ? \
+                 AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = s.device_id) \
+                 AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = s.device_id) \
+                 AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = s.device_id) \
+               ORDER BY s.updated_at ASC LIMIT ? \
+             )",
+        )
+        .bind(now)
+        .bind(before_ts)
+        .bind(before_ts)
+        .bind(limit as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    pub(super) async fn cleanup_soft_deleted_devices(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        self.cleanup_devices_by_query(
+            "SELECT device_id, device_key FROM devices d \
+             WHERE NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status = 'active') \
+               AND EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status <> 'active' AND s.updated_at <= ?) \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = d.device_id) \
+               AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = d.device_id) \
+               AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = d.device_id) \
+             ORDER BY d.route_updated_at ASC, d.device_key ASC LIMIT ?",
+            before_ts,
+            limit,
+        )
+        .await
+    }
+
+    pub(super) async fn cleanup_orphan_channels(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let result = sqlx::query(
+            "DELETE FROM channels \
+             WHERE rowid IN ( \
+               SELECT c.rowid FROM channels c \
+               WHERE c.updated_at <= ? \
+                 AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = c.channel_id) \
+                 AND NOT EXISTS (SELECT 1 FROM channel_stats_daily st WHERE st.channel_id = c.channel_id AND st.messages_routed > 0) \
+               ORDER BY c.updated_at ASC LIMIT ? \
+             )",
+        )
+        .bind(before_ts)
+        .bind(limit as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    pub(super) async fn cleanup_audit_rows(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let route_rows = delete_limited_sqlite(
+            &self.pool,
+            "device_route_audit",
+            "created_at <= ?",
+            "created_at ASC",
+            before_ts,
+            limit,
+        )
+        .await?;
+        let subscription_rows = delete_limited_sqlite(
+            &self.pool,
+            "subscription_audit",
+            "created_at <= ?",
+            "created_at ASC",
+            before_ts,
+            limit,
+        )
+        .await?;
+        Ok(route_rows.saturating_add(subscription_rows))
+    }
+
+    pub(super) async fn cleanup_hourly_stats(
+        &self,
+        before_bucket: &str,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let gateway_rows = delete_limited_by_bucket_sqlite(
+            &self.pool,
+            "gateway_stats_hourly",
+            "bucket_hour",
+            before_bucket,
+            limit,
+        )
+        .await?;
+        let ops_rows = delete_limited_by_bucket_sqlite(
+            &self.pool,
+            "ops_stats_hourly",
+            "bucket_hour",
+            before_bucket,
+            limit,
+        )
+        .await?;
+        Ok(gateway_rows.saturating_add(ops_rows))
+    }
+
+    pub(super) async fn cleanup_daily_stats(
+        &self,
+        before_bucket: &str,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let channel_rows = delete_limited_by_bucket_sqlite(
+            &self.pool,
+            "channel_stats_daily",
+            "bucket_date",
+            before_bucket,
+            limit,
+        )
+        .await?;
+        let device_rows = delete_limited_by_bucket_sqlite(
+            &self.pool,
+            "device_stats_daily",
+            "bucket_date",
+            before_bucket,
+            limit,
+        )
+        .await?;
+        Ok(channel_rows.saturating_add(device_rows))
+    }
+
+    async fn cleanup_devices_by_query(
+        &self,
+        select_sql: &str,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let rows = sqlx::query(select_sql)
+            .bind(before_ts)
+            .bind(limit as i64)
+            .fetch_all(&mut *tx)
+            .await?;
+        let mut deleted = 0usize;
+        for row in rows {
+            let device_id: Vec<u8> = row.get("device_id");
+            let device_key: Option<String> = row.try_get("device_key").ok();
+            let delivery_ids = sqlx::query(
+                "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
+                 UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
+            )
+            .bind(device_id.as_slice())
+            .bind(device_id.as_slice())
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|row| row.get("delivery_id"))
+            .collect::<Vec<String>>();
+            for statement in [
+                "DELETE FROM channel_subscriptions WHERE device_id = ?",
+                "DELETE FROM provider_pull_queue WHERE device_id = ?",
+                "DELETE FROM private_bindings WHERE device_id = ?",
+                "DELETE FROM private_outbox WHERE device_id = ?",
+                "DELETE FROM private_sessions WHERE device_id = ?",
+                "DELETE FROM private_device_keys WHERE device_id = ?",
+            ] {
+                sqlx::query(statement)
+                    .bind(device_id.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            if let Some(device_key) = device_key.as_deref() {
+                sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
+                    .bind(device_key)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            deleted = deleted.saturating_add(
+                sqlx::query("DELETE FROM devices WHERE device_id = ?")
+                    .bind(device_id.as_slice())
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected() as usize,
+            );
+            for delivery_id in &delivery_ids {
+                delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
     pub(super) async fn reserve_delivery_dedupe(
         &self,
         dedupe_key: &str,
@@ -234,4 +530,74 @@ impl SqliteDb {
         .await?;
         Ok(())
     }
+}
+
+async fn select_delivery_keys(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    sql: &str,
+    before_ts: i64,
+    limit: usize,
+) -> StoreResult<Vec<(Vec<u8>, String)>> {
+    let rows = sqlx::query(sql)
+        .bind(before_ts)
+        .bind(limit as i64)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get("device_id"), row.get("delivery_id")))
+        .collect())
+}
+
+async fn delete_orphan_private_payload_in_sqlite_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    delivery_id: &str,
+) -> StoreResult<()> {
+    sqlx::query(
+        "DELETE FROM private_payloads \
+         WHERE delivery_id = ? \
+           AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+           AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
+    )
+    .bind(delivery_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn delete_limited_sqlite(
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    predicate: &str,
+    order_by: &str,
+    before_ts: i64,
+    limit: usize,
+) -> StoreResult<usize> {
+    let sql = format!(
+        "DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {predicate} ORDER BY {order_by} LIMIT ?)"
+    );
+    let result = sqlx::query(sql.as_str())
+        .bind(before_ts)
+        .bind(limit as i64)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() as usize)
+}
+
+async fn delete_limited_by_bucket_sqlite(
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    column: &str,
+    before_bucket: &str,
+    limit: usize,
+) -> StoreResult<usize> {
+    let sql = format!(
+        "DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {column} < ? ORDER BY {column} ASC LIMIT ?)"
+    );
+    let result = sqlx::query(sql.as_str())
+        .bind(before_bucket)
+        .bind(limit as i64)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() as usize)
 }

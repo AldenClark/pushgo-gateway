@@ -15,7 +15,8 @@ use crate::{
     routing::DeviceRegistry,
     stats::StatsCollector,
     storage::{
-        DeviceId, MaintenanceCleanupStats, Platform, PrivateMessage, PrivateOutboxEntry, Storage,
+        DeviceId, MaintenanceCleanupConfig, MaintenanceCleanupStats, Platform, PrivateMessage,
+        PrivateOutboxEntry, Storage,
     },
     util::{decode_lower_hex_128, encode_lower_hex_128},
 };
@@ -74,12 +75,14 @@ pub struct PrivateConfig {
     pub retransmit_max_retries: u8,
     pub hot_cache_capacity: usize,
     pub default_ttl_secs: i64,
+    pub maintenance_cleanup: MaintenanceCleanupConfig,
     pub gateway_token: Option<String>,
 }
 
 impl PrivateConfig {
     pub fn normalized(mut self) -> Self {
         self.default_ttl_secs = Self::normalize_default_ttl_secs(self.default_ttl_secs);
+        self.maintenance_cleanup = self.maintenance_cleanup.normalized();
         self
     }
 

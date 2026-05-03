@@ -10,34 +10,73 @@ impl PrivateHub {
         // Serialize capacity check + enqueue to avoid TOCTOU over-admission.
         let _enqueue_gate = self.enqueue_gate.lock().await;
         let now = chrono::Utc::now().timestamp_millis();
-        let device_pending = self
+        let mut private_outbox_pruned = 0usize;
+        let mut device_pending = self
             .store
             .count_private_outbox_for_device(device_id)
             .await
             .map_err(|err| crate::Error::Internal(err.to_string()))?;
-        if device_pending >= self.max_pending_per_device {
-            return Err(crate::Error::TooBusy);
+        while device_pending >= self.max_pending_per_device {
+            let Some(evicted_delivery_id) = self
+                .store
+                .evict_oldest_pending_private_outbox_for_device(device_id)
+                .await
+                .map_err(|err| crate::Error::Internal(err.to_string()))?
+            else {
+                return Err(crate::Error::TooBusy);
+            };
+            private_outbox_pruned = private_outbox_pruned.saturating_add(1);
+            emit_private_outbox_evicted(
+                "per_device_capacity",
+                device_id,
+                evicted_delivery_id.as_str(),
+            );
+            device_pending = self
+                .store
+                .count_private_outbox_for_device(device_id)
+                .await
+                .map_err(|err| crate::Error::Internal(err.to_string()))?;
         }
         let mut total_pending = self
             .store
             .count_private_outbox_total()
             .await
             .map_err(|err| crate::Error::Internal(err.to_string()))?;
-        let mut private_outbox_pruned = 0usize;
-        if total_pending >= self.global_max_pending {
-            private_outbox_pruned = self
-                .store
-                .cleanup_private_expired_data(now, 4096)
-                .await
-                .map_err(|err| crate::Error::Internal(err.to_string()))?;
+        while total_pending >= self.global_max_pending {
+            private_outbox_pruned = private_outbox_pruned.saturating_add(
+                self
+                    .store
+                    .cleanup_private_expired_data(now, 4096)
+                    .await
+                    .map_err(|err| crate::Error::Internal(err.to_string()))?,
+            );
             total_pending = self
                 .store
                 .count_private_outbox_total()
                 .await
                 .map_err(|err| crate::Error::Internal(err.to_string()))?;
-            if total_pending >= self.global_max_pending {
-                return Err(crate::Error::TooBusy);
+            if total_pending < self.global_max_pending {
+                break;
             }
+            let Some((evicted_device_id, evicted_delivery_id)) = self
+                .store
+                .evict_oldest_pending_private_outbox_global()
+                .await
+                .map_err(|err| crate::Error::Internal(err.to_string()))?
+            else {
+                return Err(crate::Error::TooBusy);
+            };
+            private_outbox_pruned = private_outbox_pruned.saturating_add(1);
+            emit_private_outbox_evicted(
+                "global_capacity",
+                evicted_device_id,
+                evicted_delivery_id.as_str(),
+            );
+            total_pending = self
+                .store
+                .count_private_outbox_total()
+                .await
+                .map_err(|err| crate::Error::Internal(err.to_string()))?;
         }
 
         let should_persist_message = !self.hot_messages.contains_key(delivery_id);
@@ -235,10 +274,10 @@ impl PrivateHub {
     pub async fn run_maintenance_cleanup(
         &self,
         now: i64,
-        dedupe_before: i64,
+        config: MaintenanceCleanupConfig,
     ) -> Result<MaintenanceCleanupStats, crate::Error> {
         self.store
-            .run_maintenance_cleanup(now, dedupe_before)
+            .run_maintenance_cleanup(now, config)
             .await
             .map_err(|err| crate::Error::Internal(err.to_string()))
     }
@@ -312,4 +351,12 @@ impl PrivateHub {
         }
         Ok(message)
     }
+}
+
+fn emit_private_outbox_evicted(reason: &'static str, device_id: DeviceId, delivery_id: &str) {
+    crate::util::TraceEvent::new("private.outbox_evicted")
+        .field_str("reason", reason)
+        .field_redacted("device_id", encode_lower_hex_128(&device_id))
+        .field_redacted("delivery_id", delivery_id)
+        .emit();
 }

@@ -100,6 +100,69 @@ impl SqliteDb {
         Ok(ids)
     }
 
+    pub(super) async fn evict_oldest_pending_private_outbox_for_device(
+        &self,
+        device_id: DeviceId,
+    ) -> StoreResult<Option<String>> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let row = sqlx::query(
+            "SELECT delivery_id FROM private_outbox \
+             WHERE device_id = ? AND status = ? \
+             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT 1",
+        )
+        .bind(&device_id[..])
+        .bind(OUTBOX_STATUS_PENDING)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let delivery_id: String = row.get("delivery_id");
+        sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+            .bind(&device_id[..])
+            .bind(&delivery_id)
+            .execute(&mut *tx)
+            .await?;
+        delete_unreferenced_private_payload(&mut tx, &delivery_id).await?;
+        tx.commit().await?;
+        Ok(Some(delivery_id))
+    }
+
+    pub(super) async fn evict_oldest_pending_private_outbox_global(
+        &self,
+    ) -> StoreResult<Option<(DeviceId, String)>> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let row = sqlx::query(
+            "SELECT device_id, delivery_id FROM private_outbox \
+             WHERE status = ? \
+             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT 1",
+        )
+        .bind(OUTBOX_STATUS_PENDING)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let raw_device_id: Vec<u8> = row.get("device_id");
+        let mut device_id = [0u8; 16];
+        device_id.copy_from_slice(&raw_device_id);
+        let delivery_id: String = row.get("delivery_id");
+        sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+            .bind(&device_id[..])
+            .bind(&delivery_id)
+            .execute(&mut *tx)
+            .await?;
+        delete_unreferenced_private_payload(&mut tx, &delivery_id).await?;
+        tx.commit().await?;
+        Ok(Some((device_id, delivery_id)))
+    }
+
     pub(super) async fn list_private_outbox_due(
         &self,
         before_ts: i64,
@@ -295,4 +358,20 @@ impl SqliteDb {
                 .await?;
         Ok(count as usize)
     }
+}
+
+async fn delete_unreferenced_private_payload(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    delivery_id: &str,
+) -> StoreResult<()> {
+    sqlx::query(
+        "DELETE FROM private_payloads \
+         WHERE delivery_id = ? \
+           AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+           AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
+    )
+    .bind(delivery_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }

@@ -350,6 +350,134 @@ pub struct Args {
     )]
     pub private_default_ttl_secs: i64,
 
+    /// Batch size for deleting expired provider pull queue rows.
+    #[arg(
+        env = "PUSHGO_PROVIDER_PULL_EXPIRED_BATCH",
+        long = "provider-pull-expired-batch",
+        default_value = "2048"
+    )]
+    pub provider_pull_expired_batch: usize,
+
+    /// Hard-delete private outbox rows older than this many days.
+    #[arg(
+        env = "PUSHGO_PRIVATE_STALE_OUTBOX_TTL_DAYS",
+        long = "private-stale-outbox-ttl-days",
+        default_value = "30"
+    )]
+    pub private_stale_outbox_ttl_days: i64,
+
+    /// Hard-delete route-only devices with no live references after this many days.
+    #[arg(
+        env = "PUSHGO_ORPHAN_DEVICE_TTL_DAYS",
+        long = "orphan-device-ttl-days",
+        default_value = "30"
+    )]
+    pub orphan_device_ttl_days: i64,
+
+    /// Soft-unsubscribe inactive subscribed devices after this many days when enabled.
+    #[arg(
+        env = "PUSHGO_STALE_SUBSCRIPTION_TTL_DAYS",
+        long = "stale-subscription-ttl-days",
+        default_value = "120"
+    )]
+    pub stale_subscription_ttl_days: i64,
+
+    /// Hard-delete soft-unsubscribed devices with no references after this many days when enabled.
+    #[arg(
+        env = "PUSHGO_SOFT_DELETED_DEVICE_TTL_DAYS",
+        long = "soft-deleted-device-ttl-days",
+        default_value = "30"
+    )]
+    pub soft_deleted_device_ttl_days: i64,
+
+    /// Hard-delete empty channels after this many days when enabled.
+    #[arg(
+        env = "PUSHGO_ORPHAN_CHANNEL_TTL_DAYS",
+        long = "orphan-channel-ttl-days",
+        default_value = "180"
+    )]
+    pub orphan_channel_ttl_days: i64,
+
+    /// Keep sent dispatch/semantic dedupe rows for this many days.
+    #[arg(
+        env = "PUSHGO_DEDUPE_RETENTION_DAYS",
+        long = "dedupe-retention-days",
+        default_value = "30"
+    )]
+    pub dedupe_retention_days: i64,
+
+    /// Keep audit rows for this many days when retention cleanup is enabled.
+    #[arg(
+        env = "PUSHGO_AUDIT_RETENTION_DAYS",
+        long = "audit-retention-days",
+        default_value = "180"
+    )]
+    pub audit_retention_days: i64,
+
+    /// Keep hourly stats rows for this many days when stats retention cleanup is enabled.
+    #[arg(
+        env = "PUSHGO_HOURLY_STATS_RETENTION_DAYS",
+        long = "hourly-stats-retention-days",
+        default_value = "90"
+    )]
+    pub hourly_stats_retention_days: i64,
+
+    /// Keep daily stats rows for this many days when stats retention cleanup is enabled.
+    #[arg(
+        env = "PUSHGO_DAILY_STATS_RETENTION_DAYS",
+        long = "daily-stats-retention-days",
+        default_value = "400"
+    )]
+    pub daily_stats_retention_days: i64,
+
+    /// Batch size for maintenance deletes other than provider pull expiry.
+    #[arg(
+        env = "PUSHGO_MAINTENANCE_DELETE_BATCH",
+        long = "maintenance-delete-batch",
+        default_value = "256"
+    )]
+    pub maintenance_delete_batch: usize,
+
+    /// Enable inactive-subscription soft cleanup.
+    #[arg(
+        env = "PUSHGO_STALE_SUBSCRIPTION_CLEANUP_ENABLED",
+        long = "stale-subscription-cleanup-enabled",
+        default_value = "false"
+    )]
+    pub stale_subscription_cleanup_enabled: bool,
+
+    /// Enable hard cleanup for devices whose subscriptions were already soft-deleted.
+    #[arg(
+        env = "PUSHGO_SOFT_DELETED_DEVICE_CLEANUP_ENABLED",
+        long = "soft-deleted-device-cleanup-enabled",
+        default_value = "false"
+    )]
+    pub soft_deleted_device_cleanup_enabled: bool,
+
+    /// Enable empty-channel cleanup.
+    #[arg(
+        env = "PUSHGO_ORPHAN_CHANNEL_CLEANUP_ENABLED",
+        long = "orphan-channel-cleanup-enabled",
+        default_value = "false"
+    )]
+    pub orphan_channel_cleanup_enabled: bool,
+
+    /// Enable audit retention cleanup.
+    #[arg(
+        env = "PUSHGO_AUDIT_RETENTION_CLEANUP_ENABLED",
+        long = "audit-retention-cleanup-enabled",
+        default_value = "false"
+    )]
+    pub audit_retention_cleanup_enabled: bool,
+
+    /// Enable stats retention cleanup.
+    #[arg(
+        env = "PUSHGO_STATS_RETENTION_CLEANUP_ENABLED",
+        long = "stats-retention-cleanup-enabled",
+        default_value = "false"
+    )]
+    pub stats_retention_cleanup_enabled: bool,
+
     /// Enable MCP endpoint (`/mcp`) and related routes.
     #[arg(
         env = "PUSHGO_MCP_ENABLED",

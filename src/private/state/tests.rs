@@ -1,5 +1,6 @@
 use super::*;
 use crate::routing::derive_private_device_id;
+use crate::storage::{MaintenanceCleanupConfig, OUTBOX_STATUS_CLAIMED};
 use tempfile::{TempDir, tempdir};
 
 struct StateTestContext {
@@ -48,6 +49,7 @@ fn test_private_config() -> PrivateConfig {
         retransmit_max_retries: 3,
         hot_cache_capacity: 64,
         default_ttl_secs: 60,
+        maintenance_cleanup: MaintenanceCleanupConfig::default(),
         gateway_token: None,
     }
     .normalized()
@@ -93,5 +95,134 @@ async fn begin_shutdown_marks_state_and_wakes_waiters() {
     assert!(
         ctx.state.session_coord_owner().starts_with("gateway-"),
         "session coordinator owner should remain gateway-scoped"
+    );
+}
+
+#[tokio::test]
+async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_full() {
+    let ctx = StateTestContext::new().await;
+    let device_id = derive_private_device_id("capacity-evict-device");
+    let now = chrono::Utc::now().timestamp_millis();
+
+    for index in 0..ctx.state.config.max_pending_per_device {
+        ctx.state
+            .enqueue_private_delivery(
+                device_id,
+                &format!("delivery-old-{index:02}"),
+                vec![index as u8],
+                now + index as i64,
+                now + 600_000,
+            )
+            .await
+            .expect("initial enqueue should succeed");
+    }
+
+    ctx.state
+        .enqueue_private_delivery(
+            device_id,
+            "delivery-new",
+            vec![255],
+            now + 10_000,
+            now + 600_000,
+        )
+        .await
+        .expect("new enqueue should evict oldest pending instead of failing");
+
+    let store = ctx.state.hub.store();
+    assert_eq!(
+        store
+            .count_private_outbox_for_device(device_id)
+            .await
+            .expect("outbox count should succeed"),
+        ctx.state.config.max_pending_per_device
+    );
+    assert!(
+        store
+            .load_private_outbox_entry(device_id, "delivery-old-00")
+            .await
+            .expect("oldest lookup should succeed")
+            .is_none(),
+        "oldest pending entry should be evicted"
+    );
+    assert!(
+        store
+            .load_private_outbox_entry(device_id, "delivery-old-01")
+            .await
+            .expect("next oldest lookup should succeed")
+            .is_some(),
+        "only one pending entry should be evicted"
+    );
+    assert!(
+        store
+            .load_private_outbox_entry(device_id, "delivery-new")
+            .await
+            .expect("new delivery lookup should succeed")
+            .is_some(),
+        "new delivery should be enqueued"
+    );
+}
+
+#[tokio::test]
+async fn enqueue_private_delivery_does_not_evict_claimed_entries_for_capacity() {
+    let ctx = StateTestContext::new().await;
+    let device_id = derive_private_device_id("capacity-claimed-device");
+    let now = chrono::Utc::now().timestamp_millis();
+    let store = ctx.state.hub.store();
+
+    for index in 0..ctx.state.config.max_pending_per_device {
+        let delivery_id = format!("delivery-claimed-{index:02}");
+        let message = PrivateMessage {
+            payload: vec![index as u8],
+            size: 1,
+            sent_at: now + index as i64,
+            expires_at: now + 600_000,
+        };
+        store
+            .insert_private_message(&delivery_id, &message)
+            .await
+            .expect("claimed message insert should succeed");
+        store
+            .enqueue_private_outbox(
+                device_id,
+                &PrivateOutboxEntry {
+                    delivery_id,
+                    status: OUTBOX_STATUS_CLAIMED.to_string(),
+                    attempts: 0,
+                    occurred_at: now + index as i64,
+                    created_at: now + index as i64,
+                    claimed_at: Some(now + index as i64),
+                    first_sent_at: None,
+                    last_attempt_at: None,
+                    acked_at: None,
+                    fallback_sent_at: None,
+                    next_attempt_at: now + 30_000,
+                    last_error_code: None,
+                    last_error_detail: None,
+                    updated_at: now + index as i64,
+                },
+            )
+            .await
+            .expect("claimed outbox enqueue should succeed");
+    }
+
+    let err = ctx
+        .state
+        .enqueue_private_delivery(
+            device_id,
+            "delivery-new",
+            vec![255],
+            now + 10_000,
+            now + 600_000,
+        )
+        .await
+        .expect_err("capacity full with no pending entries should remain too busy");
+    assert!(matches!(err, crate::Error::TooBusy));
+    assert!(
+        store
+            .load_private_outbox_entry(device_id, "delivery-new")
+            .await
+            .expect("new delivery lookup should succeed")
+            .is_none(),
+        "claimed entries must not be evicted to admit new delivery"
     );
 }
