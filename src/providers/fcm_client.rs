@@ -7,7 +7,8 @@ use tokio::time::sleep;
 use crate::{
     Error,
     providers::{
-        BoxFuture, DispatchResult, FcmClient, FcmTokenProvider, TokenInfo, fcm::FcmPayload,
+        BoxFuture, DispatchResult, FcmClient, FcmTokenProvider, ProviderFailure,
+        ProviderFailureKind, TokenInfo, error::trimmed_body_text, fcm::FcmPayload,
     },
 };
 
@@ -48,13 +49,7 @@ impl FcmService {
             None => match payload.encoded_body(device_token) {
                 Ok(body) => body,
                 Err(err) => {
-                    return DispatchResult {
-                        success: false,
-                        status_code: 0,
-                        error: Some(Error::Internal(err.to_string())),
-                        invalid_token: false,
-                        payload_too_large: false,
-                    };
+                    return DispatchResult::from_error(0, Error::Internal(err.to_string()));
                 }
             },
         };
@@ -71,15 +66,7 @@ impl FcmService {
                 self.token_provider.token_info().await
             } {
                 Ok(access) => access,
-                Err(err) => {
-                    return DispatchResult {
-                        success: false,
-                        status_code: 0,
-                        error: Some(err),
-                        invalid_token: false,
-                        payload_too_large: false,
-                    };
-                }
+                Err(err) => return DispatchResult::from_error(0, err),
             };
 
             let dispatch = self.send_once(&access, body.as_ref()).await;
@@ -87,8 +74,7 @@ impl FcmService {
                 return dispatch;
             }
 
-            let status_code = dispatch.status_code;
-            if (status_code == 401 || status_code == 403)
+            if dispatch.should_refresh_credentials()
                 && !force_fresh_token
                 && attempt < FCM_MAX_RETRY
             {
@@ -96,7 +82,7 @@ impl FcmService {
                 continue;
             }
 
-            let retryable = is_fcm_retryable_status(status_code) && attempt < FCM_MAX_RETRY;
+            let retryable = dispatch.is_retryable() && attempt < FCM_MAX_RETRY;
             if !retryable {
                 return dispatch;
             }
@@ -123,15 +109,7 @@ impl FcmService {
             .await
         {
             Ok(resp) => resp,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::Internal(err.to_string())),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
+            Err(err) => return DispatchResult::transport(Error::Internal(err.to_string())),
         };
 
         let status = response.status();
@@ -139,28 +117,10 @@ impl FcmService {
         let response_body = response.bytes().await.unwrap_or_default();
 
         if status.is_success() {
-            return DispatchResult {
-                success: true,
-                status_code,
-                error: None,
-                invalid_token: false,
-                payload_too_large: false,
-            };
+            return DispatchResult::success(status_code);
         }
 
-        let message = body_message(&response_body)
-            .unwrap_or_else(|| format!("FCM error, status {status_code}"));
-        DispatchResult {
-            success: false,
-            status_code,
-            error: Some(Error::Upstream {
-                provider: "FCM",
-                status: status_code,
-                message,
-            }),
-            invalid_token: is_fcm_token_invalid(status_code, &response_body),
-            payload_too_large: is_fcm_payload_too_large(status_code, &response_body),
-        }
+        DispatchResult::upstream("FCM", classify_fcm_failure(status_code, &response_body))
     }
 
     pub async fn token_info(&self) -> Result<TokenInfo, Error> {
@@ -174,31 +134,41 @@ impl FcmService {
     }
 }
 
-fn is_fcm_retryable_status(status_code: u16) -> bool {
-    status_code == 0 || matches!(status_code, 429 | 500 | 503 | 504)
+fn classify_fcm_failure(status_code: u16, body: &[u8]) -> ProviderFailure {
+    let message =
+        trimmed_body_text(body).unwrap_or_else(|| format!("FCM error, status {status_code}"));
+    let kind = if is_fcm_token_invalid(status_code, body) {
+        ProviderFailureKind::InvalidToken
+    } else if is_fcm_payload_too_large(status_code, body) {
+        ProviderFailureKind::PayloadTooLarge
+    } else if matches!(status_code, 401 | 403) {
+        ProviderFailureKind::CredentialsExpired
+    } else if status_code == 429 {
+        ProviderFailureKind::RateLimited
+    } else if matches!(status_code, 500 | 503 | 504) {
+        ProviderFailureKind::TemporarilyUnavailable
+    } else {
+        ProviderFailureKind::Rejected
+    };
+    ProviderFailure::new(status_code, kind, message)
 }
 
 fn is_fcm_payload_too_large(status_code: u16, body: &[u8]) -> bool {
-    if status_code != 400 {
-        return false;
-    }
-    let Some(error) = parse_fcm_error(body).and_then(|value| value.error) else {
-        return false;
-    };
-    let invalid_argument = error
-        .status
-        .as_deref()
-        .map(|status| status.eq_ignore_ascii_case("INVALID_ARGUMENT"))
-        .unwrap_or(false);
-    if !invalid_argument {
-        return false;
-    }
-    let message = error
-        .message
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    message.contains("message too big")
+    status_code == 400
+        && parse_fcm_error(body)
+            .and_then(|value| value.error)
+            .is_some_and(|error| {
+                error
+                    .status
+                    .as_deref()
+                    .is_some_and(|status| status.eq_ignore_ascii_case("INVALID_ARGUMENT"))
+                    && error
+                        .message
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase()
+                        .contains("message too big")
+            })
 }
 impl FcmClient for FcmService {
     fn send_to_device<'a>(
@@ -271,15 +241,6 @@ fn normalize_base_url(raw: &str) -> Result<String, Error> {
     Ok(trimmed.to_string())
 }
 
-fn body_message(body: &[u8]) -> Option<String> {
-    let trimmed = String::from_utf8_lossy(body).trim().to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
 fn parse_fcm_error(body: &[u8]) -> Option<FcmErrorEnvelope> {
     serde_json::from_slice(body).ok()
 }
@@ -301,4 +262,40 @@ struct FcmErrorBody {
 struct FcmErrorDetail {
     #[serde(rename = "errorCode")]
     error_code: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProviderFailureKind, classify_fcm_failure};
+
+    #[test]
+    fn fcm_classifies_unregistered_token() {
+        let body = br#"{
+            "error":{
+                "status":"NOT_FOUND",
+                "message":"Requested entity was not found.",
+                "details":[{"errorCode":"UNREGISTERED"}]
+            }
+        }"#;
+        let failure = classify_fcm_failure(404, body);
+        assert_eq!(failure.kind, ProviderFailureKind::InvalidToken);
+    }
+
+    #[test]
+    fn fcm_classifies_payload_too_large() {
+        let body = br#"{
+            "error":{
+                "status":"INVALID_ARGUMENT",
+                "message":"Message too big"
+            }
+        }"#;
+        let failure = classify_fcm_failure(400, body);
+        assert_eq!(failure.kind, ProviderFailureKind::PayloadTooLarge);
+    }
+
+    #[test]
+    fn fcm_classifies_retryable_server_failure() {
+        let failure = classify_fcm_failure(503, b"");
+        assert_eq!(failure.kind, ProviderFailureKind::TemporarilyUnavailable);
+    }
 }

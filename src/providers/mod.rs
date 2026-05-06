@@ -4,12 +4,15 @@ use crate::{Error, storage::Platform};
 
 pub mod apns;
 pub mod apns_client;
+pub mod error;
 pub mod fcm;
 pub mod fcm_client;
 pub mod wns;
 pub mod wns_client;
 
 pub use apns_client::ApnsService;
+pub(crate) use error::ProviderFailure;
+pub use error::ProviderFailureKind;
 pub use fcm_client::FcmService;
 pub use wns_client::WnsService;
 
@@ -33,8 +36,75 @@ pub struct DispatchResult {
     pub status_code: u16,
     #[allow(dead_code)]
     pub error: Option<Error>,
-    pub invalid_token: bool,
-    pub payload_too_large: bool,
+    pub failure_kind: Option<ProviderFailureKind>,
+}
+
+impl DispatchResult {
+    pub(crate) fn success(status_code: u16) -> Self {
+        Self {
+            success: true,
+            status_code,
+            error: None,
+            failure_kind: None,
+        }
+    }
+
+    pub(crate) fn from_error(status_code: u16, error: Error) -> Self {
+        Self {
+            success: false,
+            status_code,
+            error: Some(error),
+            failure_kind: None,
+        }
+    }
+
+    pub(crate) fn transport(error: Error) -> Self {
+        Self {
+            success: false,
+            status_code: 0,
+            error: Some(error),
+            failure_kind: Some(ProviderFailureKind::Transport),
+        }
+    }
+
+    pub(crate) fn upstream(provider: &'static str, failure: ProviderFailure) -> Self {
+        Self {
+            success: false,
+            status_code: failure.status_code,
+            error: Some(Error::Upstream {
+                provider,
+                status: failure.status_code,
+                message: failure.message,
+            }),
+            failure_kind: Some(failure.kind),
+        }
+    }
+
+    pub(crate) fn should_refresh_credentials(&self) -> bool {
+        self.failure_kind
+            .is_some_and(ProviderFailureKind::should_refresh_credentials)
+    }
+
+    pub(crate) fn is_retryable(&self) -> bool {
+        self.failure_kind
+            .is_some_and(ProviderFailureKind::is_retryable)
+    }
+
+    pub(crate) fn is_invalid_token(&self) -> bool {
+        self.failure_kind
+            .is_some_and(ProviderFailureKind::is_invalid_token)
+    }
+
+    pub(crate) fn is_payload_too_large(&self) -> bool {
+        self.failure_kind
+            .is_some_and(ProviderFailureKind::is_payload_too_large)
+    }
+
+    pub(crate) fn failure_kind_name(&self) -> &'static str {
+        self.failure_kind
+            .map(ProviderFailureKind::as_str)
+            .unwrap_or("none")
+    }
 }
 
 pub trait ApnsTokenProvider: Send + Sync {

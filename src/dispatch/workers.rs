@@ -73,7 +73,7 @@ impl DispatchWorkerPool {
                         .await;
                     if !dispatch.success
                         && actual_path == ProviderDeliveryPath::Direct
-                        && dispatch.payload_too_large
+                        && dispatch.is_payload_too_large()
                         && job.wakeup_payload_within_limit
                         && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                     {
@@ -110,7 +110,7 @@ impl DispatchWorkerPool {
                             &dispatch,
                         );
                     }
-                    if dispatch.invalid_token {
+                    if dispatch.is_invalid_token() {
                         let _ = runtime
                             .store
                             .unsubscribe_channel_for_device_key(
@@ -165,7 +165,7 @@ impl DispatchWorkerPool {
                         .await;
                     if !dispatch.success
                         && actual_path == ProviderDeliveryPath::Direct
-                        && dispatch.payload_too_large
+                        && dispatch.is_payload_too_large()
                         && job.wakeup_payload_within_limit
                         && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                     {
@@ -206,7 +206,7 @@ impl DispatchWorkerPool {
                             &dispatch,
                         );
                     }
-                    if dispatch.invalid_token {
+                    if dispatch.is_invalid_token() {
                         let _ = runtime
                             .store
                             .unsubscribe_channel_for_device_key(
@@ -253,7 +253,7 @@ impl DispatchWorkerPool {
                         .await;
                     if !dispatch.success
                         && actual_path == ProviderDeliveryPath::Direct
-                        && dispatch.payload_too_large
+                        && dispatch.is_payload_too_large()
                         && job.wakeup_payload_within_limit
                         && let Some(wakeup_payload) = job.wakeup_payload.as_ref()
                     {
@@ -285,7 +285,7 @@ impl DispatchWorkerPool {
                             &dispatch,
                         );
                     }
-                    if dispatch.invalid_token {
+                    if dispatch.is_invalid_token() {
                         let _ = runtime
                             .store
                             .unsubscribe_channel_for_device_key(

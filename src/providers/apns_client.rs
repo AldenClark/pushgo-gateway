@@ -7,7 +7,8 @@ use tokio::{sync::Semaphore, time::sleep};
 use crate::{
     Error,
     providers::{
-        ApnsClient, ApnsTokenProvider, BoxFuture, DispatchResult, TokenInfo, apns::ApnsPayload,
+        ApnsClient, ApnsTokenProvider, BoxFuture, DispatchResult, ProviderFailure,
+        ProviderFailureKind, TokenInfo, apns::ApnsPayload, error::trimmed_body_text,
     },
     storage::Platform,
 };
@@ -74,26 +75,16 @@ impl ApnsService {
             Platform::MACOS => MACOS_TOPIC,
             Platform::WATCHOS => WATCHOS_TOPIC,
             Platform::ANDROID => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::validation(
-                        "android platform must be delivered via FCM",
-                    )),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
+                return DispatchResult::from_error(
+                    0,
+                    Error::validation("android platform must be delivered via FCM"),
+                );
             }
             Platform::WINDOWS => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::validation(
-                        "windows platform must be delivered via WNS",
-                    )),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
+                return DispatchResult::from_error(
+                    0,
+                    Error::validation("windows platform must be delivered via WNS"),
+                );
             }
         };
         let topic = match payload.topic_override() {
@@ -121,10 +112,8 @@ impl ApnsService {
                 .send_once(device_token, topic, payload.clone(), collapse_id.clone())
                 .await;
 
-            let retryable = (dispatch.status_code == 0
-                || matches!(dispatch.status_code, 429 | 500 | 503))
-                && attempt < APNS_MAX_RETRY
-                && !dispatch.success;
+            let retryable =
+                dispatch.is_retryable() && attempt < APNS_MAX_RETRY && !dispatch.success;
 
             if retryable {
                 sleep(backoff).await;
@@ -148,41 +137,20 @@ impl ApnsService {
         let _permit = match self.limiter.clone().acquire_owned().await {
             Ok(p) => p,
             Err(_) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::Internal(
-                        "APNs concurrency limiter closed".to_string(),
-                    )),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
+                return DispatchResult::from_error(
+                    0,
+                    Error::Internal("APNs concurrency limiter closed".to_string()),
+                );
             }
         };
         let mut auth_token = match self.current_token().await {
             Ok(token) => token,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(err),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
+            Err(err) => return DispatchResult::from_error(0, err),
         };
 
         let body = match payload.encoded_body() {
             Ok(body) => body,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::Internal(err.to_string())),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
+            Err(err) => return DispatchResult::from_error(0, Error::Internal(err.to_string())),
         };
 
         let mut request = self
@@ -202,15 +170,7 @@ impl ApnsService {
 
         let mut response = match request.body(body.as_ref().to_vec()).send().await {
             Ok(resp) => resp,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::Internal(err.to_string())),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
+            Err(err) => return DispatchResult::transport(Error::Internal(err.to_string())),
         };
 
         let mut status = response.status();
@@ -243,13 +203,7 @@ impl ApnsService {
                     response = match request.body(body.as_ref().to_vec()).send().await {
                         Ok(resp) => resp,
                         Err(err) => {
-                            return DispatchResult {
-                                success: false,
-                                status_code: 0,
-                                error: Some(Error::Internal(err.to_string())),
-                                invalid_token: false,
-                                payload_too_large: false,
-                            };
+                            return DispatchResult::transport(Error::Internal(err.to_string()));
                         }
                     };
 
@@ -258,47 +212,17 @@ impl ApnsService {
                     response_body = response.bytes().await.unwrap_or_default();
                     reason = parse_apns_reason(&response_body);
                 }
-                Err(err) => {
-                    return DispatchResult {
-                        success: false,
-                        status_code,
-                        error: Some(err),
-                        invalid_token: false,
-                        payload_too_large: false,
-                    };
-                }
+                Err(err) => return DispatchResult::from_error(status_code, err),
             }
         }
 
         if status == StatusCode::OK {
-            DispatchResult {
-                success: true,
-                status_code,
-                error: None,
-                invalid_token: false,
-                payload_too_large: false,
-            }
+            DispatchResult::success(status_code)
         } else {
-            // Prefer APNs reason, then fall back to the raw body or status.
-            let message = if let Some(r) = reason.as_deref() {
-                r.to_string()
-            } else if let Some(body_text) = response_body_text(&response_body) {
-                body_text
-            } else {
-                format!("APNs error, status {status_code}")
-            };
-
-            DispatchResult {
-                success: false,
-                status_code,
-                error: Some(Error::Upstream {
-                    provider: "APNs",
-                    status: status_code,
-                    message,
-                }),
-                invalid_token: is_apns_token_invalid(status, reason.as_deref()),
-                payload_too_large: is_apns_payload_too_large(status, reason.as_deref()),
-            }
+            DispatchResult::upstream(
+                "APNs",
+                classify_apns_failure(status, reason.as_deref(), &response_body),
+            )
         }
     }
 
@@ -311,8 +235,44 @@ impl ApnsService {
     }
 }
 
-fn is_apns_payload_too_large(status: StatusCode, reason: Option<&str>) -> bool {
-    status == StatusCode::PAYLOAD_TOO_LARGE && matches!(reason, Some("PayloadTooLarge"))
+fn classify_apns_failure(
+    status: StatusCode,
+    reason: Option<&str>,
+    response_body: &[u8],
+) -> ProviderFailure {
+    let status_code = status.as_u16();
+    let message = if let Some(reason) = reason {
+        reason.to_string()
+    } else if let Some(body_text) = trimmed_body_text(response_body) {
+        body_text
+    } else {
+        format!("APNs error, status {status_code}")
+    };
+    let kind = if matches!(
+        reason,
+        Some("BadDeviceToken" | "DeviceTokenNotForTopic" | "Unregistered" | "InvalidToken")
+    ) || status == StatusCode::GONE
+    {
+        ProviderFailureKind::InvalidToken
+    } else if status == StatusCode::PAYLOAD_TOO_LARGE && matches!(reason, Some("PayloadTooLarge")) {
+        ProviderFailureKind::PayloadTooLarge
+    } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        && matches!(reason, Some("ExpiredProviderToken"))
+    {
+        ProviderFailureKind::CredentialsExpired
+    } else if status == StatusCode::TOO_MANY_REQUESTS {
+        ProviderFailureKind::RateLimited
+    } else if matches!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR | StatusCode::SERVICE_UNAVAILABLE
+    ) {
+        ProviderFailureKind::TemporarilyUnavailable
+    } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        ProviderFailureKind::Unauthorized
+    } else {
+        ProviderFailureKind::Rejected
+    };
+    ProviderFailure::new(status_code, kind, message)
 }
 impl ApnsClient for ApnsService {
     fn send_to_device<'a>(
@@ -347,24 +307,39 @@ fn parse_apns_reason(body: &[u8]) -> Option<String> {
     parsed.reason
 }
 
-fn response_body_text(body: &[u8]) -> Option<String> {
-    let trimmed = String::from_utf8_lossy(body).trim().to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
+#[cfg(test)]
+mod tests {
+    use reqwest::StatusCode;
 
-fn is_apns_token_invalid(status: StatusCode, reason: Option<&str>) -> bool {
-    if status == StatusCode::GONE {
-        return true;
-    }
-    if let Some(reason) = reason {
-        return matches!(
-            reason,
-            "BadDeviceToken" | "DeviceTokenNotForTopic" | "Unregistered" | "InvalidToken"
+    use super::{ProviderFailureKind, classify_apns_failure};
+
+    #[test]
+    fn apns_classifies_expired_provider_token() {
+        let failure = classify_apns_failure(
+            StatusCode::UNAUTHORIZED,
+            Some("ExpiredProviderToken"),
+            br#"{"reason":"ExpiredProviderToken"}"#,
         );
+        assert_eq!(failure.kind, ProviderFailureKind::CredentialsExpired);
     }
-    false
+
+    #[test]
+    fn apns_classifies_invalid_device_token() {
+        let failure = classify_apns_failure(
+            StatusCode::BAD_REQUEST,
+            Some("BadDeviceToken"),
+            br#"{"reason":"BadDeviceToken"}"#,
+        );
+        assert_eq!(failure.kind, ProviderFailureKind::InvalidToken);
+    }
+
+    #[test]
+    fn apns_classifies_payload_too_large() {
+        let failure = classify_apns_failure(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Some("PayloadTooLarge"),
+            br#"{"reason":"PayloadTooLarge"}"#,
+        );
+        assert_eq!(failure.kind, ProviderFailureKind::PayloadTooLarge);
+    }
 }

@@ -6,7 +6,8 @@ use tokio::time::sleep;
 use crate::{
     Error,
     providers::{
-        BoxFuture, DispatchResult, TokenInfo, WnsClient, WnsTokenProvider, wns::WnsPayload,
+        BoxFuture, DispatchResult, ProviderFailure, ProviderFailureKind, TokenInfo, WnsClient,
+        WnsTokenProvider, error::trimmed_body_text, wns::WnsPayload,
     },
 };
 
@@ -42,15 +43,7 @@ impl WnsService {
     ) -> DispatchResult {
         let body = match payload.encoded_body() {
             Ok(body) => body,
-            Err(err) => {
-                return DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(Error::Internal(err.to_string())),
-                    invalid_token: false,
-                    payload_too_large: false,
-                };
-            }
+            Err(err) => return DispatchResult::from_error(0, Error::Internal(err.to_string())),
         };
 
         let priority = payload.priority();
@@ -67,15 +60,7 @@ impl WnsService {
                 self.token_provider.token_info().await
             } {
                 Ok(info) => info,
-                Err(err) => {
-                    return DispatchResult {
-                        success: false,
-                        status_code: 0,
-                        error: Some(err),
-                        invalid_token: false,
-                        payload_too_large: false,
-                    };
-                }
+                Err(err) => return DispatchResult::from_error(0, err),
             };
 
             let dispatch = self
@@ -86,25 +71,20 @@ impl WnsService {
                     priority,
                     ttl_seconds,
                 )
-                .await
-                .unwrap_or_else(|err| DispatchResult {
-                    success: false,
-                    status_code: 0,
-                    error: Some(err),
-                    invalid_token: false,
-                    payload_too_large: false,
-                });
+                .await;
             if dispatch.success {
                 return dispatch;
             }
 
-            let status_code = dispatch.status_code;
-            if status_code == 401 && !force_fresh_token && attempt < WNS_MAX_RETRY {
+            if dispatch.should_refresh_credentials()
+                && !force_fresh_token
+                && attempt < WNS_MAX_RETRY
+            {
                 force_fresh_token = true;
                 continue;
             }
 
-            let retryable = is_wns_retryable_status(status_code) && attempt < WNS_MAX_RETRY;
+            let retryable = dispatch.is_retryable() && attempt < WNS_MAX_RETRY;
             if !retryable {
                 return dispatch;
             }
@@ -122,7 +102,7 @@ impl WnsService {
         body: Arc<[u8]>,
         priority: Option<u8>,
         ttl_seconds: Option<u32>,
-    ) -> Result<DispatchResult, Error> {
+    ) -> DispatchResult {
         let mut request = self
             .client
             .post(device_token)
@@ -136,41 +116,20 @@ impl WnsService {
         if let Some(ttl) = ttl_seconds {
             request = request.header("x-wns-ttl", ttl.to_string());
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|err| Error::Internal(err.to_string()))?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(err) => return DispatchResult::transport(Error::Internal(err.to_string())),
+        };
 
         let status = response.status();
         let status_code = status.as_u16();
         let body = response.bytes().await.unwrap_or_default();
 
         if !status.is_success() {
-            let message = if let Some(body_text) = response_body_text(&body) {
-                body_text
-            } else {
-                format!("WNS error, status {status_code}")
-            };
-            return Ok(DispatchResult {
-                success: false,
-                status_code,
-                error: Some(Error::Upstream {
-                    provider: "WNS",
-                    status: status_code,
-                    message,
-                }),
-                invalid_token: is_wns_token_invalid(status_code),
-                payload_too_large: is_wns_payload_too_large(status_code),
-            });
+            return DispatchResult::upstream("WNS", classify_wns_failure(status_code, &body));
         }
 
-        Ok(DispatchResult {
-            success: true,
-            status_code,
-            error: None,
-            invalid_token: false,
-            payload_too_large: false,
-        })
+        DispatchResult::success(status_code)
     }
 
     pub async fn token_info(&self) -> Result<TokenInfo, Error> {
@@ -200,23 +159,40 @@ impl WnsClient for WnsService {
     }
 }
 
-fn is_wns_token_invalid(status_code: u16) -> bool {
-    matches!(status_code, 404 | 410)
+fn classify_wns_failure(status_code: u16, body: &[u8]) -> ProviderFailure {
+    let message =
+        trimmed_body_text(body).unwrap_or_else(|| format!("WNS error, status {status_code}"));
+    let kind = match status_code {
+        401 => ProviderFailureKind::CredentialsExpired,
+        404 | 410 => ProviderFailureKind::InvalidToken,
+        413 => ProviderFailureKind::PayloadTooLarge,
+        429 => ProviderFailureKind::RateLimited,
+        500 | 503 | 504 => ProviderFailureKind::TemporarilyUnavailable,
+        403 => ProviderFailureKind::Unauthorized,
+        _ => ProviderFailureKind::Rejected,
+    };
+    ProviderFailure::new(status_code, kind, message)
 }
 
-fn is_wns_payload_too_large(status_code: u16) -> bool {
-    status_code == 413
-}
+#[cfg(test)]
+mod tests {
+    use super::{ProviderFailureKind, classify_wns_failure};
 
-fn is_wns_retryable_status(status_code: u16) -> bool {
-    status_code == 0 || matches!(status_code, 429 | 500 | 503 | 504)
-}
+    #[test]
+    fn wns_classifies_expired_credentials() {
+        let failure = classify_wns_failure(401, b"");
+        assert_eq!(failure.kind, ProviderFailureKind::CredentialsExpired);
+    }
 
-fn response_body_text(body: &[u8]) -> Option<String> {
-    let trimmed = String::from_utf8_lossy(body).trim().to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
+    #[test]
+    fn wns_classifies_invalid_token() {
+        let failure = classify_wns_failure(410, b"gone");
+        assert_eq!(failure.kind, ProviderFailureKind::InvalidToken);
+    }
+
+    #[test]
+    fn wns_classifies_payload_too_large() {
+        let failure = classify_wns_failure(413, b"too large");
+        assert_eq!(failure.kind, ProviderFailureKind::PayloadTooLarge);
     }
 }

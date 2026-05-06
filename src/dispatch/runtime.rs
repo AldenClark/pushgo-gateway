@@ -103,8 +103,9 @@ impl DispatchWorkerRuntime {
             )
             .field_redacted("device_token", redact_device_token(failure.device_token))
             .field_u64("status_code", dispatch.status_code.into())
-            .field_bool("invalid_token", dispatch.invalid_token)
-            .field_bool("payload_too_large", dispatch.payload_too_large)
+            .field_str("failure_kind", dispatch.failure_kind_name())
+            .field_bool("invalid_token", dispatch.is_invalid_token())
+            .field_bool("payload_too_large", dispatch.is_payload_too_large())
             .field_str("error", error)
             .emit();
     }
@@ -139,8 +140,9 @@ impl DispatchWorkerRuntime {
             .field_redacted("device_token", redact_device_token(device_token))
             .field_bool("success", dispatch.success)
             .field_u64("status_code", dispatch.status_code.into())
-            .field_bool("invalid_token", dispatch.invalid_token)
-            .field_bool("payload_too_large", dispatch.payload_too_large)
+            .field_str("failure_kind", dispatch.failure_kind_name())
+            .field_bool("invalid_token", dispatch.is_invalid_token())
+            .field_bool("payload_too_large", dispatch.is_payload_too_large())
             .field_str("error", error)
             .emit();
     }

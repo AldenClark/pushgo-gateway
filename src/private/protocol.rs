@@ -1,5 +1,8 @@
+use std::{fmt, str::FromStr};
+
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
+use warp_link::warp_link_core::AckStatus as WarpAckStatus;
 
 use crate::value::ChannelId;
 
@@ -260,7 +263,79 @@ pub struct AckFrame {
     #[serde(default)]
     pub seq: Option<u64>,
     pub delivery_id: String,
-    pub status: String,
+    pub status: AckFrameStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum AckFrameStatus {
+    Ok,
+    InvalidPayload,
+    Error,
+}
+
+impl AckFrameStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::InvalidPayload => "invalid_payload",
+            Self::Error => "error",
+        }
+    }
+
+    pub const fn to_warp(self) -> WarpAckStatus {
+        match self {
+            Self::Ok => WarpAckStatus::Ok,
+            Self::InvalidPayload => WarpAckStatus::InvalidPayload,
+            Self::Error => WarpAckStatus::Error,
+        }
+    }
+}
+
+impl From<WarpAckStatus> for AckFrameStatus {
+    fn from(value: WarpAckStatus) -> Self {
+        match value {
+            WarpAckStatus::Ok => Self::Ok,
+            WarpAckStatus::InvalidPayload => Self::InvalidPayload,
+            WarpAckStatus::Error => Self::Error,
+        }
+    }
+}
+
+impl From<AckFrameStatus> for String {
+    fn from(value: AckFrameStatus) -> Self {
+        value.as_str().to_string()
+    }
+}
+
+impl FromStr for AckFrameStatus {
+    type Err = AckFrameStatusParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "ok" => Ok(Self::Ok),
+            "invalid_payload" => Ok(Self::InvalidPayload),
+            "error" => Ok(Self::Error),
+            _ => Err(AckFrameStatusParseError),
+        }
+    }
+}
+
+impl TryFrom<String> for AckFrameStatus {
+    type Error = AckFrameStatusParseError;
+
+    fn try_from(value: String) -> Result<Self, AckFrameStatusParseError> {
+        Self::from_str(&value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AckFrameStatusParseError;
+
+impl fmt::Display for AckFrameStatusParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid ack status")
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -278,10 +353,11 @@ pub struct DeliverEnvelope {
 #[cfg(test)]
 mod tests {
     use hashbrown::HashMap;
+    use warp_link::warp_link_core::AckStatus as WarpAckStatus;
 
     use super::{
-        ClientHello, PRIVATE_PAYLOAD_VERSION_V1, PrivatePayloadEnvelope, WIRE_CODEC_POSTCARD,
-        WIRE_VERSION_V2, WireFlags,
+        AckFrame, AckFrameStatus, ClientHello, PRIVATE_PAYLOAD_VERSION_V1, PrivatePayloadEnvelope,
+        WIRE_CODEC_POSTCARD, WIRE_VERSION_V2, WireFlags,
     };
 
     #[test]
@@ -356,5 +432,34 @@ mod tests {
         };
         assert!(envelope.channel_id().is_none());
         assert!(envelope.parsed_channel_id().is_none());
+    }
+
+    #[test]
+    fn ack_status_serializes_as_stable_protocol_string() {
+        let frame = AckFrame {
+            seq: Some(7),
+            delivery_id: "delivery-1".to_string(),
+            status: AckFrameStatus::InvalidPayload,
+        };
+        let payload = serde_json::to_string(&frame).expect("ack frame should serialize");
+        assert!(payload.contains(r#""status":"invalid_payload""#));
+    }
+
+    #[test]
+    fn ack_status_rejects_unknown_text() {
+        let error = serde_json::from_str::<AckFrame>(
+            r#"{"seq":1,"delivery_id":"delivery-1","status":"bad"}"#,
+        )
+        .expect_err("invalid ack status should be rejected");
+        assert!(error.to_string().contains("invalid ack status"));
+    }
+
+    #[test]
+    fn ack_status_maps_to_warp_status() {
+        assert_eq!(AckFrameStatus::Ok.to_warp(), WarpAckStatus::Ok);
+        assert_eq!(
+            AckFrameStatus::from(WarpAckStatus::InvalidPayload),
+            AckFrameStatus::InvalidPayload
+        );
     }
 }
