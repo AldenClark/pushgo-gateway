@@ -2,8 +2,8 @@ use super::*;
 
 impl CompatServerChanPayload {
     fn into_intent(self, key: CompatKey) -> Result<MessageIntent, Error> {
-        let mut metadata = parse_query_metadata(self.metadata.as_deref())?;
-        insert_metadata_string(&mut metadata, "compat.serverchan.url", self.url.as_deref());
+        let mut metadata = CompatMetadata::parse(self.metadata.as_deref())?;
+        metadata.insert_text("compat.serverchan.url", self.url.as_deref());
         Ok(MessageIntent {
             channel_id: key.channel_id,
             password: key.password,
@@ -21,7 +21,7 @@ impl CompatServerChanPayload {
             images: Vec::new(),
             ciphertext: self.ciphertext,
             tags: Vec::new(),
-            metadata,
+            metadata: metadata.into_inner(),
         })
     }
 }

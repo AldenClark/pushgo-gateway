@@ -7,6 +7,7 @@ use crate::{
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
     storage::{DeviceRouteRecordRow, StoreError},
+    value::DeviceKeyRef,
 };
 
 use super::{
@@ -19,22 +20,20 @@ pub(crate) async fn channel_sync(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ChannelSyncRequest>,
 ) -> HttpResult {
-    let device_key = payload.device_key.trim();
-    if device_key.is_empty() {
-        return Err(Error::validation("device_key is required"));
-    }
+    let device_key = DeviceKeyRef::parse(&payload.device_key)?;
     if payload.channels.len() > 2000 {
         return Err(Error::validation("channels exceeds max limit 2000"));
     }
 
     let route = state
         .device_registry
-        .get(device_key)
+        .get(device_key.as_str())
         .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
     state
         .store
         .upsert_device_route(&DeviceRouteRecordRow::from_registry_record(
-            device_key, &route,
+            device_key.as_str(),
+            &route,
         ))
         .await
         .map_err(|err| Error::Internal(err.to_string()))?;
@@ -87,7 +86,7 @@ pub(crate) async fn channel_sync(
 
         match sync_single_channel(
             &state,
-            device_key,
+            device_key.as_str(),
             &route,
             channel_id.into_inner(),
             password.as_str(),
@@ -121,7 +120,7 @@ pub(crate) async fn channel_sync(
 
     let failed = channels.len().saturating_sub(success);
     if failed == 0 {
-        reconcile_synced_channels(&state, device_key, &route, &desired_channels).await?;
+        reconcile_synced_channels(&state, device_key.as_str(), &route, &desired_channels).await?;
     }
 
     Ok(crate::api::ok(ChannelSyncResponse {

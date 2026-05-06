@@ -4,17 +4,13 @@ use hashbrown::HashMap;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
-use crate::{private::protocol::PrivatePayloadEnvelope, util::build_provider_wakeup_data};
+use crate::{
+    private::protocol::PrivatePayloadEnvelope,
+    util::build_provider_wakeup_data,
+    value::{EntityKind, OptionalText},
+};
 
 pub(crate) const PAYLOAD_VERSION_NUMERIC: u8 = PrivatePayloadEnvelope::CURRENT_VERSION;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PayloadSeverity {
-    Critical,
-    High,
-    Normal,
-    Low,
-}
 
 pub(crate) struct StandardFields<'a> {
     pub channel_id: &'a str,
@@ -44,11 +40,6 @@ pub(crate) struct PreparedCustomPayload {
     pub(crate) private_payload: EncodedPrivatePayload,
 }
 
-pub(crate) struct OptionalText;
-
-#[derive(Clone, Copy)]
-pub(crate) struct EntityKind<'a>(&'a str);
-
 pub(crate) struct AppleThreadId(pub(crate) String);
 
 pub(crate) struct ProviderWakeupData(pub(crate) Arc<HashMap<String, String>>);
@@ -61,46 +52,16 @@ pub(crate) struct ProviderNotificationText {
     pub(crate) body: Option<String>,
 }
 
-impl PayloadSeverity {
-    pub(crate) fn normalize(value: Option<String>) -> Self {
-        match OptionalText::normalize_owned(value)
-            .map(|level| level.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("critical") => Self::Critical,
-            Some("high") => Self::High,
-            Some("low") => Self::Low,
-            _ => Self::Normal,
-        }
-    }
-
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Critical => "critical",
-            Self::High => "high",
-            Self::Normal => "normal",
-            Self::Low => "low",
-        }
-    }
-
-    pub(crate) fn fcm_priority(self) -> &'static str {
-        match self {
-            Self::Critical | Self::High | Self::Normal => "HIGH",
-            Self::Low => "NORMAL",
-        }
-    }
-}
-
 impl StandardFields<'_> {
     pub(crate) fn apply_to(self, data: &mut HashMap<String, String>) {
         data.insert("channel_id".to_string(), self.channel_id.to_string());
-        if let Some(value) = self.title.map(str::trim).filter(|text| !text.is_empty()) {
+        if let Some(value) = OptionalText::normalize(self.title) {
             data.insert("title".to_string(), value.to_string());
         }
-        if let Some(value) = self.body.map(str::trim).filter(|text| !text.is_empty()) {
+        if let Some(value) = OptionalText::normalize(self.body) {
             data.insert("body".to_string(), value.to_string());
         }
-        if let Some(value) = self.severity.map(str::trim).filter(|text| !text.is_empty()) {
+        if let Some(value) = OptionalText::normalize(self.severity) {
             data.insert("severity".to_string(), value.to_string());
         }
         data.insert(
@@ -153,7 +114,7 @@ impl CustomPayloadData {
 
     pub(crate) fn resolve_notification_text(
         &self,
-        entity_kind: EntityKind<'_>,
+        entity_kind: EntityKind,
         explicit_title: Option<&str>,
         explicit_body: Option<&str>,
     ) -> ProviderNotificationText {
@@ -161,17 +122,13 @@ impl CustomPayloadData {
     }
 
     pub(crate) fn ensure_notification_title(&mut self, title: Option<&str>) {
-        let normalized = title
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        if let Some(title) = normalized {
+        if let Some(title) = OptionalText::normalize(title) {
             self.data.entry("title".to_string()).or_insert(title);
         }
     }
 
-    fn apple_thread_id(&self, channel_id: &str, entity_kind: EntityKind<'_>) -> AppleThreadId {
-        let mut parts = vec![entity_kind.apple_thread_prefix().to_string()];
+    fn apple_thread_id(&self, channel_id: &str, entity_kind: EntityKind) -> AppleThreadId {
+        let mut parts = vec![entity_kind.as_str().to_string()];
         let trimmed_channel = channel_id.trim();
         if !trimmed_channel.is_empty() {
             parts.push(format!("channel={trimmed_channel}"));
@@ -181,8 +138,7 @@ impl CustomPayloadData {
                 .data
                 .get("event_id")
                 .map(String::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
+                .and_then(OptionalText::normalize_value)
         {
             parts.push(format!("event={event_id}"));
         }
@@ -191,8 +147,7 @@ impl CustomPayloadData {
                 .data
                 .get("thing_id")
                 .map(String::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
+                .and_then(OptionalText::normalize_value)
         {
             parts.push(format!("thing={thing_id}"));
         }
@@ -224,7 +179,7 @@ impl CustomPayloadData {
     pub(crate) fn prepare_dispatch(
         self,
         channel_id: &str,
-        entity_kind: EntityKind<'_>,
+        entity_kind: EntityKind,
     ) -> Result<PreparedCustomPayload, postcard::Error> {
         let apple_thread_id = self.apple_thread_id(channel_id, entity_kind);
         let wakeup_data = self.wakeup_data();
@@ -290,32 +245,15 @@ impl CustomPayloadData {
     }
 }
 
-impl OptionalText {
-    pub(crate) fn normalize_owned(value: Option<String>) -> Option<String> {
-        value.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
-    }
-}
-
-impl<'a> EntityKind<'a> {
-    pub(crate) fn new(raw: &'a str) -> Self {
-        Self(raw)
-    }
-
+impl EntityKind {
     pub(crate) fn resolve_notification_text(
         self,
         explicit_title: Option<&str>,
         explicit_body: Option<&str>,
         payload: &HashMap<String, String>,
     ) -> ProviderNotificationText {
-        match self.apple_thread_prefix() {
-            "event" => ProviderNotificationText {
+        match self {
+            EntityKind::Event => ProviderNotificationText {
                 title: normalize_optional_text(explicit_title).or_else(|| {
                     map_text(payload, "title")
                         .or_else(|| map_text(payload, "event_title"))
@@ -331,7 +269,7 @@ impl<'a> EntityKind<'a> {
                         .or_else(|| default_event_body(payload))
                 }),
             },
-            "thing" => ProviderNotificationText {
+            EntityKind::Thing => ProviderNotificationText {
                 title: normalize_optional_text(explicit_title).or_else(|| {
                     thing_name_from_attrs(payload)
                         .or_else(|| map_text(payload, "title"))
@@ -348,7 +286,7 @@ impl<'a> EntityKind<'a> {
                         .or_else(|| Some("Updated".to_string()))
                 }),
             },
-            _ => {
+            EntityKind::Message => {
                 let explicit_or_payload_body =
                     normalize_optional_text(explicit_body).or_else(|| map_text(payload, "body"));
                 ProviderNotificationText {
@@ -367,37 +305,16 @@ impl<'a> EntityKind<'a> {
             }
         }
     }
-
-    fn apple_thread_prefix(self) -> &'static str {
-        match self.0.trim().to_ascii_lowercase().as_str() {
-            "event" => "event",
-            "thing" => "thing",
-            _ => "message",
-        }
-    }
-
-    fn includes_event_id(self) -> bool {
-        matches!(self.apple_thread_prefix(), "event" | "thing")
-    }
-
-    fn includes_thing_id(self) -> bool {
-        self.apple_thread_prefix() == "thing"
-    }
 }
 
 fn normalize_optional_text(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+    OptionalText::normalize(value)
 }
 
 fn map_text(data: &HashMap<String, String>, key: &str) -> Option<String> {
     data.get(key)
         .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+        .and_then(OptionalText::normalize_value)
 }
 
 fn default_event_body(data: &HashMap<String, String>) -> Option<String> {
@@ -522,11 +439,10 @@ mod tests {
             entity_type: "message",
             entity_id: "message-1",
         });
-        let title =
-            payload.resolve_notification_text(super::EntityKind::new("message"), None, None);
+        let title = payload.resolve_notification_text(super::EntityKind::Message, None, None);
         payload.ensure_notification_title(title.title.as_deref());
         let prepared = payload
-            .prepare_dispatch("channel-1", super::EntityKind::new("message"))
+            .prepare_dispatch("channel-1", super::EntityKind::Message)
             .expect("payload should encode");
 
         let wakeup = prepared.wakeup_data.into_inner();

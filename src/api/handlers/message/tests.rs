@@ -7,8 +7,8 @@ use super::{
     MessageIntent,
     ids::{OpId, wakeup_data_with_delivery_id},
     payload::{
-        CustomPayloadData, EntityKind, OptionalText, PayloadSeverity, ProviderDeliverySelection,
-        StandardFields,
+        CustomPayloadData, EntityKind, NotificationSeverity, OptionalText,
+        ProviderDeliverySelection, StandardFields,
     },
 };
 
@@ -120,20 +120,20 @@ fn provider_payload_limit_boundary_matches_platform_rules() {
 #[test]
 fn payload_severity_normalizes_to_known_levels() {
     assert_eq!(
-        PayloadSeverity::normalize(Some("HIGH".to_string())),
-        PayloadSeverity::High
+        NotificationSeverity::normalize(Some("HIGH".to_string())),
+        NotificationSeverity::High
     );
     assert_eq!(
-        PayloadSeverity::normalize(Some(" critical ".to_string())),
-        PayloadSeverity::Critical
+        NotificationSeverity::normalize(Some(" critical ".to_string())),
+        NotificationSeverity::Critical
     );
     assert_eq!(
-        PayloadSeverity::normalize(Some("unknown".to_string())),
-        PayloadSeverity::Normal
+        NotificationSeverity::normalize(Some("unknown".to_string())),
+        NotificationSeverity::Normal
     );
-    assert_eq!(PayloadSeverity::Normal.fcm_priority(), "HIGH");
-    assert_eq!(PayloadSeverity::Low.fcm_priority(), "NORMAL");
-    assert_eq!(PayloadSeverity::Critical.fcm_priority(), "HIGH");
+    assert_eq!(NotificationSeverity::Normal.fcm_priority(), "HIGH");
+    assert_eq!(NotificationSeverity::Low.fcm_priority(), "NORMAL");
+    assert_eq!(NotificationSeverity::Critical.fcm_priority(), "HIGH");
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn custom_payload_prepare_dispatch_builds_thread_id_and_wakeup_data() {
         ("thing_id".to_string(), "thing-1".to_string()),
     ]));
     let prepared = payload
-        .prepare_dispatch("channel-1", EntityKind::new("thing"))
+        .prepare_dispatch("channel-1", EntityKind::Thing)
         .expect("payload should encode");
 
     assert_eq!(
@@ -197,7 +197,7 @@ fn custom_payload_prepare_dispatch_includes_gateway_base_url_in_wakeup_data() {
     let mut payload = CustomPayloadData::new(HashMap::new());
     payload.apply_gateway_base_url(Some(" https://sandbox.pushgo.dev/ "));
     let prepared = payload
-        .prepare_dispatch("channel-1", EntityKind::new("message"))
+        .prepare_dispatch("channel-1", EntityKind::Message)
         .expect("payload should encode");
 
     assert_eq!(

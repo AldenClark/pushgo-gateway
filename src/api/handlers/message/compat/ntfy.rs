@@ -19,10 +19,9 @@ impl CompatNtfyQuery {
         body: Option<Bytes>,
     ) -> Result<MessageIntent, Error> {
         let headers = CompatHeaders::new(headers);
-        let body_text = body
-            .as_ref()
-            .map(|value| String::from_utf8_lossy(value).trim().to_string())
-            .filter(|value| !value.is_empty());
+        let body_text = body.as_ref().and_then(|value| {
+            OptionalText::normalize_value(String::from_utf8_lossy(value).as_ref())
+        });
         Ok(MessageIntent {
             channel_id: key.channel_id,
             password: key.password,
@@ -43,10 +42,10 @@ impl CompatNtfyQuery {
                 .or_else(|| Self::severity_for_priority(self.priority.as_deref())),
             ttl: self.ttl,
             url: self.url,
-            images: split_query_list(self.images.as_deref()),
+            images: CompatCsvList::parse(self.images.as_deref()).into_inner(),
             ciphertext: self.ciphertext,
-            tags: split_query_list(self.tags.as_deref()),
-            metadata: parse_query_metadata(self.metadata.as_deref())?,
+            tags: CompatCsvList::parse(self.tags.as_deref()).into_inner(),
+            metadata: CompatMetadata::parse(self.metadata.as_deref())?.into_inner(),
         })
     }
 

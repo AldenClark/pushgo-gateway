@@ -8,6 +8,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::storage::StoreError;
+use crate::value::ValueError;
 
 pub(crate) fn ok<T: Serialize>(data: T) -> Response {
     StatusResponse::ok_with(data).into_response()
@@ -117,6 +118,12 @@ impl Error {
             }
             _ => Self::validation("invalid JSON request"),
         }
+    }
+}
+
+impl From<ValueError> for Error {
+    fn from(value: ValueError) -> Self {
+        Self::validation(value.to_string())
     }
 }
 

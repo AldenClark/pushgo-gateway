@@ -7,10 +7,10 @@ impl CompatBarkV1Query {
         body: Option<String>,
         title: Option<String>,
     ) -> Result<MessageIntent, Error> {
-        let mut metadata = parse_query_metadata(self.metadata.as_deref())?;
-        insert_metadata_string(&mut metadata, "compat.bark.sound", self.sound.as_deref());
-        insert_metadata_string(&mut metadata, "compat.bark.icon", self.icon.as_deref());
-        insert_metadata_string(&mut metadata, "compat.bark.group", self.group.as_deref());
+        let mut metadata = CompatMetadata::parse(self.metadata.as_deref())?;
+        metadata.insert_text("compat.bark.sound", self.sound.as_deref());
+        metadata.insert_text("compat.bark.icon", self.icon.as_deref());
+        metadata.insert_text("compat.bark.group", self.group.as_deref());
         Ok(MessageIntent {
             channel_id: key.channel_id,
             password: key.password,
@@ -22,10 +22,10 @@ impl CompatBarkV1Query {
             severity: Self::severity_for_level(self.level.as_deref()),
             ttl: None,
             url: self.url,
-            images: split_query_list(self.images.as_deref()),
+            images: CompatCsvList::parse(self.images.as_deref()).into_inner(),
             ciphertext: self.ciphertext,
-            tags: split_query_list(self.tags.as_deref()),
-            metadata,
+            tags: CompatCsvList::parse(self.tags.as_deref()).into_inner(),
+            metadata: metadata.into_inner(),
         })
     }
 
@@ -43,10 +43,10 @@ impl CompatBarkV1Query {
 
 impl CompatBarkV2Payload {
     fn into_intent(self, key: CompatKey) -> MessageIntent {
-        let mut metadata = self.metadata;
-        insert_metadata_string(&mut metadata, "compat.bark.sound", self.sound.as_deref());
-        insert_metadata_string(&mut metadata, "compat.bark.icon", self.icon.as_deref());
-        insert_metadata_string(&mut metadata, "compat.bark.group", self.group.as_deref());
+        let mut metadata = CompatMetadata::from_map(self.metadata);
+        metadata.insert_text("compat.bark.sound", self.sound.as_deref());
+        metadata.insert_text("compat.bark.icon", self.icon.as_deref());
+        metadata.insert_text("compat.bark.group", self.group.as_deref());
         MessageIntent {
             channel_id: key.channel_id,
             password: key.password,
@@ -61,7 +61,7 @@ impl CompatBarkV2Payload {
             images: self.images,
             ciphertext: self.ciphertext,
             tags: self.tags,
-            metadata,
+            metadata: metadata.into_inner(),
         }
     }
 }

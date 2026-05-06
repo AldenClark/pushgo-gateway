@@ -1,9 +1,5 @@
 use crate::{api::Error, routing::DeviceChannelType, storage::Platform};
 
-pub(super) fn normalized_optional_token(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|item| !item.is_empty())
-}
-
 pub(super) fn platform_from_channel_type(
     channel_type: DeviceChannelType,
     device_platform: Platform,

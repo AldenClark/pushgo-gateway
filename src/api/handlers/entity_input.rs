@@ -1,57 +1,9 @@
 use crate::api::Error;
 use serde_json::{Map as JsonMap, Value};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EntityId(String);
-
-impl EntityId {
-    pub(crate) fn parse(raw: &str, field: &str) -> Result<Self, Error> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err(Error::validation(format!("{field} must not be empty")));
-        }
-        if trimmed.len() > 64 {
-            return Err(Error::validation(format!("{field} is too long")));
-        }
-        if !trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' || ch == '-')
-        {
-            return Err(Error::validation(format!("{field} format is invalid")));
-        }
-        Ok(Self(trimmed.to_string()))
-    }
-
-    pub(crate) fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NormalizedTags(Vec<String>);
-
-impl NormalizedTags {
-    pub(crate) fn parse(values: &[String], field: &str) -> Result<Self, Error> {
-        Ok(Self(normalize_text_list(values, field, 32, 64, "tag")?))
-    }
-
-    pub(crate) fn into_inner(self) -> Vec<String> {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NormalizedImageUrls(Vec<String>);
-
-impl NormalizedImageUrls {
-    pub(crate) fn parse(values: &[String], field: &str) -> Result<Self, Error> {
-        Ok(Self(normalize_text_list(values, field, 32, 2048, "url")?))
-    }
-
-    pub(crate) fn into_inner(self) -> Vec<String> {
-        self.0
-    }
-}
+pub(crate) use crate::value::{
+    EntityId, NormalizedImageUrls, NormalizedTags, OptionalText, OptionalUrl,
+};
 
 pub(crate) struct MetadataEntries<'a>(&'a JsonMap<String, Value>);
 
@@ -96,36 +48,6 @@ impl<'a> MetadataEntries<'a> {
 
     pub(crate) fn encode(&self) -> Result<String, Error> {
         serde_json::to_string(self.0).map_err(|_| Error::validation("metadata format is invalid"))
-    }
-}
-
-pub(crate) struct OptionalText;
-
-impl OptionalText {
-    pub(crate) fn normalize(raw: Option<&str>) -> Option<String> {
-        raw.and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(trimmed.to_string())
-        })
-    }
-}
-
-pub(crate) struct OptionalUrl;
-
-impl OptionalUrl {
-    pub(crate) fn normalize(raw: Option<&str>, field: &str) -> Result<Option<String>, Error> {
-        const MAX_URL_LEN: usize = 2048;
-        let Some(raw) = raw else {
-            return Ok(None);
-        };
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        if trimmed.len() > MAX_URL_LEN {
-            return Err(Error::validation(format!("{field} contains oversized url")));
-        }
-        Ok(Some(trimmed.to_string()))
     }
 }
 
@@ -219,36 +141,6 @@ fn metadata_scalar_text(raw: &Value) -> Option<String> {
         Value::Bool(value) => Some(value.to_string()),
         _ => None,
     }
-}
-
-fn normalize_text_list(
-    values: &[String],
-    field: &str,
-    max_items: usize,
-    max_len: usize,
-    item_label: &str,
-) -> Result<Vec<String>, Error> {
-    if values.len() > max_items {
-        return Err(Error::validation(format!("{field} exceeds max length")));
-    }
-    let mut out = Vec::with_capacity(values.len());
-    for value in values {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Err(Error::validation(format!(
-                "{field} contains empty {item_label}"
-            )));
-        }
-        if trimmed.len() > max_len {
-            return Err(Error::validation(format!(
-                "{field} contains oversized {item_label}"
-            )));
-        }
-        if !out.iter().any(|item| item == trimmed) {
-            out.push(trimmed.to_string());
-        }
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

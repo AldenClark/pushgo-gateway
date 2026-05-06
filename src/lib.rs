@@ -9,6 +9,7 @@ pub(crate) mod routing;
 pub mod stats;
 pub mod storage;
 pub mod util;
+pub(crate) mod value;
 
 pub use api::Error;
 

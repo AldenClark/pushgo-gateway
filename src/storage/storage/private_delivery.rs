@@ -4,6 +4,7 @@ use crate::{
     storage::database::{
         PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderPullDatabaseAccess,
     },
+    value::ProviderTokenRef,
 };
 
 impl Storage {
@@ -227,10 +228,9 @@ impl Storage {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<usize> {
-        let normalized_token = provider_token.trim();
-        if normalized_token.is_empty() {
+        let Some(normalized_token) = ProviderTokenRef::optional(Some(provider_token)) else {
             return Ok(0);
-        }
+        };
         let pending = self.db.count_private_outbox_for_device(device_id).await?;
         if pending == 0 {
             return Ok(0);
@@ -251,7 +251,7 @@ impl Storage {
                     entry.delivery_id.as_str(),
                     &message,
                     platform,
-                    normalized_token,
+                    normalized_token.as_str(),
                 )
                 .await?;
             migrated = migrated.saturating_add(1);

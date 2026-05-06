@@ -17,8 +17,8 @@ use super::{
     ids::{DeliveryId, OpId, SemanticScope, wakeup_data_with_delivery_id},
     payload::{
         CustomPayloadData, EntityKind, MAX_PROVIDER_TTL_MILLIS, MAX_PROVIDER_TTL_SECONDS,
-        PAYLOAD_VERSION, PayloadSeverity, ProviderDeliverySelection, ProviderRouteBinding,
-        ProviderTtl, SCHEMA_VERSION, StandardFields,
+        NotificationSeverity, OptionalText, PAYLOAD_VERSION, ProviderDeliverySelection,
+        ProviderRouteBinding, ProviderTtl, SCHEMA_VERSION, StandardFields,
     },
     stats::{PrivateEnqueueStats, emit_dispatch_stats, merge_device_dispatch_delta},
 };

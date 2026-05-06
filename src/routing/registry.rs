@@ -5,8 +5,9 @@ use parking_lot::RwLock;
 
 use crate::storage::Platform;
 use crate::util::generate_hex_id_128;
+use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
-use super::types::{default_route_for_platform, normalize_provider_token};
+use super::types::default_route_for_platform;
 use super::{DeviceChannelType, DeviceRegistryStats, DeviceRouteRecord};
 
 const REPLACED_DEVICE_KEY_TTL_SECS: i64 = 10 * 60;
@@ -45,10 +46,10 @@ impl DeviceRegistry {
     ) -> Result<String, String> {
         let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
-        if let Some(key) = device_key.map(str::trim).filter(|value| !value.is_empty())
-            && state.by_device.contains_key(key)
+        if let Some(key) = device_key.and_then(|value| DeviceKeyRef::optional(Some(value)))
+            && state.by_device.contains_key(key.as_str())
         {
-            return Ok(key.to_string());
+            return Ok(key.into_owned());
         }
 
         let key = loop {
@@ -75,14 +76,11 @@ impl DeviceRegistry {
     }
 
     pub fn restore_route(&self, device_key: &str, route: DeviceRouteRecord) -> Result<(), String> {
-        let key = device_key.trim();
-        if key.is_empty() {
-            return Err("device_key is required".to_string());
-        }
+        let key = DeviceKeyRef::parse(device_key).map_err(|err| err.to_string())?;
         let route = route.normalized();
 
         let mut state = self.state.write();
-        if let Some(previous) = state.by_device.get(key)
+        if let Some(previous) = state.by_device.get(key.as_str())
             && let Some(old_key) = ProviderIngressKey::from_route(previous)
         {
             state.provider_ingress_index.remove(&old_key);
@@ -90,9 +88,9 @@ impl DeviceRegistry {
         if let Some(new_key) = ProviderIngressKey::from_route(&route) {
             state
                 .provider_ingress_index
-                .insert(new_key, key.to_string());
+                .insert(new_key, key.as_str().to_string());
         }
-        state.by_device.insert(key.to_string(), route);
+        state.by_device.insert(key.into_owned(), route);
         Ok(())
     }
 
@@ -121,7 +119,8 @@ impl DeviceRegistry {
                 .ok_or_else(|| "device_key not found".to_string())?;
 
             rec.channel_type = channel_type;
-            rec.provider_token = normalize_provider_token(provider_token);
+            rec.provider_token = ProviderTokenRef::optional(provider_token.as_deref())
+                .map(ProviderTokenRef::into_owned);
             rec.updated_at = now;
 
             (rec.clone(), ProviderIngressKey::from_route(rec))
@@ -166,12 +165,9 @@ impl DeviceRegistry {
     }
 
     pub fn remove_device(&self, device_key: &str) -> Option<DeviceRouteRecord> {
-        let key = device_key.trim();
-        if key.is_empty() {
-            return None;
-        }
+        let key = DeviceKeyRef::parse(device_key).ok()?;
         let mut state = self.state.write();
-        let previous = state.by_device.remove(key)?;
+        let previous = state.by_device.remove(key.as_str())?;
         if let Some(provider_key) = ProviderIngressKey::from_route(&previous) {
             state.provider_ingress_index.remove(&provider_key);
         }
@@ -184,21 +180,23 @@ impl DeviceRegistry {
         replacement_device_key: &str,
         platform: Platform,
     ) {
-        let previous_device_key = previous_device_key.trim();
-        let replacement_device_key = replacement_device_key.trim();
-        if previous_device_key.is_empty()
-            || replacement_device_key.is_empty()
-            || previous_device_key == replacement_device_key
-        {
+        let Some(previous_device_key) = DeviceKeyRef::optional(Some(previous_device_key)) else {
+            return;
+        };
+        let Some(replacement_device_key) = DeviceKeyRef::optional(Some(replacement_device_key))
+        else {
+            return;
+        };
+        if previous_device_key == replacement_device_key {
             return;
         }
         let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         state.purge_expired_replaced_device_keys(now);
         state.replaced_device_keys.insert(
-            previous_device_key.to_string(),
+            previous_device_key.into_owned(),
             ReplacedDeviceKey {
-                device_key: replacement_device_key.to_string(),
+                device_key: replacement_device_key.into_owned(),
                 platform,
                 recorded_at: now,
             },
@@ -210,14 +208,11 @@ impl DeviceRegistry {
         previous_device_key: &str,
         platform: Platform,
     ) -> Option<String> {
-        let key = previous_device_key.trim();
-        if key.is_empty() {
-            return None;
-        }
+        let key = DeviceKeyRef::parse(previous_device_key).ok()?;
         let now = chrono::Utc::now().timestamp_millis();
         let mut state = self.state.write();
         state.purge_expired_replaced_device_keys(now);
-        let replaced = state.replaced_device_keys.get(key)?;
+        let replaced = state.replaced_device_keys.get(key.as_str())?;
         let route = state.by_device.get(replaced.device_key.as_str())?;
         if replaced.platform != platform || route.platform != platform {
             return None;
@@ -326,13 +321,10 @@ impl DeviceRegistryState {
 
 impl ProviderIngressKey {
     fn new(platform: Platform, token: &str) -> Option<Self> {
-        let normalized_token = token.trim();
-        if normalized_token.is_empty() {
-            return None;
-        }
+        let normalized_token = ProviderTokenRef::optional(Some(token))?;
         Some(Self {
             platform,
-            token: normalized_token.to_string(),
+            token: normalized_token.into_owned(),
         })
     }
 

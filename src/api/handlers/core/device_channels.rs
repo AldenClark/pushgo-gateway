@@ -7,10 +7,11 @@ use crate::{
     routing::{
         DeviceChannelType, DeviceRouteRecord, default_route_for_platform, derive_private_device_id,
     },
-    storage::{DeviceInfo, DeviceRouteAuditWrite, DeviceRouteRecordRow, Platform},
+    storage::{DeviceRouteAuditWrite, DeviceRouteRecordRow, Platform},
+    value::{DeviceKeyRef, ProviderTokenRef},
 };
 
-use super::shared::{normalized_optional_token, platform_from_channel_type, platform_from_str};
+use super::shared::{platform_from_channel_type, platform_from_str};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,11 +73,7 @@ impl DeviceRegisterRequest {
 
 impl DeviceChannelUpsertRequest {
     fn device_key(&self) -> Result<&str, Error> {
-        let device_key = self.device_key.trim();
-        if device_key.is_empty() {
-            return Err(Error::validation("device_key is required"));
-        }
-        Ok(device_key)
+        Ok(DeviceKeyRef::parse(&self.device_key).map(DeviceKeyRef::as_str)?)
     }
 
     fn requested_platform(&self) -> Result<Option<Platform>, Error> {
@@ -95,7 +92,7 @@ impl DeviceChannelUpsertRequest {
     ) -> Result<Option<String>, Error> {
         match channel_type {
             DeviceChannelType::Private => {
-                if normalized_optional_token(self.provider_token.as_deref()).is_some() {
+                if ProviderTokenRef::optional(self.provider_token.as_deref()).is_some() {
                     return Err(Error::validation(
                         "provider_token is not allowed for private channel",
                     ));
@@ -103,10 +100,9 @@ impl DeviceChannelUpsertRequest {
                 Ok(None)
             }
             _ => {
-                let token =
-                    normalized_optional_token(self.provider_token.as_deref()).ok_or_else(|| {
-                        Error::validation("provider_token required for provider channel")
-                    })?;
+                let token = ProviderTokenRef::optional(self.provider_token.as_deref()).ok_or_else(
+                    || Error::validation("provider_token required for provider channel"),
+                )?;
                 match channel_type {
                     DeviceChannelType::Apns
                         if !matches!(
@@ -130,9 +126,8 @@ impl DeviceChannelUpsertRequest {
                     }
                     _ => {}
                 }
-                DeviceInfo::from_token(platform, token)
-                    .map_err(|_| Error::validation("invalid provider_token"))?;
-                Ok(Some(token.to_string()))
+                let token = token.validate_for_platform(platform)?;
+                Ok(Some(token.into_owned()))
             }
         }
     }
@@ -140,11 +135,7 @@ impl DeviceChannelUpsertRequest {
 
 impl DeviceChannelDeleteRequest {
     fn device_key(&self) -> Result<&str, Error> {
-        let device_key = self.device_key.trim();
-        if device_key.is_empty() {
-            return Err(Error::validation("device_key is required"));
-        }
-        Ok(device_key)
+        Ok(DeviceKeyRef::parse(&self.device_key).map(DeviceKeyRef::as_str)?)
     }
 
     fn requested_channel_type(&self) -> Result<DeviceChannelType, Error> {
@@ -159,13 +150,10 @@ impl ProviderTokenRetireRequest {
     }
 
     fn normalized_provider_token(&self, platform: Platform) -> Result<&str, Error> {
-        let provider_token = self.provider_token.trim();
-        if provider_token.is_empty() {
-            return Err(Error::validation("provider_token is required"));
-        }
-        DeviceInfo::from_token(platform, provider_token)
-            .map_err(|_| Error::validation("invalid provider_token"))?;
-        Ok(provider_token)
+        Ok(
+            ProviderTokenRef::parse_for_platform(&self.provider_token, platform)
+                .map(ProviderTokenRef::as_str)?,
+        )
     }
 }
 
@@ -175,7 +163,7 @@ impl DeviceRouteRecord {
     }
 
     fn provider_token_ref(&self) -> Option<&str> {
-        normalized_optional_token(self.provider_token.as_deref())
+        ProviderTokenRef::optional(self.provider_token.as_deref()).map(ProviderTokenRef::as_str)
     }
 
     fn cleanup<'a>(
@@ -401,7 +389,8 @@ pub(crate) async fn device_channel_upsert(
         DeviceKeyResolution::resolve_existing_for_route(&state, device_key, requested_platform)
             .await?;
     let next_provider_token = payload.normalized_provider_token(previous.platform, next_type)?;
-    let next_provider_token_ref = normalized_optional_token(next_provider_token.as_deref());
+    let next_provider_token_ref =
+        ProviderTokenRef::optional(next_provider_token.as_deref()).map(ProviderTokenRef::as_str);
     if previous.channel_type == next_type
         && previous.provider_token_ref() == next_provider_token_ref
     {

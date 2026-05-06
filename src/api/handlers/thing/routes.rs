@@ -94,7 +94,7 @@ async fn thing_to_channel_with_action(
     ExtensionObjectRef::new(&payload.payload.mutable.attrs, "attrs").validate()?;
     validate_manufacturer_attrs(&payload.payload.mutable.attrs)?;
     ExternalIdPatchRef::new(&payload.payload.mutable.external_ids).validate()?;
-    let normalized_location = super::ThingLocation::normalize_patch(
+    let normalized_location = super::ThingLocation::parse_patch(
         payload.payload.mutable.location_type.as_deref(),
         payload.payload.mutable.location_value.as_deref(),
     )?;
@@ -229,8 +229,11 @@ async fn thing_to_channel_with_action(
                 extra.insert("external_ids".to_string(), serialized);
             }
             if let Some(location) = profile.location.as_ref() {
-                extra.insert("location_type".to_string(), location.location_type.clone());
-                extra.insert("location_value".to_string(), location.value.clone());
+                extra.insert(
+                    "location_type".to_string(),
+                    location.location_type().to_string(),
+                );
+                extra.insert("location_value".to_string(), location.value_text());
                 if let Ok(serialized) = serde_json::to_string(location) {
                     extra.insert("location".to_string(), serialized);
                 }

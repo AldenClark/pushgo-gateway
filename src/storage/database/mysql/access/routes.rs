@@ -1,4 +1,5 @@
 use super::*;
+use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
 async fn upsert_device_route_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
@@ -109,9 +110,9 @@ impl MySqlDb {
     ) -> StoreResult<()> {
         let values = route.persistence_values()?;
         let old_key = old_device_key
-            .map(str::trim)
-            .filter(|value| !value.is_empty() && *value != values.device_key);
-        let old_device_id = old_key.map(|key| PrivateDeviceId::derive(key).to_vec());
+            .and_then(|value| DeviceKeyRef::optional(Some(value)))
+            .filter(|value| value.as_str() != values.device_key);
+        let old_device_id = old_key.map(|key| PrivateDeviceId::derive(key.as_str()).to_vec());
 
         let mut tx = self.pool.begin().await?;
         let delivery_ids = if let Some(device_id) = old_device_id.as_deref() {
@@ -148,12 +149,12 @@ impl MySqlDb {
                     .await?;
             }
             sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
-                .bind(old_key)
+                .bind(old_key.as_str())
                 .bind(device_id)
                 .execute(&mut *tx)
                 .await?;
             sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
-                .bind(old_key)
+                .bind(old_key.as_str())
                 .execute(&mut *tx)
                 .await?;
             for delivery_id in &delivery_ids {
@@ -174,11 +175,10 @@ impl MySqlDb {
     }
 
     pub(super) async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()> {
-        let normalized_key = device_key.trim();
-        if normalized_key.is_empty() {
+        let Some(normalized_key) = DeviceKeyRef::optional(Some(device_key)) else {
             return Ok(());
-        }
-        let device_id = PrivateDeviceId::derive(normalized_key).to_vec();
+        };
+        let device_id = PrivateDeviceId::derive(normalized_key.as_str()).to_vec();
         let mut tx = self.pool.begin().await?;
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
@@ -207,12 +207,12 @@ impl MySqlDb {
                 .await?;
         }
         sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
-            .bind(normalized_key)
+            .bind(normalized_key.as_str())
             .bind(device_id.as_slice())
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
-            .bind(normalized_key)
+            .bind(normalized_key.as_str())
             .execute(&mut *tx)
             .await?;
 
@@ -237,20 +237,20 @@ impl MySqlDb {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()> {
-        let normalized_token = provider_token.trim();
-        if normalized_token.is_empty() {
+        let Some(normalized_token) = ProviderTokenRef::optional(Some(provider_token)) else {
             return Ok(());
-        }
+        };
         let now = Utc::now().timestamp_millis();
         let platform_name = platform.name();
         let platform_code = platform.to_byte() as i16;
-        let (token_hash, _) = ProviderTokenSnapshot::from_token(normalized_token).into_parts();
+        let (token_hash, _) =
+            ProviderTokenSnapshot::from_token(normalized_token.as_str()).into_parts();
         let mut tx = self.pool.begin().await?;
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM provider_pull_queue WHERE platform = ? AND provider_token = ?",
         )
         .bind(platform_name)
-        .bind(normalized_token)
+        .bind(normalized_token.as_str())
         .fetch_all(&mut *tx)
         .await?;
         let delivery_ids: Vec<String> = delivery_rows
@@ -260,7 +260,7 @@ impl MySqlDb {
 
         sqlx::query("DELETE FROM provider_pull_queue WHERE platform = ? AND provider_token = ?")
             .bind(platform_name)
-            .bind(normalized_token)
+            .bind(normalized_token.as_str())
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM private_bindings WHERE platform = ? AND token_hash = ?")
@@ -275,7 +275,7 @@ impl MySqlDb {
         )
         .bind(now)
         .bind(platform_name)
-        .bind(normalized_token)
+        .bind(normalized_token.as_str())
         .execute(&mut *tx)
         .await?;
 
@@ -368,7 +368,11 @@ impl MySqlDb {
                    provider_failure_count = provider_failure_count + VALUES(provider_failure_count), \
                    private_outbox_enqueued_count = private_outbox_enqueued_count + VALUES(private_outbox_enqueued_count)",
             )
-            .bind(row.device_key.trim())
+            .bind(
+                DeviceKeyRef::parse(row.device_key.as_str())
+                    .map(DeviceKeyRef::as_str)
+                    .unwrap_or(""),
+            )
             .bind(row.bucket_date.as_str())
             .bind(row.messages_received)
             .bind(row.messages_acked)

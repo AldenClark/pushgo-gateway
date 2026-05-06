@@ -8,6 +8,7 @@ use crate::{
     routing::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord, derive_private_device_id},
     stats::StatsCollector,
     storage::{DeviceRouteRecordRow, MaintenanceCleanupConfig, Storage},
+    value::DeviceKeyRef,
 };
 use axum::Router;
 use scc::HashMap as ConcurrentHashMap;
@@ -78,10 +79,8 @@ impl DeviceOperationGuards {
     }
 
     pub(crate) fn guard_for(&self, device_key: &str) -> Option<Arc<Mutex<()>>> {
-        let normalized = device_key.trim();
-        if normalized.is_empty() {
-            return None;
-        }
+        let normalized = DeviceKeyRef::parse(device_key).ok()?;
+        let normalized = normalized.as_str();
 
         let now_ms = Self::monotonic_now_ms();
         if let Some(Some(guard)) = self.by_key.read_sync(normalized, |_, slot| {
@@ -240,8 +239,9 @@ pub async fn build_app(
     }
     .spawn(receivers);
 
-    let public_base_url = normalize_mcp_public_base_url(args.public_base_url.as_deref())?
-        .map(|value| Arc::<str>::from(value.into_boxed_str()));
+    let public_base_url = args
+        .public_base_url_value()?
+        .map(|value| value.into_arc_str());
     let private_transport_profile = PrivateTransportProfile {
         quic_enabled: private_transports.quic,
         quic_port: private_transports.quic.then_some(args.private_quic_port),
@@ -254,8 +254,14 @@ pub async fn build_app(
     };
 
     let mcp_state = if args.mcp_enabled {
-        let predefined_clients =
-            parse_mcp_predefined_clients(args.mcp_predefined_clients.as_deref())?;
+        let predefined_clients = args
+            .mcp_predefined_client_values()?
+            .into_iter()
+            .map(|client| McpPredefinedClientConfig {
+                client_id: client.client_id(),
+                client_secret: client.client_secret(),
+            })
+            .collect();
         let config = McpConfig {
             bootstrap_http_addr: Arc::from(args.http_addr.clone().into_boxed_str()),
             public_base_url: public_base_url.clone(),
@@ -292,22 +298,6 @@ pub async fn build_app(
     Ok(AppRuntime { router, private })
 }
 
-fn normalize_mcp_public_base_url(
-    raw: Option<&str>,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    if !value.starts_with("https://") && !value.starts_with("http://") {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "PUSHGO_PUBLIC_BASE_URL must start with https:// or http://",
-        )
-        .into());
-    }
-    Ok(Some(value.trim_end_matches('/').to_string()))
-}
-
 fn days_to_secs(days: i64) -> i64 {
     const DAY_SECS: i64 = 24 * 60 * 60;
     days.saturating_mul(DAY_SECS)
@@ -321,42 +311,6 @@ fn derive_wss_advertised_port(public_base_url: Option<&str>) -> u16 {
         return 443;
     };
     parsed.port_or_known_default().unwrap_or(443)
-}
-
-fn parse_mcp_predefined_clients(
-    raw: Option<&str>,
-) -> Result<Vec<McpPredefinedClientConfig>, Box<dyn std::error::Error>> {
-    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(Vec::new());
-    };
-    let mut clients = Vec::new();
-    for entry in value
-        .split(['\n', ';'])
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-    {
-        let Some((client_id, client_secret)) = entry.split_once(':') else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid predefined MCP client entry: {entry}"),
-            )
-            .into());
-        };
-        let client_id = client_id.trim();
-        let client_secret = client_secret.trim();
-        if client_id.is_empty() || client_secret.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid predefined MCP client entry: {entry}"),
-            )
-            .into());
-        }
-        clients.push(McpPredefinedClientConfig {
-            client_id: Arc::from(client_id.to_string().into_boxed_str()),
-            client_secret: Arc::from(client_secret.to_string().into_boxed_str()),
-        });
-    }
-    Ok(clients)
 }
 
 async fn restore_device_registry(

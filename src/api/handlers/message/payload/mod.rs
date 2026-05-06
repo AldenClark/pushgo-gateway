@@ -1,9 +1,8 @@
 mod custom;
 mod provider;
 
-pub(crate) use custom::{
-    CustomPayloadData, EntityKind, OptionalText, PayloadSeverity, StandardFields,
-};
+pub(crate) use crate::value::{EntityKind, NotificationSeverity, OptionalText};
+pub(crate) use custom::{CustomPayloadData, StandardFields};
 pub(crate) use provider::{ProviderDeliverySelection, ProviderRouteBinding, ProviderTtl};
 
 pub(crate) const PAYLOAD_VERSION: &str = "1";

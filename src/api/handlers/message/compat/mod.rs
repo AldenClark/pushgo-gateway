@@ -8,6 +8,7 @@ use serde_json::{Map as JsonMap, Value};
 
 use super::*;
 use crate::api::handlers::entity_input::EntityId;
+use crate::value::OptionalText;
 
 mod bark;
 mod ntfy;
@@ -146,6 +147,12 @@ pub(super) struct CompatKey {
     pub password: String,
 }
 
+#[derive(Debug, Default)]
+pub(super) struct CompatCsvList(Vec<String>);
+
+#[derive(Debug, Default)]
+pub(super) struct CompatMetadata(JsonMap<String, Value>);
+
 impl CompatKey {
     pub(super) fn parse(raw: &str) -> Result<Self, Error> {
         let Some((channel_id, password)) = raw.trim().split_once(':') else {
@@ -153,16 +160,13 @@ impl CompatKey {
                 "compat key must be '<channel_id>:<password>'",
             ));
         };
-        let channel_id = channel_id.trim();
-        let password = password.trim();
-        if channel_id.is_empty() || password.is_empty() {
-            return Err(Error::validation(
-                "compat key must be '<channel_id>:<password>'",
-            ));
-        }
+        let channel_id = OptionalText::normalize_value(channel_id)
+            .ok_or_else(|| Error::validation("compat key must be '<channel_id>:<password>'"))?;
+        let password = OptionalText::normalize_value(password)
+            .ok_or_else(|| Error::validation("compat key must be '<channel_id>:<password>'"))?;
         Ok(Self {
-            channel_id: channel_id.to_string(),
-            password: password.to_string(),
+            channel_id,
+            password,
         })
     }
 }
@@ -180,18 +184,58 @@ impl<'a> CompatHeaders<'a> {
         self.headers
             .get(name)
             .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
+            .and_then(OptionalText::normalize_value)
+    }
+}
+
+impl CompatCsvList {
+    pub(super) fn parse(raw: Option<&str>) -> Self {
+        let values = raw
+            .into_iter()
+            .flat_map(|value| value.split(','))
+            .filter_map(OptionalText::normalize_value)
+            .collect();
+        Self(values)
+    }
+
+    pub(super) fn into_inner(self) -> Vec<String> {
+        self.0
+    }
+}
+
+impl CompatMetadata {
+    pub(super) fn from_map(map: JsonMap<String, Value>) -> Self {
+        Self(map)
+    }
+
+    pub(super) fn parse(raw: Option<&str>) -> Result<Self, Error> {
+        let Some(raw) = raw.and_then(OptionalText::normalize_value) else {
+            return Ok(Self::default());
+        };
+        let parsed: Value = serde_json::from_str(raw.as_str())
+            .map_err(|_| Error::validation("metadata must be a JSON object"))?;
+        let metadata = parse_metadata_map_value(parsed).map_err(Error::validation)?;
+        Ok(Self(metadata))
+    }
+
+    pub(super) fn insert_text(&mut self, key: &str, raw: Option<&str>) {
+        if let Some(value) = raw.and_then(OptionalText::normalize_value) {
+            self.0.insert(key.to_string(), Value::String(value));
+        }
+    }
+
+    pub(super) fn into_inner(self) -> JsonMap<String, Value> {
+        self.0
     }
 }
 
 impl MessageGetQuery {
     fn scoped_thing_id(&self) -> Result<Option<String>, Error> {
-        self.thing_id
+        Ok(self
+            .thing_id
             .as_deref()
             .map(|raw| EntityId::parse(raw, "thing_id").map(EntityId::into_inner))
-            .transpose()
+            .transpose()?)
     }
 
     fn into_intent(self) -> Result<MessageIntent, Error> {
@@ -206,10 +250,10 @@ impl MessageGetQuery {
             severity: self.severity,
             ttl: self.ttl,
             url: self.url,
-            images: split_query_list(self.images.as_deref()),
+            images: CompatCsvList::parse(self.images.as_deref()).into_inner(),
             ciphertext: self.ciphertext,
-            tags: split_query_list(self.tags.as_deref()),
-            metadata: parse_query_metadata(self.metadata.as_deref())?,
+            tags: CompatCsvList::parse(self.tags.as_deref()).into_inner(),
+            metadata: CompatMetadata::parse(self.metadata.as_deref())?.into_inner(),
         })
     }
 }
@@ -223,37 +267,6 @@ pub(crate) async fn message_to_channel_get(
     dispatch_message_intent(&state, payload, scoped_thing_id).await
 }
 
-pub(super) fn split_query_list(raw: Option<&str>) -> Vec<String> {
-    raw.map(|value| {
-        value
-            .split(',')
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default()
-}
-
-pub(super) fn parse_query_metadata(raw: Option<&str>) -> Result<JsonMap<String, Value>, Error> {
-    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(JsonMap::new());
-    };
-    let parsed: Value = serde_json::from_str(raw)
-        .map_err(|_| Error::validation("metadata must be a JSON object"))?;
-    parse_metadata_map_value(parsed).map_err(Error::validation)
-}
-
-pub(super) fn insert_metadata_string(
-    metadata: &mut JsonMap<String, Value>,
-    key: &str,
-    raw: Option<&str>,
-) {
-    if let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) {
-        metadata.insert(key.to_string(), Value::String(value.to_string()));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +277,22 @@ mod tests {
         assert!(CompatKey::parse("channel:secret").is_ok());
         assert!(CompatKey::parse("channel").is_err());
         assert!(CompatKey::parse("channel:").is_err());
+    }
+
+    #[test]
+    fn compat_csv_list_drops_blank_segments() {
+        let values = CompatCsvList::parse(Some(" a, ,b ,, c ")).into_inner();
+        assert_eq!(values, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn compat_metadata_trims_inserted_text() {
+        let mut metadata = CompatMetadata::parse(None).expect("empty metadata should parse");
+        metadata.insert_text("compat.test", Some("  value  "));
+        assert_eq!(
+            metadata.into_inner().get("compat.test"),
+            Some(&Value::String("value".to_string()))
+        );
     }
 
     #[test]

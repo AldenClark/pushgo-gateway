@@ -2,7 +2,10 @@ use clap::Parser;
 use std::{
     io::{Error as IoError, ErrorKind},
     net::SocketAddr,
+    sync::Arc,
 };
+
+use reqwest::Url;
 
 const DEFAULT_TRACE_LOG_FILE: &str = "logs/pushgo-gateway-trace.log";
 
@@ -29,6 +32,21 @@ pub struct PrivateTransports {
     pub wss: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct TokenServiceBaseUrl(String);
+
+#[derive(Debug, Clone)]
+pub struct PublicBaseUrl {
+    canonical: String,
+    parsed: Url,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpPredefinedClient {
+    client_id: Arc<str>,
+    client_secret: Arc<str>,
+}
+
 impl PrivateTransports {
     #[must_use]
     pub const fn none() -> Self {
@@ -51,6 +69,85 @@ impl PrivateTransports {
     #[must_use]
     pub const fn any_enabled(self) -> bool {
         self.quic || self.tcp || self.wss
+    }
+}
+
+impl TokenServiceBaseUrl {
+    fn parse(raw: &str) -> Result<Self, IoError> {
+        let (canonical, _) = parse_http_base_url(
+            raw,
+            "PUSHGO_TOKEN_SERVICE_URL",
+            "PUSHGO_TOKEN_SERVICE_URL must be a valid http(s) base URL",
+        )?;
+        Ok(Self(canonical))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl PublicBaseUrl {
+    fn parse(raw: &str) -> Result<Self, IoError> {
+        let (canonical, parsed) = parse_http_base_url(
+            raw,
+            "PUSHGO_PUBLIC_BASE_URL",
+            "PUSHGO_PUBLIC_BASE_URL must be a valid http(s) base URL",
+        )?;
+        Ok(Self { canonical, parsed })
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.canonical.as_str()
+    }
+
+    #[must_use]
+    pub fn advertised_port(&self) -> u16 {
+        self.parsed.port_or_known_default().unwrap_or(443)
+    }
+
+    #[must_use]
+    pub fn into_arc_str(self) -> Arc<str> {
+        Arc::from(self.canonical.into_boxed_str())
+    }
+}
+
+impl McpPredefinedClient {
+    fn parse(raw: &str) -> Result<Self, IoError> {
+        let Some((client_id, client_secret)) = raw.split_once(':') else {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                format!("invalid predefined MCP client entry: {raw}"),
+            ));
+        };
+        let client_id = normalize_non_empty_str(client_id).ok_or_else(|| {
+            IoError::new(
+                ErrorKind::InvalidInput,
+                format!("invalid predefined MCP client entry: {raw}"),
+            )
+        })?;
+        let client_secret = normalize_non_empty_str(client_secret).ok_or_else(|| {
+            IoError::new(
+                ErrorKind::InvalidInput,
+                format!("invalid predefined MCP client entry: {raw}"),
+            )
+        })?;
+        Ok(Self {
+            client_id: Arc::from(client_id.into_boxed_str()),
+            client_secret: Arc::from(client_secret.into_boxed_str()),
+        })
+    }
+
+    #[must_use]
+    pub fn client_id(&self) -> Arc<str> {
+        Arc::clone(&self.client_id)
+    }
+
+    #[must_use]
+    pub fn client_secret(&self) -> Arc<str> {
+        Arc::clone(&self.client_secret)
     }
 }
 
@@ -565,6 +662,28 @@ impl Args {
         Ok(transports)
     }
 
+    pub fn token_service_base_url(&self) -> Result<TokenServiceBaseUrl, IoError> {
+        TokenServiceBaseUrl::parse(self.token_service_url.as_str())
+    }
+
+    pub fn public_base_url_value(&self) -> Result<Option<PublicBaseUrl>, IoError> {
+        self.public_base_url
+            .as_deref()
+            .map(PublicBaseUrl::parse)
+            .transpose()
+    }
+
+    pub fn mcp_predefined_client_values(&self) -> Result<Vec<McpPredefinedClient>, IoError> {
+        let Some(raw) = self.mcp_predefined_clients.as_deref() else {
+            return Ok(Vec::new());
+        };
+        raw.split(['\n', ';'])
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(McpPredefinedClient::parse)
+            .collect()
+    }
+
     fn validate_private_transport_dependencies(
         &self,
         transports: PrivateTransports,
@@ -642,14 +761,36 @@ impl Args {
 
 #[inline]
 fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
-    value.and_then(|raw| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
+    value.and_then(|raw| normalize_non_empty_str(raw.as_str()))
+}
+
+#[inline]
+fn normalize_non_empty_str(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn parse_http_base_url(raw: &str, env_name: &str, message: &str) -> Result<(String, Url), IoError> {
+    let canonical = normalize_non_empty_str(raw).ok_or_else(|| {
+        IoError::new(
+            ErrorKind::InvalidInput,
+            format!("{message}: {env_name} must not be empty"),
+        )
+    })?;
+    let canonical = canonical.trim_end_matches('/').to_string();
+    let parsed = Url::parse(canonical.as_str()).map_err(|err| {
+        IoError::new(
+            ErrorKind::InvalidInput,
+            format!("{message}: {env_name}=`{canonical}` ({err})"),
+        )
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            format!("{message}: {env_name}=`{canonical}`"),
+        ));
+    }
+    Ok((canonical, parsed))
 }
 
 fn parse_private_transports(raw: &str) -> Result<PrivateTransports, IoError> {
@@ -944,5 +1085,69 @@ mod tests {
                 wss: true,
             }
         );
+    }
+
+    #[test]
+    fn token_service_base_url_rejects_non_http_values() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--token-service-url",
+            " ftp://token.pushgo.dev ",
+        ])
+        .normalized();
+        assert!(args.token_service_base_url().is_err());
+    }
+
+    #[test]
+    fn public_base_url_value_trims_and_removes_trailing_slash() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--public-base-url",
+            " https://pushgo.dev/ ",
+        ])
+        .normalized();
+        let base_url = args
+            .public_base_url_value()
+            .expect("public base url should parse")
+            .expect("public base url should exist");
+        assert_eq!(base_url.as_str(), "https://pushgo.dev");
+        assert_eq!(base_url.advertised_port(), 443);
+    }
+
+    #[test]
+    fn mcp_predefined_client_values_reject_invalid_shape() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--mcp-predefined-clients",
+            "client-only",
+        ])
+        .normalized();
+        assert!(args.mcp_predefined_client_values().is_err());
+    }
+
+    #[test]
+    fn mcp_predefined_client_values_trim_and_collect_entries() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--mcp-predefined-clients",
+            " client-a : secret-a ; client-b:secret-b ",
+        ])
+        .normalized();
+        let clients = args
+            .mcp_predefined_client_values()
+            .expect("clients should parse");
+        assert_eq!(clients.len(), 2);
+        assert_eq!(&*clients[0].client_id(), "client-a");
+        assert_eq!(&*clients[0].client_secret(), "secret-a");
+        assert_eq!(&*clients[1].client_id(), "client-b");
+        assert_eq!(&*clients[1].client_secret(), "secret-b");
     }
 }

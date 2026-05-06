@@ -6,6 +6,7 @@ use serde_json::Map as JsonMap;
 use crate::{
     api::{ApiJson, Error, HttpResult},
     app::AppState,
+    value::{EventMessageText, EventSeverity, EventStatusText},
 };
 
 use super::{
@@ -19,7 +20,6 @@ use super::{
     },
     EventCloseRequest, EventCreateRequest, EventIntent, EventProfile, EventRouteAction,
     EventSummary, EventUpdateRequest,
-    validation::{normalize_event_message, normalize_event_severity, normalize_event_status},
 };
 
 async fn event_to_channel_with_action(
@@ -86,21 +86,24 @@ async fn event_to_channel_with_action(
         .payload
         .severity
         .as_deref()
-        .map(normalize_event_severity)
+        .map(EventSeverity::parse)
+        .map(|result| result.map(|value| value.as_str().to_string()))
         .transpose()?;
     let normalized_status = payload
         .payload
         .status
         .as_deref()
-        .map(normalize_event_status)
+        .map(EventStatusText::parse)
+        .map(|result| result.map(EventStatusText::into_inner))
         .transpose()?;
     let normalized_message = payload
         .payload
         .message
         .as_deref()
-        .map(normalize_event_message)
+        .map(EventMessageText::parse)
+        .map(|result| result.map(EventMessageText::into_inner))
         .transpose()?;
-    let normalized_images =
+    let normalized_images: Vec<String> =
         NormalizedImageUrls::parse(&payload.payload.images, "images")?.into_inner();
     let normalized_ciphertext = OptionalText::normalize(payload.payload.ciphertext.as_deref());
     let normalized_description = OptionalText::normalize(payload.payload.description.as_deref());

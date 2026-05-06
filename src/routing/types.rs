@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{Platform, PrivateDeviceId};
+use crate::value::ProviderTokenRef;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -58,7 +59,8 @@ pub struct DeviceRegistryStats {
 
 impl DeviceRouteRecord {
     pub(crate) fn normalized(mut self) -> Self {
-        self.provider_token = normalize_provider_token(self.provider_token);
+        self.provider_token = ProviderTokenRef::optional(self.provider_token.as_deref())
+            .map(ProviderTokenRef::into_owned);
         self
     }
 }
@@ -70,17 +72,6 @@ pub(crate) fn default_route_for_platform(platform: Platform, updated_at: i64) ->
         provider_token: None,
         updated_at,
     }
-}
-
-pub(crate) fn normalize_provider_token(provider_token: Option<String>) -> Option<String> {
-    provider_token.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
 }
 
 pub(crate) fn derive_private_device_id(device_key: &str) -> [u8; 16] {

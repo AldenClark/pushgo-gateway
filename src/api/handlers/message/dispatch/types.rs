@@ -11,7 +11,7 @@ pub(super) struct PreparedDispatch<'a> {
     pub(super) sent_at: i64,
     pub(super) resolved_title: Option<String>,
     pub(super) resolved_body: Option<String>,
-    pub(super) severity: PayloadSeverity,
+    pub(super) severity: NotificationSeverity,
     pub(super) effective_ttl: Option<i64>,
     pub(super) ttl_seconds: Option<u32>,
     pub(super) private_default_ttl_secs: i64,
@@ -87,19 +87,11 @@ impl<'a> PreparedDispatch<'a> {
         delivery_id_ref: Arc<str>,
     ) -> Result<Self, Error> {
         let entity_id = entity_id.trim().to_string();
-        let entity_kind = EntityKind::new(entity_type);
-        let resolved_title = title
-            .as_deref()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(ToString::to_string);
-        let resolved_body = body
-            .as_deref()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(ToString::to_string);
+        let entity_kind = EntityKind::detect(Some(entity_type));
+        let resolved_title = OptionalText::normalize(title.as_deref());
+        let resolved_body = OptionalText::normalize(body.as_deref());
 
-        let severity = PayloadSeverity::normalize(severity);
+        let severity = NotificationSeverity::normalize(severity);
         let effective_ttl = ttl.map(|expires_at| expires_at.min(sent_at + MAX_PROVIDER_TTL_MILLIS));
         let ttl_seconds = effective_ttl
             .map(|expires_at| ProviderTtl::remaining(sent_at, expires_at).into_inner());

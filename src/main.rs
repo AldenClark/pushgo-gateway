@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     pushgo_gateway::util::install_panic_trace_hook();
     let apns_endpoint = apns_endpoint(args.sandbox_mode);
-    let token_service_url = args.token_service_url.trim().to_string();
+    let token_service_url = args.token_service_base_url()?;
     print_startup_diagnostics(
         &args,
         private_transports,

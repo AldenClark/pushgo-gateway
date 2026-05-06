@@ -1,21 +1,21 @@
 use super::*;
+use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
 impl MySqlDb {
     pub(super) async fn resolve_device_key_route_device(
         &self,
         device_key: &str,
     ) -> StoreResult<Option<Vec<u8>>> {
-        let normalized_key = device_key.trim();
-        if normalized_key.is_empty() {
+        let Some(normalized_key) = DeviceKeyRef::optional(Some(device_key)) else {
             return Ok(None);
-        }
+        };
         let row = sqlx::query(
             "SELECT device_id \
              FROM devices \
              WHERE device_key = ? \
              LIMIT 1",
         )
-        .bind(normalized_key)
+        .bind(normalized_key.as_str())
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|value| value.get("device_id")))
@@ -79,8 +79,7 @@ impl MySqlDb {
             let device_key: Option<String> = row
                 .get::<Option<String>, _>("route_device_key")
                 .and_then(|value| {
-                    let trimmed = value.trim().to_string();
-                    (!trimmed.is_empty()).then_some(trimmed)
+                    DeviceKeyRef::optional(Some(value.as_str())).map(DeviceKeyRef::into_owned)
                 });
 
             if channel_type.eq_ignore_ascii_case("private") {
@@ -95,17 +94,15 @@ impl MySqlDb {
 
             let platform_raw: String = row.get("platform");
             let platform: Platform = platform_raw.parse()?;
-            if let Some(token) = route_provider_token {
-                let token = token.trim().to_string();
-                if !token.is_empty()
-                    && let Some(device_key) = device_key
-                {
-                    out.push(DispatchTarget::Provider {
-                        platform,
-                        provider_token: token,
-                        device_key,
-                    });
-                }
+            if let Some(token) = route_provider_token
+                && let Some(token) = ProviderTokenRef::optional(Some(token.as_str()))
+                && let Some(device_key) = device_key
+            {
+                out.push(DispatchTarget::Provider {
+                    platform,
+                    provider_token: token.into_owned(),
+                    device_key,
+                });
             }
         }
         Ok(out)
@@ -323,14 +320,8 @@ fn route_matches_dispatch_target(
     if channel_type.eq_ignore_ascii_case("private") {
         return true;
     }
-    let Some(route_provider_token) = normalize_optional_token(route_provider_token) else {
+    let Some(route_provider_token) = ProviderTokenRef::optional(route_provider_token) else {
         return false;
     };
-    !route_provider_token.is_empty()
-}
-
-fn normalize_optional_token(value: Option<&str>) -> Option<&str> {
-    value
-        .map(str::trim)
-        .filter(|candidate| !candidate.is_empty())
+    !route_provider_token.as_str().is_empty()
 }

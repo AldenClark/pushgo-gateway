@@ -2,40 +2,6 @@ use crate::{api::Error, storage::EventState};
 
 use super::{EventProfile, EventRouteAction};
 
-pub(super) fn normalize_event_severity(raw: &str) -> Result<String, Error> {
-    let normalized = raw.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "critical" | "high" | "normal" | "low" => Ok(normalized),
-        _ => Err(Error::validation(
-            "severity must be one of critical/high/normal/low",
-        )),
-    }
-}
-
-pub(super) fn normalize_event_status(raw: &str) -> Result<String, Error> {
-    const MAX_STATUS_LEN: usize = 24;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(Error::validation("status must not be empty"));
-    }
-    if trimmed.chars().count() > MAX_STATUS_LEN {
-        return Err(Error::validation("status is too long"));
-    }
-    Ok(trimmed.to_string())
-}
-
-pub(super) fn normalize_event_message(raw: &str) -> Result<String, Error> {
-    const MAX_MESSAGE_LEN: usize = 512;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(Error::validation("message must not be empty"));
-    }
-    if trimmed.chars().count() > MAX_MESSAGE_LEN {
-        return Err(Error::validation("message is too long"));
-    }
-    Ok(trimmed.to_string())
-}
-
 impl EventRouteAction {
     pub(super) fn validate_temporal_fields(
         self,

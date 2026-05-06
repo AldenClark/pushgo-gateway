@@ -1,4 +1,5 @@
 use super::*;
+use crate::value::DeviceKeyRef;
 
 impl MySqlDb {
     pub(super) async fn load_private_outbox_entry(
@@ -55,10 +56,8 @@ impl MySqlDb {
         _provider_token: &str,
         _platform: Platform,
     ) -> StoreResult<SubscribeOutcome> {
-        let normalized_device_key = device_key.trim();
-        if normalized_device_key.is_empty() {
-            return Err(StoreError::DeviceNotFound);
-        }
+        let normalized_device_key =
+            DeviceKeyRef::parse(device_key).map_err(|_| StoreError::DeviceNotFound)?;
         let now = Utc::now().timestamp_millis();
 
         let mut tx = self.pool.begin().await?;
@@ -91,7 +90,7 @@ impl MySqlDb {
              WHERE device_key = ? \
              LIMIT 1",
         )
-        .bind(normalized_device_key)
+        .bind(normalized_device_key.as_str())
         .fetch_optional(&mut *tx)
         .await?
         .map(|row| row.get::<Vec<u8>, _>("device_id"))

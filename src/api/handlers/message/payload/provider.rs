@@ -4,6 +4,7 @@ use crate::{
     dispatch::{ProviderDeliveryPath, ProviderPullDelivery},
     routing::derive_private_device_id,
     storage::Platform,
+    value::{DeviceKeyRef, ProviderTokenRef},
 };
 
 use super::{MAX_PROVIDER_TTL_MILLIS, MAX_PROVIDER_TTL_SECONDS};
@@ -93,7 +94,11 @@ impl ProviderRouteBinding {
         let provider_device_key = state
             .device_registry
             .resolve_provider_ingress_route(platform, token)
-            .unwrap_or_else(|| dispatch_device_key.trim().to_string());
+            .unwrap_or_else(|| {
+                DeviceKeyRef::parse(dispatch_device_key)
+                    .map(DeviceKeyRef::into_owned)
+                    .unwrap_or_default()
+            });
         let stats_device_key = ProviderStatsDeviceKey::resolve(provider_device_key.as_str());
         Self {
             provider_device_key,
@@ -104,12 +109,14 @@ impl ProviderRouteBinding {
 
 impl ProviderStatsDeviceKey {
     fn resolve(route_device_key: &str) -> Self {
-        let normalized = route_device_key.trim();
+        let normalized = DeviceKeyRef::parse(route_device_key)
+            .map(DeviceKeyRef::into_owned)
+            .unwrap_or_default();
         debug_assert!(
             !normalized.is_empty(),
             "provider stats key should be derived from a stable device_key"
         );
-        Self(normalized.to_string())
+        Self(normalized)
     }
 
     pub(crate) fn as_str(&self) -> &str {
@@ -140,19 +147,13 @@ impl ProviderPullDelivery {
         sent_at: i64,
         expires_at: i64,
     ) -> Option<Self> {
-        let normalized_token = provider_token.trim();
-        if normalized_token.is_empty() {
-            return None;
-        }
-        let normalized_device_key = provider_device_key.trim();
-        if normalized_device_key.is_empty() {
-            return None;
-        }
-        let device_id = derive_private_device_id(normalized_device_key);
+        let normalized_token = ProviderTokenRef::optional(Some(provider_token))?;
+        let normalized_device_key = DeviceKeyRef::optional(Some(provider_device_key))?;
+        let device_id = derive_private_device_id(normalized_device_key.as_str());
         Some(Self {
             device_id,
             platform,
-            provider_token: std::sync::Arc::from(normalized_token.to_string().into_boxed_str()),
+            provider_token: std::sync::Arc::from(normalized_token.into_owned().into_boxed_str()),
             delivery_id: std::sync::Arc::from(delivery_id.to_string().into_boxed_str()),
             payload: std::sync::Arc::new(private_payload.to_owned()),
             sent_at,

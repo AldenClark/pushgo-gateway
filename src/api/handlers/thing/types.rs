@@ -5,12 +5,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::api::{deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(super) struct ThingLocation {
-    #[serde(rename = "type")]
-    pub(super) location_type: String,
-    pub(super) value: String,
-}
+pub(super) use crate::value::ThingLocation;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(super) struct ThingProfile {

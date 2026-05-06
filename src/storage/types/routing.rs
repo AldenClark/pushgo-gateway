@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::routing::{DeviceChannelType, DeviceRouteRecord};
+use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
 use super::{DeviceId, DeviceInfo, Platform, PrivateDeviceId, StoreError, StoreResult};
 
@@ -56,35 +57,29 @@ impl DeviceRouteRecordRow {
 
     pub fn device_id_bytes(&self) -> StoreResult<Vec<u8>> {
         let _ = self.channel_type_kind()?;
-        let key = self.device_key.trim();
-        if key.is_empty() {
-            return Err(StoreError::InvalidDeviceToken);
-        }
-        Ok(PrivateDeviceId::derive(key).to_vec())
+        let key =
+            DeviceKeyRef::parse(&self.device_key).map_err(|_| StoreError::InvalidDeviceToken)?;
+        Ok(PrivateDeviceId::derive(key.as_str()).to_vec())
     }
 
     pub fn persistence_values(&self) -> StoreResult<DeviceRoutePersistenceValues> {
-        let provider_token = self.provider_token.as_deref().and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
+        let provider_token = ProviderTokenRef::optional(self.provider_token.as_deref())
+            .map(ProviderTokenRef::into_owned);
         let device_id = self.device_id_bytes()?;
         let platform = self.platform_kind()?;
+        let device_key =
+            DeviceKeyRef::parse(&self.device_key).map_err(|_| StoreError::InvalidDeviceToken)?;
         let token_raw = if let Some(token) = provider_token.as_deref() {
             DeviceInfo::from_token(platform, token)?.token_raw.to_vec()
         } else {
-            self.device_key.trim().as_bytes().to_vec()
+            device_key.as_str().as_bytes().to_vec()
         };
 
         Ok(DeviceRoutePersistenceValues {
             device_id,
             token_raw,
             platform_code: platform.to_byte() as i16,
-            device_key: self.device_key.trim().to_string(),
+            device_key: device_key.into_owned(),
             platform: self.platform.trim().to_ascii_lowercase(),
             channel_type: self.channel_type.trim().to_ascii_lowercase(),
             provider_token,

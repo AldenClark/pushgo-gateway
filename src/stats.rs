@@ -9,6 +9,7 @@ use crate::storage::{
     OpsStatsHourlyDelta, StatsBatchWrite, Storage,
 };
 use crate::util::TraceEvent;
+use crate::value::DeviceKeyRef;
 
 const STATS_FLUSH_INTERVAL_SECS: u64 = 2;
 const STATS_FLUSH_EVENT_THRESHOLD: usize = 1024;
@@ -101,13 +102,12 @@ impl StatsCollector {
     }
 
     pub fn record_private_pull(&self, device_key: &str, occurred_at: i64) {
-        let device_key = device_key.trim();
-        if device_key.is_empty() {
+        let Ok(device_key) = DeviceKeyRef::parse(device_key) else {
             return;
-        }
+        };
         self.try_send(StatsEvent::DeviceDelta {
             occurred_at,
-            device_key: device_key.to_string(),
+            device_key: device_key.into_owned(),
             delta: DeviceDispatchDelta {
                 private_pull_count: 1,
                 ..DeviceDispatchDelta::default()
@@ -116,13 +116,15 @@ impl StatsCollector {
     }
 
     pub fn record_private_ack(&self, device_key: &str, acked_count: usize, occurred_at: i64) {
-        let device_key = device_key.trim();
-        if device_key.is_empty() || acked_count == 0 {
+        let Ok(device_key) = DeviceKeyRef::parse(device_key) else {
+            return;
+        };
+        if acked_count == 0 {
             return;
         }
         self.try_send(StatsEvent::PrivateAck {
             occurred_at,
-            device_key: device_key.to_string(),
+            device_key: device_key.into_owned(),
             channel_id: None,
             acked_count: acked_count as i64,
         });
@@ -135,24 +137,27 @@ impl StatsCollector {
         acked_count: usize,
         occurred_at: i64,
     ) {
-        if device_key.trim().is_empty() || acked_count == 0 {
+        let Ok(device_key) = DeviceKeyRef::parse(&device_key) else {
+            return;
+        };
+        if acked_count == 0 {
             return;
         }
         self.try_send(StatsEvent::PrivateAck {
             occurred_at,
-            device_key,
+            device_key: device_key.into_owned(),
             channel_id,
             acked_count: acked_count as i64,
         });
     }
 
     pub fn record_private_connected(&self, device_key: String) {
-        if device_key.trim().is_empty() {
+        let Ok(device_key) = DeviceKeyRef::parse(&device_key) else {
             return;
-        }
+        };
         self.try_send(StatsEvent::DeviceDelta {
             occurred_at: Utc::now().timestamp(),
-            device_key,
+            device_key: device_key.into_owned(),
             delta: DeviceDispatchDelta {
                 private_connected_count: 1,
                 ..DeviceDispatchDelta::default()
@@ -336,15 +341,14 @@ fn merge_device_daily_delta(
     bucket_date: &str,
     delta: DeviceDispatchDelta,
 ) {
-    let device_key_trimmed = delta.device_key.trim();
-    if device_key_trimmed.is_empty() {
+    let Ok(device_key) = DeviceKeyRef::parse(&delta.device_key) else {
         return;
-    }
-    let key = (device_key_trimmed.to_string(), bucket_date.to_string());
+    };
+    let key = (device_key.as_str().to_string(), bucket_date.to_string());
     let row = device_rows
         .entry(key)
         .or_insert_with(|| DeviceStatsDailyDelta {
-            device_key: device_key_trimmed.to_string(),
+            device_key: device_key.as_str().to_string(),
             bucket_date: bucket_date.to_string(),
             ..DeviceStatsDailyDelta::default()
         });

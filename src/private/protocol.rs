@@ -1,6 +1,8 @@
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
+use crate::value::ChannelId;
+
 pub const WIRE_CODEC_POSTCARD: u8 = 1;
 pub const WIRE_VERSION_V2: u8 = 2;
 pub const PRIVATE_PAYLOAD_VERSION_V1: u8 = 1;
@@ -228,16 +230,15 @@ impl PrivatePayloadEnvelope {
         self.payload_version == Self::CURRENT_VERSION
     }
 
-    pub fn channel_id_raw(&self) -> Option<&str> {
+    pub(crate) fn channel_id(&self) -> Option<ChannelId> {
         self.data
             .get("channel_id")
             .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+            .and_then(|value| ChannelId::parse(value).ok())
     }
 
-    pub fn parsed_channel_id(&self) -> Option<[u8; 16]> {
-        crate::api::parse_channel_id(self.channel_id_raw()?).ok()
+    pub(crate) fn parsed_channel_id(&self) -> Option<[u8; 16]> {
+        self.channel_id().map(ChannelId::into_inner)
     }
 
     pub fn ttl(&self) -> Option<i64> {
@@ -338,9 +339,22 @@ mod tests {
             ]),
         };
         assert!(envelope.is_supported_version());
-        assert_eq!(envelope.channel_id_raw(), Some(channel_id.as_str()));
+        assert_eq!(
+            envelope.channel_id().map(|value| value.to_string()),
+            Some(channel_id)
+        );
         assert!(envelope.parsed_channel_id().is_some());
         assert_eq!(envelope.ttl(), Some(120));
         assert_eq!(envelope.ttl_seconds_remaining(100), Some(20));
+    }
+
+    #[test]
+    fn payload_envelope_rejects_invalid_channel_id_text() {
+        let envelope = PrivatePayloadEnvelope {
+            payload_version: PRIVATE_PAYLOAD_VERSION_V1,
+            data: HashMap::from([("channel_id".to_string(), "bad-channel".to_string())]),
+        };
+        assert!(envelope.channel_id().is_none());
+        assert!(envelope.parsed_channel_id().is_none());
     }
 }

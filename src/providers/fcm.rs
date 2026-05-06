@@ -3,7 +3,7 @@ use std::sync::Arc;
 use hashbrown::HashMap;
 use serde::Serialize;
 
-use crate::util::SharedStringMap;
+use crate::{util::SharedStringMap, value::NotificationSeverity};
 
 #[derive(Debug, Serialize)]
 pub struct FcmPayload {
@@ -26,10 +26,9 @@ impl FcmPayload {
     }
 
     pub fn priority_for_level(level: &str) -> &'static str {
-        match level.trim().to_ascii_lowercase().as_str() {
-            "critical" | "high" | "normal" => "HIGH",
-            _ => "NORMAL",
-        }
+        NotificationSeverity::parse_known(level)
+            .map(NotificationSeverity::fcm_priority)
+            .unwrap_or("NORMAL")
     }
 
     pub fn data(&self) -> &HashMap<String, String> {

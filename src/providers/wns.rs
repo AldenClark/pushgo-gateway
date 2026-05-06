@@ -3,7 +3,7 @@ use std::sync::Arc;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 
-use crate::util::SharedStringMap;
+use crate::{util::SharedStringMap, value::NotificationSeverity};
 
 #[derive(Debug)]
 pub struct WnsPayload {
@@ -37,11 +37,11 @@ impl WnsPayload {
     }
 
     pub fn priority_for_level(level: &str) -> Option<u8> {
-        match level.trim().to_ascii_lowercase().as_str() {
-            "critical" | "high" => Some(1),
-            "low" => Some(3),
-            _ => Some(2),
-        }
+        Some(
+            NotificationSeverity::parse_known(level)
+                .unwrap_or(NotificationSeverity::Normal)
+                .wns_priority(),
+        )
     }
 
     pub fn encoded_body(&self) -> Result<Arc<[u8]>, postcard::Error> {

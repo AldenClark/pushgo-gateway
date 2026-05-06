@@ -1,6 +1,8 @@
 use hashbrown::HashMap;
 use serde::Deserialize;
 
+use crate::value::{EntityKind, OptionalText};
+
 #[derive(Debug, Default, Deserialize)]
 struct WatchProfile {
     #[serde(default)]
@@ -13,25 +15,8 @@ struct WatchProfile {
     severity: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WatchEntityKind {
-    Message,
-    Event,
-    Thing,
-}
-
 struct WatchLightPayload<'a> {
     payload: &'a HashMap<String, String>,
-}
-
-impl WatchEntityKind {
-    fn detect(raw: Option<&str>) -> Self {
-        match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-            Some("event") => Self::Event,
-            Some("thing") => Self::Thing,
-            _ => Self::Message,
-        }
-    }
 }
 
 impl WatchProfile {
@@ -52,9 +37,7 @@ impl WatchProfile {
     fn field(value: Option<&String>) -> Option<String> {
         value
             .map(String::as_str)
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .map(str::to_owned)
+            .and_then(OptionalText::normalize_value)
     }
 }
 
@@ -65,9 +48,9 @@ impl<'a> WatchLightPayload<'a> {
 
     fn quantize(&self) -> HashMap<String, String> {
         let mut output = match self.kind() {
-            WatchEntityKind::Event => self.event_payload(),
-            WatchEntityKind::Thing => self.thing_payload(),
-            WatchEntityKind::Message => self.message_payload(),
+            EntityKind::Event => self.event_payload(),
+            EntityKind::Thing => self.thing_payload(),
+            EntityKind::Message => self.message_payload(),
         };
 
         if output.is_empty() {
@@ -78,17 +61,15 @@ impl<'a> WatchLightPayload<'a> {
         output
     }
 
-    fn kind(&self) -> WatchEntityKind {
-        WatchEntityKind::detect(self.field("entity_type").as_deref())
+    fn kind(&self) -> EntityKind {
+        EntityKind::detect(self.field("entity_type").as_deref())
     }
 
     fn field(&self, key: &str) -> Option<String> {
         self.payload
             .get(key)
             .map(String::as_str)
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .map(str::to_owned)
+            .and_then(OptionalText::normalize_value)
     }
 
     fn insert_if_present(
@@ -127,7 +108,8 @@ impl<'a> WatchLightPayload<'a> {
         output.insert("event_id".to_string(), event_id.clone());
         output.insert(
             "title".to_string(),
-            profile.title
+            profile
+                .title
                 .or_else(|| self.field("title"))
                 .unwrap_or(event_id),
         );
@@ -160,7 +142,8 @@ impl<'a> WatchLightPayload<'a> {
         output.insert("thing_id".to_string(), thing_id.clone());
         output.insert(
             "title".to_string(),
-            profile.title
+            profile
+                .title
                 .or_else(|| self.field("title"))
                 .unwrap_or(thing_id),
         );
@@ -169,11 +152,7 @@ impl<'a> WatchLightPayload<'a> {
             "body",
             profile.description.or_else(|| self.field("body")),
         );
-        Self::insert_if_present(
-            &mut output,
-            "attrs",
-            self.field("attrs"),
-        );
+        Self::insert_if_present(&mut output, "attrs", self.field("attrs"));
         Self::insert_if_present(
             &mut output,
             "image",
