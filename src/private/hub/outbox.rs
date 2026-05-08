@@ -23,6 +23,14 @@ impl PrivateHub {
                 .await
                 .map_err(|err| crate::Error::Internal(err.to_string()))?
             else {
+                emit_private_enqueue_rejected(
+                    "per_device_capacity",
+                    device_id,
+                    device_pending,
+                    self.max_pending_per_device,
+                    None,
+                    self.global_max_pending,
+                );
                 return Err(crate::Error::TooBusy);
             };
             private_outbox_pruned = private_outbox_pruned.saturating_add(1);
@@ -64,6 +72,14 @@ impl PrivateHub {
                 .await
                 .map_err(|err| crate::Error::Internal(err.to_string()))?
             else {
+                emit_private_enqueue_rejected(
+                    "global_capacity",
+                    device_id,
+                    device_pending,
+                    self.max_pending_per_device,
+                    Some(total_pending),
+                    self.global_max_pending,
+                );
                 return Err(crate::Error::TooBusy);
             };
             private_outbox_pruned = private_outbox_pruned.saturating_add(1);
@@ -354,9 +370,33 @@ impl PrivateHub {
 }
 
 fn emit_private_outbox_evicted(reason: &'static str, device_id: DeviceId, delivery_id: &str) {
-    crate::util::TraceEvent::new("private.outbox_evicted")
-        .field_str("reason", reason)
-        .field_redacted("device_id", encode_lower_hex_128(&device_id))
-        .field_redacted("delivery_id", delivery_id)
-        .emit();
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "private.outbox_evicted",
+        reason = %(reason),
+        device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+        delivery_id = %(crate::util::redact_text(delivery_id))
+    );
+}
+
+fn emit_private_enqueue_rejected(
+    reason: &'static str,
+    device_id: DeviceId,
+    device_pending: usize,
+    max_pending_per_device: usize,
+    total_pending: Option<usize>,
+    global_max_pending: usize,
+) {
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "private.enqueue_rejected",
+        reason = %(reason),
+        device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+        device_pending = (device_pending as u64),
+        max_pending_per_device = (max_pending_per_device as u64),
+        global_max_pending = (global_max_pending as u64),
+        total_pending = ?(total_pending.map(|value| value as u64))
+    );
 }

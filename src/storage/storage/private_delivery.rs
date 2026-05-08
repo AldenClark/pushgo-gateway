@@ -6,6 +6,7 @@ use crate::{
     },
     value::ProviderTokenRef,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 
 impl Storage {
     pub async fn load_private_outbox_entry(
@@ -235,14 +236,33 @@ impl Storage {
         if pending == 0 {
             return Ok(0);
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "provider.pending_migration_started",
+            direction = %("private_to_provider"),
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            platform = %(platform.name()),
+            pending = (pending as u64)
+        );
         let entries = self.db.list_private_outbox(device_id, pending).await?;
         let mut migrated = 0usize;
+        let mut missing_messages = 0usize;
         for entry in entries {
             let Some(message) = self
                 .db
                 .load_private_message(entry.delivery_id.as_str())
                 .await?
             else {
+                missing_messages = missing_messages.saturating_add(1);
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::INFO,
+                    event = "provider.pending_migration_message_missing",
+                    direction = %("private_to_provider"),
+                    device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                    delivery_id = %(crate::util::redact_text(entry.delivery_id.as_str()))
+                );
                 continue;
             };
             self.db
@@ -259,6 +279,16 @@ impl Storage {
         if migrated > 0 {
             let _cleared = self.db.clear_private_outbox_for_device(device_id).await?;
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "provider.pending_migration_finished",
+            direction = %("private_to_provider"),
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            pending = (pending as u64),
+            migrated = (migrated as u64),
+            missing_messages = (missing_messages as u64)
+        );
         Ok(migrated)
     }
 
@@ -272,11 +302,32 @@ impl Storage {
         let existing_pending = self.db.count_private_outbox_for_device(device_id).await?;
         let mut remaining_capacity = max_pending_per_device.saturating_sub(existing_pending);
         if remaining_capacity == 0 {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "provider.pending_migration_skipped",
+                direction = %("provider_to_private"),
+                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                reason = %("no_remaining_capacity"),
+                existing_pending = (existing_pending as u64),
+                max_pending_per_device = (max_pending_per_device as u64)
+            );
             return Ok(0);
         }
         let now = chrono::Utc::now().timestamp_millis();
         let next_attempt_at = now.saturating_add(ack_timeout_secs.max(1) as i64 * 1000);
         let mut migrated = 0usize;
+        let mut source_pulled = 0usize;
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "provider.pending_migration_started",
+            direction = %("provider_to_private"),
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            existing_pending = (existing_pending as u64),
+            remaining_capacity = (remaining_capacity as u64),
+            ack_timeout_secs = (ack_timeout_secs)
+        );
 
         loop {
             let batch_size = remaining_capacity.min(BATCH_SIZE);
@@ -290,6 +341,7 @@ impl Storage {
             if items.is_empty() {
                 break;
             }
+            source_pulled = source_pulled.saturating_add(items.len());
             for item in &items {
                 let message = PrivateMessage {
                     payload: item.payload.clone(),
@@ -327,14 +379,36 @@ impl Storage {
                 break;
             }
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "provider.pending_migration_finished",
+            direction = %("provider_to_private"),
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            source_pulled = (source_pulled as u64),
+            migrated = (migrated as u64),
+            remaining_capacity = (remaining_capacity as u64)
+        );
         Ok(migrated)
     }
 
     async fn clear_private_outbox_after_provider_delivery(&self, item: &ProviderPullItem) {
         let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(&item.payload) else {
+            emit_provider_pull_ack_skip(
+                "decode_failed",
+                item.device_id,
+                item.delivery_id.as_str(),
+                None,
+            );
             return;
         };
         if !envelope.is_supported_version() {
+            emit_provider_pull_ack_skip(
+                "unsupported_payload_version",
+                item.device_id,
+                item.delivery_id.as_str(),
+                None,
+            );
             return;
         }
         let Some(original_delivery_id) = envelope
@@ -344,21 +418,57 @@ impl Storage {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         else {
+            emit_provider_pull_ack_skip(
+                "missing_original_delivery_id",
+                item.device_id,
+                item.delivery_id.as_str(),
+                None,
+            );
             return;
         };
         if let Err(err) = self
             .ack_private_delivery(item.device_id, original_delivery_id)
             .await
         {
-            crate::util::TraceEvent::new("provider.pull_private_outbox_ack_failed")
-                .field_redacted("delivery_id", item.delivery_id.as_str())
-                .field_redacted("original_delivery_id", original_delivery_id)
-                .field_redacted(
-                    "device_id",
-                    crate::util::encode_crockford_base32_128(&item.device_id),
-                )
-                .field_str("error", err.to_string())
-                .emit();
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "provider.pull_private_outbox_ack_failed",
+                delivery_id = %(crate::util::redact_text(item.delivery_id.as_str())),
+                original_delivery_id = %(crate::util::redact_text(original_delivery_id)),
+                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&item.device_id))),
+                error = %(err.to_string())
+            );
+        } else {
+            emit_provider_pull_ack_skip(
+                "acked_linked_private_outbox",
+                item.device_id,
+                item.delivery_id.as_str(),
+                Some(original_delivery_id),
+            );
         }
     }
+}
+
+fn emit_provider_pull_ack_skip(
+    reason: &'static str,
+    device_id: DeviceId,
+    delivery_id: &str,
+    original_delivery_id: Option<&str>,
+) {
+    static PROVIDER_PULL_ACK_OBS_COUNT: AtomicU64 = AtomicU64::new(0);
+    let count = PROVIDER_PULL_ACK_OBS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if !(count <= 8 || count.is_power_of_two()) {
+        return;
+    }
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "provider.pull_private_outbox_ack_observed",
+        reason = %(reason),
+        count = (count),
+        delivery_id = %(crate::util::redact_text(delivery_id)),
+        device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+        original_delivery_id = ?original_delivery_id.map(crate::util::redact_text)
+    );
 }

@@ -53,6 +53,36 @@ fn js_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing JS string should not fail")
 }
 
+fn emit_oauth_rejected(endpoint: &str, reason: &str) {
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "mcp.oauth_rejected",
+        endpoint = %(endpoint),
+        reason = %(reason)
+    );
+}
+
+fn emit_oauth_failed(endpoint: &str, stage: &str) {
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "mcp.oauth_failed",
+        endpoint = %(endpoint),
+        stage = %(stage)
+    );
+}
+
+fn emit_oauth_completed(endpoint: &str) {
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "mcp.oauth_completed",
+        endpoint = %(endpoint)
+    );
+}
+
+#[tracing::instrument(name = "gateway.mcp.oauth.authorize_get", skip_all)]
 pub(crate) async fn oauth_authorize_get(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -69,6 +99,7 @@ pub(crate) async fn oauth_authorize_get(
         .client_redirect_allowed(query.client_id.as_str(), query.redirect_uri.as_str())
         .await
     {
+        emit_oauth_rejected("authorize_get", "client_or_redirect_invalid");
         return (StatusCode::BAD_REQUEST, "client or redirect_uri invalid").into_response();
     }
     let locale = McpLocale::from_request(query.lang.as_deref(), query.ui_locales.as_deref());
@@ -433,9 +464,11 @@ pub(crate) async fn oauth_authorize_get(
         alert_missing_rows = js_string(text.alert_missing_rows),
     );
 
+    emit_oauth_completed("authorize_get");
     Html(html).into_response()
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.authorize_post", skip_all)]
 pub(crate) async fn oauth_authorize_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -452,6 +485,7 @@ pub(crate) async fn oauth_authorize_post(
         .client_redirect_allowed(form.client_id.as_str(), form.redirect_uri.as_str())
         .await
     {
+        emit_oauth_rejected("authorize_post", "client_or_redirect_invalid");
         return (StatusCode::BAD_REQUEST, "client or redirect_uri invalid").into_response();
     }
     let _locale = McpLocale::from_request(form.lang.as_deref(), form.ui_locales.as_deref());
@@ -465,6 +499,7 @@ pub(crate) async fn oauth_authorize_post(
         {
             Ok(Some(_)) => {}
             Ok(None) => {
+                emit_oauth_rejected("authorize_post", "channel_password_mismatch");
                 return (
                     StatusCode::BAD_REQUEST,
                     "channel or password mismatch in channel_bindings",
@@ -472,6 +507,7 @@ pub(crate) async fn oauth_authorize_post(
                     .into_response();
             }
             Err(_) => {
+                emit_oauth_failed("authorize_post", "channel_validation");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "channel validation failed",
@@ -528,6 +564,7 @@ pub(crate) async fn oauth_authorize_post(
     {
         let _ = write!(location, "&state={state_param}");
     }
+    emit_oauth_completed("authorize_post");
     Redirect::to(&location).into_response()
 }
 
@@ -552,6 +589,7 @@ struct TokenResponse {
     scope: String,
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.token", skip_all)]
 pub(crate) async fn oauth_token(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -574,6 +612,7 @@ pub(crate) async fn oauth_token(
             form.redirect_uri.as_deref(),
             form.code_verifier.as_deref(),
         ) else {
+            emit_oauth_rejected("token", "invalid_authorization_code_request");
             return (
                 StatusCode::BAD_REQUEST,
                 "invalid authorization_code request",
@@ -584,23 +623,28 @@ pub(crate) async fn oauth_token(
             .validate_client_for_token(client_id, form.client_secret.as_deref())
             .await
         {
+            emit_oauth_rejected("token", "invalid_client");
             return (StatusCode::BAD_REQUEST, "invalid client").into_response();
         }
 
         let mut auth_codes = mcp.auth_codes.write().await;
         let Some(record) = auth_codes.get_mut(code) else {
+            emit_oauth_rejected("token", "invalid_code");
             return (StatusCode::BAD_REQUEST, "invalid code").into_response();
         };
         if !record.is_active(McpState::now_ts()) {
+            emit_oauth_rejected("token", "code_expired_or_consumed");
             return (StatusCode::BAD_REQUEST, "code expired or consumed").into_response();
         }
         if !record.matches_exchange_request(client_id, redirect_uri) {
+            emit_oauth_rejected("token", "code_mismatch");
             return (StatusCode::BAD_REQUEST, "code mismatch").into_response();
         }
         if !record
             .code_challenge_method
             .verify(&record.code_challenge, code_verifier)
         {
+            emit_oauth_rejected("token", "code_verifier_mismatch");
             return (StatusCode::BAD_REQUEST, "code_verifier mismatch").into_response();
         }
         record.consume();
@@ -622,6 +666,7 @@ pub(crate) async fn oauth_token(
         ) {
             Ok(token) => token,
             Err(_) => {
+                emit_oauth_failed("token", "sign_authorization_code_access_token");
                 return (StatusCode::INTERNAL_SERVER_ERROR, "token sign failed").into_response();
             }
         };
@@ -645,6 +690,7 @@ pub(crate) async fn oauth_token(
         drop(auth_codes);
         mcp.persist_snapshot().await;
 
+        emit_oauth_completed("token_authorization_code");
         return Json(TokenResponse {
             access_token,
             token_type: "Bearer",
@@ -659,25 +705,30 @@ pub(crate) async fn oauth_token(
         let (Some(refresh_token), Some(client_id)) =
             (form.refresh_token.as_deref(), form.client_id.as_deref())
         else {
+            emit_oauth_rejected("token", "invalid_refresh_token_request");
             return (StatusCode::BAD_REQUEST, "invalid refresh_token request").into_response();
         };
         if !mcp
             .validate_client_for_token(client_id, form.client_secret.as_deref())
             .await
         {
+            emit_oauth_rejected("token", "invalid_client");
             return (StatusCode::BAD_REQUEST, "invalid client").into_response();
         }
         let hashed = McpState::token_hash(refresh_token);
         let mut refresh_tokens = mcp.refresh_tokens.write().await;
         let Some(record) = refresh_tokens.get_mut(&hashed) else {
+            emit_oauth_rejected("token", "invalid_refresh_token");
             return (StatusCode::BAD_REQUEST, "invalid refresh_token").into_response();
         };
         if !record.is_active_for(client_id, McpState::now_ts()) {
+            emit_oauth_rejected("token", "refresh_token_expired_or_revoked");
             return (StatusCode::BAD_REQUEST, "refresh_token expired or revoked").into_response();
         }
         let scope = match form.scope.clone() {
             Some(requested) => {
                 if !requested.is_subset_of(&record.scope) {
+                    emit_oauth_rejected("token", "invalid_scope");
                     return (StatusCode::BAD_REQUEST, "invalid scope").into_response();
                 }
                 requested
@@ -704,6 +755,7 @@ pub(crate) async fn oauth_token(
         ) {
             Ok(token) => token,
             Err(_) => {
+                emit_oauth_failed("token", "sign_refresh_access_token");
                 return (StatusCode::INTERNAL_SERVER_ERROR, "token sign failed").into_response();
             }
         };
@@ -727,6 +779,7 @@ pub(crate) async fn oauth_token(
         drop(refresh_tokens);
         mcp.persist_snapshot().await;
 
+        emit_oauth_completed("token_refresh_token");
         return Json(TokenResponse {
             access_token,
             token_type: "Bearer",
@@ -737,6 +790,7 @@ pub(crate) async fn oauth_token(
         .into_response();
     }
 
+    emit_oauth_rejected("token", "unsupported_grant_type");
     (StatusCode::BAD_REQUEST, "unsupported grant_type").into_response()
 }
 
@@ -745,6 +799,7 @@ pub(crate) struct OAuthRevokeForm {
     token: String,
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.revoke", skip_all)]
 pub(crate) async fn oauth_revoke(
     State(state): State<AppState>,
     Form(form): Form<OAuthRevokeForm>,
@@ -765,9 +820,11 @@ pub(crate) async fn oauth_revoke(
     if changed {
         mcp.persist_snapshot().await;
     }
+    emit_oauth_completed("revoke");
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.metadata", skip_all)]
 pub(crate) async fn oauth_metadata(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -781,9 +838,11 @@ pub(crate) async fn oauth_metadata(
     }
     let issuer = mcp.oauth_issuer().await;
     let metadata = oauth_authorization_server_metadata(&issuer);
+    emit_oauth_completed("metadata");
     Json(metadata).into_response()
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.openid_configuration", skip_all)]
 pub(crate) async fn oauth_openid_configuration(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -807,6 +866,7 @@ pub(crate) async fn oauth_openid_configuration(
             json!(["HS256"]),
         );
     }
+    emit_oauth_completed("openid_configuration");
     Json(metadata).into_response()
 }
 
@@ -827,6 +887,7 @@ fn oauth_authorization_server_metadata(issuer: &str) -> Value {
     })
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.jwks", skip_all)]
 pub(crate) async fn oauth_jwks(State(state): State<AppState>) -> Response {
     let mcp = state
         .mcp
@@ -834,7 +895,7 @@ pub(crate) async fn oauth_jwks(State(state): State<AppState>) -> Response {
         .expect("mcp routes must only be mounted when MCP is enabled");
     let signing_key = mcp.oauth_signing_key().await;
     let kid = McpState::token_hash(&signing_key);
-    Json(json!({
+    let response = Json(json!({
         "keys": [{
             "kty": "oct",
             "use": "sig",
@@ -842,7 +903,9 @@ pub(crate) async fn oauth_jwks(State(state): State<AppState>) -> Response {
             "kid": &kid[..16]
         }]
     }))
-    .into_response()
+    .into_response();
+    emit_oauth_completed("jwks");
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -855,6 +918,7 @@ pub(crate) struct OAuthRegisterRequest {
     token_endpoint_auth_method: Option<String>,
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.register", skip_all)]
 pub(crate) async fn oauth_register(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -865,12 +929,15 @@ pub(crate) async fn oauth_register(
         .as_ref()
         .expect("mcp routes must only be mounted when MCP is enabled");
     if !enforce_gateway_token(&headers, &state.auth) {
+        emit_oauth_rejected("register", "unauthorized");
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     if !mcp.config.dcr_enabled {
+        emit_oauth_rejected("register", "dcr_disabled");
         return (StatusCode::NOT_FOUND, "dynamic client registration disabled").into_response();
     }
     if payload.redirect_uris.is_empty() {
+        emit_oauth_rejected("register", "redirect_uris_required");
         return (StatusCode::BAD_REQUEST, "redirect_uris required").into_response();
     }
     if payload
@@ -878,6 +945,7 @@ pub(crate) async fn oauth_register(
         .iter()
         .any(|item| !item.starts_with("https://"))
     {
+        emit_oauth_rejected("register", "redirect_uris_must_be_https");
         return (StatusCode::BAD_REQUEST, "redirect_uris must be https").into_response();
     }
     let auth_method = match payload
@@ -888,7 +956,10 @@ pub(crate) async fn oauth_register(
     {
         "none" => "none",
         "client_secret_post" => "client_secret_post",
-        _ => return (StatusCode::BAD_REQUEST, "unsupported token_endpoint_auth_method").into_response(),
+        _ => {
+            emit_oauth_rejected("register", "unsupported_token_endpoint_auth_method");
+            return (StatusCode::BAD_REQUEST, "unsupported token_endpoint_auth_method").into_response();
+        }
     };
     let client_id = McpState::random_id("mcp_client");
     let issued_client_secret = McpState::random_id("mcp_secret");
@@ -914,6 +985,7 @@ pub(crate) async fn oauth_register(
     }
     mcp.persist_snapshot().await;
 
+    emit_oauth_completed("register");
     (
         StatusCode::CREATED,
         Json(json!({
@@ -930,6 +1002,7 @@ pub(crate) async fn oauth_register(
         .into_response()
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.protected_resource_metadata", skip_all)]
 pub(crate) async fn oauth_protected_resource_metadata(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -942,13 +1015,15 @@ pub(crate) async fn oauth_protected_resource_metadata(
         mcp.maybe_update_issuer_from_origin(&origin).await;
     }
     let issuer = mcp.oauth_issuer().await;
-    Json(json!({
+    let response = Json(json!({
         "resource": absolute_url(&issuer, "/mcp"),
         "authorization_servers": [issuer],
         "scopes_supported": ["mcp:tools", "mcp:channels:manage"],
         "bearer_methods_supported": ["header"]
     }))
-    .into_response()
+    .into_response();
+    emit_oauth_completed("protected_resource_metadata");
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -961,6 +1036,7 @@ pub(crate) struct OAuthChannelValidateRequest {
     ui_locales: Option<String>,
 }
 
+#[tracing::instrument(name = "gateway.mcp.oauth.channel_validate", skip_all)]
 pub(crate) async fn oauth_channel_validate(
     State(state): State<AppState>,
     Json(payload): Json<OAuthChannelValidateRequest>,
@@ -973,6 +1049,7 @@ pub(crate) async fn oauth_channel_validate(
     let channel_id = match parse_channel_id(&payload.channel_id) {
         Ok(value) => value,
         Err(_) => {
+            emit_oauth_rejected("channel_validate", "invalid_channel_id");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"valid": false, "message": channel_validate_invalid_channel_id(locale)})),
@@ -983,6 +1060,7 @@ pub(crate) async fn oauth_channel_validate(
     let password = match validate_channel_password(&payload.password) {
         Ok(value) => value,
         Err(_) => {
+            emit_oauth_rejected("channel_validate", "invalid_password");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"valid": false, "message": channel_validate_invalid_password(locale)})),
@@ -990,7 +1068,7 @@ pub(crate) async fn oauth_channel_validate(
                 .into_response();
         }
     };
-    match state.store.channel_info_with_password(channel_id, password).await {
+    let response = match state.store.channel_info_with_password(channel_id, password).await {
         Ok(Some(info)) => (
             StatusCode::OK,
             Json(json!({
@@ -999,15 +1077,23 @@ pub(crate) async fn oauth_channel_validate(
             })),
         )
             .into_response(),
-        Ok(None) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"valid": false, "message": channel_validate_mismatch(locale)})),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"valid": false, "message": channel_validate_mismatch(locale)})),
-        )
-            .into_response(),
-    }
+        Ok(None) => {
+            emit_oauth_rejected("channel_validate", "channel_password_mismatch");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"valid": false, "message": channel_validate_mismatch(locale)})),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            emit_oauth_failed("channel_validate", "channel_validation");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"valid": false, "message": channel_validate_mismatch(locale)})),
+            )
+                .into_response()
+        }
+    };
+    emit_oauth_completed("channel_validate");
+    response
 }

@@ -64,7 +64,7 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss`) |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | No                | Observability matrix profile (`prod_min`/`ops`/`incident`/`debug`) |
-| `--trace-log-file`                | `PUSHGO_TRACE_LOG_FILE`                | `logs/pushgo-gateway-trace.log` | No           | Trace JSONL file path when trace logs are enabled      |
+| `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | No                | Native tracing log level (`off`/`error`/`warn`/`info`/`debug`/`trace`) |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
 | `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | None                       | No                | External HTTPS base URL used for MCP/OAuth issuer URLs and advertised WSS URL |
 
@@ -126,9 +126,9 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | In-process APNS max concurrent sends                                        |
 | `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | Dispatch-target cache TTL in milliseconds (200~10000)                       |
 | `PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED` | None                                | Optional override for diagnostics API switch                                 |
-| `PUSHGO_OBSERVABILITY_TRACE_LOGS_ENABLED`      | None                                | Optional override for trace logs switch                                      |
+| `PUSHGO_OBSERVABILITY_LOG_LEVEL`              | `warn`                              | Optional override for native tracing log level                               |
 | `PUSHGO_OBSERVABILITY_STATS_ENABLED`           | None                                | Optional override for stats collection                                       |
-| `PUSHGO_TRACE_LOG_FILE`                       | `logs/pushgo-gateway-trace.log`    | Trace JSONL file path for replay (used when trace logs are enabled)         |
+| `RUST_LOG`                                    | None                                | Optional full EnvFilter directive override (higher priority than profile/level) |
 
 ### Operations Stats (DB)
 
@@ -137,8 +137,9 @@ In addition to existing channel/device/gateway aggregates, gateway now writes op
 
 ### Trace Event Output
 
-When trace logs are enabled (for example `--observability-profile incident`), gateway emits one JSON event per line to the trace log file (`--trace-log-file` / `PUSHGO_TRACE_LOG_FILE`).
-Each event contains fixed envelope fields (`ts_ms`, `component`, `event`) and a whitelist of typed fields.
+Gateway now uses one native `tracing` pipeline for both spans and events.
+Default output level is `warn`; use `--observability-log-level` (or `PUSHGO_OBSERVABILITY_LOG_LEVEL`) to raise/lower verbosity, and use `RUST_LOG` when full EnvFilter routing is needed.
+Each trace event contains fixed envelope fields (`ts_ms`, `component`, `event`) and a whitelist of typed fields.
 Potentially sensitive identifiers are emitted through redacted fields.
 
 Example:
@@ -418,7 +419,7 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss`）      |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | 否       | 可观测矩阵档位（`prod_min`/`ops`/`incident`/`debug`） |
-| `--trace-log-file`                | `PUSHGO_TRACE_LOG_FILE`                | `logs/pushgo-gateway-trace.log` | 否  | trace JSONL 文件路径（仅在 trace 开启时使用）        |
+| `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | 否       | 原生 tracing 日志级别（`off`/`error`/`warn`/`info`/`debug`/`trace`） |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
 | `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | 无                         | 否       | MCP/OAuth issuer URL 与 WSS 对外提示使用的外部 HTTPS 基准地址 |
 
@@ -480,9 +481,9 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | 进程内 APNS 最大发送并发数                                                |
 | `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | dispatch targets 缓存 TTL（毫秒，200~10000）                              |
 | `PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED` | 无                                 | 可选覆盖 diagnostics API 开关                                             |
-| `PUSHGO_OBSERVABILITY_TRACE_LOGS_ENABLED`      | 无                                 | 可选覆盖 trace 日志开关                                                   |
+| `PUSHGO_OBSERVABILITY_LOG_LEVEL`              | `warn`                             | 可选覆盖原生 tracing 日志级别                                             |
 | `PUSHGO_OBSERVABILITY_STATS_ENABLED`           | 无                                 | 可选覆盖统计采集开关                                                      |
-| `PUSHGO_TRACE_LOG_FILE`                       | `logs/pushgo-gateway-trace.log`    | trace JSONL 回放日志文件路径（trace 开启时生效）                           |
+| `RUST_LOG`                                    | 无                                 | 可选覆盖完整 EnvFilter 指令（优先级高于 profile/level）                   |
 
 ### 运营统计（入库）
 
@@ -491,7 +492,8 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 
 ### Trace 事件输出
 
-开启 trace 日志（例如 `--observability-profile incident`）后，gateway 会向 trace 日志文件（`--trace-log-file` / `PUSHGO_TRACE_LOG_FILE`）输出一行一个 JSON 事件。
+gateway 已统一为一条原生 `tracing` 链路（span + event）。
+默认输出级别为 `warn`；可通过 `--observability-log-level`（或 `PUSHGO_OBSERVABILITY_LOG_LEVEL`）调节，若需要完整路由规则可使用 `RUST_LOG` 覆盖。
 每条事件固定包含 `ts_ms`、`component`、`event`，并附带白名单字段。
 可能涉及敏感标识的字段会走脱敏输出。
 

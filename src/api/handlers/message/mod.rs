@@ -141,12 +141,25 @@ pub(crate) async fn message_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<MessageIntent>,
 ) -> HttpResult {
-    let scoped_thing_id = payload
-        .thing_id
-        .as_deref()
-        .map(|raw| EntityId::parse(raw, "thing_id").map(EntityId::into_inner))
-        .transpose()?;
-    dispatch_message_intent(&state, payload, scoped_thing_id).await
+    let span = tracing::info_span!("gateway.api.message.request");
+    let fut = async move {
+        let scoped_thing_id = payload
+            .thing_id
+            .as_deref()
+            .map(|raw| EntityId::parse(raw, "thing_id").map(EntityId::into_inner))
+            .transpose()?;
+        dispatch_message_intent(&state, payload, scoped_thing_id).await
+    };
+    tracing::Instrument::instrument(fut, span)
+        .await
+        .inspect_err(|err: &Error| {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "message.route_failed",
+                error = %(err.to_string())
+            );
+        })
 }
 
 pub(super) async fn dispatch_message_intent(
@@ -167,110 +180,150 @@ pub(crate) async fn dispatch_message_authorized_intent(
     payload: MessageDispatchIntent,
     scoped_thing_id: Option<String>,
 ) -> HttpResult {
-    let channel_id = authorized_channel.channel_id;
-    let channel_id_value = authorized_channel.channel_scope;
+    let span = tracing::info_span!(
+        "gateway.api.message.dispatch",
+        has_thing_id = scoped_thing_id.is_some()
+    );
+    let fut = async move {
+        let channel_id = authorized_channel.channel_id;
+        let channel_id_value = authorized_channel.channel_scope;
 
-    let MessageDispatchIntent {
-        op_id,
-        occurred_at,
-        title,
-        body,
-        severity,
-        ttl,
-        url,
-        images,
-        ciphertext,
-        tags,
-        metadata,
-    } = payload;
-    let occurred_at = if scoped_thing_id.is_some() {
-        occurred_at.ok_or_else(|| {
-            Error::validation_code(
-                "occurred_at is required when message is scoped to thing_id",
-                "occurred_at_required_for_thing_scoped_message",
+        let MessageDispatchIntent {
+            op_id,
+            occurred_at,
+            title,
+            body,
+            severity,
+            ttl,
+            url,
+            images,
+            ciphertext,
+            tags,
+            metadata,
+        } = payload;
+        let occurred_at = if scoped_thing_id.is_some() {
+            occurred_at.ok_or_else(|| {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "message.route_rejected",
+                    channel_id = %(crate::util::redact_text(channel_id_value.as_str())),
+                    reason = %("occurred_at_required_for_thing_scoped_message")
+                );
+                Error::validation_code(
+                    "occurred_at is required when message is scoped to thing_id",
+                    "occurred_at_required_for_thing_scoped_message",
+                )
+            })?
+        } else {
+            occurred_at.unwrap_or_else(|| Utc::now().timestamp_millis())
+        };
+        let normalized_body = OptionalText::normalize_owned(body);
+        let normalized_url = OptionalText::normalize_owned(url);
+        let normalized_images = NormalizedImageUrls::parse(&images, "images")?.into_inner();
+
+        let op_id = OpId::resolve(op_id.as_deref())?;
+        let message_id = ResolvedSemanticId::resolve_create(
+            state,
+            SemanticScope::semantic_create_key(
+                &channel_id_value,
+                "message",
+                scoped_thing_id.as_deref(),
+                &op_id,
             )
-        })?
-    } else {
-        occurred_at.unwrap_or_else(|| Utc::now().timestamp_millis())
-    };
-    let normalized_body = OptionalText::normalize_owned(body);
-    let normalized_url = OptionalText::normalize_owned(url);
-    let normalized_images = NormalizedImageUrls::parse(&images, "images")?.into_inner();
-
-    let op_id = OpId::resolve(op_id.as_deref())?;
-    let message_id = ResolvedSemanticId::resolve_create(
-        state,
-        SemanticScope::semantic_create_key(
-            &channel_id_value,
-            "message",
-            scoped_thing_id.as_deref(),
-            &op_id,
+            .as_str(),
         )
-        .as_str(),
-    )
-    .await?
-    .semantic_id;
-    let mut custom_data = HashMap::with_capacity(4);
-    if let Some(url) = normalized_url {
-        custom_data.insert("url".to_string(), url);
-    }
-    if !normalized_images.is_empty() {
-        let encoded = serde_json::to_string(&normalized_images).map_err(|_| {
-            Error::validation_code("images format is invalid", "images_format_invalid")
-        })?;
-        custom_data.insert("images".to_string(), encoded);
-    }
-    if let Some(ciphertext) = OptionalText::normalize_owned(ciphertext) {
-        custom_data.insert("ciphertext".to_string(), ciphertext);
-    }
-    let normalized_tags = NormalizedTags::parse(&tags, "tags")?.into_inner();
-    if !metadata.is_empty() {
-        let encoded = MetadataEntries::new(&metadata).encode()?;
-        custom_data.insert("metadata".to_string(), encoded);
-    }
-    let mut extra_fields = HashMap::with_capacity(3);
-    extra_fields.insert("message_id".to_string(), message_id.clone());
-    if !normalized_tags.is_empty() {
-        let encoded = serde_json::to_string(&normalized_tags)
-            .map_err(|_| Error::validation_code("tags format is invalid", "tags_format_invalid"))?;
-        extra_fields.insert("tags".to_string(), encoded);
-    }
-    if let Some(thing_id) = scoped_thing_id.clone() {
-        extra_fields.insert("thing_id".to_string(), thing_id);
-    }
+        .await?
+        .semantic_id;
+        let mut custom_data = HashMap::with_capacity(4);
+        if let Some(url) = normalized_url {
+            custom_data.insert("url".to_string(), url);
+        }
+        if !normalized_images.is_empty() {
+            let encoded = serde_json::to_string(&normalized_images).map_err(|_| {
+                Error::validation_code("images format is invalid", "images_format_invalid")
+            })?;
+            custom_data.insert("images".to_string(), encoded);
+        }
+        if let Some(ciphertext) = OptionalText::normalize_owned(ciphertext) {
+            custom_data.insert("ciphertext".to_string(), ciphertext);
+        }
+        let normalized_tags = NormalizedTags::parse(&tags, "tags")?.into_inner();
+        if !metadata.is_empty() {
+            let encoded = MetadataEntries::new(&metadata).encode()?;
+            custom_data.insert("metadata".to_string(), encoded);
+        }
+        let mut extra_fields = HashMap::with_capacity(3);
+        extra_fields.insert("message_id".to_string(), message_id.clone());
+        if !normalized_tags.is_empty() {
+            let encoded = serde_json::to_string(&normalized_tags).map_err(|_| {
+                Error::validation_code("tags format is invalid", "tags_format_invalid")
+            })?;
+            extra_fields.insert("tags".to_string(), encoded);
+        }
+        if let Some(thing_id) = scoped_thing_id.clone() {
+            extra_fields.insert("thing_id".to_string(), thing_id);
+        }
 
-    let summary = dispatch_entity_notification(
-        state,
-        channel_id,
-        op_id.into_inner(),
-        occurred_at,
-        Some(title),
-        normalized_body,
-        severity,
-        ttl,
-        custom_data,
-        "message",
-        &message_id,
-        extra_fields,
-    )
-    .await?;
+        let summary = dispatch_entity_notification(
+            state,
+            channel_id,
+            op_id.into_inner(),
+            occurred_at,
+            Some(title),
+            normalized_body,
+            severity,
+            ttl,
+            custom_data,
+            "message",
+            &message_id,
+            extra_fields,
+        )
+        .await?;
 
-    let error_message = summary.failure_error_message();
-    let mut response_data = MessageSummary {
-        channel_id: summary.channel_id,
-        op_id: summary.op_id,
-        message_id,
-        thing_id: scoped_thing_id,
-        accepted: true,
-    };
-    if let Some(error_message) = error_message {
-        response_data.accepted = false;
-        return Ok(
-            crate::api::StatusResponse::err_with_data(error_message, response_data)
-                .with_status(StatusCode::SERVICE_UNAVAILABLE),
+        let error_message = summary.failure_error_message();
+        let mut response_data = MessageSummary {
+            channel_id: summary.channel_id,
+            op_id: summary.op_id,
+            message_id,
+            thing_id: scoped_thing_id,
+            accepted: true,
+        };
+        if let Some(error_message) = error_message {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "message.route_dispatch_rejected",
+                channel_id = %(crate::util::redact_text(response_data.channel_id.as_str())),
+                message_id = %(crate::util::redact_text(response_data.message_id.as_str())),
+                reason = %(error_message)
+            );
+            response_data.accepted = false;
+            return Ok(
+                crate::api::StatusResponse::err_with_data(error_message, response_data)
+                    .with_status(StatusCode::SERVICE_UNAVAILABLE),
+            );
+        }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "message.route_completed",
+            channel_id = %(crate::util::redact_text(response_data.channel_id.as_str())),
+            message_id = %(crate::util::redact_text(response_data.message_id.as_str())),
+            accepted = (response_data.accepted)
         );
-    }
-    Ok(crate::api::ok(response_data))
+        Ok(crate::api::ok(response_data))
+    };
+    tracing::Instrument::instrument(fut, span)
+        .await
+        .inspect_err(|err: &Error| {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "message.route_failed",
+                error = %(err.to_string())
+            );
+        })
 }
 
 #[cfg(test)]

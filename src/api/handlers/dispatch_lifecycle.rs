@@ -85,7 +85,17 @@ impl DispatchOpGuard {
                 created_at,
             )
             .await
-            .map_err(|err| Error::Internal(err.to_string()))?;
+            .map_err(|err| {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::ERROR,
+                    event = "dispatch.dedupe_reserve_failed",
+                    dedupe_key = %(crate::util::redact_text(dedupe_key.as_str())),
+                    reserved_delivery_id = %(crate::util::redact_text(reserved_delivery_id.as_str())),
+                    error = %(err.to_string())
+                );
+                Error::Internal(err.to_string())
+            })?;
 
         let decision = match reservation {
             OpDedupeReservation::Sent { delivery_id } => {
@@ -99,6 +109,7 @@ impl DispatchOpGuard {
                 reserved_delivery_id,
             }),
         };
+        emit_dispatch_reservation_trace(&decision);
 
         Ok(decision)
     }
@@ -156,10 +167,40 @@ impl DispatchOpGuard {
                     .store
                     .mark_op_dedupe_sent(self.dedupe_key.as_str(), delivery_id)
                     .await
-                    .map_err(|err| Error::Internal(err.to_string()))?;
+                    .map_err(|err| {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::ERROR,
+                            event = "dispatch.dedupe_finalize_failed",
+                            dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
+                            reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
+                            finalized_delivery_id = %(crate::util::redact_text(delivery_id)),
+                            error = %(err.to_string())
+                        );
+                        Error::Internal(err.to_string())
+                    })?;
                 if !marked {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "dispatch.dedupe_settle_failed",
+                        action = %("finalize_sent"),
+                        dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
+                        reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
+                        finalized_delivery_id = %(crate::util::redact_text(delivery_id)),
+                        reason = %("mark_op_dedupe_sent_returned_false")
+                    );
                     return Err(Error::Internal("failed to finalize op dedupe".to_string()));
                 }
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::INFO,
+                    event = "dispatch.dedupe_settled",
+                    action = %("finalize_sent"),
+                    dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
+                    reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
+                    finalized_delivery_id = %(crate::util::redact_text(delivery_id))
+                );
             }
             DispatchOpDedupeAction::ClearPending => {
                 state
@@ -169,7 +210,25 @@ impl DispatchOpGuard {
                         self.reserved_delivery_id.as_str(),
                     )
                     .await
-                    .map_err(|err| Error::Internal(err.to_string()))?;
+                    .map_err(|err| {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::ERROR,
+                            event = "dispatch.dedupe_clear_pending_failed",
+                            dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
+                            reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
+                            error = %(err.to_string())
+                        );
+                        Error::Internal(err.to_string())
+                    })?;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::INFO,
+                    event = "dispatch.dedupe_settled",
+                    action = %("clear_pending"),
+                    dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
+                    reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str()))
+                );
             }
         }
         Ok(())
@@ -189,6 +248,36 @@ impl DispatchOpGuard {
                 let _ = self.clear_pending(state).await;
                 Err(err)
             }
+        }
+    }
+}
+
+fn emit_dispatch_reservation_trace(decision: &DispatchOpGuardDecision) {
+    match decision {
+        DispatchOpGuardDecision::Proceed(guard) => {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "dispatch.dedupe_reserved",
+                dedupe_key = %(crate::util::redact_text(guard.dedupe_key.as_str())),
+                reserved_delivery_id = %(crate::util::redact_text(guard.reserved_delivery_id.as_str()))
+            );
+        }
+        DispatchOpGuardDecision::AlreadySent { delivery_id } => {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "dispatch.dedupe_already_sent",
+                delivery_id = %(crate::util::redact_text(delivery_id.as_str()))
+            );
+        }
+        DispatchOpGuardDecision::Pending { delivery_id } => {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "dispatch.dedupe_pending",
+                delivery_id = %(crate::util::redact_text(delivery_id.as_str()))
+            );
         }
     }
 }

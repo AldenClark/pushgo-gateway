@@ -118,6 +118,12 @@ impl Storage {
         config: MaintenanceCleanupConfig,
     ) -> StoreResult<MaintenanceCleanupStats> {
         let config = config.normalized();
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "storage.maintenance_cleanup_started",
+            now = (now)
+        );
         let private_sessions_pruned = self.db.cleanup_private_sessions(now).await?;
         let private_outbox_pruned = self.cleanup_private_expired_data(now, 2048).await?;
         let stale_private_outbox_pruned = self
@@ -203,6 +209,21 @@ impl Storage {
             self.cache.clear_devices();
             self.cache.invalidate_all_channel_devices();
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "storage.maintenance_cleanup_finished",
+            private_sessions_pruned = (private_sessions_pruned as u64),
+            private_outbox_pruned = (private_outbox_pruned as u64),
+            provider_pull_pruned = (provider_pull_pruned as u64),
+            orphan_devices_pruned = (orphan_devices_pruned as u64),
+            stale_subscriptions_pruned = (stale_subscriptions_pruned as u64),
+            soft_deleted_devices_pruned = (soft_deleted_devices_pruned as u64),
+            orphan_channels_pruned = (orphan_channels_pruned as u64),
+            audit_rows_pruned = (audit_rows_pruned as u64),
+            hourly_stats_pruned = (hourly_stats_pruned as u64),
+            daily_stats_pruned = (daily_stats_pruned as u64)
+        );
         Ok(MaintenanceCleanupStats {
             private_sessions_pruned,
             private_outbox_pruned,

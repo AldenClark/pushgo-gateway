@@ -20,11 +20,22 @@ use rmcp::{
         StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
     },
 };
+use tracing::Instrument;
 
 pub(crate) async fn mcp_http(
     AxumState(state): AxumState<AppState>,
     request: Request,
 ) -> AxumResponse {
+    let request_id = crate::util::generate_hex_id_128();
+    let method = request.method().to_string();
+    let path = request.uri().path().to_string();
+    let span = tracing::info_span!(
+        "gateway.mcp.http.request",
+        request_id = %request_id,
+        method = %method,
+        path = %path
+    );
+    async move {
     let mcp = state
         .mcp
         .as_ref()
@@ -37,6 +48,14 @@ pub(crate) async fn mcp_http(
     let auth = match mcp.authenticate(&parts.headers).await {
         Ok(auth) => auth,
         Err(_) => {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.auth_failed",
+                request_id = %(crate::util::redact_text(request_id.as_str())),
+                method = %(method.as_str()),
+                path = %(path.as_str())
+            );
             return auth_challenge_response(
                 mcp.oauth_issuer().await,
                 None,
@@ -48,12 +67,29 @@ pub(crate) async fn mcp_http(
     if parts.method == Method::POST {
         let body = match to_bytes(body, 32 * 1024).await {
             Ok(body) => body,
-            Err(_) => return (StatusCode::BAD_REQUEST, "invalid request body").into_response(),
+            Err(_) => {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.request_body_invalid",
+                    request_id = %(crate::util::redact_text(request_id.as_str())),
+                    method = %(method.as_str()),
+                    path = %(path.as_str())
+                );
+                return (StatusCode::BAD_REQUEST, "invalid request body").into_response();
+            }
         };
         if let Some(required_scope) = required_scope_for_request(&body)
             && let McpAuthContext::OAuth { scope, .. } = &auth
             && !scope.contains(required_scope)
         {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.scope_rejected",
+                request_id = %(crate::util::redact_text(request_id.as_str())),
+                required_scope = %(required_scope.as_str())
+            );
             return auth_challenge_response(
                 mcp.oauth_issuer().await,
                 Some(required_scope),
@@ -68,6 +104,9 @@ pub(crate) async fn mcp_http(
     parts.extensions.insert(auth);
     let request = Request::from_parts(parts, body);
     rmcp_http_service(state).handle(request).await.map(Body::new)
+    }
+    .instrument(span)
+    .await
 }
 
 fn rmcp_http_service(
@@ -243,12 +282,29 @@ impl ServerHandler for PushgoRmcpServer {
         let value = service
             .handle_tools_call(Some(Value::Object(params)))
             .await
-            .map_err(|err| map_mcp_error(err, ErrorCode::INVALID_PARAMS))?;
+            .map_err(|err| {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.call_tool_failed",
+                    tool_name = %(tool_name.as_str()),
+                    error = %(err.as_str())
+                );
+                map_mcp_error(err, ErrorCode::INVALID_PARAMS)
+            })?;
         if should_notify_resource_list_changed(&tool_name, &value) {
             let peer = context.peer.clone();
             tokio::spawn(async move {
-                let _ = peer.notify_resource_list_changed().await;
-            });
+                if let Err(err) = peer.notify_resource_list_changed().await {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "mcp.resource_list_notify_failed",
+                        error = %(err.to_string())
+                    );
+                }
+            }
+            .in_current_span());
         }
         Ok(CallToolResult::structured(value))
     }
@@ -263,7 +319,15 @@ impl ServerHandler for PushgoRmcpServer {
         let value = service
             .resources_list_result()
             .await
-            .map_err(map_resource_error)?;
+            .map_err(|err| {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.list_resources_failed",
+                    error = %(err.as_str())
+                );
+                map_resource_error(err)
+            })?;
         serde_json::from_value(value)
             .map_err(|err| McpError::internal_error(format!("invalid resources payload: {err}"), None))
     }
@@ -278,13 +342,29 @@ impl ServerHandler for PushgoRmcpServer {
         let value = service
             .resources_read_result(Some(request.uri.as_str()))
             .await
-            .map_err(map_resource_error)?;
+            .map_err(|err| {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.read_resource_failed",
+                    error = %(err.as_str()),
+                    uri = %(request.uri.as_str())
+                );
+                map_resource_error(err)
+            })?;
         serde_json::from_value(value)
             .map_err(|err| McpError::internal_error(format!("invalid resource content: {err}"), None))
     }
 }
 
 fn map_mcp_error(message: String, code: ErrorCode) -> McpError {
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "mcp.error_mapped",
+        error_code = (i64::from(code.0)),
+        message = %(message.as_str())
+    );
     match code {
         ErrorCode::INVALID_PARAMS => McpError::invalid_params(message, None),
         ErrorCode::RESOURCE_NOT_FOUND => McpError::resource_not_found(message, None),
@@ -293,6 +373,12 @@ fn map_mcp_error(message: String, code: ErrorCode) -> McpError {
 }
 
 fn map_resource_error(message: String) -> McpError {
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "mcp.resource_error_mapped",
+        message = %(message.as_str())
+    );
     if message == "resource_not_found" {
         return McpError::resource_not_found(message, Some(json!({ "uri": "unknown" })));
     }

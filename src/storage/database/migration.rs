@@ -79,12 +79,14 @@ impl SchemaMigrationPlan {
                 }
             }
             Some(version) => {
+                emit_schema_validation_failed("schema_version_mismatch", None, None);
                 return Err(StoreError::SchemaVersionMismatch {
                     expected: STORAGE_SCHEMA_VERSION.to_string(),
                     actual: version.to_string(),
                 });
             }
         };
+        emit_schema_plan_resolved(&action, normalized, pending_migrations.len());
         Ok(Self {
             current_version: normalized.map(ToString::to_string),
             target_version: STORAGE_SCHEMA_VERSION,
@@ -124,6 +126,11 @@ pub(crate) fn validate_applied_schema_migrations(
             .find(|migration| migration.id == applied_migration.id)
             .copied()
         else {
+            emit_schema_validation_failed(
+                "unknown_migration_id",
+                Some(applied_migration.id.as_str()),
+                None,
+            );
             return Err(StoreError::SchemaVersionMismatch {
                 expected: STORAGE_SCHEMA_VERSION.to_string(),
                 actual: format!("unknown migration {}", applied_migration.id),
@@ -153,12 +160,22 @@ fn validate_applied_schema_migration(
     expected: SchemaMigrationDefinition,
 ) -> StoreResult<()> {
     if applied.checksum != expected.checksum {
+        emit_schema_validation_failed(
+            "checksum_mismatch",
+            Some(applied.id.as_str()),
+            Some(expected.id),
+        );
         return Err(StoreError::SchemaVersionMismatch {
             expected: format!("{} {}", expected.id, expected.checksum),
             actual: format!("{} {}", applied.id, applied.checksum),
         });
     }
     if !applied.success {
+        emit_schema_validation_failed(
+            "migration_not_successful",
+            Some(applied.id.as_str()),
+            Some(expected.id),
+        );
         return Err(StoreError::SchemaVersionMismatch {
             expected: format!("{} success=true", expected.id),
             actual: format!("{} success=false", applied.id),
@@ -175,6 +192,41 @@ fn is_legacy_hard_cut_version(version: &str) -> bool {
             | STORAGE_SCHEMA_VERSION_OLDER_LEGACY
             | STORAGE_SCHEMA_VERSION_OLDEST_LEGACY
     )
+}
+
+fn emit_schema_validation_failed(
+    reason: &'static str,
+    migration_id: Option<&str>,
+    expected_migration_id: Option<&str>,
+) {
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "db.schema_validation_failed",
+        reason = %(reason),
+        migration_id = ?migration_id,
+        expected_migration_id = ?expected_migration_id
+    );
+}
+
+fn emit_schema_plan_resolved(
+    action: &SchemaMigrationAction,
+    current_version: Option<&str>,
+    pending_migrations: usize,
+) {
+    let action_name = match action {
+        SchemaMigrationAction::FreshInstall => "fresh_install",
+        SchemaMigrationAction::BackfillCurrent => "backfill_current",
+        SchemaMigrationAction::HardResetRuntime { .. } => "hard_reset_runtime",
+    };
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "db.schema_plan_resolved",
+        action = %(action_name),
+        pending_migrations = (pending_migrations as u64),
+        current_version = ?current_version
+    );
 }
 
 #[cfg(test)]

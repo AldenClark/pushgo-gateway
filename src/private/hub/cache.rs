@@ -8,6 +8,7 @@ impl PrivateHub {
 
     pub fn compact_hot_cache(&self, target_capacity: usize) {
         let target_capacity = target_capacity.clamp(1, self.hot_cache_capacity);
+        let before_order_len = self.hot_order.lock().len();
         let retained_ids = {
             let mut order = self.hot_order.lock();
             if order.len() > 1 {
@@ -38,9 +39,19 @@ impl PrivateHub {
                 (!retained_ids.contains(entry.key().as_str())).then(|| entry.key().clone())
             })
             .collect();
+        let removed_entries = stale_keys.len();
         for key in stale_keys {
             self.hot_messages.remove(key.as_str());
         }
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.hot_cache_compacted",
+            target_capacity = (target_capacity as u64),
+            retained_ids = (retained_ids.len() as u64),
+            removed_entries = (removed_entries as u64),
+            before_order_len = (before_order_len as u64)
+        );
     }
 
     fn cache_put(&self, delivery_id: &str, message: &PrivateMessage) {

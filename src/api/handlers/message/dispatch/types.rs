@@ -98,7 +98,20 @@ impl<'a> PreparedDispatch<'a> {
         let dispatch_targets = state
             .store
             .list_channel_dispatch_targets(channel_id, sent_at)
-            .await?;
+            .await
+            .map_err(|err| {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::ERROR,
+                    event = "dispatch.list_channel_targets_failed",
+                    channel_id = %(crate::util::redact_text(channel_id_value.as_str())),
+                    op_id = %(crate::util::redact_text(op_id.as_str())),
+                    correlation_id = %(crate::util::redact_text(correlation_id.as_ref())),
+                    delivery_id = %(crate::util::redact_text(delivery_id_ref.as_ref())),
+                    error = %(err.to_string())
+                );
+                err
+            })?;
 
         let private_state = state.private.as_deref();
         let private_enabled = state.private_channel_enabled && private_state.is_some();
@@ -119,10 +132,24 @@ impl<'a> PreparedDispatch<'a> {
                     provider_token,
                     device_key,
                 } => {
-                    provider_devices.push(ProviderDispatchDevice {
-                        info: DeviceInfo::from_token(platform, provider_token.as_str())?,
-                        device_key,
-                    });
+                    let info = DeviceInfo::from_token(platform, provider_token.as_str()).map_err(
+                        |err| {
+                            ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::WARN,
+                                event = "dispatch.provider_device_token_parse_failed",
+                                channel_id = %(crate::util::redact_text(channel_id_value.as_str())),
+                                op_id = %(crate::util::redact_text(op_id.as_str())),
+                                correlation_id = %(crate::util::redact_text(correlation_id.as_ref())),
+                                delivery_id = %(crate::util::redact_text(delivery_id_ref.as_ref())),
+                                device_key = %(crate::util::redact_text(device_key.as_str())),
+                                platform = %(platform.name()),
+                                error = %(err.to_string())
+                            );
+                            err
+                        },
+                    )?;
+                    provider_devices.push(ProviderDispatchDevice { info, device_key });
                 }
                 _ => {}
             }
@@ -157,7 +184,21 @@ impl<'a> PreparedDispatch<'a> {
         custom_data.ensure_notification_title(resolved_title.as_deref());
         let prepared_payload = custom_data
             .prepare_dispatch(channel_id_value.as_str(), entity_kind)
-            .map_err(|err| Error::Internal(format!("private payload encoding failed: {err}")))?;
+            .map_err(|err| {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::ERROR,
+                    event = "dispatch.private_payload_encode_failed",
+                    channel_id = %(crate::util::redact_text(channel_id_value.as_str())),
+                    op_id = %(crate::util::redact_text(op_id.as_str())),
+                    correlation_id = %(crate::util::redact_text(correlation_id.as_ref())),
+                    delivery_id = %(crate::util::redact_text(delivery_id_ref.as_ref())),
+                    entity_type = %(entity_type),
+                    entity_id = %(crate::util::redact_text(entity_id.as_str())),
+                    error = %(err.to_string())
+                );
+                Error::Internal(format!("private payload encoding failed: {err}"))
+            })?;
         let private_dispatch =
             private_state
                 .filter(|_| private_enabled)

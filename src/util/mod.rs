@@ -15,9 +15,7 @@ pub use encoding::{
 };
 pub use id128::{generate_hex_id_128, random_id_bytes_128};
 pub use redaction::{redact_debug, redact_text};
-pub use runtime_flags::{
-    is_sandbox_mode, is_trace_logs_mode, set_sandbox_mode, set_trace_logs_mode,
-};
+pub use runtime_flags::{is_sandbox_mode, set_sandbox_mode};
 pub use shared_string_map::SharedStringMap;
-pub use trace::{TraceEvent, install_panic_trace_hook, set_trace_log_file};
+pub use trace::install_panic_trace_hook;
 pub use wakeup::{apply_provider_wakeup_title, build_provider_wakeup_data};

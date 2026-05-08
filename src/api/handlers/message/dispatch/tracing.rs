@@ -7,15 +7,18 @@ pub(super) async fn record_provider_path_rejected(
     detail: impl Into<Cow<'static, str>>,
 ) {
     progress.record_provider_failure(Arc::clone(&target.provider_stats_key));
-    crate::util::TraceEvent::new("dispatch.provider_path_rejected")
-        .field_redacted("correlation_id", prepared.correlation_id.as_ref())
-        .field_redacted("delivery_id", prepared.delivery_id.as_str())
-        .field_redacted("channel_id", prepared.channel_id_value.as_str())
-        .field_str("provider", target.device.platform.provider_name())
-        .field_str("platform", target.device.platform.name())
-        .field_redacted("device_token", target.device.token_str())
-        .field_str("detail", detail.into().as_ref())
-        .emit();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "dispatch.provider_path_rejected",
+        correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+        delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+        channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+        provider = %(target.device.platform.provider_name()),
+        platform = %(target.device.platform.name()),
+        device_token = %(crate::util::redact_text(target.device.token_str())),
+        detail = %(detail.into().as_ref())
+    );
 }
 
 pub(super) async fn record_provider_enqueued(
@@ -25,15 +28,18 @@ pub(super) async fn record_provider_enqueued(
     path: ProviderDeliveryPath,
 ) {
     progress.record_provider_success(Arc::clone(&target.provider_stats_key));
-    crate::util::TraceEvent::new("dispatch.provider_enqueued")
-        .field_redacted("correlation_id", prepared.correlation_id.as_ref())
-        .field_redacted("delivery_id", prepared.delivery_id.as_str())
-        .field_redacted("channel_id", prepared.channel_id_value.as_str())
-        .field_str("provider", target.device.platform.provider_name())
-        .field_str("platform", target.device.platform.name())
-        .field_str("path", path.as_str())
-        .field_redacted("device_token", target.device.token_str())
-        .emit();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "dispatch.provider_enqueued",
+        correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+        delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+        channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+        provider = %(target.device.platform.provider_name()),
+        platform = %(target.device.platform.name()),
+        path = %(path.as_str()),
+        device_token = %(crate::util::redact_text(target.device.token_str()))
+    );
 }
 
 pub(super) async fn record_provider_enqueue_failed(
@@ -44,17 +50,20 @@ pub(super) async fn record_provider_enqueue_failed(
     err: &DispatchError,
 ) {
     progress.record_provider_failure(Arc::clone(&target.provider_stats_key));
-    crate::util::TraceEvent::new("dispatch.provider_enqueue_failed")
-        .field_redacted("correlation_id", prepared.correlation_id.as_ref())
-        .field_redacted("delivery_id", prepared.delivery_id.as_str())
-        .field_redacted("channel_id", prepared.channel_id_value.as_str())
-        .field_str("provider", target.device.platform.provider_name())
-        .field_str("platform", target.device.platform.name())
-        .field_str("path", path.as_str())
-        .field_redacted("device_token", target.device.token_str())
-        .field_str("error_code", dispatch_error_code(err))
-        .field_str("error", dispatch_error_detail(err))
-        .emit();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "dispatch.provider_enqueue_failed",
+        correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+        delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+        channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+        provider = %(target.device.platform.provider_name()),
+        platform = %(target.device.platform.name()),
+        path = %(path.as_str()),
+        device_token = %(crate::util::redact_text(target.device.token_str())),
+        error_code = %(dispatch_error_code(err)),
+        error = %(dispatch_error_detail(err))
+    );
     if matches!(err, DispatchError::ChannelClosed) {
         progress.dispatch_closed = true;
     }
@@ -67,15 +76,18 @@ pub(super) async fn record_provider_cache_enqueue_failed(
     detail: impl Into<Cow<'static, str>>,
 ) {
     progress.record_provider_failure(Arc::clone(&target.provider_stats_key));
-    crate::util::TraceEvent::new("dispatch.provider_cache_enqueue_failed")
-        .field_redacted("correlation_id", prepared.correlation_id.as_ref())
-        .field_redacted("delivery_id", prepared.delivery_id.as_str())
-        .field_redacted("channel_id", prepared.channel_id_value.as_str())
-        .field_str("provider", target.device.platform.provider_name())
-        .field_str("platform", target.device.platform.name())
-        .field_redacted("device_token", target.device.token_str())
-        .field_str("detail", detail.into().as_ref())
-        .emit();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "dispatch.provider_cache_enqueue_failed",
+        correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+        delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+        channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+        provider = %(target.device.platform.provider_name()),
+        platform = %(target.device.platform.name()),
+        device_token = %(crate::util::redact_text(target.device.token_str())),
+        detail = %(detail.into().as_ref())
+    );
 }
 
 pub(super) fn dispatch_error_detail(error: &DispatchError) -> &'static str {

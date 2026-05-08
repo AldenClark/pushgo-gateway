@@ -2,7 +2,8 @@ use std::fmt;
 
 use super::runtime_flags::is_sandbox_mode;
 
-pub fn redact_text(value: &str) -> String {
+pub fn redact_text(value: impl AsRef<str>) -> String {
+    let value = value.as_ref();
     if is_sandbox_mode() {
         return value.to_string();
     }

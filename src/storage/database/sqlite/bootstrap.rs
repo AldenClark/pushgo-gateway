@@ -93,6 +93,12 @@ impl SqliteDb {
     }
 
     async fn init_schema(&self) -> StoreResult<()> {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "db.schema_init_started",
+            driver = %("sqlite")
+        );
         sqlx::query("PRAGMA journal_mode = WAL")
             .execute(&self.pool)
             .await?;
@@ -117,6 +123,13 @@ impl SqliteDb {
         )?;
         if let Some(migration) = plan.hard_reset_migration() {
             let started_at = Utc::now().timestamp();
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "db.schema_hard_reset_started",
+                driver = %("sqlite"),
+                migration_id = %(migration.id)
+            );
             if let Err(err) = self.hard_reset_sqlite_runtime_tables().await {
                 let _ = self
                     .record_sqlite_schema_migration(
@@ -126,6 +139,14 @@ impl SqliteDb {
                         Some(err.to_string()),
                     )
                     .await;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "db.schema_hard_reset_failed",
+                    driver = %("sqlite"),
+                    migration_id = %(migration.id),
+                    error = %(err.to_string())
+                );
                 return Err(err);
             }
         }
@@ -360,6 +381,14 @@ impl SqliteDb {
             self.record_sqlite_schema_migration(*migration, migration_started_at, true, None)
                 .await?;
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "db.schema_init_finished",
+            driver = %("sqlite"),
+            target_schema_version = %(STORAGE_SCHEMA_VERSION),
+            pending_migrations = (plan.pending_migrations.len() as u64)
+        );
         Ok(())
     }
 

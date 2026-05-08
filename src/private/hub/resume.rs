@@ -42,6 +42,7 @@ impl PrivateHub {
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .unwrap_or_default();
+        let mut reset_applied = false;
         let (resume_token, acked_delivery_ids) =
             self.ensure_resume_state_mut(device_id, now, |entry| {
                 let token_mismatch = incoming.is_empty() || incoming != entry.token;
@@ -49,10 +50,19 @@ impl PrivateHub {
                     !token_mismatch && last_acked_seq > entry.next_seq.saturating_sub(1);
                 if token_mismatch || ack_watermark_out_of_range {
                     entry.reset(now);
+                    reset_applied = true;
                 }
                 let acked_delivery_ids = entry.ack_up_to(last_acked_seq, now);
                 (entry.token.clone(), acked_delivery_ids)
             });
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.resume_session_started",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            reset_applied = (reset_applied),
+            acked_delivery_ids = (acked_delivery_ids.len() as u64)
+        );
 
         ResumeHandshake {
             resume_token,
@@ -91,11 +101,21 @@ impl PrivateHub {
         seq: u64,
         expected_delivery_id: Option<&str>,
     ) -> Result<Option<String>, crate::Error> {
-        Ok(self
+        let result = self
             .with_resume_state_mut(device_id, |entry| {
                 entry.ack_by_seq(seq, expected_delivery_id, Instant::now())
             })
-            .flatten())
+            .flatten();
+        if result.is_none() {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.resume_ack_by_seq_missed",
+                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                seq = (seq)
+            );
+        }
+        Ok(result)
     }
 
     fn snapshot_inflight(&self, device_id: DeviceId) -> Vec<(u64, protocol::DeliverEnvelope)> {
@@ -190,8 +210,17 @@ impl PrivateHub {
                 }
             })
             .collect();
+        let stale_count = stale.len();
         for device_id in stale {
             self.resume_state.remove(&device_id);
+        }
+        if stale_count > 0 {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.resume_state_pruned",
+                devices = (stale_count as u64)
+            );
         }
     }
 }

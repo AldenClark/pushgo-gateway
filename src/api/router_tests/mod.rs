@@ -49,7 +49,6 @@ async fn build_test_state() -> AppState {
         auth: AuthMode::Disabled,
         private_channel_enabled: false,
         diagnostics_api_enabled: false,
-        trace_logs_enabled: false,
         public_base_url: Some(Arc::from("https://sandbox.pushgo.dev")),
         device_registry: Arc::new(DeviceRegistry::new()),
         device_operation_guards: Arc::new(DeviceOperationGuards::default()),

@@ -807,6 +807,7 @@ pub enum Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        emit_api_error_observation(&self);
         match self {
             Error::Validation { message, code } => match code {
                 Some(code) => {
@@ -885,6 +886,84 @@ impl IntoResponse for Error {
             ),
         }
     }
+}
+
+fn emit_api_error_observation(error: &Error) {
+    let (status_code, error_kind, error_code): (u16, &'static str, Option<&str>) = match error {
+        Error::Validation { code, .. } => (
+            StatusCode::BAD_REQUEST.as_u16(),
+            "validation",
+            code.as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        ),
+        Error::Unauthorized => (
+            StatusCode::UNAUTHORIZED.as_u16(),
+            "unauthorized",
+            Some("authentication_failed"),
+        ),
+        Error::TooBusy => (
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            "too_busy",
+            Some("server_busy"),
+        ),
+        Error::Upstream { .. } => (
+            StatusCode::BAD_GATEWAY.as_u16(),
+            "upstream",
+            Some("upstream_error"),
+        ),
+        Error::Internal(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            "internal",
+            Some("internal_error"),
+        ),
+        Error::StoreError(StoreError::InvalidDeviceToken) => (
+            StatusCode::BAD_REQUEST.as_u16(),
+            "store_error",
+            Some("invalid_device_token"),
+        ),
+        Error::StoreError(StoreError::DeviceNotFound) => (
+            StatusCode::BAD_REQUEST.as_u16(),
+            "store_error",
+            Some("device_not_found"),
+        ),
+        Error::StoreError(StoreError::ChannelNotFound) => (
+            StatusCode::NOT_FOUND.as_u16(),
+            "store_error",
+            Some("channel_not_found"),
+        ),
+        Error::StoreError(StoreError::ChannelPasswordMismatch) => (
+            StatusCode::FORBIDDEN.as_u16(),
+            "store_error",
+            Some("password_mismatch"),
+        ),
+        Error::StoreError(StoreError::ChannelAliasMissing) => (
+            StatusCode::BAD_REQUEST.as_u16(),
+            "store_error",
+            Some("invalid_channel_name"),
+        ),
+        Error::StoreError(StoreError::InvalidPlatform) => (
+            StatusCode::BAD_REQUEST.as_u16(),
+            "store_error",
+            Some("invalid_platform"),
+        ),
+        Error::StoreError(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            "store_error",
+            Some("store_error"),
+        ),
+    };
+
+    let request_id = current_api_request_id();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "api.error_response",
+        status_code = (u64::from(status_code)),
+        error_kind = %(error_kind),
+        error_code = ?error_code,
+        request_id = ?request_id.as_deref().map(crate::util::redact_text)
+    );
 }
 
 impl Error {

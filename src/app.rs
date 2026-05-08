@@ -43,7 +43,6 @@ pub(crate) struct AppState {
     pub auth: AuthMode,
     pub private_channel_enabled: bool,
     pub diagnostics_api_enabled: bool,
-    pub trace_logs_enabled: bool,
     pub public_base_url: Option<Arc<str>>,
     pub device_registry: Arc<DeviceRegistry>,
     pub device_operation_guards: Arc<DeviceOperationGuards>,
@@ -151,6 +150,18 @@ pub async fn build_app(
     wns: Arc<dyn WnsClient>,
     docs_html: &'static str,
 ) -> Result<AppRuntime, Box<dyn std::error::Error>> {
+    let _build_span = tracing::info_span!(
+        "gateway.app.build",
+        http_addr = %args.http_addr,
+        observability_profile = %args.observability_config().profile.as_str(),
+        mcp_enabled = args.mcp_enabled
+    )
+    .entered();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "gateway.app_build_started"
+    );
     let store = Storage::new(args.db_url.as_deref()).await?;
     let observability = args.observability_config();
     let stats = StatsCollector::spawn_with_mode(store.clone(), observability.stats_enabled);
@@ -282,7 +293,6 @@ pub async fn build_app(
         auth: auth.clone(),
         private_channel_enabled,
         diagnostics_api_enabled: observability.diagnostics_api_enabled,
-        trace_logs_enabled: observability.trace_logs_enabled,
         public_base_url,
         device_registry,
         device_operation_guards,
@@ -295,6 +305,11 @@ pub async fn build_app(
 
     let router = build_router(state.clone(), docs_html);
 
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "gateway.app_build_finished"
+    );
     Ok(AppRuntime { router, private })
 }
 
@@ -318,26 +333,54 @@ async fn restore_device_registry(
     registry: &Arc<DeviceRegistry>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let routes = store.load_device_routes().await?;
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "gateway.restore_device_registry_started",
+        routes = (routes.len() as u64)
+    );
 
     for route in routes {
         let Some(record) = parse_device_route_record(&route) else {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "gateway.restore_route_skipped",
+                device_key = %(crate::util::redact_text(route.device_key.as_str())),
+                reason = %("parse_failed")
+            );
             continue;
         };
         if registry
             .restore_route(&route.device_key, record.clone())
             .is_err()
         {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "gateway.restore_route_skipped",
+                device_key = %(crate::util::redact_text(route.device_key.as_str())),
+                reason = %("registry_conflict")
+            );
             continue;
         }
         if let Err(err) =
             backfill_private_binding_for_route(store, &route.device_key, &record).await
         {
-            crate::util::TraceEvent::new("gateway.restore_private_binding_failed")
-                .field_redacted("device_key", route.device_key.as_str())
-                .field_str("error", &err)
-                .emit();
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "gateway.restore_private_binding_failed",
+                device_key = %(crate::util::redact_text(route.device_key.as_str())),
+                error = %(&err)
+            );
         }
     }
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "gateway.restore_device_registry_finished"
+    );
     Ok(())
 }
 

@@ -85,6 +85,12 @@ impl MySqlDb {
     }
 
     async fn init_schema(&self) -> StoreResult<()> {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "db.schema_init_started",
+            driver = %("mysql")
+        );
         self.ensure_mysql_schema_meta_table().await?;
         self.ensure_mysql_schema_migrations_table().await?;
         let applied_migrations = self.load_mysql_schema_migrations().await?;
@@ -96,6 +102,13 @@ impl MySqlDb {
         )?;
         if let Some(migration) = plan.hard_reset_migration() {
             let started_at = Utc::now().timestamp();
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "db.schema_hard_reset_started",
+                driver = %("mysql"),
+                migration_id = %(migration.id)
+            );
             if let Err(err) = self.hard_reset_mysql_runtime_tables().await {
                 let _ = self
                     .record_mysql_schema_migration(
@@ -105,6 +118,14 @@ impl MySqlDb {
                         Some(err.to_string()),
                     )
                     .await;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "db.schema_hard_reset_failed",
+                    driver = %("mysql"),
+                    migration_id = %(migration.id),
+                    error = %(err.to_string())
+                );
                 return Err(err);
             }
         }
@@ -324,6 +345,14 @@ impl MySqlDb {
             self.record_mysql_schema_migration(*migration, migration_started_at, true, None)
                 .await?;
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "db.schema_init_finished",
+            driver = %("mysql"),
+            target_schema_version = %(STORAGE_SCHEMA_VERSION),
+            pending_migrations = (plan.pending_migrations.len() as u64)
+        );
         Ok(())
     }
 

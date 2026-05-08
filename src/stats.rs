@@ -1,14 +1,17 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use chrono::{TimeZone, Utc};
 use hashbrown::HashMap;
 use tokio::{sync::mpsc, time::Duration};
+use tracing::Instrument;
 
 use crate::storage::{
     AutomationCounts, ChannelStatsDailyDelta, DeviceStatsDailyDelta, GatewayStatsHourlyDelta,
     OpsStatsHourlyDelta, StatsBatchWrite, Storage,
 };
-use crate::util::TraceEvent;
 use crate::value::DeviceKeyRef;
 
 const STATS_FLUSH_INTERVAL_SECS: u64 = 2;
@@ -85,7 +88,9 @@ impl StatsCollector {
             return Arc::new(Self { tx: None });
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_stats_worker(store, rx));
+        tokio::spawn(
+            run_stats_worker(store, rx).instrument(tracing::info_span!("gateway.stats.worker")),
+        );
         Arc::new(Self { tx: Some(tx) })
     }
 
@@ -94,7 +99,16 @@ impl StatsCollector {
         let Some(tx) = &self.tx else {
             return;
         };
-        let _ = tx.send(event);
+        let event_kind = stats_event_kind(&event);
+        if tx.send(event).is_err() {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "stats.event_dropped",
+                reason = %("worker_channel_closed"),
+                event_kind = %(event_kind)
+            );
+        }
     }
 
     pub fn record_dispatch(&self, event: DispatchStatsEvent) {
@@ -182,7 +196,24 @@ impl StatsCollector {
     }
 }
 
+fn stats_event_kind(event: &StatsEvent) -> &'static str {
+    match event {
+        StatsEvent::Dispatch(_) => "dispatch",
+        StatsEvent::DeviceDelta { .. } => "device_delta",
+        StatsEvent::PrivateAck { .. } => "private_ack",
+        StatsEvent::OpsCounter { .. } => "ops_counter",
+    }
+}
+
 async fn run_stats_worker(store: Storage, mut rx: mpsc::UnboundedReceiver<StatsEvent>) {
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "stats.worker_started",
+        flush_interval_secs = (STATS_FLUSH_INTERVAL_SECS),
+        flush_event_threshold = (STATS_FLUSH_EVENT_THRESHOLD as u64)
+    );
+
     let mut interval = tokio::time::interval(Duration::from_secs(STATS_FLUSH_INTERVAL_SECS));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -205,6 +236,12 @@ async fn run_stats_worker(store: Storage, mut rx: mpsc::UnboundedReceiver<StatsE
                         &mut ops_rows,
                     )
                     .await;
+                                        ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::INFO,
+                        event = "stats.worker_stopped",
+                        reason = %("channel_closed")
+                    );
                     break;
                 };
                 pending_events = pending_events.saturating_add(1);
@@ -466,14 +503,37 @@ async fn flush_stats_batch(
 
     if let Err(err) = store.apply_stats_batch(&batch).await {
         restore_failed_stats_batch(&batch, channel_rows, device_rows, gateway_rows, ops_rows);
-        TraceEvent::new("stats.batch_write_failed")
-            .field_u64("channel_rows", channel_count as u64)
-            .field_u64("device_rows", device_count as u64)
-            .field_u64("gateway_rows", gateway_count as u64)
-            .field_u64("ops_rows", ops_count as u64)
-            .field_str("error", err.to_string())
-            .emit();
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "stats.batch_write_failed",
+            channel_rows = (channel_count as u64),
+            device_rows = (device_count as u64),
+            gateway_rows = (gateway_count as u64),
+            ops_rows = (ops_count as u64),
+            error = %(err.to_string())
+        );
+    } else {
+        static STATS_BATCH_FLUSH_COUNT: AtomicU64 = AtomicU64::new(0);
+        let count = STATS_BATCH_FLUSH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if should_emit_stats_batch_trace(count) {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "stats.batch_write_applied",
+                count = (count),
+                channel_rows = (channel_count as u64),
+                device_rows = (device_count as u64),
+                gateway_rows = (gateway_count as u64),
+                ops_rows = (ops_count as u64)
+            );
+        }
     }
+}
+
+#[inline]
+fn should_emit_stats_batch_trace(count: u64) -> bool {
+    count <= 8 || count.is_power_of_two()
 }
 
 fn restore_failed_stats_batch(

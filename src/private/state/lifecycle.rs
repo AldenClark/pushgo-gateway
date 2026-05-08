@@ -11,7 +11,7 @@ impl PrivateState {
         let hub = Arc::new(PrivateHub::new(store, &config));
         let owner = format!("gateway-{}", std::process::id());
         let fallback_tasks = (config.ack_timeout_secs > 0).then(FallbackTaskEngine::new);
-        PrivateState {
+        let state = PrivateState {
             hub,
             config,
             device_registry,
@@ -25,19 +25,37 @@ impl PrivateState {
             session_devices: RwLock::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             shutdown_notify: tokio::sync::Notify::new(),
-        }
+        };
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.state_initialized",
+            fallback_tasks_enabled = (state.fallback_tasks.is_some())
+        );
+        state
     }
 
     pub fn begin_shutdown(&self) {
         if self.shutting_down.swap(true, Ordering::SeqCst) {
             return;
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.state_shutdown_started"
+        );
 
         for control in self.session_controls.read().values() {
             control.expire_now();
         }
 
         self.shutdown_notify.notify_waiters();
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.state_shutdown_signaled",
+            active_sessions = (self.session_controls.read().len() as u64)
+        );
     }
 
     pub fn is_shutting_down(&self) -> bool {
@@ -78,11 +96,24 @@ impl PrivateState {
         self.session_devices
             .write()
             .insert(session_id.to_string(), device_id);
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.session_registered",
+            session_id = %(crate::util::redact_text(session_id)),
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id)))
+        );
     }
 
     pub fn unregister_session_control(&self, session_id: &str) {
         self.session_controls.write().remove(session_id);
         self.session_devices.write().remove(session_id);
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.session_unregistered",
+            session_id = %(crate::util::redact_text(session_id))
+        );
     }
 
     pub fn expire_other_device_sessions(
@@ -115,9 +146,24 @@ impl PrivateState {
         auth_refresh_before_secs: u16,
     ) -> bool {
         let Some(control) = self.session_controls.read().get(session_id).cloned() else {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.session_auth_expiry_update_skipped",
+                session_id = %(crate::util::redact_text(session_id)),
+                reason = %("session_not_found")
+            );
             return false;
         };
         control.set_auth_expiry(auth_expires_at_unix_secs, auth_refresh_before_secs);
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.session_auth_expiry_updated",
+            session_id = %(crate::util::redact_text(session_id)),
+            auth_expires_at_unix_secs = (auth_expires_at_unix_secs.unwrap_or(-1)),
+            auth_refresh_before_secs = (u64::from(auth_refresh_before_secs))
+        );
         true
     }
 
@@ -172,6 +218,16 @@ impl PrivateState {
                     .set_auth_expiry(auth_expires_at_unix_secs, auth_refresh_before_secs);
                 affected = affected.saturating_add(1);
             }
+        }
+        if affected > 0 {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.device_auth_expiry_updated",
+                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                affected_sessions = (affected as u64),
+                auth_expires_at_unix_secs = (auth_expires_at_unix_secs.unwrap_or(-1))
+            );
         }
         affected
     }

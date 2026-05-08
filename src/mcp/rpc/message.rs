@@ -32,8 +32,12 @@ struct MessageArgs {
 }
 
 impl McpRpcService<'_> {
+    #[tracing::instrument(name = "gateway.mcp.rpc.message_send", skip_all)]
     pub(super) async fn call_message_send(&self, args: Value) -> Result<Value, String> {
-        let parsed: MessageArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: MessageArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("message_send_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
@@ -47,7 +51,10 @@ impl McpRpcService<'_> {
                     .map(crate::api::handlers::entity_input::EntityId::into_inner)
             })
             .transpose()
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| {
+                self.emit_rpc_failed("message_send_parse_thing_id", &err.to_string());
+                err.to_string()
+            })?;
 
         let intent = crate::api::handlers::message::MessageDispatchIntent {
             op_id: parsed.op_id,
@@ -74,6 +81,7 @@ impl McpRpcService<'_> {
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("message_send");
         Ok(value)
     }
 }

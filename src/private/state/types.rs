@@ -18,6 +18,15 @@ pub(super) enum TerminalDeliveryDisposition {
     Dropped,
 }
 
+impl TerminalDeliveryDisposition {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Acked => "acked",
+            Self::Dropped => "dropped",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct EnqueuePrivateMessageOutcome {
     pub(crate) private_outbox_pruned: usize,

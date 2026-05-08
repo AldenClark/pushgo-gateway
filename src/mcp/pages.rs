@@ -22,12 +22,20 @@ pub(crate) async fn bind_page_get(
     State(state): State<AppState>,
     Query(query): Query<BindSessionQuery>,
 ) -> Response {
+    let span = tracing::info_span!("gateway.mcp.bind.page_get");
+    let fut = async move {
     let mcp = state
         .mcp
         .as_ref()
         .expect("mcp routes must only be mounted when MCP is enabled");
     let sessions = mcp.bind_sessions.read().await;
     let Some(session) = sessions.get(&query.bind_session_id) else {
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "mcp.bind_page_rejected",
+            reason = %("bind_session_not_found")
+        );
         return (StatusCode::NOT_FOUND, "bind session not found").into_response();
     };
     let locale = McpLocale::from_request(query.lang.as_deref(), query.ui_locales.as_deref());
@@ -154,7 +162,15 @@ pub(crate) async fn bind_page_get(
         submit = text.submit,
     );
 
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "mcp.bind_page_rendered",
+        action = %(action)
+    );
     Html(html).into_response()
+    };
+    tracing::Instrument::instrument(fut, span).await
 }
 
 pub(crate) async fn bind_page_post(
@@ -176,6 +192,15 @@ async fn bind_apply(
     form: BindSubmitForm,
     expected_action: BindAction,
 ) -> Response {
+    let span = tracing::info_span!(
+        "gateway.mcp.bind.apply",
+        action = if expected_action == BindAction::Bind {
+            "bind"
+        } else {
+            "revoke"
+        }
+    );
+    let fut = async move {
     let mcp = state
         .mcp
         .as_ref()
@@ -184,11 +209,27 @@ async fn bind_apply(
 
     let channel_id = match parse_channel_id(&form.channel_id) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid channel_id").into_response(),
+        Err(_) => {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_rejected",
+                reason = %("invalid_channel_id")
+            );
+            return (StatusCode::BAD_REQUEST, "invalid channel_id").into_response();
+        }
     };
     let password = match validate_channel_password(&form.password) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid password").into_response(),
+        Err(_) => {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_rejected",
+                reason = %("invalid_password")
+            );
+            return (StatusCode::BAD_REQUEST, "invalid password").into_response();
+        }
     };
 
     match state
@@ -198,9 +239,21 @@ async fn bind_apply(
     {
         Ok(Some(_)) => {}
         Ok(None) => {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_rejected",
+                reason = %("channel_password_mismatch")
+            );
             return (StatusCode::BAD_REQUEST, "channel_id/password mismatch").into_response();
         }
         Err(_) => {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_failed",
+                stage = %("channel_validation")
+            );
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "channel validation failed",
@@ -212,9 +265,21 @@ async fn bind_apply(
     let (principal_id, redirect_uri) = {
         let mut sessions = mcp.bind_sessions.write().await;
         let Some(session) = sessions.get_mut(&form.bind_session_id) else {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_rejected",
+                reason = %("bind_session_not_found")
+            );
             return (StatusCode::NOT_FOUND, "bind session not found").into_response();
         };
         if session.status != BindStatus::Pending {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_rejected",
+                reason = %("bind_session_not_pending")
+            );
             return (StatusCode::BAD_REQUEST, "bind session already completed").into_response();
         }
         if session.expires_at < McpState::now_ts() {
@@ -222,9 +287,21 @@ async fn bind_apply(
             session.error_code = Some("bind_session_expired".to_string());
             drop(sessions);
             mcp.persist_snapshot().await;
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_rejected",
+                reason = %("bind_session_expired")
+            );
             return (StatusCode::BAD_REQUEST, "bind session expired").into_response();
         }
         if session.action != expected_action {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_apply_rejected",
+                reason = %("bind_session_action_mismatch")
+            );
             return (StatusCode::BAD_REQUEST, "bind session action mismatch").into_response();
         }
         (session.principal_id.clone(), session.redirect_uri.clone())
@@ -244,6 +321,12 @@ async fn bind_apply(
         }
     }
     mcp.persist_snapshot().await;
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "mcp.bind_apply_completed",
+        action = %(if expected_action == BindAction::Bind { "bind" } else { "revoke" })
+    );
 
     if let Some(redirect_uri) = redirect_uri.as_deref() {
         return Redirect::to(redirect_uri).into_response();
@@ -254,6 +337,8 @@ async fn bind_apply(
         bind_page_text(locale, expected_action).finished,
     ))
     .into_response()
+    };
+    tracing::Instrument::instrument(fut, span).await
 }
 
 fn simple_status_page(locale: McpLocale, message: &str) -> String {

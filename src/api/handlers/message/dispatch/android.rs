@@ -18,7 +18,22 @@ pub(super) async fn dispatch(
     ));
     let direct_body = direct_payload
         .encoded_body(target.device.token_str())
-        .map_err(|err| Error::Internal(err.to_string()))?;
+        .map_err(|err| {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::ERROR,
+                event = "dispatch.fcm_direct_payload_encode_failed",
+                correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+                delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+                channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+                op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
+                device_key = %(crate::util::redact_text(target.device_key.as_ref())),
+                device_token = %(crate::util::redact_text(target.device.token_str())),
+                platform = %(target.device.platform.name()),
+                error = %(err.to_string())
+            );
+            Error::Internal(err.to_string())
+        })?;
     let mut wakeup_body = None;
     let selection = if let Some(selection) =
         ProviderDeliverySelection::direct(target.device.platform, direct_body.len())
@@ -27,7 +42,22 @@ pub(super) async fn dispatch(
     } else {
         let encoded_wakeup = wakeup_payload
             .encoded_body(target.device.token_str())
-            .map_err(|err| Error::Internal(err.to_string()))?;
+            .map_err(|err| {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::ERROR,
+                    event = "dispatch.fcm_wakeup_payload_encode_failed",
+                    correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+                    delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+                    channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+                    op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
+                    device_key = %(crate::util::redact_text(target.device_key.as_ref())),
+                    device_token = %(crate::util::redact_text(target.device.token_str())),
+                    platform = %(target.device.platform.name()),
+                    error = %(err.to_string())
+                );
+                Error::Internal(err.to_string())
+            })?;
         let selection = match ProviderDeliverySelection::wakeup_pull(
             target.device.platform,
             encoded_wakeup.len(),

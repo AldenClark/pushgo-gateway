@@ -9,21 +9,44 @@ impl PrivateState {
         sent_at: i64,
         expires_at: i64,
     ) -> Result<(), crate::Error> {
-        let outcome = self
-            .hub
-            .enqueue_private_message(device_id, delivery_id, payload, sent_at, expires_at)
-            .await?;
-        if outcome.private_outbox_pruned > 0
-            && let Some(engine) = &self.fallback_tasks
-        {
-            engine.request_resync();
-        }
-        self.schedule_fallback(
-            device_id,
-            delivery_id.to_string(),
-            sent_at + self.config.ack_timeout_secs.max(1) as i64 * 1000,
-        );
-        Ok(())
+        let span = tracing::info_span!("gateway.private.enqueue_delivery");
+        let fut = async move {
+            let outcome = self
+                .hub
+                .enqueue_private_message(device_id, delivery_id, payload, sent_at, expires_at)
+                .await?;
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.delivery_enqueued",
+                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                delivery_id = %(crate::util::redact_text(delivery_id)),
+                private_outbox_pruned = (outcome.private_outbox_pruned as u64)
+            );
+            if outcome.private_outbox_pruned > 0
+                && let Some(engine) = &self.fallback_tasks
+            {
+                engine.request_resync();
+            }
+            self.schedule_fallback(
+                device_id,
+                delivery_id.to_string(),
+                sent_at + self.config.ack_timeout_secs.max(1) as i64 * 1000,
+            );
+            Ok(())
+        };
+        tracing::Instrument::instrument(fut, span)
+            .await
+            .inspect_err(|err: &crate::Error| {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "private.delivery_enqueue_failed",
+                    device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                    delivery_id = %(crate::util::redact_text(delivery_id)),
+                    error = %(err.to_string())
+                );
+            })
     }
 
     pub async fn complete_terminal_delivery(
@@ -70,6 +93,14 @@ impl PrivateState {
             Some(delivery_id.to_owned())
         };
         let Some(resolved_delivery_id) = resolved_delivery_id else {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.delivery_settle_skipped",
+                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                delivery_id = %(crate::util::redact_text(delivery_id)),
+                reason = %("delivery_not_found")
+            );
             return Ok(false);
         };
         let channel_id = self
@@ -90,6 +121,15 @@ impl PrivateState {
                 );
             }
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.delivery_settled",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            delivery_id = %(crate::util::redact_text(resolved_delivery_id.as_str())),
+            disposition = %(disposition.as_str()),
+            cleared = (cleared)
+        );
         Ok(cleared)
     }
 

@@ -22,6 +22,34 @@ impl<'a> McpRpcService<'a> {
 }
 
 impl McpRpcService<'_> {
+    pub(super) fn emit_rpc_rejected(&self, reason: &str) {
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "mcp.rpc.rejected",
+            reason = %(reason)
+        );
+    }
+
+    pub(super) fn emit_rpc_failed(&self, stage: &str, error: &str) {
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "mcp.rpc.failed",
+            stage = %(stage),
+            error = %(error)
+        );
+    }
+
+    pub(super) fn emit_rpc_completed(&self, op: &str) {
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "mcp.rpc.completed",
+            op = %(op)
+        );
+    }
+
     pub(super) async fn channel_name(&self, channel_id: &str) -> Option<String> {
         let channel_id = parse_channel_id(channel_id).ok()?;
         self.state
@@ -77,6 +105,7 @@ impl McpRpcService<'_> {
 
     pub(super) async fn load_authorized_channels(&self) -> Result<Vec<Value>, String> {
         let McpAuthContext::OAuth { principal_id, .. } = self.auth else {
+            self.emit_rpc_rejected("auth_mode_not_supported");
             return Err("auth_mode_not_supported".to_string());
         };
         let grants = self.mcp.list_grants(principal_id).await;
@@ -88,10 +117,13 @@ impl McpRpcService<'_> {
                     .store
                     .channel_info(channel_id)
                     .await
-                    .ok()
-                    .flatten()
-                    .map(|info| info.alias),
-                Err(_) => None,
+                .ok()
+                .flatten()
+                .map(|info| info.alias),
+                Err(_) => {
+                    self.emit_rpc_rejected("invalid_channel_id_in_grants");
+                    None
+                }
             };
             channels.push(json!({
                 "channel_id": grant.channel_id,
@@ -268,14 +300,22 @@ impl McpRpcService<'_> {
     }
 
     pub(super) async fn handle_tools_call(&self, params: Option<Value>) -> Result<Value, String> {
-        let payload = params.ok_or_else(|| "missing params".to_string())?;
+        let payload = params.ok_or_else(|| {
+            self.emit_rpc_rejected("missing_params");
+            "missing params".to_string()
+        })?;
         let call: ToolCallEnvelope =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("parse_tool_call_envelope", &err.to_string());
+                err.to_string()
+            })?;
         if Self::is_send_tool_name(call.name.as_str()) {
-            ensure_scope(self.auth, McpScope::Tools)?;
+            ensure_scope(self.auth, McpScope::Tools).inspect_err(|err| {
+                self.emit_rpc_rejected(err);
+            })?;
         }
 
-        match call.name.as_str() {
+        let result = match call.name.as_str() {
             "pushgo.message.send" => self.call_message_send(call.arguments).await,
             "pushgo.event.create" => self.call_event_create(call.arguments).await,
             "pushgo.event.update" => self.call_event_update(call.arguments).await,
@@ -288,8 +328,24 @@ impl McpRpcService<'_> {
             "pushgo.channel.bind.status" => self.call_bind_status(call.arguments).await,
             "pushgo.channel.list" => self.call_channel_list().await,
             "pushgo.channel.unbind" => self.call_channel_unbind(call.arguments).await,
-            _ => Err("unknown tool".to_string()),
+            _ => {
+                self.emit_rpc_rejected("unknown_tool");
+                Err("unknown tool".to_string())
+            }
+        };
+        if let Err(err) = &result {
+            self.emit_rpc_failed("handle_tools_call", err);
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.rpc.tool_call_failed",
+                tool_name = %(call.name.as_str()),
+                error = %(err.as_str())
+            );
+        } else {
+            self.emit_rpc_completed("handle_tools_call");
         }
+        result
     }
 
     fn is_send_tool_name(name: &str) -> bool {
@@ -321,36 +377,55 @@ impl McpRpcService<'_> {
         match self.auth {
             McpAuthContext::OAuth { principal_id, .. } => {
                 if password.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+                    self.emit_rpc_rejected("password_forbidden_in_oauth_mode");
                     return Err("password_forbidden_in_oauth_mode".to_string());
                 }
                 if !self.mcp.has_grant(principal_id, channel_id).await {
+                    self.emit_rpc_rejected("channel_not_bound");
                     return Err("channel_not_bound".to_string());
                 }
                 crate::api::handlers::channel_auth::authorize_channel_exists(self.state, channel_id)
                     .await
-                    .map_err(|err| err.to_string())
+                    .map_err(|err| {
+                        self.emit_rpc_failed("authorize_channel_exists", &err.to_string());
+                        err.to_string()
+                    })
             }
             McpAuthContext::Legacy => {
                 let password = password
                     .map(|v| v.trim().to_string())
                     .filter(|v| !v.is_empty())
-                    .ok_or_else(|| "password_required_in_legacy_mode".to_string())?;
+                    .ok_or_else(|| {
+                        self.emit_rpc_rejected("password_required_in_legacy_mode");
+                        "password_required_in_legacy_mode".to_string()
+                    })?;
                 crate::api::handlers::channel_auth::authorize_channel_by_password(
                     self.state, channel_id, &password,
                 )
                 .await
-                .map_err(|err| err.to_string())
+                .map_err(|err| {
+                    self.emit_rpc_failed("authorize_channel_by_password", &err.to_string());
+                    err.to_string()
+                })
             }
         }
     }
 
     pub(super) async fn http_result_to_value(&self, result: HttpResult) -> Result<Value, String> {
-        let response = result.map_err(|err| err.to_string())?;
+        let response = result.map_err(|err| {
+            self.emit_rpc_failed("http_result_to_value_response", &err.to_string());
+            err.to_string()
+        })?;
         let status = response.status().as_u16();
         let body = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
             .await
-            .map_err(|err| err.to_string())?;
-        let payload = parse_status_response(&body)?;
+            .map_err(|err| {
+                self.emit_rpc_failed("http_result_to_value_read_body", &err.to_string());
+                err.to_string()
+            })?;
+        let payload = parse_status_response(&body).inspect_err(|err| {
+            self.emit_rpc_failed("http_result_to_value_parse_body", err);
+        })?;
         Ok(json!({"status": status, "payload": payload}))
     }
 }

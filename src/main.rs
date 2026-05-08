@@ -2,10 +2,11 @@ use std::{error::Error, net::SocketAddr, sync::Arc};
 
 use clap::Parser;
 use tokio::{net::TcpListener, signal};
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 use pushgo_gateway::{
     app::{AppRuntime, build_app},
-    args::{Args, ObservabilityConfig, PrivateTransports},
+    args::{Args, ObservabilityConfig, ObservabilityLogLevel, PrivateTransports},
     private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
 };
@@ -25,13 +26,15 @@ const FCM_SEND_BASE_URL: &str = "https://fcm.googleapis.com";
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse().normalized();
+    if let Some(raw_level) = args.observability_log_level.as_deref()
+        && ObservabilityLogLevel::parse(raw_level).is_none()
+    {
+        eprintln!("invalid observability log level `{raw_level}`, fallback to default `warn`");
+    }
     let private_transports = args.private_transports()?;
     let observability = args.observability_config();
+    init_native_tracing(observability.log_level);
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
-    pushgo_gateway::util::set_trace_logs_mode(observability.trace_logs_enabled);
-    if observability.trace_logs_enabled {
-        pushgo_gateway::util::set_trace_log_file(args.trace_log_file.as_str())?;
-    }
     pushgo_gateway::util::install_panic_trace_hook();
     let apns_endpoint = apns_endpoint(args.sandbox_mode);
     let token_service_url = args.token_service_base_url()?;
@@ -41,7 +44,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &observability,
         apns_endpoint,
         token_service_url.as_str(),
-        args.trace_log_file.as_str(),
     );
 
     let client = reqwest::Client::builder()
@@ -73,9 +75,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let addr: SocketAddr = args.http_addr.parse()?;
 
     let listener = TcpListener::bind(addr).await?;
-    pushgo_gateway::util::TraceEvent::new("gateway.listening")
-        .field_str("http_addr", addr.to_string())
-        .emit();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "gateway.listening",
+        http_addr = %(addr.to_string())
+    );
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -84,6 +89,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await?;
 
     Ok(())
+}
+
+fn init_native_tracing(log_level: ObservabilityLogLevel) {
+    let default_directive = log_level.as_str();
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directive));
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .json()
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_current_span(true)
+        .with_span_list(true)
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .with_ansi(false)
+        .finish();
+    if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("native tracing init failed: {err}");
+    }
 }
 
 /// Wait for Ctrl+C or SIGTERM, then trigger graceful shutdown.
@@ -126,25 +150,23 @@ fn print_startup_diagnostics(
     observability: &ObservabilityConfig,
     apns_endpoint: &str,
     token_service_url: &str,
-    trace_log_file: &str,
 ) {
-    pushgo_gateway::util::TraceEvent::new("gateway.startup")
-        .field_str("http_addr", args.http_addr.as_str())
-        .field_bool("sandbox_mode", args.sandbox_mode)
-        .field_bool("private_channel_enabled", private_transports.any_enabled())
-        .field_bool("private_transport_quic_enabled", private_transports.quic)
-        .field_bool("private_transport_tcp_enabled", private_transports.tcp)
-        .field_bool("private_transport_wss_enabled", private_transports.wss)
-        .field_str("observability_profile", observability.profile.as_str())
-        .field_bool(
-            "diagnostics_api_enabled",
-            observability.diagnostics_api_enabled,
-        )
-        .field_bool("trace_logs_enabled", observability.trace_logs_enabled)
-        .field_bool("stats_enabled", observability.stats_enabled)
-        .field_bool("mcp_enabled", args.mcp_enabled)
-        .field_str("apns_endpoint", apns_endpoint)
-        .field_str("token_service_url", token_service_url)
-        .field_str("trace_log_file", trace_log_file)
-        .emit();
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "gateway.startup",
+        http_addr = %(args.http_addr.as_str()),
+        sandbox_mode = (args.sandbox_mode),
+        private_channel_enabled = (private_transports.any_enabled()),
+        private_transport_quic_enabled = (private_transports.quic),
+        private_transport_tcp_enabled = (private_transports.tcp),
+        private_transport_wss_enabled = (private_transports.wss),
+        observability_profile = %(observability.profile.as_str()),
+        diagnostics_api_enabled = (observability.diagnostics_api_enabled),
+        observability_log_level = %(observability.log_level.as_str()),
+        stats_enabled = (observability.stats_enabled),
+        mcp_enabled = (args.mcp_enabled),
+        apns_endpoint = %(apns_endpoint),
+        token_service_url = %(token_service_url)
+    );
 }

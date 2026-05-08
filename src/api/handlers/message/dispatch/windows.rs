@@ -18,12 +18,38 @@ pub(super) async fn dispatch(
     ));
     let selection = match ProviderDeliverySelection::resolve(
         target.device.platform,
-        direct_payload
-            .encoded_len()
-            .map_err(|err| Error::Internal(err.to_string()))?,
-        wakeup_payload
-            .encoded_len()
-            .map_err(|err| Error::Internal(err.to_string()))?,
+        direct_payload.encoded_len().map_err(|err| {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::ERROR,
+                event = "dispatch.wns_direct_payload_encode_failed",
+                correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+                delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+                channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+                op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
+                device_key = %(crate::util::redact_text(target.device_key.as_ref())),
+                device_token = %(crate::util::redact_text(target.device.token_str())),
+                platform = %(target.device.platform.name()),
+                error = %(err.to_string())
+            );
+            Error::Internal(err.to_string())
+        })?,
+        wakeup_payload.encoded_len().map_err(|err| {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::ERROR,
+                event = "dispatch.wns_wakeup_payload_encode_failed",
+                correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+                delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+                channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+                op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
+                device_key = %(crate::util::redact_text(target.device_key.as_ref())),
+                device_token = %(crate::util::redact_text(target.device.token_str())),
+                platform = %(target.device.platform.name()),
+                error = %(err.to_string())
+            );
+            Error::Internal(err.to_string())
+        })?,
         target.provider_pull_delivery.is_some(),
     ) {
         Ok(value) => value,

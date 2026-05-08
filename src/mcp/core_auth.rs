@@ -53,14 +53,40 @@ impl BearerToken {
 
 impl McpState {
     pub(super) async fn authenticate(&self, headers: &HeaderMap) -> Result<McpAuthContext, Error> {
-        let token = BearerToken::parse(headers).ok_or(Error::Unauthorized)?;
+        let token = BearerToken::parse(headers).ok_or_else(|| {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.auth_rejected",
+                reason = %("missing_or_invalid_bearer")
+            );
+            Error::Unauthorized
+        })?;
 
         if let Some(auth) = self.authenticate_oauth_token(&token).await {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "mcp.auth_completed",
+                mode = %("oauth")
+            );
             return Ok(auth);
         }
         if self.authenticate_legacy_token(&token) {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "mcp.auth_completed",
+                mode = %("legacy")
+            );
             return Ok(McpAuthContext::Legacy);
         }
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "mcp.auth_rejected",
+            reason = %("token_not_accepted")
+        );
         Err(Error::Unauthorized)
     }
 

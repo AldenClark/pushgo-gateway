@@ -16,6 +16,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_rustls::TlsAcceptor;
+use tracing::Instrument;
 use warp_link::warp_link_core::{PeerMeta, ServerApp, TlsMode, TransportKind, WarpLinkError};
 use warp_link::{ServerSessionIo, run_server_session};
 
@@ -116,6 +117,14 @@ impl TcpServerRuntime {
         let listener = TcpListener::bind(listen_addr)
             .await
             .map_err(|err| format!("bind tcp listener failed: {err}"))?;
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.tcp_listener_started",
+            listen_addr = %(listen_addr.to_string()),
+            proxy_protocol_enabled = (self.proxy_protocol.enabled),
+            tls_enabled = (self.tls_acceptor.is_some())
+        );
         let session_limiter = Arc::new(Semaphore::new(self.config.max_concurrent_sessions.max(1)));
 
         loop {
@@ -138,7 +147,16 @@ impl TcpServerRuntime {
                 }
             };
 
-            tokio::spawn(self.clone().serve_connection(socket, remote_addr, permit));
+            let span = tracing::info_span!(
+                "private.tcp.connection",
+                remote_addr = %remote_addr,
+                tls_enabled = self.tls_acceptor.is_some()
+            );
+            tokio::spawn(
+                self.clone()
+                    .serve_connection(socket, remote_addr, permit)
+                    .instrument(span),
+            );
         }
     }
 
@@ -207,7 +225,14 @@ impl TcpServerRuntime {
             transport: TransportKind::Tcp,
             remote_addr: Some(peer_remote_addr),
         };
-        let _ = run_server_session(&self.config, self.app, &mut io, peer).await;
+        if let Err(err) = run_server_session(&self.config, self.app, &mut io, peer).await {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "private.tcp_session_failed",
+                error = %(err.to_string())
+            );
+        }
     }
 }
 

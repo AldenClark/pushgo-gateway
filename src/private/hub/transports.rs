@@ -13,13 +13,11 @@ impl PrivateState {
             "PUSHGO_PRIVATE_TLS_CERT is required when QUIC is enabled",
             "PUSHGO_PRIVATE_TLS_KEY is required when QUIC is enabled",
         )?;
-        self.spawn_with_restart_loop(move |state| {
+        self.spawn_with_restart_loop("quic", bind_addr.clone(), move |state| {
             let bind_addr = bind_addr.clone();
             let cert_path = cert_path.clone();
             let key_path = key_path.clone();
-            async move {
-                let _ = quic::serve_quic(&bind_addr, &cert_path, &key_path, state).await;
-            }
+            async move { quic::serve_quic(&bind_addr, &cert_path, &key_path, state).await }
         });
         Ok(())
     }
@@ -30,11 +28,9 @@ impl PrivateState {
         };
         let proxy_protocol_enabled = self.config.tcp_proxy_protocol;
         if self.config.tcp_tls_offload {
-            self.spawn_with_restart_loop(move |state| {
+            self.spawn_with_restart_loop("tcp_plain", bind_addr.clone(), move |state| {
                 let bind_addr = bind_addr.clone();
-                async move {
-                    let _ = tcp::serve_tcp_plain(&bind_addr, state, proxy_protocol_enabled).await;
-                }
+                async move { tcp::serve_tcp_plain(&bind_addr, state, proxy_protocol_enabled).await }
             });
             return Ok(());
         }
@@ -43,43 +39,92 @@ impl PrivateState {
             "PUSHGO_PRIVATE_TLS_CERT is required when private TCP is enabled",
             "PUSHGO_PRIVATE_TLS_KEY is required when private TCP is enabled",
         )?;
-        self.spawn_with_restart_loop(move |state| {
+        self.spawn_with_restart_loop("tcp_tls", bind_addr.clone(), move |state| {
             let bind_addr = bind_addr.clone();
             let cert_path = cert_path.clone();
             let key_path = key_path.clone();
             async move {
-                let _ = tcp::serve_tcp_tls(
+                tcp::serve_tcp_tls(
                     &bind_addr,
                     &cert_path,
                     &key_path,
                     state,
                     proxy_protocol_enabled,
                 )
-                .await;
+                .await
             }
         });
         Ok(())
     }
 
-    fn spawn_with_restart_loop<F, Fut>(self: &Arc<Self>, mut serve: F)
+    fn spawn_with_restart_loop<F, Fut>(
+        self: &Arc<Self>,
+        transport: &'static str,
+        bind_addr: String,
+        mut serve: F,
+    )
     where
         F: FnMut(Arc<PrivateState>) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = ()> + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
     {
         let state = Arc::clone(self);
+        let loop_span =
+            tracing::info_span!("gateway.private.transport_loop", transport = transport, bind_addr = %bind_addr);
         tokio::spawn(async move {
             let mut restart_delay_secs = 1u64;
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.transport_loop_started",
+                transport = %(transport),
+                bind_addr = %(bind_addr.as_str())
+            );
             loop {
-                serve(Arc::clone(&state)).await;
+                if let Err(err) = serve(Arc::clone(&state)).await {
+                                        ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "private.transport_serve_failed",
+                        transport = %(transport),
+                        bind_addr = %(bind_addr.as_str()),
+                        retry_delay_secs = (restart_delay_secs),
+                        error = %(err)
+                    );
+                }
                 if state.is_shutting_down() {
+                                        ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::INFO,
+                        event = "private.transport_loop_stopped",
+                        transport = %(transport),
+                        reason = %("shutdown")
+                    );
                     break;
                 }
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::INFO,
+                    event = "private.transport_loop_retry_scheduled",
+                    transport = %(transport),
+                    bind_addr = %(bind_addr.as_str()),
+                    retry_delay_secs = (restart_delay_secs)
+                );
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(restart_delay_secs)) => {}
-                    _ = state.wait_for_shutdown() => break,
+                    _ = state.wait_for_shutdown() => {
+                                                ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::INFO,
+                            event = "private.transport_loop_stopped",
+                            transport = %(transport),
+                            reason = %("shutdown_signal")
+                        );
+                        break;
+                    },
                 }
                 restart_delay_secs = restart_delay_secs.saturating_mul(2).min(30);
             }
-        });
+        }
+        .instrument(loop_span));
     }
 }

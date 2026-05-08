@@ -85,6 +85,12 @@ impl PostgresDb {
     }
 
     async fn init_schema(&self) -> StoreResult<()> {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "db.schema_init_started",
+            driver = %("postgres")
+        );
         self.ensure_pg_schema_meta_table().await?;
         self.ensure_pg_schema_migrations_table().await?;
         let applied_migrations = self.load_pg_schema_migrations().await?;
@@ -96,10 +102,25 @@ impl PostgresDb {
         )?;
         if let Some(migration) = plan.hard_reset_migration() {
             let started_at = Utc::now().timestamp();
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "db.schema_hard_reset_started",
+                driver = %("postgres"),
+                migration_id = %(migration.id)
+            );
             if let Err(err) = self.hard_reset_pg_runtime_tables().await {
                 let _ = self
                     .record_pg_schema_migration(migration, started_at, false, Some(err.to_string()))
                     .await;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "db.schema_hard_reset_failed",
+                    driver = %("postgres"),
+                    migration_id = %(migration.id),
+                    error = %(err.to_string())
+                );
                 return Err(err);
             }
         }
@@ -333,6 +354,14 @@ impl PostgresDb {
             self.record_pg_schema_migration(*migration, migration_started_at, true, None)
                 .await?;
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "db.schema_init_finished",
+            driver = %("postgres"),
+            target_schema_version = %(STORAGE_SCHEMA_VERSION),
+            pending_migrations = (plan.pending_migrations.len() as u64)
+        );
         Ok(())
     }
 

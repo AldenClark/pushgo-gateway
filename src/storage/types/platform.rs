@@ -88,6 +88,14 @@ pub enum DatabaseKind {
 }
 
 impl DatabaseKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            DatabaseKind::Sqlite => "sqlite",
+            DatabaseKind::Postgres => "postgres",
+            DatabaseKind::Mysql => "mysql",
+        }
+    }
+
     pub fn from_url(db_url: &str) -> StoreResult<Self> {
         let trimmed = db_url.trim();
         if trimmed.is_empty() {

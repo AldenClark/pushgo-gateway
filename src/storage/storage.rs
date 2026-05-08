@@ -24,6 +24,11 @@ pub struct Storage {
 
 impl Storage {
     pub async fn new(db_url: Option<&str>) -> StoreResult<Self> {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "storage.init_started"
+        );
         let db_url = db_url.and_then(|url| {
             let trimmed = url.trim();
             if trimmed.is_empty() {
@@ -32,8 +37,22 @@ impl Storage {
                 Some(trimmed)
             }
         });
+        let driver = DatabaseDriver::new(db_url).await.map_err(|err| {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "storage.init_failed",
+                error = %(err.to_string())
+            );
+            err
+        })?;
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "storage.init_finished"
+        );
         Ok(Self {
-            db: Arc::new(DatabaseDriver::new(db_url).await?),
+            db: Arc::new(driver),
             cache: Arc::new(CacheStore::new()),
         })
     }

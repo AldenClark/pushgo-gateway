@@ -7,6 +7,14 @@ impl PrivateState {
         client_resume_token: Option<&str>,
         last_acked_seq: u64,
     ) -> ResumeHandshake {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.session_resume_started",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            has_resume_token = (client_resume_token.is_some()),
+            last_acked_seq = (last_acked_seq)
+        );
         self.stats
             .record_private_connected(format!("private:{}", encode_lower_hex_128(&device_id)));
         let resume = self
@@ -15,6 +23,13 @@ impl PrivateState {
             .await;
         self.settle_resume_acked_deliveries(device_id, &resume.acked_delivery_ids)
             .await;
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.session_resume_completed",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            acked_delivery_ids = (resume.acked_delivery_ids.len() as u64)
+        );
         resume
     }
 
@@ -35,13 +50,25 @@ impl PrivateState {
     }
 
     async fn settle_resume_acked_deliveries(&self, device_id: DeviceId, delivery_ids: &[String]) {
+        if delivery_ids.is_empty() {
+            return;
+        }
         for delivery_id in delivery_ids {
             match self
                 .complete_terminal_delivery(device_id, delivery_id.as_str(), None)
                 .await
             {
                 Ok(true) | Ok(false) => {}
-                Err(_err) => {}
+                Err(err) => {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "private.session_resume_settle_failed",
+                        device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                        delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+                        error = %(err.to_string())
+                    );
+                }
             }
         }
     }

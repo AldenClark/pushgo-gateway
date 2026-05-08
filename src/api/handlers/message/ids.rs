@@ -15,6 +15,7 @@ pub(crate) struct DeliveryId(String);
 impl DeliveryId {
     pub(crate) async fn reserve(state: &AppState, created_at: i64) -> Result<Self, Error> {
         const MAX_ATTEMPTS: usize = 4;
+        let mut collisions = 0usize;
         for _ in 0..MAX_ATTEMPTS {
             let delivery_id = generate_hex_id_128();
             let dedupe_key = format!("delivery:{delivery_id}");
@@ -24,9 +25,25 @@ impl DeliveryId {
                 .await
                 .map_err(internal_store_error)?;
             if inserted {
+                if collisions > 0 {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::INFO,
+                        event = "dispatch.delivery_id_reserved_after_collision",
+                        collisions = (collisions as u64)
+                    );
+                }
                 return Ok(Self(delivery_id));
             }
+            collisions = collisions.saturating_add(1);
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::ERROR,
+            event = "dispatch.delivery_id_reserve_exhausted",
+            max_attempts = (MAX_ATTEMPTS as u64),
+            collisions = (collisions as u64)
+        );
         Err(Error::Internal(
             "unable to reserve unique delivery id".to_string(),
         ))
@@ -80,6 +97,7 @@ impl ResolvedSemanticId {
     pub(crate) async fn resolve_create(state: &AppState, dedupe_key: &str) -> Result<Self, Error> {
         const MAX_ATTEMPTS: usize = 8;
         let created_at = Utc::now().timestamp_millis();
+        let mut collisions = 0usize;
         for _ in 0..MAX_ATTEMPTS {
             let semantic_id = generate_hex_id_128();
             match state
@@ -88,13 +106,35 @@ impl ResolvedSemanticId {
                 .await
                 .map_err(internal_store_error)?
             {
-                SemanticIdReservation::Reserved => return Ok(Self { semantic_id }),
+                SemanticIdReservation::Reserved => {
+                    if collisions > 0 {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::INFO,
+                            event = "dispatch.semantic_id_reserved_after_collision",
+                            dedupe_key = %(crate::util::redact_text(dedupe_key)),
+                            collisions = (collisions as u64)
+                        );
+                    }
+                    return Ok(Self { semantic_id });
+                }
                 SemanticIdReservation::Existing { semantic_id } => {
                     return Ok(Self { semantic_id });
                 }
-                SemanticIdReservation::Collision => continue,
+                SemanticIdReservation::Collision => {
+                    collisions = collisions.saturating_add(1);
+                    continue;
+                }
             }
         }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::ERROR,
+            event = "dispatch.semantic_id_reserve_exhausted",
+            dedupe_key = %(crate::util::redact_text(dedupe_key)),
+            max_attempts = (MAX_ATTEMPTS as u64),
+            collisions = (collisions as u64)
+        );
         Err(Error::Internal(
             "unable to reserve unique semantic id".to_string(),
         ))

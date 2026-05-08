@@ -13,13 +13,33 @@ pub async fn serve_quic(
     key_path: &str,
     state: Arc<PrivateState>,
 ) -> Result<(), String> {
-    let app = PushgoServerApp::new(state);
-    let mut config = default_server_config();
-    config.quic_listen_addr = Some(bind_addr.to_string());
-    config.tls_cert_path = Some(cert_path.to_string());
-    config.tls_key_path = Some(key_path.to_string());
-    config.quic_alpn = "pushgo-quic".to_string();
-    warp_serve_quic(config, app)
-        .await
-        .map_err(|e| e.to_string())
+    let span = tracing::info_span!("gateway.private.quic.serve", bind_addr = bind_addr);
+    let fut = async move {
+        let app = PushgoServerApp::new(state);
+        let mut config = default_server_config();
+        config.quic_listen_addr = Some(bind_addr.to_string());
+        config.tls_cert_path = Some(cert_path.to_string());
+        config.tls_key_path = Some(key_path.to_string());
+        config.quic_alpn = "pushgo-quic".to_string();
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.quic_serve_started",
+            bind_addr = %(bind_addr)
+        );
+        let result = warp_serve_quic(config, app)
+            .await
+            .map_err(|e| e.to_string());
+        if let Err(err) = &result {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "private.quic_serve_failed",
+                bind_addr = %(bind_addr),
+                error = %(err.as_str())
+            );
+        }
+        result
+    };
+    tracing::Instrument::instrument(fut, span).await
 }

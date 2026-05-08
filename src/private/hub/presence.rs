@@ -99,6 +99,15 @@ impl PrivateHub {
                 }),
                 draining: Vec::new(),
             });
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.presence_connection_registered",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            conn_id = (conn_id),
+            transport = %(format!("{transport:?}")),
+            superseded_previous = (superseded_conn_id.is_some())
+        );
         RegisterConnectionOutcome { superseded_conn_id }
     }
 
@@ -201,12 +210,21 @@ impl PrivateHub {
         if remove_presence {
             self.presence.remove(&device_id);
         }
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.presence_connection_unregistered",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            conn_id = (conn_id),
+            removed_presence = (remove_presence)
+        );
     }
     pub async fn deliver_to_device(
         &self,
         device_id: DeviceId,
         envelope: protocol::DeliverEnvelope,
     ) -> bool {
+        let delivery_id = envelope.delivery_id.clone();
         if let Some(presence) = self.presence.get(&device_id) {
             let senders = presence.delivery_senders(Instant::now());
             drop(presence);
@@ -216,8 +234,27 @@ impl PrivateHub {
                     delivered = true;
                 }
             }
+            if !delivered {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "private.presence_delivery_failed",
+                    device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                    delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+                    mode = %("async")
+                );
+            }
             return delivered;
         }
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "private.presence_delivery_failed",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+            mode = %("async"),
+            reason = %("device_not_online")
+        );
         false
     }
 
@@ -226,6 +263,7 @@ impl PrivateHub {
         device_id: DeviceId,
         envelope: protocol::DeliverEnvelope,
     ) -> bool {
+        let delivery_id = envelope.delivery_id.clone();
         if let Some(presence) = self.presence.get(&device_id) {
             let senders = presence.delivery_senders(Instant::now());
             drop(presence);
@@ -235,8 +273,27 @@ impl PrivateHub {
                     delivered = true;
                 }
             }
+            if !delivered {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "private.presence_delivery_failed",
+                    device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                    delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+                    mode = %("try")
+                );
+            }
             return delivered;
         }
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "private.presence_delivery_failed",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+            mode = %("try"),
+            reason = %("device_not_online")
+        );
         false
     }
 }

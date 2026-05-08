@@ -6,6 +6,12 @@ impl DatabaseDriver {
     pub async fn new(db_url: Option<&str>) -> StoreResult<Self> {
         let normalized_db_url = Self::normalize_db_url(db_url);
         let db_kind = DatabaseKind::from_url(normalized_db_url.as_str())?;
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "db.driver_selected",
+            driver = %(db_kind.as_str())
+        );
         match db_kind {
             DatabaseKind::Sqlite => Ok(DatabaseDriver::Sqlite(
                 SqliteDb::new(normalized_db_url.as_str()).await?,

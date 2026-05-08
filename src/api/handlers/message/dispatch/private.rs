@@ -37,6 +37,15 @@ pub(super) async fn enqueue_private_deliveries(
                         progress.private_realtime_delivered.insert(device_id);
                     } else {
                         private_dispatch.state.metrics.mark_deliver_send_failure();
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::WARN,
+                            event = "dispatch.private_realtime_delivery_failed",
+                            correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+                            delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+                            channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+                            device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id)))
+                        );
                     }
                 }
             }
@@ -47,13 +56,16 @@ pub(super) async fn enqueue_private_deliveries(
                     &err,
                 );
                 private_dispatch.state.metrics.mark_enqueue_failure();
-                crate::util::TraceEvent::new("dispatch.private_enqueue_failed")
-                    .field_redacted("correlation_id", prepared.correlation_id.as_ref())
-                    .field_redacted("delivery_id", prepared.delivery_id.as_str())
-                    .field_redacted("channel_id", prepared.channel_id_value.as_str())
-                    .field_redacted("device_id", encode_lower_hex_128(&device_id))
-                    .field_str("error", err.to_string())
-                    .emit();
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "dispatch.private_enqueue_failed",
+                    correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+                    delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+                    channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+                    device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+                    error = %(err.to_string())
+                );
             }
         }
     }

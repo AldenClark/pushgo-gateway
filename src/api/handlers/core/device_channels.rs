@@ -261,19 +261,37 @@ impl DeviceRouteCleanup<'_> {
         next_type: DeviceChannelType,
     ) -> Result<(), Error> {
         let device_id = derive_private_device_id(self.device_key);
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "device.route_migration_started",
+            device_key = %(crate::util::redact_text(self.device_key)),
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            from_channel_type = %(self.old_channel_type.as_str()),
+            to_channel_type = %(next_type.as_str())
+        );
         match (self.old_channel_type, next_type) {
             (
                 DeviceChannelType::Private,
                 DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns,
             ) => {
                 let Some(next_provider_token) = self.next_provider_token else {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "device.route_migration_failed",
+                        device_key = %(crate::util::redact_text(self.device_key)),
+                        from_channel_type = %(self.old_channel_type.as_str()),
+                        to_channel_type = %(next_type.as_str()),
+                        reason = %("missing_provider_token")
+                    );
                     return Err(Error::Internal(
                         "provider token missing when migrating private pending deliveries"
                             .to_string(),
                     ));
                 };
                 let platform = platform_from_channel_type(next_type, self.device_platform)?;
-                state
+                let migrated = state
                     .store
                     .migrate_private_pending_to_provider_queue(
                         device_id,
@@ -282,10 +300,29 @@ impl DeviceRouteCleanup<'_> {
                     )
                     .await
                     .map_err(|err| {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::WARN,
+                            event = "device.route_migration_failed",
+                            device_key = %(crate::util::redact_text(self.device_key)),
+                            from_channel_type = %(self.old_channel_type.as_str()),
+                            to_channel_type = %(next_type.as_str()),
+                            reason = %("private_to_provider_store_error"),
+                            error = %(err.to_string())
+                        );
                         Error::Internal(format!(
                             "failed to migrate private pending deliveries to provider queue: {err}"
                         ))
                     })?;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::INFO,
+                    event = "device.route_migration_finished",
+                    device_key = %(crate::util::redact_text(self.device_key)),
+                    from_channel_type = %(self.old_channel_type.as_str()),
+                    to_channel_type = %(next_type.as_str()),
+                    migrated = (migrated as u64)
+                );
             }
             (
                 DeviceChannelType::Apns | DeviceChannelType::Fcm | DeviceChannelType::Wns,
@@ -310,10 +347,29 @@ impl DeviceRouteCleanup<'_> {
                     )
                     .await
                     .map_err(|err| {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::WARN,
+                            event = "device.route_migration_failed",
+                            device_key = %(crate::util::redact_text(self.device_key)),
+                            from_channel_type = %(self.old_channel_type.as_str()),
+                            to_channel_type = %(next_type.as_str()),
+                            reason = %("provider_to_private_store_error"),
+                            error = %(err.to_string())
+                        );
                         Error::Internal(format!(
                             "failed to migrate provider pending deliveries to private outbox: {err}"
                         ))
                     })?;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::INFO,
+                    event = "device.route_migration_finished",
+                    device_key = %(crate::util::redact_text(self.device_key)),
+                    from_channel_type = %(self.old_channel_type.as_str()),
+                    to_channel_type = %(next_type.as_str()),
+                    migrated = (migrated as u64)
+                );
                 if migrated > 0
                     && let Some(private_state) = state.private.as_deref()
                 {
@@ -678,18 +734,21 @@ impl DeviceKeyResolution {
             );
         }
 
-        if state.trace_logs_enabled && issue_reason == "platform_mismatch" {
+        if issue_reason == "platform_mismatch" && tracing::enabled!(tracing::Level::WARN) {
             let old_key = requested_device_key.unwrap_or("");
             let old_platform = previous_route
                 .map(|route| route.platform.name())
                 .unwrap_or("");
-            crate::util::TraceEvent::new("device.route_reissued")
-                .field_str("reason", issue_reason)
-                .field_redacted("old_device_key", old_key)
-                .field_str("old_platform", old_platform)
-                .field_str("requested_platform", requested_platform.name())
-                .field_redacted("new_device_key", resolved_device_key.as_str())
-                .emit();
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "device.route_reissued",
+                reason = %(issue_reason),
+                old_device_key = %(crate::util::redact_text(old_key)),
+                old_platform = %(old_platform),
+                requested_platform = %(requested_platform.name()),
+                new_device_key = %(crate::util::redact_text(resolved_device_key.as_str()))
+            );
         }
 
         Ok(Self {

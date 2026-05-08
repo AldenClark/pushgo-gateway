@@ -30,17 +30,27 @@ struct UnbindArgs {
 }
 
 impl McpRpcService<'_> {
+    #[tracing::instrument(name = "gateway.mcp.rpc.bind_start", skip_all)]
     pub(super) async fn call_bind_start(&self, args: Value) -> Result<Value, String> {
         let McpAuthContext::OAuth { principal_id, .. } = self.auth else {
+            self.emit_rpc_rejected("auth_mode_not_supported");
             return Err("auth_mode_not_supported".to_string());
         };
-        ensure_scope(self.auth, McpScope::ChannelsManage)?;
-        let parsed: BindStartArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        ensure_scope(self.auth, McpScope::ChannelsManage).inspect_err(|err| {
+            self.emit_rpc_rejected(err);
+        })?;
+        let parsed: BindStartArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("bind_start_parse_args", &err.to_string());
+            err.to_string()
+        })?;
 
         let action = match parsed.action.as_deref().unwrap_or("bind") {
             "bind" => BindAction::Bind,
             "revoke" => BindAction::Revoke,
-            _ => return Err("invalid action".to_string()),
+            _ => {
+                self.emit_rpc_rejected("invalid_action");
+                return Err("invalid action".to_string());
+            }
         };
         let bind_session_id = McpState::random_id("mcp_bind");
         let expires_at = McpState::now_ts() + self.mcp.config.bind_session_ttl_secs;
@@ -79,7 +89,7 @@ impl McpRpcService<'_> {
             )
         };
         let bind_url = absolute_url(self.mcp.oauth_issuer().await.as_str(), &bind_url_path);
-        Ok(json!({
+        let result = json!({
             "bind_session_id": bind_session_id,
             "bind_url": bind_url,
             "expires_at": expires_at,
@@ -87,23 +97,34 @@ impl McpRpcService<'_> {
             "ui_locales_supported": MCP_UI_LOCALES_SUPPORTED,
             "default_ui_locale": MCP_UI_DEFAULT_LOCALE,
             "ui_locale_query_parameter": MCP_UI_LOCALE_QUERY_PARAMETER
-        }))
+        });
+        self.emit_rpc_completed("bind_start");
+        Ok(result)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.bind_status", skip_all)]
     pub(super) async fn call_bind_status(&self, args: Value) -> Result<Value, String> {
         let McpAuthContext::OAuth { principal_id, .. } = self.auth else {
+            self.emit_rpc_rejected("auth_mode_not_supported");
             return Err("auth_mode_not_supported".to_string());
         };
-        ensure_scope(self.auth, McpScope::ChannelsManage)?;
+        ensure_scope(self.auth, McpScope::ChannelsManage).inspect_err(|err| {
+            self.emit_rpc_rejected(err);
+        })?;
         let parsed: BindStatusArgs =
-            serde_json::from_value(args).map_err(|err| err.to_string())?;
+            serde_json::from_value(args).map_err(|err| {
+                self.emit_rpc_failed("bind_status_parse_args", &err.to_string());
+                err.to_string()
+            })?;
         let mut changed = false;
         let snapshot = {
             let mut sessions = self.mcp.bind_sessions.write().await;
             let Some(session) = sessions.get_mut(&parsed.bind_session_id) else {
+                self.emit_rpc_rejected("bind_session_invalid");
                 return Err("bind_session_invalid".to_string());
             };
             if session.principal_id != *principal_id {
+                self.emit_rpc_rejected("bind_session_invalid");
                 return Err("bind_session_invalid".to_string());
             }
             if session.expires_at < McpState::now_ts() && session.status == BindStatus::Pending {
@@ -154,24 +175,36 @@ impl McpRpcService<'_> {
                 );
             }
         }
+        self.emit_rpc_completed("bind_status");
         Ok(snapshot)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.channel_list", skip_all)]
     pub(super) async fn call_channel_list(&self) -> Result<Value, String> {
-        ensure_scope(self.auth, McpScope::ChannelsManage)?;
+        ensure_scope(self.auth, McpScope::ChannelsManage).inspect_err(|err| {
+            self.emit_rpc_rejected(err);
+        })?;
         let channels = self.load_authorized_channels().await?;
+        self.emit_rpc_completed("channel_list");
         Ok(json!({ "channels": channels }))
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.channel_unbind", skip_all)]
     pub(super) async fn call_channel_unbind(&self, args: Value) -> Result<Value, String> {
         let McpAuthContext::OAuth { principal_id, .. } = self.auth else {
+            self.emit_rpc_rejected("auth_mode_not_supported");
             return Err("auth_mode_not_supported".to_string());
         };
-        ensure_scope(self.auth, McpScope::ChannelsManage)?;
-        let parsed: UnbindArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        ensure_scope(self.auth, McpScope::ChannelsManage).inspect_err(|err| {
+            self.emit_rpc_rejected(err);
+        })?;
+        let parsed: UnbindArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("channel_unbind_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_name = self.channel_name(&parsed.channel_id).await;
         let removed = self.mcp.remove_grant(principal_id, &parsed.channel_id).await;
-        Ok(json!({
+        let result = json!({
             "removed": removed,
             "channel_id": parsed.channel_id,
             "channel_name": channel_name,
@@ -180,6 +213,8 @@ impl McpRpcService<'_> {
                 channel_name.as_deref()
             ),
             "resources_changed": removed
-        }))
+        });
+        self.emit_rpc_completed("channel_unbind");
+        Ok(result)
     }
 }

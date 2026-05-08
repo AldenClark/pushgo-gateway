@@ -131,8 +131,12 @@ impl ThingArgs {
 }
 
 impl McpRpcService<'_> {
+    #[tracing::instrument(name = "gateway.mcp.rpc.event_create", skip_all)]
     pub(super) async fn call_event_create(&self, args: Value) -> Result<Value, String> {
-        let parsed: EventArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: EventArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("event_create_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
@@ -142,60 +146,86 @@ impl McpRpcService<'_> {
             obj.remove("event_id");
         }
         let req: crate::api::handlers::event::EventCreateRequest =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("event_create_parse_request", &err.to_string());
+                err.to_string()
+            })?;
         let response =
             crate::api::handlers::event::event_create_authorized(self.state, req, authorized_channel)
                 .await;
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("event_create");
         Ok(value)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.event_update", skip_all)]
     pub(super) async fn call_event_update(&self, args: Value) -> Result<Value, String> {
-        let parsed: EventArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: EventArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("event_update_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
             .await?;
         if parsed.event_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+            self.emit_rpc_rejected("event_id_required");
             return Err("event_id required".to_string());
         }
         let payload = parsed.into_payload_json();
         let req: crate::api::handlers::event::EventUpdateRequest =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("event_update_parse_request", &err.to_string());
+                err.to_string()
+            })?;
         let response =
             crate::api::handlers::event::event_update_authorized(self.state, req, authorized_channel)
                 .await;
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("event_update");
         Ok(value)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.event_close", skip_all)]
     pub(super) async fn call_event_close(&self, args: Value) -> Result<Value, String> {
-        let parsed: EventArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: EventArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("event_close_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
             .await?;
         if parsed.event_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+            self.emit_rpc_rejected("event_id_required");
             return Err("event_id required".to_string());
         }
         let payload = parsed.into_payload_json();
         let req: crate::api::handlers::event::EventCloseRequest =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("event_close_parse_request", &err.to_string());
+                err.to_string()
+            })?;
         let response =
             crate::api::handlers::event::event_close_authorized(self.state, req, authorized_channel)
                 .await;
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("event_close");
         Ok(value)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.thing_create", skip_all)]
     pub(super) async fn call_thing_create(&self, args: Value) -> Result<Value, String> {
-        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("thing_create_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
@@ -206,23 +236,32 @@ impl McpRpcService<'_> {
             obj.remove("deleted_at");
         }
         let req: crate::api::handlers::thing::ThingCreateRequest =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("thing_create_parse_request", &err.to_string());
+                err.to_string()
+            })?;
         let response =
             crate::api::handlers::thing::thing_create_authorized(self.state, req, authorized_channel)
                 .await;
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("thing_create");
         Ok(value)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.thing_update", skip_all)]
     pub(super) async fn call_thing_update(&self, args: Value) -> Result<Value, String> {
-        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("thing_update_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
             .await?;
         if parsed.thing_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+            self.emit_rpc_rejected("thing_id_required");
             return Err("thing_id required".to_string());
         }
         let mut payload = parsed.into_payload_json();
@@ -231,23 +270,32 @@ impl McpRpcService<'_> {
             obj.remove("deleted_at");
         }
         let req: crate::api::handlers::thing::ThingUpdateRequest =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("thing_update_parse_request", &err.to_string());
+                err.to_string()
+            })?;
         let response =
             crate::api::handlers::thing::thing_update_authorized(self.state, req, authorized_channel)
                 .await;
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("thing_update");
         Ok(value)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.thing_archive", skip_all)]
     pub(super) async fn call_thing_archive(&self, args: Value) -> Result<Value, String> {
-        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("thing_archive_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
             .await?;
         if parsed.thing_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+            self.emit_rpc_rejected("thing_id_required");
             return Err("thing_id required".to_string());
         }
         let mut payload = parsed.into_payload_json();
@@ -256,7 +304,10 @@ impl McpRpcService<'_> {
             obj.remove("deleted_at");
         }
         let req: crate::api::handlers::thing::ThingArchiveRequest =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("thing_archive_parse_request", &err.to_string());
+                err.to_string()
+            })?;
         let response = crate::api::handlers::thing::thing_archive_authorized(
             self.state,
             req,
@@ -266,16 +317,22 @@ impl McpRpcService<'_> {
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("thing_archive");
         Ok(value)
     }
 
+    #[tracing::instrument(name = "gateway.mcp.rpc.thing_delete", skip_all)]
     pub(super) async fn call_thing_delete(&self, args: Value) -> Result<Value, String> {
-        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| err.to_string())?;
+        let parsed: ThingArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("thing_delete_parse_args", &err.to_string());
+            err.to_string()
+        })?;
         let channel_id = parsed.channel_id.clone();
         let authorized_channel = self
             .authorize_channel(&channel_id, parsed.password.clone())
             .await?;
         if parsed.thing_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+            self.emit_rpc_rejected("thing_id_required");
             return Err("thing_id required".to_string());
         }
         let mut payload = parsed.into_payload_json();
@@ -283,13 +340,17 @@ impl McpRpcService<'_> {
             obj.remove("created_at");
         }
         let req: crate::api::handlers::thing::ThingDeleteRequest =
-            serde_json::from_value(payload).map_err(|err| err.to_string())?;
+            serde_json::from_value(payload).map_err(|err| {
+                self.emit_rpc_failed("thing_delete_parse_request", &err.to_string());
+                err.to_string()
+            })?;
         let response =
             crate::api::handlers::thing::thing_delete_authorized(self.state, req, authorized_channel)
                 .await;
         let mut value = self.http_result_to_value(response).await?;
         value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
         self.attach_channel_context(&mut value, &channel_id).await;
+        self.emit_rpc_completed("thing_delete");
         Ok(value)
     }
 }

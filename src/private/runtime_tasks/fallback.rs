@@ -116,11 +116,13 @@ impl FallbackRuntime {
         let max_rounds = max_rounds.max(1);
         let max_processed_total = max_processed_total.max(batch_size);
         let mut processed_total = 0usize;
+        let mut rounds_executed = 0usize;
         for round in 0..max_rounds {
             let online_devices = self.state.hub.online_device_ids();
             if online_devices.is_empty() {
                 break;
             }
+            rounds_executed = rounds_executed.saturating_add(1);
             let now = chrono::Utc::now().timestamp_millis();
             let claim_until =
                 now.saturating_add(self.state.config.ack_timeout_secs.clamp(5, 120) as i64 * 1000);
@@ -169,6 +171,18 @@ impl FallbackRuntime {
                 tokio::task::yield_now().await;
             }
         }
+        if processed_total > 0 {
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.claim_ack_drain_processed",
+                processed_total = (processed_total as u64),
+                rounds_executed = (rounds_executed as u64),
+                batch_size = (batch_size as u64),
+                max_rounds = (max_rounds as u64),
+                max_processed_total = (max_processed_total as u64)
+            );
+        }
         Ok(())
     }
 
@@ -181,10 +195,20 @@ impl FallbackRuntime {
             self.state.hub.online_device_ids().into_iter().collect();
         if online_device_ids.is_empty() {
             scheduler.replace_fallback_tasks(std::iter::empty());
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.fallback_resync_snapshot",
+                online_devices = (0),
+                total_pending = (0),
+                loaded_entries = (0),
+                scheduler_action = %("replace")
+            );
             return Ok(());
         }
         let total_pending = self.state.hub.count_pending_outbox_total().await?;
         let entries = self.state.hub.list_due_outbox(i64::MAX, limit).await?;
+        let loaded_entries = entries.len();
         let snapshot = entries.into_iter().filter_map(|(device_id, entry)| {
             online_device_ids.contains(&device_id).then_some((
                 FallbackTaskKey {
@@ -196,8 +220,28 @@ impl FallbackRuntime {
         });
         if total_pending > limit {
             scheduler.merge_fallback_tasks(snapshot);
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.fallback_resync_snapshot",
+                online_devices = (online_device_ids.len() as u64),
+                total_pending = (total_pending as u64),
+                loaded_entries = (loaded_entries as u64),
+                limit = (limit as u64),
+                scheduler_action = %("merge")
+            );
         } else {
             scheduler.replace_fallback_tasks(snapshot);
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.fallback_resync_snapshot",
+                online_devices = (online_device_ids.len() as u64),
+                total_pending = (total_pending as u64),
+                loaded_entries = (loaded_entries as u64),
+                limit = (limit as u64),
+                scheduler_action = %("replace")
+            );
         }
         Ok(())
     }
@@ -231,7 +275,16 @@ impl FallbackRuntime {
         }
         let total_pending = match self.state.hub.count_pending_outbox_total().await {
             Ok(value) => value,
-            Err(_err) => return,
+            Err(err) => {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "private.fallback_seed_failed",
+                    stage = %("count_pending_outbox_total"),
+                    error = %(err.to_string())
+                );
+                return;
+            }
         };
         if total_pending == 0 {
             return;
@@ -239,7 +292,16 @@ impl FallbackRuntime {
         let seed_limit = total_pending.min(200_000);
         let entries = match self.state.hub.list_due_outbox(i64::MAX, seed_limit).await {
             Ok(value) => value,
-            Err(_err) => return,
+            Err(err) => {
+                                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "private.fallback_seed_failed",
+                    stage = %("list_due_outbox"),
+                    error = %(err.to_string())
+                );
+                return;
+            }
         };
         let mut seeded = 0usize;
         for (device_id, entry) in entries {
@@ -258,6 +320,15 @@ impl FallbackRuntime {
         if seeded > 0 {
             self.state.metrics.mark_replay_bootstrap_enqueued(seeded);
         }
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.fallback_seed_applied",
+            online_devices = (online_device_ids.len() as u64),
+            total_pending = (total_pending as u64),
+            seed_limit = (seed_limit as u64),
+            seeded = (seeded as u64)
+        );
     }
 
     async fn run_claimed_fallback_task(
@@ -272,12 +343,12 @@ impl FallbackRuntime {
             .load_private_message(outbox.delivery_id.as_str())
             .await?
         else {
-            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str())
+            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str(), "message_missing")
                 .await?;
             return Ok(());
         };
         let Some(context) = FallbackPayloadContext::parse(&message, now) else {
-            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str())
+            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str(), "payload_unusable")
                 .await?;
             return Ok(());
         };
@@ -287,7 +358,11 @@ impl FallbackRuntime {
         }
 
         if self.attempt_policy.should_drop_outbox(outbox) {
-            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str())
+            self.drop_fallback_delivery(
+                device_id,
+                outbox.delivery_id.as_str(),
+                "max_attempts_reached",
+            )
                 .await?;
             return Ok(());
         }
@@ -303,10 +378,27 @@ impl FallbackRuntime {
                 .state
                 .mark_fallback_sent(device_id, outbox.delivery_id.as_str(), next_attempt_at)
                 .await;
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.fallback_delivery_sent",
+                device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+                delivery_id = %(crate::util::redact_text(outbox.delivery_id.as_str())),
+                attempts = (outbox.attempts as u64),
+                next_attempt_at = (next_attempt_at)
+            );
             self.state.metrics.mark_fallback_tick(1, 1, 0, 0);
             return Ok(());
         }
 
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "private.fallback_delivery_send_failed",
+            device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+            delivery_id = %(crate::util::redact_text(outbox.delivery_id.as_str())),
+            attempts = (outbox.attempts as u64)
+        );
         self.state.metrics.mark_deliver_send_failure();
         self.schedule_fallback_retry(device_id, outbox, now, 0, AttemptBudget::Enforced)
             .await?;
@@ -326,7 +418,11 @@ impl FallbackRuntime {
             .attempt_policy
             .should_drop_attempt(next_attempt, budget)
         {
-            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str())
+            self.drop_fallback_delivery(
+                device_id,
+                outbox.delivery_id.as_str(),
+                "max_attempts_enforced",
+            )
                 .await?;
             return Ok(now);
         }
@@ -335,6 +431,19 @@ impl FallbackRuntime {
             .state
             .defer_fallback_retry(device_id, outbox.delivery_id.as_str(), retry_at)
             .await;
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.fallback_retry_scheduled",
+            device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+            delivery_id = %(crate::util::redact_text(outbox.delivery_id.as_str())),
+            next_attempt = (next_attempt as u64),
+            retry_at = (retry_at),
+            budget = %(match budget {
+                AttemptBudget::Enforced => "enforced",
+                AttemptBudget::Unlimited => "unlimited",
+            })
+        );
         self.state.metrics.mark_fallback_tick(1, sent, 1, 0);
         Ok(retry_at)
     }
@@ -343,11 +452,20 @@ impl FallbackRuntime {
         &self,
         device_id: DeviceId,
         delivery_id: &str,
+        reason: &'static str,
     ) -> Result<(), crate::Error> {
         let _ = self
             .state
             .drop_terminal_delivery(device_id, delivery_id)
             .await?;
+                ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "private.fallback_delivery_dropped",
+            reason = %(reason),
+            device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+            delivery_id = %(crate::util::redact_text(delivery_id))
+        );
         self.state.metrics.mark_fallback_tick(1, 0, 0, 1);
         Ok(())
     }
@@ -368,24 +486,21 @@ fn emit_maintenance_cleanup_stats(cleanup: &MaintenanceCleanupStats) {
     if total == 0 {
         return;
     }
-    crate::util::TraceEvent::new("private.maintenance_cleanup")
-        .field_u64("private_sessions_pruned", cleanup.private_sessions_pruned as u64)
-        .field_u64("private_outbox_pruned", cleanup.private_outbox_pruned as u64)
-        .field_u64("provider_pull_pruned", cleanup.provider_pull_pruned as u64)
-        .field_u64("orphan_devices_pruned", cleanup.orphan_devices_pruned as u64)
-        .field_u64(
-            "stale_subscriptions_pruned",
-            cleanup.stale_subscriptions_pruned as u64,
-        )
-        .field_u64(
-            "soft_deleted_devices_pruned",
-            cleanup.soft_deleted_devices_pruned as u64,
-        )
-        .field_u64("orphan_channels_pruned", cleanup.orphan_channels_pruned as u64)
-        .field_u64("audit_rows_pruned", cleanup.audit_rows_pruned as u64)
-        .field_u64("hourly_stats_pruned", cleanup.hourly_stats_pruned as u64)
-        .field_u64("daily_stats_pruned", cleanup.daily_stats_pruned as u64)
-        .emit();
+        ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "private.maintenance_cleanup",
+        private_sessions_pruned = (cleanup.private_sessions_pruned as u64),
+        private_outbox_pruned = (cleanup.private_outbox_pruned as u64),
+        provider_pull_pruned = (cleanup.provider_pull_pruned as u64),
+        orphan_devices_pruned = (cleanup.orphan_devices_pruned as u64),
+        stale_subscriptions_pruned = (cleanup.stale_subscriptions_pruned as u64),
+        soft_deleted_devices_pruned = (cleanup.soft_deleted_devices_pruned as u64),
+        orphan_channels_pruned = (cleanup.orphan_channels_pruned as u64),
+        audit_rows_pruned = (cleanup.audit_rows_pruned as u64),
+        hourly_stats_pruned = (cleanup.hourly_stats_pruned as u64),
+        daily_stats_pruned = (cleanup.daily_stats_pruned as u64)
+    );
 }
 
 #[cfg(test)]

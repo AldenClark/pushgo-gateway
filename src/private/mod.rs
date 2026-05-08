@@ -8,6 +8,7 @@ use flume::{Receiver, Sender};
 use hashbrown::HashMap;
 use parking_lot::{Mutex, RwLock};
 use tokio::time::Instant as TokioInstant;
+use tracing::Instrument;
 use warp_link::warp_link_core::{SessionControl, SessionCoordinator, TransportKind};
 use warp_link_coordination::InMemoryCoordinator;
 
@@ -217,6 +218,14 @@ impl FallbackTaskEngine {
             ))
             .is_ok();
         if !sent {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "private.fallback_task_enqueue_failed",
+                action = %("schedule"),
+                device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+                due_at_unix_millis = (due_at_unix_millis)
+            );
             self.request_resync();
         }
         sent
@@ -231,6 +240,14 @@ impl FallbackTaskEngine {
             )))
             .is_ok();
         if !sent {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "private.fallback_task_enqueue_failed",
+                action = %("cancel"),
+                device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+                delivery_id = %(crate::util::redact_text(delivery_id))
+            );
             self.request_resync();
         }
         sent
@@ -337,9 +354,16 @@ impl PrivateState {
         };
         let state = Arc::clone(self);
 
+        let worker_span = tracing::info_span!("gateway.private.fallback_worker");
         tokio::spawn(async move {
             let runtime = FallbackRuntime::new(Arc::clone(&state));
             let mut scheduler = FallbackScheduler::default();
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.fallback_worker_started",
+                maintenance_interval_secs = (MAINTENANCE_INTERVAL_SECS)
+            );
             runtime.seed_fallback_tasks(&mut scheduler).await;
             scheduler.schedule_maintenance(
                 chrono::Utc::now()
@@ -347,16 +371,25 @@ impl PrivateState {
                     .saturating_add(MAINTENANCE_INTERVAL_SECS * 1000),
             );
             engine.sync_scheduler_depth(&state, &scheduler);
-
-            loop {
+            let stop_reason = loop {
                 if state.is_shutting_down() {
-                    break;
+                    break "shutdown_flag";
                 }
                 if engine.consume_resync_request() {
                     if let Err(err) = runtime.resync_fallback_tasks(&mut scheduler, 200_000).await {
-                        crate::util::TraceEvent::new("private.fallback_resync_failed")
-                            .field_str("error", err.to_string())
-                            .emit();
+                                                ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::WARN,
+                            event = "private.fallback_resync_failed",
+                            error = %(err.to_string())
+                        );
+                    } else {
+                                                ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::INFO,
+                            event = "private.fallback_resync_applied",
+                            scheduler_depth = (scheduler.depth() as u64)
+                        );
                     }
                     engine.sync_scheduler_depth(&state, &scheduler);
                 }
@@ -366,17 +399,20 @@ impl PrivateState {
                 tokio::select! {
                     maybe_cmd = rx.recv_async() => {
                         let Ok(cmd) = maybe_cmd else {
-                            break;
+                            break "task_command_channel_closed";
                         };
                         scheduler.apply(cmd);
                         engine.sync_scheduler_depth(&state, &scheduler);
                     }
                     _ = engine.resync_notify.notified() => {}
-                    _ = state.wait_for_shutdown() => break,
+                    _ = state.wait_for_shutdown() => {
+                        break "shutdown_signal";
+                    },
                     _ = tokio::time::sleep_until(wake_at) => {
                         let now = chrono::Utc::now().timestamp_millis();
                         let due_tasks = scheduler.pop_due(now, 1024);
                         if !due_tasks.is_empty() {
+                            let due_tasks_count = due_tasks.len();
                             let mut max_lag_ms = 0u64;
                             let mut run_claim_worker = false;
                             for (key, due_at_unix_millis) in due_tasks {
@@ -385,11 +421,12 @@ impl PrivateState {
                                 match key {
                                     SchedulerTaskKey::Maintenance => {
                                         if let Err(err) = runtime.run_maintenance_tick().await {
-                                            crate::util::TraceEvent::new(
-                                                "private.maintenance_tick_failed",
-                                            )
-                                            .field_str("error", err.to_string())
-                                            .emit();
+                                            ::tracing::event!(
+                                                target: "gateway.trace_event",
+                                                ::tracing::Level::WARN,
+                                                event = "private.maintenance_tick_failed",
+                                                error = %(err.to_string())
+                                            );
                                         }
                                         scheduler.schedule_maintenance(
                                             now.saturating_add(MAINTENANCE_INTERVAL_SECS * 1000),
@@ -399,6 +436,14 @@ impl PrivateState {
                                     SchedulerTaskKey::Fallback(_) => run_claim_worker = true,
                                 }
                             }
+                                                        ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::INFO,
+                                event = "private.fallback_due_batch",
+                                due_tasks = (due_tasks_count as u64),
+                                max_lag_ms = (max_lag_ms),
+                                run_claim_worker = (run_claim_worker)
+                            );
                             if run_claim_worker
                                 && let Err(err) =
                                     runtime.run_claim_ack_drain(
@@ -409,11 +454,12 @@ impl PrivateState {
                                     )
                                     .await
                             {
-                                crate::util::TraceEvent::new(
-                                    "private.claim_ack_drain_active_failed",
-                                )
-                                .field_str("error", err.to_string())
-                                .emit();
+                                ::tracing::event!(
+                                    target: "gateway.trace_event",
+                                    ::tracing::Level::WARN,
+                                    event = "private.claim_ack_drain_active_failed",
+                                    error = %(err.to_string())
+                                );
                             }
                             if max_lag_ms > 0 {
                                 state.metrics.mark_task_lag_ms(max_lag_ms);
@@ -427,15 +473,26 @@ impl PrivateState {
                             )
                             .await
                         {
-                            crate::util::TraceEvent::new("private.claim_ack_drain_idle_failed")
-                                .field_str("error", err.to_string())
-                                .emit();
+                                                        ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::WARN,
+                                event = "private.claim_ack_drain_idle_failed",
+                                error = %(err.to_string())
+                            );
                         }
                         engine.sync_scheduler_depth(&state, &scheduler);
                     }
                 }
-            }
-        });
+            };
+                        ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::INFO,
+                event = "private.fallback_worker_stopped",
+                reason = %(stop_reason),
+                scheduler_depth = (scheduler.depth() as u64)
+            );
+        }
+        .instrument(worker_span));
     }
 }
 
