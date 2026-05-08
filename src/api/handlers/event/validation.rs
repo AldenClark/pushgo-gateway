@@ -11,22 +11,25 @@ impl EventRouteAction {
         match self {
             EventRouteAction::Create => {
                 if ended_at.is_some() {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "ended_at is only allowed on /event/close",
+                        "ended_at_forbidden_on_create",
                     ));
                 }
             }
             EventRouteAction::Update => {
                 if started_at.is_some() || ended_at.is_some() {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "started_at and ended_at are not allowed on /event/update",
+                        "event_temporal_fields_forbidden_on_update",
                     ));
                 }
             }
             EventRouteAction::Close => {
                 if started_at.is_some() {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "started_at is only allowed on /event/create",
+                        "started_at_forbidden_on_close",
                     ));
                 }
             }
@@ -44,15 +47,17 @@ impl EventRouteAction {
         match self {
             EventRouteAction::Create => {
                 if title.is_none() || status.is_none() || message.is_none() || severity.is_none() {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "title, status, message and severity are required on /event/create",
+                        "event_create_required_fields_missing",
                     ));
                 }
             }
             EventRouteAction::Update | EventRouteAction::Close => {
                 if status.is_none() || message.is_none() || severity.is_none() {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "status, message and severity are required on /event/update and /event/close",
+                        "event_update_required_fields_missing",
                     ));
                 }
             }

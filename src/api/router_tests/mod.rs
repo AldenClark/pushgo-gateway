@@ -151,13 +151,26 @@ async fn build_diagnostics_test_state() -> AppState {
 }
 
 async fn post_json(app: axum::Router, path: &str, payload: Value) -> (StatusCode, Value) {
+    post_json_with_accept_language(app, path, payload, None).await
+}
+
+async fn post_json_with_accept_language(
+    app: axum::Router,
+    path: &str,
+    payload: Value,
+    accept_language: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream");
+    if let Some(accept_language) = accept_language {
+        builder = builder.header("accept-language", accept_language);
+    }
     let response = app
         .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(path)
-                .header("content-type", "application/json")
-                .header("accept", "application/json, text/event-stream")
+            builder
                 .body(Body::from(payload.to_string()))
                 .expect("request should build"),
         )

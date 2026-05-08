@@ -39,7 +39,10 @@ pub(crate) async fn messages_pull(
     let raw_items = if let Some(delivery_id) = payload.delivery_id.as_deref() {
         let delivery_id = delivery_id.trim();
         if delivery_id.is_empty() {
-            return Err(Error::validation("delivery_id must not be empty"));
+            return Err(Error::validation_code(
+                "delivery_id must not be empty",
+                "delivery_id_required",
+            ));
         }
         match state
             .store

@@ -25,29 +25,50 @@ impl<'a> MetadataEntries<'a> {
         for (raw_key, raw_value) in self.0 {
             let key = raw_key.trim();
             if key.is_empty() {
-                return Err(Error::validation("metadata key must not be empty"));
+                return Err(Error::validation_code(
+                    "metadata key must not be empty",
+                    "metadata_key_required",
+                ));
             }
             if key.len() > 64 {
-                return Err(Error::validation("metadata key is too long"));
+                return Err(Error::validation_code(
+                    "metadata key is too long",
+                    "metadata_key_too_long",
+                ));
             }
             if !dedupe.insert(key.to_string()) {
-                return Err(Error::validation("metadata key must be unique"));
+                return Err(Error::validation_code(
+                    "metadata key must be unique",
+                    "metadata_key_duplicate",
+                ));
             }
 
-            let value = metadata_scalar_text(raw_value)
-                .ok_or_else(|| Error::validation("metadata value must be scalar"))?;
+            let value = metadata_scalar_text(raw_value).ok_or_else(|| {
+                Error::validation_code(
+                    "metadata value must be scalar",
+                    "metadata_value_scalar_required",
+                )
+            })?;
             if value.is_empty() {
-                return Err(Error::validation("metadata value must not be empty"));
+                return Err(Error::validation_code(
+                    "metadata value must not be empty",
+                    "metadata_value_required",
+                ));
             }
             if value.len() > 512 {
-                return Err(Error::validation("metadata value is too long"));
+                return Err(Error::validation_code(
+                    "metadata value is too long",
+                    "metadata_value_too_long",
+                ));
             }
         }
         Ok(())
     }
 
     pub(crate) fn encode(&self) -> Result<String, Error> {
-        serde_json::to_string(self.0).map_err(|_| Error::validation("metadata format is invalid"))
+        serde_json::to_string(self.0).map_err(|_| {
+            Error::validation_code("metadata format is invalid", "metadata_format_invalid")
+        })
     }
 }
 
@@ -64,10 +85,10 @@ impl<'a> ExtensionObjectRef<'a> {
     pub(crate) fn validate(&self) -> Result<(), Error> {
         for (key, value) in self.object {
             if key.trim().is_empty() {
-                return Err(Error::validation(format!(
-                    "{} contains empty key",
-                    self.field
-                )));
+                return Err(Error::validation_code(
+                    format!("{} contains empty key", self.field),
+                    "extension_object_key_required",
+                ));
             }
             match value {
                 Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
@@ -76,19 +97,19 @@ impl<'a> ExtensionObjectRef<'a> {
                         match inner_value {
                             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
                             _ => {
-                                return Err(Error::validation(format!(
-                                    "{} only supports one-level objects",
-                                    self.field
-                                )));
+                                return Err(Error::validation_code(
+                                    format!("{} only supports one-level objects", self.field),
+                                    "extension_object_nested_object_unsupported",
+                                ));
                             }
                         }
                     }
                 }
                 Value::Array(_) => {
-                    return Err(Error::validation(format!(
-                        "{} does not support arrays",
-                        self.field
-                    )));
+                    return Err(Error::validation_code(
+                        format!("{} does not support arrays", self.field),
+                        "extension_object_arrays_unsupported",
+                    ));
                 }
             }
         }

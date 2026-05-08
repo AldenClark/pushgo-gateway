@@ -37,9 +37,10 @@ pub(crate) async fn private_network_diagnostics(
     State(state): State<AppState>,
 ) -> HttpResult {
     if !state.private_channel_enabled {
-        return Ok(crate::api::err(
+        return Ok(crate::api::err_with_code(
             StatusCode::SERVICE_UNAVAILABLE,
             "private channel is disabled",
+            "private_channel_disabled",
         ));
     }
 
@@ -54,28 +55,32 @@ pub(crate) async fn private_ws(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     if !state.private_transport_profile.wss_enabled {
-        return crate::api::err(
+        return crate::api::err_with_code(
             StatusCode::SERVICE_UNAVAILABLE,
             "private wss transport is disabled",
+            "private_wss_transport_disabled",
         );
     }
     if !state.private_channel_enabled {
-        return crate::api::err(
+        return crate::api::err_with_code(
             StatusCode::SERVICE_UNAVAILABLE,
             "private channel is disabled",
+            "private_channel_disabled",
         );
     }
     if !network::PrivateRequestHeaders::new(&headers).offers_ws_subprotocol(PRIVATE_WS_SUBPROTOCOL)
     {
-        return crate::api::err(
+        return crate::api::err_with_code(
             StatusCode::BAD_REQUEST,
             format!("missing websocket subprotocol `{PRIVATE_WS_SUBPROTOCOL}`"),
+            "missing_websocket_subprotocol",
         );
     }
     let Some(private_state) = state.private.as_ref() else {
-        return crate::api::err(
+        return crate::api::err_with_code(
             StatusCode::SERVICE_UNAVAILABLE,
             "private channel runtime is unavailable",
+            "private_channel_runtime_unavailable",
         );
     };
     let private_state = Arc::clone(private_state);

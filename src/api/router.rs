@@ -1,6 +1,6 @@
 use crate::{
     api::handlers,
-    api::{Error, HttpResult},
+    api::{Error, HttpResult, err_with_code, with_api_request_scope},
     app::{AppState, AuthMode},
     mcp::{is_mcp_or_oauth_path, mcp_router},
     stats::OPS_METRIC_HTTP_RESPONSE_5XX,
@@ -36,7 +36,15 @@ pub(crate) fn build_router(state: AppState, docs_html: &'static str) -> Router {
         .layer(from_fn_with_state(state.clone(), middleware))
         .layer(DefaultBodyLimit::max(32 * 1024))
         .with_state(state)
-        .fallback(async || (StatusCode::NOT_FOUND, "404 Not Found").into_response())
+        .fallback(|| async {
+            let request_id = crate::util::generate_hex_id_128();
+            let mut response =
+                err_with_code(StatusCode::NOT_FOUND, "404 Not Found", "route_not_found");
+            if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
+                response.headers_mut().insert("x-request-id", value);
+            }
+            response
+        })
 }
 
 fn extract_bearer_token(req: &Request) -> Result<&str, Error> {
@@ -70,34 +78,42 @@ fn extract_bearer_token(req: &Request) -> Result<&str, Error> {
 }
 
 async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> HttpResult {
-    let method = req.method().to_string();
-    let raw_path = req.uri().path().to_string();
-    let route_pattern = req
-        .extensions()
-        .get::<MatchedPath>()
-        .map(|matched| matched.as_str().to_string())
-        .unwrap_or_else(|| raw_path.clone());
-    let bypass_auth = state.mcp.is_some() && is_mcp_or_oauth_path(req.uri().path());
+    let headers = req.headers().clone();
+    let request_id = crate::util::generate_hex_id_128();
+    with_api_request_scope(&headers, request_id.clone(), async move {
+        let method = req.method().to_string();
+        let raw_path = req.uri().path().to_string();
+        let route_pattern = req
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|matched| matched.as_str().to_string())
+            .unwrap_or_else(|| raw_path.clone());
+        let bypass_auth = state.mcp.is_some() && is_mcp_or_oauth_path(req.uri().path());
 
-    fn constant_time_equals(a: &str, b: &str) -> bool {
-        constant_time_eq(a.as_bytes(), b.as_bytes())
-    }
-    if !bypass_auth && let AuthMode::SharedToken(token) = &state.auth {
-        match extract_bearer_token(&req) {
-            Ok(req_token) => {
-                if !constant_time_equals(req_token, token) {
-                    return Ok(Error::Unauthorized.into_response());
+        fn constant_time_equals(a: &str, b: &str) -> bool {
+            constant_time_eq(a.as_bytes(), b.as_bytes())
+        }
+        if !bypass_auth && let AuthMode::SharedToken(token) = &state.auth {
+            match extract_bearer_token(&req) {
+                Ok(req_token) => {
+                    if !constant_time_equals(req_token, token) {
+                        return Ok(Error::Unauthorized.into_response());
+                    }
+                }
+                Err(err) => {
+                    return Ok(err.into_response());
                 }
             }
-            Err(err) => {
-                return Ok(err.into_response());
-            }
         }
-    }
 
-    let response = next.run(req).await;
-    observe_server_error_response(&state, &method, &route_pattern, response.status());
-    Ok(response)
+        let mut response = next.run(req).await;
+        if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
+            response.headers_mut().insert("x-request-id", value);
+        }
+        observe_server_error_response(&state, &method, &route_pattern, response.status());
+        Ok(response)
+    })
+    .await
 }
 
 fn observe_server_error_response(

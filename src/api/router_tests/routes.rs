@@ -16,6 +16,18 @@ async fn thing_scoped_event_route_returns_not_found() {
         .await
         .expect("router should handle request");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(
+        response.headers().get("x-request-id").is_some(),
+        "404 responses should carry request ids"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body should be readable");
+    let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+    assert_eq!(
+        value.get("error_code").and_then(Value::as_str),
+        Some("route_not_found")
+    );
 }
 
 #[tokio::test]
@@ -220,4 +232,76 @@ async fn channel_device_route_requires_device_key() {
         .await
         .expect("router should handle request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn channel_subscribe_returns_structured_problem_with_zh_locale() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let (status, body) = post_json_with_accept_language(
+        app,
+        "/channel/subscribe",
+        json!({
+            "device_key": "missing-device-key-001",
+            "channel_name": "demo-channel",
+            "password": "password-1234"
+        }),
+        Some("zh-CN, en;q=0.8"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body.get("error_code").and_then(Value::as_str),
+        Some("device_key_not_found")
+    );
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("category"))
+            .and_then(Value::as_str),
+        Some("not_found")
+    );
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("localized_message"))
+            .and_then(Value::as_str),
+        Some("当前设备注册已失效，请重试。")
+    );
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("locale"))
+            .and_then(Value::as_str),
+        Some("zh-CN")
+    );
+}
+
+#[tokio::test]
+async fn channel_subscribe_accepts_apple_style_zh_hans_locale() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let (status, body) = post_json_with_accept_language(
+        app,
+        "/channel/subscribe",
+        json!({
+            "device_key": "missing-device-key-001",
+            "channel_name": "demo-channel",
+            "password": "password-1234"
+        }),
+        Some("zh-Hans-CN, en-US;q=0.8"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("localized_message"))
+            .and_then(Value::as_str),
+        Some("当前设备注册已失效，请重试。")
+    );
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("locale"))
+            .and_then(Value::as_str),
+        Some("zh-CN")
+    );
 }

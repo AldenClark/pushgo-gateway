@@ -77,13 +77,19 @@ impl ApnsService {
             Platform::ANDROID => {
                 return DispatchResult::from_error(
                     0,
-                    Error::validation("android platform must be delivered via FCM"),
+                    Error::validation_code(
+                        "android platform must be delivered via FCM",
+                        "android_platform_requires_fcm",
+                    ),
                 );
             }
             Platform::WINDOWS => {
                 return DispatchResult::from_error(
                     0,
-                    Error::validation("windows platform must be delivered via WNS"),
+                    Error::validation_code(
+                        "windows platform must be delivered via WNS",
+                        "windows_platform_requires_wns",
+                    ),
                 );
             }
         };

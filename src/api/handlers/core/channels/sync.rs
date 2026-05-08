@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use axum::extract::State;
+use axum::{extract::State, http::StatusCode};
 
 use crate::{
-    api::{ApiJson, ChannelId, ChannelPassword, Error, HttpResult},
+    api::{ApiJson, ApiProblem, ChannelId, ChannelPassword, Error, HttpResult},
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
     storage::{DeviceRouteRecordRow, StoreError},
@@ -22,7 +22,10 @@ pub(crate) async fn channel_sync(
 ) -> HttpResult {
     let device_key = DeviceKeyRef::parse(&payload.device_key)?;
     if payload.channels.len() > 2000 {
-        return Err(Error::validation("channels exceeds max limit 2000"));
+        return Err(Error::validation_code(
+            "channels exceeds max limit 2000",
+            "channels_limit_exceeded",
+        ));
     }
 
     let route = state
@@ -51,19 +54,30 @@ pub(crate) async fn channel_sync(
                 created: false,
                 error: Some("channel_id is required".to_string()),
                 error_code: Some("invalid_channel_id".to_string()),
+                problem: ApiProblem::from_legacy(
+                    StatusCode::BAD_REQUEST,
+                    Some("channel_id is required"),
+                    Some("invalid_channel_id"),
+                ),
             });
             continue;
         }
         let channel_id = match ChannelId::parse(raw_channel_id) {
             Ok(value) => value,
             Err(err) => {
+                let detail = err.to_string();
                 channels.push(ChannelSyncResult {
                     channel_id: raw_channel_id.to_string(),
                     channel_name: None,
                     subscribed: false,
                     created: false,
-                    error: Some(err.to_string()),
+                    error: Some(detail.clone()),
                     error_code: Some("invalid_channel_id".to_string()),
+                    problem: ApiProblem::from_legacy(
+                        StatusCode::BAD_REQUEST,
+                        Some(detail.as_str()),
+                        Some("invalid_channel_id"),
+                    ),
                 });
                 continue;
             }
@@ -72,13 +86,19 @@ pub(crate) async fn channel_sync(
         let password = match ChannelPassword::parse(&item.password) {
             Ok(value) => value,
             Err(err) => {
+                let detail = err.to_string();
                 channels.push(ChannelSyncResult {
                     channel_id: channel_id_text,
                     channel_name: None,
                     subscribed: false,
                     created: false,
-                    error: Some(err.to_string()),
+                    error: Some(detail.clone()),
                     error_code: Some("invalid_password".to_string()),
+                    problem: ApiProblem::from_legacy(
+                        StatusCode::BAD_REQUEST,
+                        Some(detail.as_str()),
+                        Some("invalid_password"),
+                    ),
                 });
                 continue;
             }
@@ -103,14 +123,27 @@ pub(crate) async fn channel_sync(
                     created,
                     error: None,
                     error_code: None,
+                    problem: None,
                 });
             }
             Err((error_code, message)) => {
+                let item_status = match error_code {
+                    "channel_not_found" => StatusCode::NOT_FOUND,
+                    "password_mismatch" => StatusCode::FORBIDDEN,
+                    "private_channel_disabled" => StatusCode::SERVICE_UNAVAILABLE,
+                    "provider_token_missing" => StatusCode::BAD_REQUEST,
+                    _ => StatusCode::BAD_REQUEST,
+                };
                 channels.push(ChannelSyncResult {
                     channel_id: channel_id_text,
                     channel_name: None,
                     subscribed: false,
                     created: false,
+                    problem: ApiProblem::from_legacy(
+                        item_status,
+                        Some(message.as_str()),
+                        Some(error_code),
+                    ),
                     error: Some(message),
                     error_code: Some(error_code.to_string()),
                 });

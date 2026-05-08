@@ -55,6 +55,151 @@ async fn insert_device_route_audit_in_tx(
     Ok(())
 }
 
+#[derive(Debug)]
+struct DuplicateProviderRouteRow {
+    device_id: Vec<u8>,
+    device_key: Option<String>,
+}
+
+async fn collect_duplicate_provider_routes_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    route: &DeviceRoutePersistenceValues,
+) -> StoreResult<Vec<DuplicateProviderRouteRow>> {
+    let Some(provider_token) = route.provider_token.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let rows = sqlx::query(
+        "SELECT device_id, device_key \
+         FROM devices \
+         WHERE platform = ? AND provider_token = ? AND device_id <> ?",
+    )
+    .bind(route.platform.as_str())
+    .bind(provider_token)
+    .bind(route.device_id.as_slice())
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| DuplicateProviderRouteRow {
+            device_id: row.get("device_id"),
+            device_key: row.get("device_key"),
+        })
+        .collect())
+}
+
+async fn load_device_delivery_ids_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    device_id: &[u8],
+) -> StoreResult<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
+         UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
+    )
+    .bind(device_id)
+    .bind(device_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(rows.into_iter().map(|row| row.get("delivery_id")).collect())
+}
+
+async fn cleanup_orphan_private_payloads_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    delivery_ids: &[String],
+) -> StoreResult<()> {
+    for delivery_id in delivery_ids {
+        sqlx::query(
+            "DELETE FROM private_payloads \
+             WHERE delivery_id = ? \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+               AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
+        )
+        .bind(delivery_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn coalesce_duplicate_provider_routes_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    route: &DeviceRoutePersistenceValues,
+) -> StoreResult<()> {
+    let duplicates = collect_duplicate_provider_routes_in_tx(tx, route).await?;
+    if duplicates.is_empty() {
+        return Ok(());
+    }
+
+    for duplicate in duplicates {
+        let delivery_ids =
+            load_device_delivery_ids_in_tx(tx, duplicate.device_id.as_slice()).await?;
+
+        sqlx::query(
+            "INSERT INTO channel_subscriptions (channel_id, device_id, status, created_at, updated_at) \
+             SELECT channel_id, ?, status, created_at, updated_at \
+             FROM channel_subscriptions \
+             WHERE device_id = ? AND status = 'active' \
+             ON DUPLICATE KEY UPDATE \
+               status = IF(status = 'active' OR VALUES(status) = 'active', 'active', VALUES(status)), \
+               created_at = LEAST(created_at, VALUES(created_at)), \
+               updated_at = GREATEST(updated_at, VALUES(updated_at))",
+        )
+        .bind(route.device_id.as_slice())
+        .bind(duplicate.device_id.as_slice())
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO provider_pull_queue \
+             (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+             SELECT ?, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at \
+             FROM provider_pull_queue \
+             WHERE device_id = ? \
+             ON DUPLICATE KEY UPDATE \
+               payload_blob = VALUES(payload_blob), \
+               payload_size = VALUES(payload_size), \
+               sent_at = LEAST(sent_at, VALUES(sent_at)), \
+               expires_at = GREATEST(expires_at, VALUES(expires_at)), \
+               platform = VALUES(platform), \
+               provider_token = VALUES(provider_token), \
+               created_at = LEAST(created_at, VALUES(created_at)), \
+               updated_at = GREATEST(updated_at, VALUES(updated_at))",
+        )
+        .bind(route.device_id.as_slice())
+        .bind(duplicate.device_id.as_slice())
+        .execute(&mut **tx)
+        .await?;
+
+        for statement in [
+            "DELETE FROM channel_subscriptions WHERE device_id = ?",
+            "DELETE FROM provider_pull_queue WHERE device_id = ?",
+            "DELETE FROM private_bindings WHERE device_id = ?",
+            "DELETE FROM private_outbox WHERE device_id = ?",
+            "DELETE FROM private_sessions WHERE device_id = ?",
+            "DELETE FROM private_device_keys WHERE device_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(duplicate.device_id.as_slice())
+                .execute(&mut **tx)
+                .await?;
+        }
+
+        sqlx::query("DELETE FROM devices WHERE device_id = ?")
+            .bind(duplicate.device_id.as_slice())
+            .execute(&mut **tx)
+            .await?;
+        if let Some(device_key) = duplicate.device_key.as_deref() {
+            sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
+                .bind(device_key)
+                .execute(&mut **tx)
+                .await?;
+        }
+
+        cleanup_orphan_private_payloads_in_tx(tx, &delivery_ids).await?;
+    }
+
+    Ok(())
+}
+
 impl MySqlDb {
     pub(super) async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>> {
         let rows = sqlx::query(
@@ -85,7 +230,9 @@ impl MySqlDb {
         route: &DeviceRouteRecordRow,
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
+        let values = route.persistence_values()?;
         upsert_device_route_in_tx(&mut tx, route).await?;
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -96,7 +243,9 @@ impl MySqlDb {
         audit: &DeviceRouteAuditWrite,
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
+        let values = route.persistence_values()?;
         upsert_device_route_in_tx(&mut tx, route).await?;
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         insert_device_route_audit_in_tx(&mut tx, audit).await?;
         tx.commit().await?;
         Ok(())
@@ -132,6 +281,7 @@ impl MySqlDb {
         };
 
         upsert_device_route_in_tx(&mut tx, route).await?;
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         insert_device_route_audit_in_tx(&mut tx, audit).await?;
 
         if let (Some(old_key), Some(device_id)) = (old_key, old_device_id.as_deref()) {
@@ -157,17 +307,7 @@ impl MySqlDb {
                 .bind(old_key.as_str())
                 .execute(&mut *tx)
                 .await?;
-            for delivery_id in &delivery_ids {
-                sqlx::query(
-                    "DELETE FROM private_payloads \
-                     WHERE delivery_id = ? \
-                       AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
-                       AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
-                )
-                .bind(delivery_id)
-                .execute(&mut *tx)
-                .await?;
-            }
+            cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
         }
 
         tx.commit().await?;
@@ -216,17 +356,7 @@ impl MySqlDb {
             .execute(&mut *tx)
             .await?;
 
-        for delivery_id in &delivery_ids {
-            sqlx::query(
-                "DELETE FROM private_payloads \
-                 WHERE delivery_id = ? \
-                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
-                   AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
-            )
-            .bind(delivery_id)
-            .execute(&mut *tx)
-            .await?;
-        }
+        cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
 
         tx.commit().await?;
         Ok(())
@@ -279,17 +409,7 @@ impl MySqlDb {
         .execute(&mut *tx)
         .await?;
 
-        for delivery_id in &delivery_ids {
-            sqlx::query(
-                "DELETE FROM private_payloads \
-                 WHERE delivery_id = ? \
-                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
-                   AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
-            )
-            .bind(delivery_id)
-            .execute(&mut *tx)
-            .await?;
-        }
+        cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
 
         tx.commit().await?;
         Ok(())

@@ -43,8 +43,9 @@ pub(crate) async fn channel_subscribe(
         None => None,
     };
     if channel_id.is_some() == channel_name.is_some() {
-        return Err(Error::validation(
+        return Err(Error::validation_code(
             "must provide either channel_id or channel_name",
+            "channel_binding_invalid",
         ));
     }
     let password = ChannelPassword::parse(&payload.password)?;
@@ -78,8 +79,9 @@ pub(crate) async fn channel_subscribe(
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
                 .ok_or_else(|| {
-                    Error::validation(
+                    Error::validation_code(
                         "device route is provider; provider_token required (switch route to private for private channel ops)",
+                        "provider_token_required",
                     )
                 })?;
             let platform = route.platform;

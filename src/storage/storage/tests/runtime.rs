@@ -90,6 +90,62 @@ async fn dispatch_targets_cache_invalidates_on_unsubscribe() {
 }
 
 #[tokio::test]
+async fn dispatch_targets_cache_invalidates_on_device_route_update() {
+    let ctx = setup_sqlite_storage("dispatch-targets-route-update-invalidate").await;
+    let device_key = "dispatch-targets-route-update-device-key";
+    let old_token = "android-token-route-update-old-000000000000000001";
+    let new_token = "android-token-route-update-new-000000000000000001";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        old_token,
+        "route-update-invalidate",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let channel_id = subscribe.channel_id;
+    let effective_at = chrono::Utc::now().timestamp_millis();
+
+    let first = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, effective_at)
+        .await
+        .expect("first fetch should succeed");
+    assert_eq!(first.len(), 1);
+    match &first[0] {
+        DispatchTarget::Provider { provider_token, .. } => {
+            assert_eq!(provider_token, old_token);
+        }
+        other => panic!("expected provider target before route update, got {other:?}"),
+    }
+
+    ctx.storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: device_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some(new_token.to_string()),
+            updated_at: effective_at + 1,
+        })
+        .await
+        .expect("route update should succeed");
+
+    let second = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, chrono::Utc::now().timestamp_millis())
+        .await
+        .expect("post-route-update fetch should succeed");
+    assert_eq!(second.len(), 1);
+    match &second[0] {
+        DispatchTarget::Provider { provider_token, .. } => {
+            assert_eq!(provider_token, new_token);
+        }
+        other => panic!("expected provider target after route update, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn provider_subscriptions_can_be_managed_by_device_key() {
     let ctx = setup_sqlite_storage("provider-subscriptions-device-key").await;
     let device_key = "provider-subscriptions-device-key";
@@ -321,6 +377,91 @@ async fn dispatch_targets_use_route_device_key_as_single_source() {
             assert_eq!(device_key.as_str(), canonical_device_key);
         }
         other => panic!("expected provider target, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn dispatch_targets_dedupe_duplicate_provider_token_routes() {
+    let ctx = setup_sqlite_storage("dispatch-targets-dedupe-provider-token").await;
+    let token = "android-token-dedupe-provider-token-0000000001";
+    let canonical_device_key = "dispatch-targets-dedupe-provider-token-current";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        canonical_device_key,
+        token,
+        "route-token-dedupe",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let canonical_updated_at = chrono::Utc::now().timestamp_millis();
+    ctx.storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: canonical_device_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some(token.to_string()),
+            updated_at: canonical_updated_at,
+        })
+        .await
+        .expect("canonical route refresh should succeed");
+
+    let stale_route = DeviceRouteRecordRow {
+        device_key: "dispatch-targets-dedupe-provider-token-stale".to_string(),
+        platform: Platform::ANDROID.name().to_string(),
+        channel_type: Platform::ANDROID.channel_type().to_string(),
+        provider_token: Some(token.to_string()),
+        updated_at: canonical_updated_at - 1_000,
+    }
+    .persistence_values()
+    .expect("stale route should derive persistence values");
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "INSERT INTO devices \
+         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(stale_route.device_id.as_slice())
+    .bind(stale_route.token_raw.as_slice())
+    .bind(stale_route.platform_code)
+    .bind(&stale_route.device_key)
+    .bind(&stale_route.platform)
+    .bind(&stale_route.channel_type)
+    .bind(stale_route.provider_token.as_deref())
+    .bind(stale_route.updated_at)
+    .execute(&mut conn)
+    .await
+    .expect("stale duplicate route insert should succeed");
+    sqlx::query(
+        "INSERT INTO channel_subscriptions (channel_id, device_id, status, created_at, updated_at) \
+         VALUES (?, ?, 'active', ?, ?)",
+    )
+    .bind(&subscribe.channel_id[..])
+    .bind(stale_route.device_id.as_slice())
+    .bind(stale_route.updated_at)
+    .bind(stale_route.updated_at)
+    .execute(&mut conn)
+    .await
+    .expect("stale duplicate subscription insert should succeed");
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(subscribe.channel_id, chrono::Utc::now().timestamp_millis())
+        .await
+        .expect("dispatch target fetch should succeed");
+    assert_eq!(targets.len(), 1);
+    match &targets[0] {
+        DispatchTarget::Provider {
+            provider_token,
+            device_key,
+            ..
+        } => {
+            assert_eq!(provider_token, token);
+            assert_eq!(device_key, canonical_device_key);
+        }
+        other => panic!("expected provider target after dedupe, got {other:?}"),
     }
 }
 
@@ -1210,4 +1351,96 @@ async fn load_device_routes_uses_devices_snapshot_not_channel_subscriptions() {
         .expect("subscription row count should be queryable");
     assert_eq!(route_rows, 1);
     assert_eq!(subscription_rows, 1);
+}
+
+#[tokio::test]
+async fn upsert_device_route_coalesces_duplicate_provider_identities() {
+    let ctx = setup_sqlite_storage("route-coalesces-duplicate-provider-identities").await;
+    let token = "android-token-provider-identity-coalesce-0000001";
+    let old_device_key = "provider-identity-old-device-key";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        old_device_key,
+        token,
+        "provider-identity-old",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let channel_id = subscribe.channel_id;
+    let old_device_id = derive_private_device_id(old_device_key);
+    let now = chrono::Utc::now().timestamp_millis();
+    let delivery_id = "delivery-provider-identity-coalesce-001";
+    let message = PrivateMessage {
+        payload: vec![9, 8, 7, 6],
+        size: 4,
+        sent_at: now,
+        expires_at: now + 300_000,
+    };
+    ctx.storage
+        .enqueue_provider_pull_item(
+            old_device_id,
+            delivery_id,
+            &message,
+            Platform::ANDROID,
+            token,
+        )
+        .await
+        .expect("old device provider queue enqueue should succeed");
+
+    let new_device_key = "provider-identity-new-device-key";
+    let new_route = DeviceRouteRecordRow {
+        device_key: new_device_key.to_string(),
+        platform: Platform::ANDROID.name().to_string(),
+        channel_type: Platform::ANDROID.channel_type().to_string(),
+        provider_token: Some(token.to_string()),
+        updated_at: now + 1,
+    };
+    ctx.storage
+        .upsert_device_route(&new_route)
+        .await
+        .expect("new route upsert should coalesce duplicates");
+
+    let routes = ctx
+        .storage
+        .load_device_routes()
+        .await
+        .expect("load routes should succeed");
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].device_key, new_device_key);
+
+    let old_channels = ctx
+        .storage
+        .list_subscribed_channels_for_device_key(old_device_key)
+        .await
+        .expect("list old device subscriptions should succeed");
+    assert!(old_channels.is_empty());
+    let new_channels = ctx
+        .storage
+        .list_subscribed_channels_for_device_key(new_device_key)
+        .await
+        .expect("list new device subscriptions should succeed");
+    assert_eq!(new_channels, vec![channel_id]);
+
+    let new_device_id = derive_private_device_id(new_device_key);
+    let migrated = ctx
+        .storage
+        .pull_provider_items(new_device_id, now + 10, 10)
+        .await
+        .expect("provider queue pull should succeed");
+    assert_eq!(migrated.len(), 1);
+    assert_eq!(migrated[0].delivery_id, delivery_id);
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 10)
+        .await
+        .expect("dispatch target fetch should succeed");
+    assert_eq!(targets.len(), 1);
+    match &targets[0] {
+        DispatchTarget::Provider { device_key, .. } => {
+            assert_eq!(device_key, new_device_key);
+        }
+        other => panic!("expected provider target after coalescing identities, got {other:?}"),
+    }
 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::value::{DeviceKeyRef, ProviderTokenRef};
+use std::collections::HashSet;
 
 impl SqliteDb {
     pub(super) async fn resolve_device_key_route_device(
@@ -56,7 +57,7 @@ impl SqliteDb {
              FROM channel_subscriptions s \
              JOIN devices d ON d.device_id = s.device_id \
              WHERE s.channel_id = ? AND s.status = 'active' AND s.created_at <= ? \
-             ORDER BY d.channel_type ASC, s.created_at ASC, s.device_id ASC",
+             ORDER BY d.channel_type ASC, d.route_updated_at DESC, s.updated_at DESC, s.created_at DESC, s.device_id DESC",
         )
         .bind(&channel_id[..])
         .bind(effective_at)
@@ -64,6 +65,7 @@ impl SqliteDb {
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
+        let mut seen_provider_targets = HashSet::new();
         for row in rows {
             let channel_type: String = row.get("channel_type");
             let route_provider_token: Option<String> = row.get("route_provider_token");
@@ -100,6 +102,10 @@ impl SqliteDb {
                 && let Some(token) = ProviderTokenRef::optional(Some(token.as_str()))
                 && let Some(device_key) = device_key
             {
+                let dedupe_key = (platform, token.as_str().to_string());
+                if !seen_provider_targets.insert(dedupe_key) {
+                    continue;
+                }
                 out.push(DispatchTarget::Provider {
                     platform,
                     provider_token: token.into_owned(),

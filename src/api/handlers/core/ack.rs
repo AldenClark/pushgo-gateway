@@ -27,7 +27,10 @@ pub(crate) async fn messages_ack(
     let device_key = DeviceKeyRef::parse(&payload.device_key)?;
     let delivery_id = payload.delivery_id.trim();
     if delivery_id.is_empty() {
-        return Err(Error::validation("delivery_id is required"));
+        return Err(Error::validation_code(
+            "delivery_id is required",
+            "delivery_id_required",
+        ));
     }
     let device_id = derive_private_device_id(device_key.as_str());
     let now = chrono::Utc::now().timestamp_millis();

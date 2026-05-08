@@ -12,20 +12,24 @@ pub(super) fn platform_from_channel_type(
             ) {
                 Ok(device_platform)
             } else {
-                Err(Error::validation(
+                Err(Error::validation_code(
                     "channel_type apns requires apple platform",
+                    "apns_channel_requires_apple_platform",
                 ))
             }
         }
         DeviceChannelType::Fcm => Ok(Platform::ANDROID),
         DeviceChannelType::Wns => Ok(Platform::WINDOWS),
-        DeviceChannelType::Private => Err(Error::validation("private has no provider platform")),
+        DeviceChannelType::Private => Err(Error::validation_code(
+            "private has no provider platform",
+            "private_channel_has_no_provider_platform",
+        )),
     }
 }
 
 pub(super) fn platform_from_str(raw: &str) -> Result<Platform, Error> {
     raw.parse()
-        .map_err(|_| Error::validation("invalid platform"))
+        .map_err(|_| Error::validation_code("invalid platform", "invalid_platform"))
 }
 #[cfg(test)]
 mod tests {

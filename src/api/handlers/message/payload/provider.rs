@@ -51,8 +51,9 @@ impl ProviderDeliverySelection {
         wakeup_pull_available: bool,
     ) -> Result<Self, Error> {
         if !wakeup_pull_available {
-            return Err(Error::validation(
+            return Err(Error::validation_code(
                 "provider payload exceeds size limit and wakeup path is unavailable",
+                "provider_payload_too_large_no_wakeup",
             ));
         }
         if Self::within_platform_limit(platform, wakeup_len) {
@@ -61,7 +62,10 @@ impl ProviderDeliverySelection {
                 wakeup_payload_within_limit: true,
             });
         }
-        Err(Error::validation("provider payload exceeds size limit"))
+        Err(Error::validation_code(
+            "provider payload exceeds size limit",
+            "provider_payload_too_large",
+        ))
     }
 
     pub(crate) fn resolve(

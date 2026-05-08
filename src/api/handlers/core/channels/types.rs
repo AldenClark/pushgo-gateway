@@ -1,7 +1,10 @@
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 
-use crate::{api::deserialize_empty_as_none, app::AppState};
+use crate::{
+    api::{ApiProblem, deserialize_empty_as_none},
+    app::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +39,8 @@ pub(super) struct ChannelSyncResult {
     pub(super) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) problem: Option<ApiProblem>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -156,14 +156,23 @@ pub(super) struct CompatMetadata(JsonMap<String, Value>);
 impl CompatKey {
     pub(super) fn parse(raw: &str) -> Result<Self, Error> {
         let Some((channel_id, password)) = raw.trim().split_once(':') else {
-            return Err(Error::validation(
+            return Err(Error::validation_code(
                 "compat key must be '<channel_id>:<password>'",
+                "compat_key_invalid",
             ));
         };
-        let channel_id = OptionalText::normalize_value(channel_id)
-            .ok_or_else(|| Error::validation("compat key must be '<channel_id>:<password>'"))?;
-        let password = OptionalText::normalize_value(password)
-            .ok_or_else(|| Error::validation("compat key must be '<channel_id>:<password>'"))?;
+        let channel_id = OptionalText::normalize_value(channel_id).ok_or_else(|| {
+            Error::validation_code(
+                "compat key must be '<channel_id>:<password>'",
+                "compat_key_invalid",
+            )
+        })?;
+        let password = OptionalText::normalize_value(password).ok_or_else(|| {
+            Error::validation_code(
+                "compat key must be '<channel_id>:<password>'",
+                "compat_key_invalid",
+            )
+        })?;
         Ok(Self {
             channel_id,
             password,
@@ -212,8 +221,9 @@ impl CompatMetadata {
         let Some(raw) = raw.and_then(OptionalText::normalize_value) else {
             return Ok(Self::default());
         };
-        let parsed: Value = serde_json::from_str(raw.as_str())
-            .map_err(|_| Error::validation("metadata must be a JSON object"))?;
+        let parsed: Value = serde_json::from_str(raw.as_str()).map_err(|_| {
+            Error::validation_code("metadata must be a JSON object", "metadata_object_required")
+        })?;
         let metadata = parse_metadata_map_value(parsed).map_err(Error::validation)?;
         Ok(Self(metadata))
     }

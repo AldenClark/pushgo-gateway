@@ -48,6 +48,8 @@ impl Storage {
 
     pub async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()> {
         self.db.upsert_device_route(route).await?;
+        self.cache.clear_devices();
+        self.cache.invalidate_all_channel_devices();
         Ok(())
     }
 
@@ -57,6 +59,8 @@ impl Storage {
         audit: &DeviceRouteAuditWrite,
     ) -> StoreResult<()> {
         self.db.persist_device_route_change(route, audit).await?;
+        self.cache.clear_devices();
+        self.cache.invalidate_all_channel_devices();
         Ok(())
     }
 

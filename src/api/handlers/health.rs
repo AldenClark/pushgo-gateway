@@ -33,9 +33,10 @@ struct GenericReadinessResponse {
 pub(crate) async fn healthz(State(state): State<AppState>) -> HttpResult {
     let private_runtime_ready = !state.private_channel_enabled || state.private.is_some();
     if !private_runtime_ready {
-        return Ok(crate::api::err(
+        return Ok(crate::api::err_with_code(
             StatusCode::SERVICE_UNAVAILABLE,
             "private runtime unavailable",
+            "private_channel_runtime_unavailable",
         ));
     }
 
@@ -61,9 +62,10 @@ pub(crate) async fn healthz(State(state): State<AppState>) -> HttpResult {
             private_last_accept_at,
         }));
     }
-    Ok(crate::api::err(
+    Ok(crate::api::err_with_code(
         StatusCode::SERVICE_UNAVAILABLE,
         "private channel unhealthy",
+        "private_channel_unhealthy",
     ))
 }
 
@@ -99,9 +101,10 @@ pub(crate) async fn private_readyz(State(state): State<AppState>) -> HttpResult 
             private_runtime_ready,
         }));
     }
-    Ok(crate::api::err(
+    Ok(crate::api::err_with_code(
         StatusCode::SERVICE_UNAVAILABLE,
         "private runtime unavailable",
+        "private_channel_runtime_unavailable",
     ))
 }
 

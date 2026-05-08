@@ -59,14 +59,20 @@ pub(crate) struct MessageIntent {
 impl MessageIntent {
     pub(crate) fn validate_payload(&self) -> Result<(), Error> {
         if self.channel_id.trim().is_empty() {
-            return Err(Error::validation("channel id must not be empty"));
+            return Err(Error::validation_code(
+                "channel id must not be empty",
+                "channel_id_required",
+            ));
         }
         validate_channel_password(&self.password)?;
         if let Some(op_id) = self.op_id.as_deref() {
             OpId::parse(op_id)?;
         }
         if self.title.trim().is_empty() {
-            return Err(Error::validation("title must not be empty"));
+            return Err(Error::validation_code(
+                "title must not be empty",
+                "title_required",
+            ));
         }
         MetadataEntries::new(&self.metadata).validate()?;
         Ok(())
@@ -209,8 +215,9 @@ pub(crate) async fn dispatch_message_authorized_intent(
         custom_data.insert("url".to_string(), url);
     }
     if !normalized_images.is_empty() {
-        let encoded = serde_json::to_string(&normalized_images)
-            .map_err(|_| Error::validation("images format is invalid"))?;
+        let encoded = serde_json::to_string(&normalized_images).map_err(|_| {
+            Error::validation_code("images format is invalid", "images_format_invalid")
+        })?;
         custom_data.insert("images".to_string(), encoded);
     }
     if let Some(ciphertext) = OptionalText::normalize_owned(ciphertext) {
@@ -225,7 +232,7 @@ pub(crate) async fn dispatch_message_authorized_intent(
     extra_fields.insert("message_id".to_string(), message_id.clone());
     if !normalized_tags.is_empty() {
         let encoded = serde_json::to_string(&normalized_tags)
-            .map_err(|_| Error::validation("tags format is invalid"))?;
+            .map_err(|_| Error::validation_code("tags format is invalid", "tags_format_invalid"))?;
         extra_fields.insert("tags".to_string(), encoded);
     }
     if let Some(thing_id) = scoped_thing_id.clone() {

@@ -236,7 +236,10 @@ fn is_fcm_token_invalid(status_code: u16, body: &[u8]) -> bool {
 fn normalize_base_url(raw: &str) -> Result<String, Error> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return Err(Error::validation("fcm-base-url must not be empty"));
+        return Err(Error::validation_code(
+            "fcm-base-url must not be empty",
+            "fcm_base_url_required",
+        ));
     }
     Ok(trimmed.to_string())
 }

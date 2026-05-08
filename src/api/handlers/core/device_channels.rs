@@ -82,7 +82,7 @@ impl DeviceChannelUpsertRequest {
 
     fn requested_channel_type(&self) -> Result<DeviceChannelType, Error> {
         DeviceChannelType::parse(&self.channel_type)
-            .ok_or_else(|| Error::validation("invalid channel_type"))
+            .ok_or_else(|| Error::validation_code("invalid channel_type", "invalid_channel_type"))
     }
 
     fn normalized_provider_token(
@@ -93,15 +93,21 @@ impl DeviceChannelUpsertRequest {
         match channel_type {
             DeviceChannelType::Private => {
                 if ProviderTokenRef::optional(self.provider_token.as_deref()).is_some() {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "provider_token is not allowed for private channel",
+                        "provider_token_forbidden_for_private_channel",
                     ));
                 }
                 Ok(None)
             }
             _ => {
                 let token = ProviderTokenRef::optional(self.provider_token.as_deref()).ok_or_else(
-                    || Error::validation("provider_token required for provider channel"),
+                    || {
+                        Error::validation_code(
+                            "provider_token required for provider channel",
+                            "provider_token_required",
+                        )
+                    },
                 )?;
                 match channel_type {
                     DeviceChannelType::Apns
@@ -110,18 +116,21 @@ impl DeviceChannelUpsertRequest {
                             Platform::IOS | Platform::MACOS | Platform::WATCHOS
                         ) =>
                     {
-                        return Err(Error::validation(
+                        return Err(Error::validation_code(
                             "channel_type apns requires apple platform",
+                            "apns_channel_requires_apple_platform",
                         ));
                     }
                     DeviceChannelType::Fcm if platform != Platform::ANDROID => {
-                        return Err(Error::validation(
+                        return Err(Error::validation_code(
                             "channel_type fcm requires android platform",
+                            "fcm_channel_requires_android_platform",
                         ));
                     }
                     DeviceChannelType::Wns if platform != Platform::WINDOWS => {
-                        return Err(Error::validation(
+                        return Err(Error::validation_code(
                             "channel_type wns requires windows platform",
+                            "wns_channel_requires_windows_platform",
                         ));
                     }
                     _ => {}
@@ -140,7 +149,7 @@ impl DeviceChannelDeleteRequest {
 
     fn requested_channel_type(&self) -> Result<DeviceChannelType, Error> {
         DeviceChannelType::parse(&self.channel_type)
-            .ok_or_else(|| Error::validation("invalid channel_type"))
+            .ok_or_else(|| Error::validation_code("invalid channel_type", "invalid_channel_type"))
     }
 }
 

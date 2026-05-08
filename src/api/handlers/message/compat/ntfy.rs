@@ -7,8 +7,9 @@ impl CompatNtfyQuery {
         if self.thing_id.is_none() {
             return Ok(None);
         }
-        Err(Error::validation(
+        Err(Error::validation_code(
             "thing_id is not supported on this endpoint",
+            "thing_id_unsupported_on_ntfy_endpoint",
         ))
     }
 

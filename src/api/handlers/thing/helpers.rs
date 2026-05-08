@@ -101,15 +101,22 @@ impl<'a> ExternalIdPatchRef<'a> {
                 JsonValue::String(raw) => {
                     let trimmed = raw.trim();
                     if trimmed.is_empty() {
-                        return Err(Error::validation("external_ids contains empty value"));
+                        return Err(Error::validation_code(
+                            "external_ids contains empty value",
+                            "external_ids_value_required",
+                        ));
                     }
                     if trimmed.len() > 256 {
-                        return Err(Error::validation("external_ids contains oversized value"));
+                        return Err(Error::validation_code(
+                            "external_ids contains oversized value",
+                            "external_ids_value_too_long",
+                        ));
                     }
                 }
                 _ => {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "external_ids only supports string or null values",
+                        "external_ids_value_invalid",
                     ));
                 }
             }
@@ -128,8 +135,9 @@ impl<'a> ExternalIdPatchRef<'a> {
                     target.insert(normalized_key, raw.trim().to_string());
                 }
                 _ => {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "external_ids only supports string or null values",
+                        "external_ids_value_invalid",
                     ));
                 }
             }
@@ -162,18 +170,23 @@ pub(super) fn validate_manufacturer_attrs(
             for key in inner.keys() {
                 let trimmed = key.trim();
                 if trimmed.is_empty() {
-                    return Err(Error::validation("attrs.manufacturer contains empty key"));
+                    return Err(Error::validation_code(
+                        "attrs.manufacturer contains empty key",
+                        "manufacturer_attr_key_required",
+                    ));
                 }
                 if trimmed.len() > 64 {
-                    return Err(Error::validation(
+                    return Err(Error::validation_code(
                         "attrs.manufacturer contains oversized key",
+                        "manufacturer_attr_key_too_long",
                     ));
                 }
             }
             Ok(())
         }
-        _ => Err(Error::validation(
+        _ => Err(Error::validation_code(
             "attrs.manufacturer must be object or null",
+            "manufacturer_attr_invalid",
         )),
     }
 }
