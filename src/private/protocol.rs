@@ -2,6 +2,7 @@ use std::{fmt, str::FromStr};
 
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use warp_link::warp_link_core::AckStatus as WarpAckStatus;
 
 use crate::value::ChannelId;
@@ -347,7 +348,7 @@ pub struct ErrorFrame {
 #[derive(Debug, Clone)]
 pub struct DeliverEnvelope {
     pub delivery_id: String,
-    pub payload: Vec<u8>,
+    pub payload: Arc<[u8]>,
 }
 
 #[cfg(test)]

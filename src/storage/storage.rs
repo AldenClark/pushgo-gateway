@@ -1,5 +1,5 @@
 use crate::storage::{
-    cache::{CacheAccess, CacheStore},
+    cache::{CacheAccess, CacheMemorySnapshot, CacheStore},
     database::DatabaseDriver,
     types::*,
 };
@@ -55,6 +55,10 @@ impl Storage {
             db: Arc::new(driver),
             cache: Arc::new(CacheStore::new()),
         })
+    }
+
+    pub fn cache_memory_snapshot(&self) -> CacheMemorySnapshot {
+        self.cache.memory_snapshot()
     }
 }
 

@@ -24,8 +24,8 @@ impl Storage {
                 .channel_info_with_password(id)
                 .await?
                 .ok_or(StoreError::ChannelNotFound)?;
-            verify_channel_password(&hash, password)?;
-            hash
+            self.verify_channel_password_and_maybe_upgrade(id, &hash, password)
+                .await?
         } else {
             hash_channel_password(password)?
         };
@@ -142,7 +142,8 @@ impl Storage {
         let Some((info, hash)) = loaded else {
             return Ok(None);
         };
-        verify_channel_password(&hash, password)?;
+        self.verify_channel_password_and_maybe_upgrade(channel_id, &hash, password)
+            .await?;
         Ok(Some(info))
     }
 
@@ -157,7 +158,8 @@ impl Storage {
             .channel_info_with_password(channel_id)
             .await?
             .ok_or(StoreError::ChannelNotFound)?;
-        verify_channel_password(&loaded.1, password)?;
+        self.verify_channel_password_and_maybe_upgrade(channel_id, &loaded.1, password)
+            .await?;
         self.db.rename_channel(channel_id, alias).await?;
         self.cache.put_channel_info(
             channel_id,
@@ -180,8 +182,8 @@ impl Storage {
                 .channel_info_with_password(id)
                 .await?
                 .ok_or(StoreError::ChannelNotFound)?;
-            verify_channel_password(&hash, password)?;
-            hash
+            self.verify_channel_password_and_maybe_upgrade(id, &hash, password)
+                .await?
         } else {
             hash_channel_password(password)?
         };
@@ -231,5 +233,22 @@ impl Storage {
         self.db
             .list_private_subscribers(channel_id, subscribed_at_or_before)
             .await
+    }
+
+    async fn verify_channel_password_and_maybe_upgrade(
+        &self,
+        channel_id: [u8; 16],
+        password_hash: &str,
+        password: &str,
+    ) -> StoreResult<String> {
+        let verify_outcome = verify_channel_password(password_hash, password)?;
+        if verify_outcome.needs_upgrade() {
+            let upgraded_hash = hash_channel_password(password)?;
+            self.db
+                .update_channel_password_hash(channel_id, upgraded_hash.as_str())
+                .await?;
+            return Ok(upgraded_hash);
+        }
+        Ok(password_hash.to_string())
     }
 }

@@ -39,6 +39,14 @@ macro_rules! impl_backend_channel_query_access {
             async fn rename_channel(&self, channel_id: [u8; 16], alias: &str) -> StoreResult<()> {
                 <$backend>::rename_channel(self, channel_id, alias).await
             }
+
+            async fn update_channel_password_hash(
+                &self,
+                channel_id: [u8; 16],
+                password_hash: &str,
+            ) -> StoreResult<()> {
+                <$backend>::update_channel_password_hash(self, channel_id, password_hash).await
+            }
         }
     };
 }
@@ -172,6 +180,23 @@ macro_rules! impl_backend_private_message_access {
                 entry: &PrivateOutboxEntry,
             ) -> StoreResult<()> {
                 <$backend>::enqueue_private_outbox(self, device_id, entry).await
+            }
+
+            async fn enqueue_private_outbox_batch(
+                &self,
+                entries: &[PrivateOutboxBatchEntry],
+                max_pending_per_device: usize,
+                global_max_pending: usize,
+                protected_delivery_id: Option<&str>,
+            ) -> StoreResult<usize> {
+                <$backend>::enqueue_private_outbox_batch(
+                    self,
+                    entries,
+                    max_pending_per_device,
+                    global_max_pending,
+                    protected_delivery_id,
+                )
+                .await
             }
 
             async fn list_private_outbox(

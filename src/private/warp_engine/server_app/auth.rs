@@ -89,7 +89,8 @@ impl PushgoServerApp {
 
         let tuning = resolve_tuning(hello.perf_tier.as_deref(), hello.app_state.as_deref());
         let conn_id = rand::random::<u64>();
-        let (tx, rx): (Sender<DeliverEnvelope>, Receiver<DeliverEnvelope>) = flume::bounded(256);
+        let (tx, rx): (Sender<DeliverEnvelope>, Receiver<DeliverEnvelope>) =
+            flume::bounded(crate::private::private_connection_queue_capacity());
         let registration =
             self.state
                 .hub

@@ -1,5 +1,6 @@
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use super::{DeviceId, StoreResult};
 
@@ -23,7 +24,7 @@ pub struct PrivateSession {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivateMessage {
-    pub payload: Vec<u8>,
+    pub payload: Arc<[u8]>,
     pub size: usize,
     pub sent_at: i64,
     pub expires_at: i64,
@@ -80,11 +81,17 @@ pub struct PrivateOutboxEntry {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct PrivateOutboxBatchEntry {
+    pub device_id: DeviceId,
+    pub entry: PrivateOutboxEntry,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderPullItem {
     pub device_id: DeviceId,
     pub delivery_id: String,
-    pub payload: Vec<u8>,
+    pub payload: Arc<[u8]>,
     pub sent_at: i64,
     pub expires_at: i64,
     pub platform: super::Platform,

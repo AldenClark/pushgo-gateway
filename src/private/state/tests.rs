@@ -49,6 +49,7 @@ fn test_private_config() -> PrivateConfig {
         retransmit_max_retries: 3,
         hot_cache_capacity: 64,
         default_ttl_secs: 60,
+        online_fast_path_enabled: false,
         maintenance_cleanup: MaintenanceCleanupConfig::default(),
         gateway_token: None,
     }
@@ -109,7 +110,7 @@ async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_
             .enqueue_private_delivery(
                 device_id,
                 &format!("delivery-old-{index:02}"),
-                vec![index as u8],
+                std::sync::Arc::from([index as u8]),
                 now + index as i64,
                 now + 600_000,
             )
@@ -121,7 +122,7 @@ async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_
         .enqueue_private_delivery(
             device_id,
             "delivery-new",
-            vec![255],
+            std::sync::Arc::from([255u8]),
             now + 10_000,
             now + 600_000,
         )
@@ -172,7 +173,7 @@ async fn enqueue_private_delivery_does_not_evict_claimed_entries_for_capacity() 
     for index in 0..ctx.state.config.max_pending_per_device {
         let delivery_id = format!("delivery-claimed-{index:02}");
         let message = PrivateMessage {
-            payload: vec![index as u8],
+            payload: vec![index as u8].into(),
             size: 1,
             sent_at: now + index as i64,
             expires_at: now + 600_000,
@@ -210,7 +211,7 @@ async fn enqueue_private_delivery_does_not_evict_claimed_entries_for_capacity() 
         .enqueue_private_delivery(
             device_id,
             "delivery-new",
-            vec![255],
+            std::sync::Arc::from([255u8]),
             now + 10_000,
             now + 600_000,
         )

@@ -162,6 +162,7 @@ fn print_startup_diagnostics(
         private_transport_tcp_enabled = (private_transports.tcp),
         private_transport_wss_enabled = (private_transports.wss),
         observability_profile = %(observability.profile.as_str()),
+        private_online_fast_path_enabled = (args.private_online_fast_path_enabled_resolved()),
         diagnostics_api_enabled = (observability.diagnostics_api_enabled),
         observability_log_level = %(observability.log_level.as_str()),
         stats_enabled = (observability.stats_enabled),

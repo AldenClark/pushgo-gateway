@@ -49,7 +49,7 @@ pub(super) enum AttemptBudget {
 }
 
 struct FallbackPayloadContext {
-    payload: Vec<u8>,
+    payload: std::sync::Arc<[u8]>,
 }
 
 impl FallbackPayloadContext {
@@ -58,7 +58,7 @@ impl FallbackPayloadContext {
             return None;
         }
         let envelope =
-            crate::private::protocol::PrivatePayloadEnvelope::decode_postcard(&message.payload)?;
+            crate::private::protocol::PrivatePayloadEnvelope::decode_postcard(message.payload.as_ref())?;
         if !envelope.is_supported_version() {
             return None;
         }
@@ -103,7 +103,11 @@ impl FallbackRuntime {
         }
     }
 
-    fn try_trim_allocator(&self) {}
+    fn try_trim_allocator(&self) {
+        // Keep this hook as a no-op unless we introduce a safe, cross-platform trim strategy.
+        // `pushgo-gateway` forbids unsafe code, so direct `malloc_trim` FFI is intentionally
+        // disabled.
+    }
 
     pub(super) async fn run_claim_ack_drain(
         &self,
@@ -289,7 +293,7 @@ impl FallbackRuntime {
         if total_pending == 0 {
             return;
         }
-        let seed_limit = total_pending.min(200_000);
+        let seed_limit = total_pending.min(crate::private::private_fallback_seed_limit());
         let entries = match self.state.hub.list_due_outbox(i64::MAX, seed_limit).await {
             Ok(value) => value,
             Err(err) => {
@@ -569,6 +573,7 @@ mod tests {
             retransmit_max_retries: 3,
             hot_cache_capacity: 64,
             default_ttl_secs: 60,
+            online_fast_path_enabled: false,
             maintenance_cleanup: MaintenanceCleanupConfig::default(),
             gateway_token: None,
         }
@@ -581,7 +586,8 @@ mod tests {
                 payload_version: crate::private::protocol::PRIVATE_PAYLOAD_VERSION_V1,
                 data,
             })
-            .expect("payload should encode"),
+            .expect("payload should encode")
+            .into(),
             size: 0,
             sent_at: 0,
             expires_at,
@@ -649,6 +655,7 @@ mod tests {
             expires_at,
         )
         .payload;
+        let payload = std::sync::Arc::<[u8]>::from(payload);
 
         ctx.state
             .enqueue_private_delivery(device_id, delivery_id, payload.clone(), sent_at, expires_at)
@@ -671,7 +678,7 @@ mod tests {
             .expect("delivery should arrive before timeout")
             .expect("delivery channel should stay open");
         assert_eq!(delivered.delivery_id, delivery_id);
-        assert_eq!(delivered.payload, payload);
+        assert_eq!(delivered.payload.as_ref(), payload.as_ref());
 
         let entry = ctx
             .state
@@ -706,6 +713,7 @@ mod tests {
             expires_at,
         )
         .payload;
+        let payload = std::sync::Arc::<[u8]>::from(payload);
 
         ctx.state
             .enqueue_private_delivery(device_id, delivery_id, payload, sent_at, expires_at)

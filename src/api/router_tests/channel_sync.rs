@@ -25,7 +25,7 @@ async fn seed_private_pending_delivery(
     let now = chrono::Utc::now().timestamp_millis();
     let payload = make_provider_payload(delivery_id, title);
     let message = PrivateMessage {
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         size: payload.len(),
         sent_at: now,
         expires_at: now + 300_000,
@@ -70,7 +70,7 @@ async fn seed_provider_pending_delivery(
     let now = chrono::Utc::now().timestamp_millis();
     let payload = make_provider_payload(delivery_id, title);
     let message = PrivateMessage {
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         size: payload.len(),
         sent_at: now,
         expires_at: now + 300_000,

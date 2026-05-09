@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) struct PreparedDispatch<'a> {
     pub(super) state: &'a AppState,
@@ -15,7 +16,7 @@ pub(super) struct PreparedDispatch<'a> {
     pub(super) effective_ttl: Option<i64>,
     pub(super) ttl_seconds: Option<u32>,
     pub(super) private_default_ttl_secs: i64,
-    pub(super) private_payload: Vec<u8>,
+    pub(super) private_payload: Arc<[u8]>,
     pub(super) wakeup_data: Arc<HashMap<String, String>>,
     pub(super) custom_data: Arc<HashMap<String, String>>,
     pub(super) provider_devices: Vec<ProviderDispatchDevice>,
@@ -222,7 +223,7 @@ impl<'a> PreparedDispatch<'a> {
             effective_ttl,
             ttl_seconds,
             private_default_ttl_secs,
-            private_payload: prepared_payload.private_payload.into_inner(),
+            private_payload: Arc::from(prepared_payload.private_payload.into_inner()),
             wakeup_data: prepared_payload.wakeup_data.into_inner(),
             custom_data: prepared_payload.custom_data,
             provider_devices,

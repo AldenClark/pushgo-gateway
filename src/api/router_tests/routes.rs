@@ -194,6 +194,23 @@ async fn diagnostics_private_metrics_route_is_locked_when_disabled() {
 }
 
 #[tokio::test]
+async fn diagnostics_private_memory_route_is_locked_when_disabled() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/diagnostics/private/memory")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("router should handle request");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn diagnostics_private_metrics_route_is_available_when_enabled() {
     let state = build_diagnostics_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");
@@ -202,6 +219,23 @@ async fn diagnostics_private_metrics_route_is_available_when_enabled() {
             Request::builder()
                 .method("GET")
                 .uri("/diagnostics/private/metrics")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("router should handle request");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn diagnostics_private_memory_route_is_available_when_enabled() {
+    let state = build_diagnostics_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/diagnostics/private/memory")
                 .body(Body::empty())
                 .expect("request should build"),
         )

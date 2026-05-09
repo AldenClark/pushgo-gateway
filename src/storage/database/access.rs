@@ -15,6 +15,11 @@ pub trait ChannelQueryDatabaseAccess: Send + Sync {
         channel_id: [u8; 16],
     ) -> StoreResult<Option<(ChannelInfo, String)>>;
     async fn rename_channel(&self, channel_id: [u8; 16], alias: &str) -> StoreResult<()>;
+    async fn update_channel_password_hash(
+        &self,
+        channel_id: [u8; 16],
+        password_hash: &str,
+    ) -> StoreResult<()>;
 }
 
 #[async_trait]
@@ -109,6 +114,13 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
         device_id: DeviceId,
         entry: &PrivateOutboxEntry,
     ) -> StoreResult<()>;
+    async fn enqueue_private_outbox_batch(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+        max_pending_per_device: usize,
+        global_max_pending: usize,
+        protected_delivery_id: Option<&str>,
+    ) -> StoreResult<usize>;
     async fn list_private_outbox(
         &self,
         device_id: DeviceId,

@@ -195,6 +195,20 @@ impl MySqlDb {
         Ok(())
     }
 
+    pub(super) async fn update_channel_password_hash(
+        &self,
+        channel_id: [u8; 16],
+        password_hash: &str,
+    ) -> StoreResult<()> {
+        sqlx::query("UPDATE channels SET password_hash = ?, updated_at = ? WHERE channel_id = ?")
+            .bind(password_hash)
+            .bind(Utc::now().timestamp_millis())
+            .bind(&channel_id[..])
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub(super) async fn upsert_private_channel(
         &self,
         channel_id: Option<[u8; 16]>,

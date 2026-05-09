@@ -5,4 +5,5 @@ include!("hub/presence.rs");
 include!("hub/resume.rs");
 include!("hub/outbox.rs");
 include!("hub/cache.rs");
+include!("hub/memory.rs");
 include!("hub/transports.rs");

@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use flume::{Receiver, Sender};
 use hashbrown::HashMap;
 use parking_lot::{Mutex, RwLock};
+use serde::Serialize;
 use tokio::time::Instant as TokioInstant;
 use tracing::Instrument;
 use warp_link::warp_link_core::{SessionControl, SessionCoordinator, TransportKind};
@@ -17,7 +18,7 @@ use crate::{
     stats::StatsCollector,
     storage::{
         DeviceId, MaintenanceCleanupConfig, MaintenanceCleanupStats, Platform, PrivateMessage,
-        PrivateOutboxEntry, Storage,
+        PrivateOutboxBatchEntry, PrivateOutboxEntry, Storage,
     },
     util::{decode_lower_hex_128, encode_lower_hex_128},
 };
@@ -39,8 +40,39 @@ use state::EnqueuePrivateMessageOutcome;
 pub use state::PrivateState;
 pub(crate) use state::{BootstrapQueues, RegisterConnectionOutcome, RetransmitPollResult};
 
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct PrivateHubMemorySnapshot {
+    pub hot_messages_count: usize,
+    pub hot_messages_payload_bytes: usize,
+    pub hot_order_len: usize,
+    pub hot_order_capacity: usize,
+    pub resume_state_count: usize,
+    pub resume_inflight_count: usize,
+    pub resume_inflight_payload_bytes: usize,
+    pub presence_device_count: usize,
+    pub presence_active_conn_count: usize,
+    pub presence_draining_conn_count: usize,
+    pub presence_queue_depth: usize,
+    pub presence_queue_capacity: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct PrivateStateMemorySnapshot {
+    pub revoked_device_count: usize,
+    pub session_control_count: usize,
+    pub session_device_count: usize,
+    pub fallback_task_queue_depth: usize,
+    pub fallback_task_queue_capacity: usize,
+    pub hub: PrivateHubMemorySnapshot,
+}
+
 const MAINTENANCE_INTERVAL_SECS: i64 = 60;
-const FALLBACK_TASK_COMMAND_CAPACITY: usize = 65_536;
+const FALLBACK_TASK_COMMAND_CAPACITY_MIN: usize = 64;
+const FALLBACK_TASK_COMMAND_CAPACITY_MAX: usize = 262_144;
+const CONNECTION_QUEUE_CAPACITY_MIN: usize = 16;
+const CONNECTION_QUEUE_CAPACITY_MAX: usize = 2_048;
+const FALLBACK_SEED_LIMIT_MIN: usize = 1_024;
+const FALLBACK_SEED_LIMIT_MAX: usize = 500_000;
 const CLAIM_ACK_ACTIVE_MAX_ROUNDS: usize = 4;
 const CLAIM_ACK_IDLE_MAX_ROUNDS: usize = 1;
 const CLAIM_ACK_ACTIVE_PROCESS_BUDGET: usize = 4_096;
@@ -76,6 +108,7 @@ pub struct PrivateConfig {
     pub retransmit_max_retries: u8,
     pub hot_cache_capacity: usize,
     pub default_ttl_secs: i64,
+    pub online_fast_path_enabled: bool,
     pub maintenance_cleanup: MaintenanceCleanupConfig,
     pub gateway_token: Option<String>,
 }
@@ -195,7 +228,7 @@ struct FallbackTaskEngine {
 
 impl FallbackTaskEngine {
     fn new() -> Arc<Self> {
-        let (tx, rx) = flume::bounded(FALLBACK_TASK_COMMAND_CAPACITY);
+        let (tx, rx) = flume::bounded(fallback_task_command_capacity());
         Arc::new(Self {
             tx,
             rx: Mutex::new(Some(rx)),
@@ -275,6 +308,43 @@ impl FallbackTaskEngine {
         self.mark_depth(depth);
         state.metrics.mark_task_queue_depth(depth);
     }
+}
+
+fn fallback_task_command_capacity() -> usize {
+    if let Some(explicit) = std::env::var("PUSHGO_PRIVATE_FALLBACK_TASK_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return explicit.clamp(
+            FALLBACK_TASK_COMMAND_CAPACITY_MIN,
+            FALLBACK_TASK_COMMAND_CAPACITY_MAX,
+        );
+    }
+    2_048
+}
+
+pub(crate) fn private_fallback_task_command_capacity() -> usize {
+    fallback_task_command_capacity()
+}
+
+pub(crate) fn private_connection_queue_capacity() -> usize {
+    if let Some(explicit) = std::env::var("PUSHGO_PRIVATE_CONNECTION_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return explicit.clamp(CONNECTION_QUEUE_CAPACITY_MIN, CONNECTION_QUEUE_CAPACITY_MAX);
+    }
+    64
+}
+
+pub(crate) fn private_fallback_seed_limit() -> usize {
+    if let Some(explicit) = std::env::var("PUSHGO_PRIVATE_FALLBACK_SEED_LIMIT")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return explicit.clamp(FALLBACK_SEED_LIMIT_MIN, FALLBACK_SEED_LIMIT_MAX);
+    }
+    10_000
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

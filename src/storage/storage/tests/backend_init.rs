@@ -431,7 +431,7 @@ async fn seed_cleanup_shared_delivery_scenario(
             referenced_queue_device_id,
             "docker-maintenance-live-reference-provider-pull",
             &PrivateMessage {
-                payload: vec![9, 9, 9],
+                payload: vec![9, 9, 9].into(),
                 size: 3,
                 sent_at: now,
                 expires_at: now + 300_000,
@@ -446,7 +446,7 @@ async fn seed_cleanup_shared_delivery_scenario(
         .insert_private_message(
             SHARED_PRIVATE_DELIVERY_ID,
             &PrivateMessage {
-                payload: vec![1, 2, 3],
+                payload: vec![1, 2, 3].into(),
                 size: 3,
                 sent_at: now,
                 expires_at: now + 300_000,
@@ -484,7 +484,7 @@ async fn seed_cleanup_shared_delivery_scenario(
             PG_MYSQL_STALE_DEVICE,
             SHARED_PROVIDER_DELIVERY_ID,
             &PrivateMessage {
-                payload: vec![4],
+                payload: vec![4].into(),
                 size: 1,
                 sent_at: old,
                 expires_at: old,
@@ -499,7 +499,7 @@ async fn seed_cleanup_shared_delivery_scenario(
             PG_MYSQL_LIVE_DEVICE,
             SHARED_PROVIDER_DELIVERY_ID,
             &PrivateMessage {
-                payload: vec![5],
+                payload: vec![5].into(),
                 size: 1,
                 sent_at: now,
                 expires_at: now + 300_000,

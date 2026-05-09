@@ -55,6 +55,8 @@ pub struct McpPredefinedClient {
     client_secret: Arc<str>,
 }
 
+const DEFAULT_PRIVATE_ONLINE_FAST_PATH_ENABLED: bool = false;
+
 impl PrivateTransports {
     #[must_use]
     pub const fn none() -> Self {
@@ -474,6 +476,13 @@ pub struct Args {
     )]
     pub private_default_ttl_secs: i64,
 
+    /// If true, online private devices use deliver-first fast path (fallback to enqueue when send fails).
+    #[arg(
+        env = "PUSHGO_PRIVATE_ONLINE_FAST_PATH_ENABLED",
+        long = "private-online-fast-path-enabled"
+    )]
+    pub private_online_fast_path_enabled: Option<bool>,
+
     /// Batch size for deleting expired provider pull queue rows.
     #[arg(
         env = "PUSHGO_PROVIDER_PULL_EXPIRED_BATCH",
@@ -782,6 +791,12 @@ impl Args {
         }
 
         config
+    }
+
+    #[must_use]
+    pub fn private_online_fast_path_enabled_resolved(&self) -> bool {
+        self.private_online_fast_path_enabled
+            .unwrap_or(DEFAULT_PRIVATE_ONLINE_FAST_PATH_ENABLED)
     }
 }
 
@@ -1178,5 +1193,34 @@ mod tests {
         assert_eq!(&*clients[0].client_secret(), "secret-a");
         assert_eq!(&*clients[1].client_id(), "client-b");
         assert_eq!(&*clients[1].client_secret(), "secret-b");
+    }
+
+    #[test]
+    fn private_defaults_are_direct_values() {
+        let args = Args::parse_from(["pushgo-gateway", "--db-url", "sqlite:///tmp/pushgo.db"])
+            .normalized();
+        assert_eq!(args.private_max_pending_per_device, 200);
+        assert_eq!(args.private_pull_limit, 200);
+        assert_eq!(args.private_global_max_pending, 5_000_000);
+        assert_eq!(args.private_hot_cache_capacity, 50_000);
+        assert!(!args.private_online_fast_path_enabled_resolved());
+    }
+
+    #[test]
+    fn explicit_private_values_are_preserved() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--private-max-pending=48",
+            "--private-global-max-pending=12345",
+            "--private-hot-cache-capacity=777",
+            "--private-online-fast-path-enabled=false",
+        ])
+        .normalized();
+        assert_eq!(args.private_max_pending_per_device, 48);
+        assert_eq!(args.private_global_max_pending, 12_345);
+        assert_eq!(args.private_hot_cache_capacity, 777);
+        assert!(!args.private_online_fast_path_enabled_resolved());
     }
 }

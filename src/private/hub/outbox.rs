@@ -3,7 +3,7 @@ impl PrivateHub {
         &self,
         device_id: DeviceId,
         delivery_id: &str,
-        payload: Vec<u8>,
+        payload: std::sync::Arc<[u8]>,
         sent_at: i64,
         expires_at: i64,
     ) -> Result<EnqueuePrivateMessageOutcome, crate::Error> {
@@ -99,7 +99,7 @@ impl PrivateHub {
         if should_persist_message {
             let size = payload.len();
             let message = PrivateMessage {
-                payload,
+                payload: payload.clone(),
                 size,
                 sent_at,
                 expires_at,
@@ -134,6 +134,104 @@ impl PrivateHub {
         Ok(EnqueuePrivateMessageOutcome {
             private_outbox_pruned,
         })
+    }
+
+    pub(crate) async fn enqueue_private_messages(
+        &self,
+        device_ids: &[DeviceId],
+        delivery_id: &str,
+        payload: std::sync::Arc<[u8]>,
+        sent_at: i64,
+        expires_at: i64,
+    ) -> Vec<(DeviceId, Result<EnqueuePrivateMessageOutcome, crate::Error>)> {
+        if device_ids.is_empty() {
+            return Vec::new();
+        }
+
+        let _enqueue_gate = self.enqueue_gate.lock().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut results = Vec::with_capacity(device_ids.len());
+        let mut batch = Vec::with_capacity(device_ids.len());
+        let mut batch_result_indexes = Vec::with_capacity(device_ids.len());
+
+        for device_id in device_ids.iter().copied() {
+            let entry = PrivateOutboxEntry {
+                delivery_id: delivery_id.to_string(),
+                status: "pending".to_string(),
+                attempts: 0,
+                occurred_at: sent_at,
+                created_at: now,
+                claimed_at: None,
+                first_sent_at: None,
+                last_attempt_at: None,
+                acked_at: None,
+                fallback_sent_at: None,
+                next_attempt_at: sent_at.saturating_add(self.ack_timeout_secs.max(1) * 1000),
+                last_error_code: None,
+                last_error_detail: None,
+                updated_at: now,
+            };
+            batch.push(PrivateOutboxBatchEntry { device_id, entry });
+            batch_result_indexes.push(results.len());
+            results.push((
+                device_id,
+                Ok(EnqueuePrivateMessageOutcome {
+                    private_outbox_pruned: 0,
+                }),
+            ));
+        }
+
+        if batch.is_empty() {
+            return results;
+        }
+
+        let should_persist_message = !self.hot_messages.contains_key(delivery_id);
+        let message = PrivateMessage {
+            payload: payload.clone(),
+            size: payload.len(),
+            sent_at,
+            expires_at,
+        };
+        if should_persist_message
+            && let Err(err) = self.store.insert_private_message(delivery_id, &message).await
+        {
+            let error = err.to_string();
+            for index in batch_result_indexes {
+                results[index].1 = Err(crate::Error::Internal(error.clone()));
+            }
+            return results;
+        }
+
+        let private_outbox_pruned = match self
+            .store
+            .enqueue_private_outbox_batch(
+                &batch,
+                self.max_pending_per_device,
+                self.global_max_pending,
+                Some(delivery_id),
+            )
+            .await
+        {
+            Ok(pruned) => pruned,
+            Err(err) => {
+                let error = err.to_string();
+                for index in batch_result_indexes {
+                    results[index].1 = Err(crate::Error::Internal(error.clone()));
+                }
+                return results;
+            }
+        };
+        if private_outbox_pruned > 0
+            && let Some(index) = batch_result_indexes.first().copied()
+            && let Ok(outcome) = &mut results[index].1
+        {
+            outcome.private_outbox_pruned = private_outbox_pruned;
+        }
+
+        if should_persist_message {
+            self.cache_put(delivery_id, &message);
+        }
+        results
     }
 
     pub async fn pull_outbox(

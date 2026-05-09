@@ -104,6 +104,7 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--private-global-max-pending`    | `PUSHGO_PRIVATE_GLOBAL_MAX_PENDING`    | `5000000`                  | No                | Global pending cap for private queue                   |
 | `--private-hot-cache-capacity`    | `PUSHGO_PRIVATE_HOT_CACHE_CAPACITY`    | `50000`                    | No                | Hot-cache capacity for private payloads                |
 | `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `2592000`                  | No                | Default TTL for private messages (seconds)             |
+| `--private-online-fast-path-enabled` | `PUSHGO_PRIVATE_ONLINE_FAST_PATH_ENABLED` | `false` | No | Deliver-first fast path for online private devices (falls back to enqueue on send failure) |
 
 ### MCP / OAuth
 
@@ -121,14 +122,33 @@ Advanced env-only runtime tunables are listed in a separate section below.
 
 | Env                                         | Default                                | Description                                                                 |
 | ------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
-| `PUSHGO_DISPATCH_WORKER_COUNT`              | Auto                                   | Dispatch worker count (clamped 2~256; auto is `cpu*2`, clamped 4~64)       |
-| `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | Auto                                   | Dispatch queue capacity (clamped 256~131072; auto is `workers*64`)          |
+| `PUSHGO_DISPATCH_WORKER_COUNT`              | Auto                                   | Dispatch worker count override (clamped 2~256) |
+| `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | Auto                                   | Dispatch queue capacity override (clamped 256~131072) |
+| `PUSHGO_PRIVATE_FALLBACK_TASK_QUEUE_CAPACITY` | Auto                                 | Private fallback scheduler queue override (clamped 64~262144) |
+| `PUSHGO_PRIVATE_CONNECTION_QUEUE_CAPACITY` | Auto                                 | Per-connection private delivery queue override (clamped 16~2048) |
+| `PUSHGO_PRIVATE_FALLBACK_SEED_LIMIT` | Auto                                   | Fallback seed scan limit override (clamped 1024~500000) |
+| `PUSHGO_STATS_CHANNEL_CAPACITY`             | Auto                                   | Stats worker channel capacity override (clamped 256~32768) |
+| `PUSHGO_STATS_FLUSH_EVENT_THRESHOLD`        | Auto                                   | Stats flush threshold override (clamped 128~16384) |
+| `PUSHGO_SQLITE_MAX_CONNECTIONS`             | `4`                                    | SQLite pool max connections (clamped 1~32)                  |
+| `PUSHGO_SQLITE_IDLE_TIMEOUT_SECS`           | `60`                                   | SQLite idle connection timeout in seconds                   |
+| `PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY`    | `32`                                   | SQLite per-connection sqlx statement cache capacity         |
+| `PUSHGO_SQLITE_PAGE_CACHE_KIB`              | `1024`                                 | SQLite page-cache target per connection, in KiB             |
+| `PUSHGO_SQLITE_WAL_AUTOCHECKPOINT`          | `256`                                  | SQLite WAL autocheckpoint page threshold                    |
 | `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | In-process APNS max concurrent sends                                        |
 | `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | Dispatch-target cache TTL in milliseconds (200~10000)                       |
 | `PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED` | None                                | Optional override for diagnostics API switch                                 |
 | `PUSHGO_OBSERVABILITY_LOG_LEVEL`              | `warn`                              | Optional override for native tracing log level                               |
 | `PUSHGO_OBSERVABILITY_STATS_ENABLED`           | None                                | Optional override for stats collection                                       |
 | `RUST_LOG`                                    | None                                | Optional full EnvFilter directive override (higher priority than profile/level) |
+
+## Channel Password Hash Strategy
+
+- New writes use `blake3 + salt` with a PHC-like string format:
+  - `$pushgo-blake3$v=1$<salt_base64url_nopad>$<digest_base64url_nopad>`
+- Legacy `argon2` hashes remain readable.
+- On successful legacy verification, gateway upgrades that row in-place to the new `blake3` format immediately (no offline migration required).
+
+This keeps private deployment CPU cost low while maintaining non-plaintext storage.
 
 ### Operations Stats (DB)
 
@@ -147,6 +167,55 @@ Example:
 ```json
 {"ts_ms":1713750000000,"component":"gateway","event":"dispatch.provider_send_failed","provider":"fcm","status_code":503,"invalid_token":false}
 ```
+
+## Memory Forensics (Private Runtime)
+
+Use compile-time symbol/stack support + external profilers + runtime diagnostics on the same timeline.
+
+### 1) Build a profiling binary
+
+```bash
+RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling
+```
+
+`profiling` profile keeps release optimizations but preserves better debug attribution.
+
+### 2) Run timeline sampling against a live gateway process
+
+```bash
+./scripts/private_memory_observe.sh \
+  --pid <gateway_pid> \
+  --base-url http://127.0.0.1:6666 \
+  --auth-token <token> \
+  --interval-ms 500 \
+  --duration-secs 180
+```
+
+This records:
+- `/proc/<pid>/smaps_rollup` (`Rss`, `Anonymous`, `Private_Dirty`, etc.)
+- `/proc/<pid>/status` (`VmRSS`, `VmData`, `Threads`, etc.)
+- `/diagnostics/private/memory` snapshot file per sample timestamp
+
+Use `samples.jsonl` as the timeline index to align process memory segments and in-process object snapshots.
+
+### 3) External allocation call-stack capture (Linux)
+
+`heaptrack`:
+
+```bash
+heaptrack --output heaptrack.gateway.gz \
+  target/profiling/pushgo-gateway <gateway args...>
+```
+
+`valgrind massif`:
+
+```bash
+valgrind --tool=massif --time-unit=ms --stacks=yes \
+  --massif-out-file=massif.out.gateway \
+  target/profiling/pushgo-gateway <gateway args...>
+```
+
+Then correlate profiler hotspots with the same test window in `samples.jsonl` and diagnostics snapshots.
 
 ## Nginx / LB Deployment Reference
 

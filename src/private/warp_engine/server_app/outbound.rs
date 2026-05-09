@@ -83,7 +83,7 @@ impl PushgoServerApp {
             return Some(OutboundMsg {
                 seq: Some(seq),
                 id: envelope.delivery_id,
-                payload: envelope.payload.into(),
+                payload: envelope.payload.to_vec().into(),
             });
         }
 
@@ -96,7 +96,7 @@ impl PushgoServerApp {
             return Some(OutboundMsg {
                 seq: Some(seq),
                 id: envelope.delivery_id,
-                payload: envelope.payload.into(),
+                payload: envelope.payload.to_vec().into(),
             });
         }
 
@@ -116,7 +116,7 @@ impl PushgoServerApp {
         OutboundMsg {
             seq: Some(seq),
             id: tracked.delivery_id,
-            payload: tracked.payload.into(),
+            payload: tracked.payload.to_vec().into(),
         }
     }
 }

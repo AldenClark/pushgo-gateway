@@ -94,6 +94,7 @@ pub(crate) fn diagnostics_router() -> Router<AppState> {
             "/diagnostics/private/metrics",
             get(private::private_metrics),
         )
+        .route("/diagnostics/private/memory", get(private::private_memory))
         .route("/diagnostics/private/health", get(private::private_health))
         .route(
             "/diagnostics/private/network",

@@ -1,11 +1,12 @@
 use super::{types::TerminalDeliveryDisposition, *};
+use std::sync::Arc;
 
 impl PrivateState {
     pub async fn enqueue_private_delivery(
         &self,
         device_id: DeviceId,
         delivery_id: &str,
-        payload: Vec<u8>,
+        payload: Arc<[u8]>,
         sent_at: i64,
         expires_at: i64,
     ) -> Result<(), crate::Error> {
@@ -47,6 +48,62 @@ impl PrivateState {
                     error = %(err.to_string())
                 );
             })
+    }
+
+    pub async fn enqueue_private_deliveries(
+        &self,
+        device_ids: &[DeviceId],
+        delivery_id: &str,
+        payload: Arc<[u8]>,
+        sent_at: i64,
+        expires_at: i64,
+    ) -> Vec<(DeviceId, Result<(), crate::Error>)> {
+        let span = tracing::info_span!("gateway.private.enqueue_deliveries_batch");
+        let fut = async move {
+            let outcomes = self
+                .hub
+                .enqueue_private_messages(device_ids, delivery_id, payload, sent_at, expires_at)
+                .await;
+            let mut results = Vec::with_capacity(outcomes.len());
+            let mut should_resync = false;
+            for (device_id, outcome) in outcomes {
+                match outcome {
+                    Ok(outcome) => {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::INFO,
+                            event = "private.delivery_enqueued",
+                            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                            delivery_id = %(crate::util::redact_text(delivery_id)),
+                            private_outbox_pruned = (outcome.private_outbox_pruned as u64)
+                        );
+                        should_resync |= outcome.private_outbox_pruned > 0;
+                        self.schedule_fallback(
+                            device_id,
+                            delivery_id.to_string(),
+                            sent_at + self.config.ack_timeout_secs.max(1) as i64 * 1000,
+                        );
+                        results.push((device_id, Ok(())));
+                    }
+                    Err(err) => {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::WARN,
+                            event = "private.delivery_enqueue_failed",
+                            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                            delivery_id = %(crate::util::redact_text(delivery_id)),
+                            error = %(err.to_string())
+                        );
+                        results.push((device_id, Err(err)));
+                    }
+                }
+            }
+            if should_resync && let Some(engine) = &self.fallback_tasks {
+                engine.request_resync();
+            }
+            results
+        };
+        tracing::Instrument::instrument(fut, span).await
     }
 
     pub async fn complete_terminal_delivery(
@@ -150,7 +207,7 @@ impl PrivateState {
             .await
             .ok()
             .flatten()?;
-        let envelope = protocol::PrivatePayloadEnvelope::decode_postcard(&message.payload)?;
+        let envelope = protocol::PrivatePayloadEnvelope::decode_postcard(message.payload.as_ref())?;
         if !envelope.is_supported_version() {
             return None;
         }

@@ -73,7 +73,8 @@ pub(crate) async fn messages_pull(
         let mut dropped_decode = 0u64;
         let mut dropped_version = 0u64;
         for item in raw_items {
-            let Some(envelope) = ProviderPullEnvelope::decode_postcard(&item.payload) else {
+            let Some(envelope) = ProviderPullEnvelope::decode_postcard(item.payload.as_ref())
+            else {
                 dropped_decode += 1;
                 continue;
             };

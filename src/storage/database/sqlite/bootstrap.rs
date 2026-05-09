@@ -79,12 +79,33 @@ const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 impl SqliteDb {
     pub async fn new(db_url: &str) -> StoreResult<Self> {
         ensure_sqlite_parent_dir(db_url)?;
+        let sqlite_max_connections = read_env_u32("PUSHGO_SQLITE_MAX_CONNECTIONS", 4, 1, 32);
+        let sqlite_idle_timeout_secs = read_env_u64("PUSHGO_SQLITE_IDLE_TIMEOUT_SECS", 60, 1, 3600);
+        let sqlite_statement_cache_capacity =
+            read_env_usize("PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY", 32, 0, 512);
+        let sqlite_page_cache_kib = read_env_i64("PUSHGO_SQLITE_PAGE_CACHE_KIB", 1024, 64, 262_144);
+        let sqlite_wal_autocheckpoint =
+            read_env_i64("PUSHGO_SQLITE_WAL_AUTOCHECKPOINT", 256, 1, 100_000);
         let connect_options = SqliteConnectOptions::from_str(db_url)?
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
+            .statement_cache_capacity(sqlite_statement_cache_capacity)
             .busy_timeout(Duration::from_secs(30));
         let pool = SqlitePoolOptions::new()
+            .max_connections(sqlite_max_connections)
+            .min_connections(0)
+            .idle_timeout(Duration::from_secs(sqlite_idle_timeout_secs))
+            .after_connect(move |conn, _meta| {
+                Box::pin(async move {
+                    let cache_size = format!("PRAGMA cache_size = -{sqlite_page_cache_kib}");
+                    conn.execute(cache_size.as_str()).await?;
+                    let wal_autocheckpoint =
+                        format!("PRAGMA wal_autocheckpoint = {sqlite_wal_autocheckpoint}");
+                    conn.execute(wal_autocheckpoint.as_str()).await?;
+                    Ok(())
+                })
+            })
             .connect_with(connect_options)
             .await?;
         let this = Self { pool };
@@ -109,6 +130,15 @@ impl SqliteDb {
             .execute(&self.pool)
             .await?;
         sqlx::query("PRAGMA busy_timeout = 5000")
+            .execute(&self.pool)
+            .await?;
+        let cache_size = format!("PRAGMA cache_size = -{}", sqlite_page_cache_kib());
+        sqlx::query(cache_size.as_str()).execute(&self.pool).await?;
+        let wal_autocheckpoint = format!(
+            "PRAGMA wal_autocheckpoint = {}",
+            sqlite_wal_autocheckpoint()
+        );
+        sqlx::query(wal_autocheckpoint.as_str())
             .execute(&self.pool)
             .await?;
 
@@ -717,4 +747,44 @@ fn ensure_sqlite_parent_dir(db_url: &str) -> StoreResult<()> {
         fs::create_dir_all(parent)?;
     }
     Ok(())
+}
+
+fn sqlite_page_cache_kib() -> i64 {
+    read_env_i64("PUSHGO_SQLITE_PAGE_CACHE_KIB", 1024, 64, 262_144)
+}
+
+fn sqlite_wal_autocheckpoint() -> i64 {
+    read_env_i64("PUSHGO_SQLITE_WAL_AUTOCHECKPOINT", 256, 1, 100_000)
+}
+
+fn read_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .map(|value| value.clamp(min, max))
+        .unwrap_or(default)
+}
+
+fn read_env_u32(name: &str, default: u32, min: u32, max: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .map(|value| value.clamp(min, max))
+        .unwrap_or(default)
+}
+
+fn read_env_u64(name: &str, default: u64, min: u64, max: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|value| value.clamp(min, max))
+        .unwrap_or(default)
+}
+
+fn read_env_i64(name: &str, default: i64, min: i64, max: i64) -> i64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .map(|value| value.clamp(min, max))
+        .unwrap_or(default)
 }

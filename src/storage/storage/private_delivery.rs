@@ -35,6 +35,26 @@ impl Storage {
         self.db.enqueue_private_outbox(device_id, entry).await
     }
 
+    pub async fn enqueue_private_outbox_batch(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+        max_pending_per_device: usize,
+        global_max_pending: usize,
+        protected_delivery_id: Option<&str>,
+    ) -> StoreResult<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        self.db
+            .enqueue_private_outbox_batch(
+                entries,
+                max_pending_per_device,
+                global_max_pending,
+                protected_delivery_id,
+            )
+            .await
+    }
+
     pub async fn list_private_outbox(
         &self,
         device_id: DeviceId,
@@ -82,7 +102,7 @@ impl Storage {
         delivery_id: &str,
     ) -> StoreResult<Option<PrivatePayloadContext>> {
         if let Some(msg) = self.db.load_private_message(delivery_id).await? {
-            return Ok(PrivatePayloadContext::decode(&msg.payload));
+            return Ok(PrivatePayloadContext::decode(msg.payload.as_ref()));
         }
         Ok(None)
     }
@@ -393,7 +413,7 @@ impl Storage {
     }
 
     async fn clear_private_outbox_after_provider_delivery(&self, item: &ProviderPullItem) {
-        let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(&item.payload) else {
+        let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(item.payload.as_ref()) else {
             emit_provider_pull_ack_skip(
                 "decode_failed",
                 item.device_id,

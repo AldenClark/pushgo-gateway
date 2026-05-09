@@ -5,6 +5,12 @@ pub(super) async fn dispatch_provider_devices(
     payloads: &ProviderPayloads,
     progress: &mut DispatchProgress,
 ) -> Result<(), Error> {
+    let provider_pull_message = PrivateMessage {
+        payload: prepared.private_payload.clone(),
+        size: prepared.private_payload.len(),
+        sent_at: prepared.sent_at,
+        expires_at: prepared.provider_pull_expires_at(),
+    };
     let total = prepared.provider_devices.len();
     for (index, device) in prepared.provider_devices.iter().enumerate() {
         let provider_route = ProviderRouteBinding::resolve(
@@ -30,10 +36,7 @@ pub(super) async fn dispatch_provider_devices(
             provider_route.provider_device_key.as_str(),
             device.info.platform,
             device.info.token_str(),
-            &prepared.private_payload,
             provider_pull_delivery_id.as_str(),
-            prepared.sent_at,
-            prepared.provider_pull_expires_at(),
         );
         let target = ResolvedProviderTarget {
             device: &device.info,
@@ -42,7 +45,7 @@ pub(super) async fn dispatch_provider_devices(
             wakeup_data_for_device,
             provider_pull_delivery,
         };
-        if !ensure_provider_pull_cached(prepared, &target, progress).await {
+        if !ensure_provider_pull_cached(prepared, &target, &provider_pull_message, progress).await {
             continue;
         }
 
@@ -63,6 +66,7 @@ pub(super) async fn dispatch_provider_devices(
 async fn ensure_provider_pull_cached(
     prepared: &PreparedDispatch<'_>,
     target: &ResolvedProviderTarget<'_>,
+    provider_pull_message: &PrivateMessage,
     progress: &mut DispatchProgress,
 ) -> bool {
     let Some(provider_pull) = target.provider_pull_delivery.as_ref() else {
@@ -75,19 +79,13 @@ async fn ensure_provider_pull_cached(
         .await;
         return false;
     };
-    let message = PrivateMessage {
-        payload: provider_pull.payload.as_ref().clone(),
-        size: provider_pull.payload.len(),
-        sent_at: provider_pull.sent_at,
-        expires_at: provider_pull.expires_at,
-    };
     match prepared
         .state
         .store
         .enqueue_provider_pull_item(
             provider_pull.device_id,
             provider_pull.delivery_id.as_ref(),
-            &message,
+            provider_pull_message,
             provider_pull.platform,
             provider_pull.provider_token.as_ref(),
         )

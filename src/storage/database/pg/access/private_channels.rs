@@ -48,7 +48,7 @@ impl PostgresDb {
              payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, updated_at = EXCLUDED.updated_at",
         )
         .bind(delivery_id)
-        .bind(&message.payload)
+        .bind(message.payload.as_ref())
         .bind(size)
         .bind(message.sent_at)
         .bind(message.expires_at)
@@ -88,6 +88,65 @@ impl PostgresDb {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub(super) async fn enqueue_private_outbox_batch(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+        max_pending_per_device: usize,
+        global_max_pending: usize,
+        protected_delivery_id: Option<&str>,
+    ) -> StoreResult<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await?;
+        for chunk in entries.chunks(50) {
+            let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+                "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) ",
+            );
+            query.push_values(chunk, |mut row, item| {
+                row.push_bind(&item.device_id[..])
+                    .push_bind(&item.entry.delivery_id)
+                    .push_bind(&item.entry.status)
+                    .push_bind(item.entry.attempts as i32)
+                    .push_bind(item.entry.occurred_at)
+                    .push_bind(item.entry.created_at)
+                    .push_bind(item.entry.claimed_at)
+                    .push_bind(item.entry.first_sent_at)
+                    .push_bind(item.entry.last_attempt_at)
+                    .push_bind(item.entry.acked_at)
+                    .push_bind(item.entry.fallback_sent_at)
+                    .push_bind(item.entry.next_attempt_at)
+                    .push_bind(item.entry.last_error_code.as_deref())
+                    .push_bind(item.entry.last_error_detail.as_deref())
+                    .push_bind(item.entry.updated_at);
+            });
+            query.push(
+                " ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
+                 status = EXCLUDED.status, attempts = EXCLUDED.attempts, updated_at = EXCLUDED.updated_at, next_attempt_at = EXCLUDED.next_attempt_at",
+            );
+            query.build().execute(&mut *tx).await?;
+        }
+        let mut pruned_delivery_ids = Vec::new();
+        for device_id in unique_batch_device_ids(entries) {
+            pruned_delivery_ids.extend(
+                prune_pg_device_outbox_overflow(
+                    &mut tx,
+                    device_id,
+                    max_pending_per_device,
+                    protected_delivery_id,
+                )
+                .await?,
+            );
+        }
+        pruned_delivery_ids.extend(
+            prune_pg_global_outbox_overflow(&mut tx, global_max_pending, protected_delivery_id)
+                .await?,
+        );
+        cleanup_pg_pruned_payloads(&mut tx, &pruned_delivery_ids).await?;
+        tx.commit().await?;
+        Ok(pruned_delivery_ids.len())
     }
 
     pub(super) async fn list_private_outbox(
@@ -316,4 +375,154 @@ impl PostgresDb {
         .await?;
         Ok(())
     }
+}
+
+fn unique_batch_device_ids(entries: &[PrivateOutboxBatchEntry]) -> Vec<DeviceId> {
+    let mut device_ids = Vec::new();
+    for entry in entries {
+        if !device_ids.contains(&entry.device_id) {
+            device_ids.push(entry.device_id);
+        }
+    }
+    device_ids
+}
+
+async fn prune_pg_device_outbox_overflow(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    device_id: DeviceId,
+    max_pending_per_device: usize,
+    protected_delivery_id: Option<&str>,
+) -> StoreResult<Vec<String>> {
+    let active_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM private_outbox WHERE device_id = $1 AND status IN ($2, $3, $4)",
+    )
+    .bind(&device_id[..])
+    .bind(OUTBOX_STATUS_PENDING)
+    .bind(OUTBOX_STATUS_CLAIMED)
+    .bind(OUTBOX_STATUS_SENT)
+    .fetch_one(&mut **tx)
+    .await?;
+    let excess = active_count.saturating_sub(max_pending_per_device as i64);
+    if excess <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let rows = if let Some(protected_delivery_id) = protected_delivery_id {
+        sqlx::query(
+            "SELECT delivery_id FROM private_outbox \
+             WHERE device_id = $1 AND status = $2 AND delivery_id <> $3 \
+             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT $4",
+        )
+        .bind(&device_id[..])
+        .bind(OUTBOX_STATUS_PENDING)
+        .bind(protected_delivery_id)
+        .bind(excess)
+        .fetch_all(&mut **tx)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT delivery_id FROM private_outbox \
+             WHERE device_id = $1 AND status = $2 \
+             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT $3",
+        )
+        .bind(&device_id[..])
+        .bind(OUTBOX_STATUS_PENDING)
+        .bind(excess)
+        .fetch_all(&mut **tx)
+        .await?
+    };
+    let delivery_ids = rows
+        .into_iter()
+        .map(|row| row.get("delivery_id"))
+        .collect::<Vec<String>>();
+    for delivery_id in &delivery_ids {
+        sqlx::query(
+            "DELETE FROM private_outbox WHERE device_id = $1 AND delivery_id = $2 AND status = $3",
+        )
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_PENDING)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(delivery_ids)
+}
+
+async fn prune_pg_global_outbox_overflow(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    global_max_pending: usize,
+    protected_delivery_id: Option<&str>,
+) -> StoreResult<Vec<String>> {
+    let active_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox WHERE status IN ($1, $2, $3)")
+            .bind(OUTBOX_STATUS_PENDING)
+            .bind(OUTBOX_STATUS_CLAIMED)
+            .bind(OUTBOX_STATUS_SENT)
+            .fetch_one(&mut **tx)
+            .await?;
+    let excess = active_count.saturating_sub(global_max_pending as i64);
+    if excess <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let rows = if let Some(protected_delivery_id) = protected_delivery_id {
+        sqlx::query(
+            "SELECT device_id, delivery_id FROM private_outbox \
+             WHERE status = $1 AND delivery_id <> $2 \
+             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT $3",
+        )
+        .bind(OUTBOX_STATUS_PENDING)
+        .bind(protected_delivery_id)
+        .bind(excess)
+        .fetch_all(&mut **tx)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT device_id, delivery_id FROM private_outbox \
+             WHERE status = $1 \
+             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
+             LIMIT $2",
+        )
+        .bind(OUTBOX_STATUS_PENDING)
+        .bind(excess)
+        .fetch_all(&mut **tx)
+        .await?
+    };
+
+    let mut delivery_ids = Vec::with_capacity(rows.len());
+    for row in rows {
+        let device_id: Vec<u8> = row.get("device_id");
+        let delivery_id: String = row.get("delivery_id");
+        sqlx::query(
+            "DELETE FROM private_outbox WHERE device_id = $1 AND delivery_id = $2 AND status = $3",
+        )
+        .bind(&device_id)
+        .bind(&delivery_id)
+        .bind(OUTBOX_STATUS_PENDING)
+        .execute(&mut **tx)
+        .await?;
+        delivery_ids.push(delivery_id);
+    }
+    Ok(delivery_ids)
+}
+
+async fn cleanup_pg_pruned_payloads(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    delivery_ids: &[String],
+) -> StoreResult<()> {
+    for delivery_id in delivery_ids {
+        sqlx::query(
+            "DELETE FROM private_payloads \
+             WHERE delivery_id = $1 \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+               AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
+        )
+        .bind(delivery_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }

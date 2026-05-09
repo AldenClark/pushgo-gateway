@@ -1,4 +1,5 @@
 use crate::storage::types::{ChannelInfo, DeviceInfo, DispatchTarget, DispatchTargetsCacheEntry};
+use serde::Serialize;
 
 mod memory;
 
@@ -8,9 +9,29 @@ pub use memory::InMemoryCache;
 pub enum CacheStore {
     InMemory(InMemoryCache),
 }
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct CacheMemorySnapshot {
+    pub device_cache_entries: usize,
+    pub device_cache_token_bytes: usize,
+    pub channel_info_cache_entries: usize,
+    pub channel_info_alias_bytes: usize,
+    pub channel_devices_cache_entries: usize,
+    pub channel_devices_device_entries: usize,
+    pub channel_devices_token_bytes: usize,
+    pub dispatch_targets_cache_entries: usize,
+    pub dispatch_targets_target_entries: usize,
+    pub dispatch_targets_heap_bytes: usize,
+}
 impl CacheStore {
     pub fn new() -> Self {
         CacheStore::InMemory(InMemoryCache::new())
+    }
+
+    pub fn memory_snapshot(&self) -> CacheMemorySnapshot {
+        match self {
+            CacheStore::InMemory(inner) => inner.memory_snapshot(),
+        }
     }
 }
 

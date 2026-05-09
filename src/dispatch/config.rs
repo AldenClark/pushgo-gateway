@@ -10,10 +10,16 @@ impl DispatchRuntimeConfig {
     }
 
     fn default_worker_count() -> usize {
+        if let Some(explicit) = std::env::var("PUSHGO_DISPATCH_WORKER_COUNT")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+        {
+            return Self::clamp_worker_count(explicit);
+        }
         let cpu = std::thread::available_parallelism()
             .map(|value| value.get())
             .unwrap_or(4);
-        (cpu * 2).clamp(4, 64)
+        Self::clamp_worker_count(cpu.clamp(2, 8))
     }
 
     pub(super) fn clamp_queue_capacity(value: usize) -> usize {
@@ -21,16 +27,13 @@ impl DispatchRuntimeConfig {
     }
 
     pub(super) fn from_env() -> Self {
-        let worker_count = std::env::var("PUSHGO_DISPATCH_WORKER_COUNT")
-            .ok()
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .map(Self::clamp_worker_count)
-            .unwrap_or_else(Self::default_worker_count);
+        let worker_count = Self::default_worker_count();
+        let default_queue_capacity = (worker_count * 32).clamp(256, 4_096);
         let queue_capacity = std::env::var("PUSHGO_DISPATCH_QUEUE_CAPACITY")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .map(Self::clamp_queue_capacity)
-            .unwrap_or((worker_count * 64).clamp(1024, 32_768));
+            .unwrap_or(default_queue_capacity);
         Self {
             worker_count,
             queue_capacity,

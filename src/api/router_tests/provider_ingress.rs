@@ -26,7 +26,7 @@ async fn enqueue_provider_pull_item(
     let now = chrono::Utc::now().timestamp_millis();
     let payload = make_provider_payload(delivery_id, title);
     let message = PrivateMessage {
-        payload: payload.clone(),
+        payload: payload.clone().into(),
         size: payload.len(),
         sent_at: now,
         expires_at: now + 300_000,

@@ -262,7 +262,7 @@ async fn sqlite_init_creates_missing_provider_pull_tables() {
     let device_id: DeviceId = [9; 16];
     let delivery_id = "delivery-heal-provider-table-1";
     let message = PrivateMessage {
-        payload: vec![11, 22, 33],
+        payload: vec![11, 22, 33].into(),
         size: 3,
         sent_at: now,
         expires_at: now + 300_000,
@@ -304,7 +304,7 @@ async fn sqlite_init_hard_resets_provider_pull_queue_without_schema_meta() {
     let now = chrono::Utc::now().timestamp_millis();
     let delivery_id = "legacy-provider-pull-shared-delivery-1";
     let payload = PrivateMessage {
-        payload: vec![1, 3, 5, 7],
+        payload: vec![1, 3, 5, 7].into(),
         size: 4,
         sent_at: now,
         expires_at: now + 600_000,

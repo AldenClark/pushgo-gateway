@@ -2,7 +2,11 @@ use serde::Serialize;
 
 use crate::{
     app::{AppState, PrivateTransportProfile},
-    private::metrics::{PrivateHealthMode, PrivateHealthSnapshot, PrivateMetricsSnapshot},
+    private::{
+        PrivateStateMemorySnapshot,
+        metrics::{PrivateHealthMode, PrivateHealthSnapshot, PrivateMetricsSnapshot},
+    },
+    storage::cache::CacheMemorySnapshot,
 };
 
 #[derive(Debug, Serialize)]
@@ -31,6 +35,17 @@ pub(super) struct GatewayProfileResponse {
     pub(super) private_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) transport: Option<PrivateTransportHints>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PrivateMemoryResponse {
+    pub(super) private_channel_enabled: bool,
+    pub(super) private_runtime_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) private_runtime: Option<PrivateStateMemorySnapshot>,
+    pub(super) cache: CacheMemorySnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) private_outbox_total: Option<usize>,
 }
 
 pub(super) struct PrivateRuntimeView<'a> {
@@ -130,6 +145,24 @@ impl<'a> PrivateRuntimeView<'a> {
                 self.transport_profile(),
                 self.public_base_url(),
             )
+        }
+    }
+
+    pub(super) fn memory_response(
+        &self,
+        private_outbox_total: Option<usize>,
+    ) -> PrivateMemoryResponse {
+        let private_runtime = self
+            .state
+            .private
+            .as_ref()
+            .map(|private| private.memory_snapshot());
+        PrivateMemoryResponse {
+            private_channel_enabled: self.state.private_channel_enabled,
+            private_runtime_enabled: self.state.private.is_some(),
+            private_runtime,
+            cache: self.state.store.cache_memory_snapshot(),
+            private_outbox_total,
         }
     }
 }

@@ -49,7 +49,7 @@ pub(super) async fn clear_private_pending_for_channels(
             else {
                 continue;
             };
-            let envelope = match ProviderPullEnvelope::decode_postcard(&message.payload) {
+            let envelope = match ProviderPullEnvelope::decode_postcard(message.payload.as_ref()) {
                 Some(value) => value,
                 None => {
                     skipped_decode = skipped_decode.saturating_add(1);

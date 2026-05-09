@@ -2,7 +2,7 @@ use crate::storage::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{
-    Connection, Row, SqlitePool,
+    Connection, Executor, Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use std::{fs, path::Path, str::FromStr, time::Duration};

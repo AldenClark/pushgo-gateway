@@ -31,6 +31,24 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, enqueue_private_outbox(device_id, entry))
     }
 
+    async fn enqueue_private_outbox_batch(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+        max_pending_per_device: usize,
+        global_max_pending: usize,
+        protected_delivery_id: Option<&str>,
+    ) -> StoreResult<usize> {
+        delegate_db_async!(
+            self,
+            enqueue_private_outbox_batch(
+                entries,
+                max_pending_per_device,
+                global_max_pending,
+                protected_delivery_id
+            )
+        )
+    }
+
     async fn list_private_outbox(
         &self,
         device_id: DeviceId,

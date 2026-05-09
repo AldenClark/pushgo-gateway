@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 impl PostgresDb {
     pub(super) async fn load_private_message(
@@ -14,7 +15,7 @@ impl PostgresDb {
         .await?;
 
         Ok(row.map(|r| PrivateMessage {
-            payload: r.get("payload_blob"),
+            payload: Arc::from(r.get::<Vec<u8>, _>("payload_blob")),
             size: r.get::<i32, _>("payload_size") as usize,
             sent_at: r.get("sent_at"),
             expires_at: r.get("expires_at"),
@@ -26,7 +27,7 @@ impl PostgresDb {
         delivery_id: &str,
     ) -> StoreResult<Option<PrivatePayloadContext>> {
         if let Some(msg) = self.load_private_message(delivery_id).await? {
-            return Ok(decode_private_payload_context(&msg.payload));
+            return Ok(decode_private_payload_context(msg.payload.as_ref()));
         }
         Ok(None)
     }
@@ -40,6 +41,7 @@ impl PostgresDb {
         provider_token: &str,
     ) -> StoreResult<()> {
         let now = Utc::now().timestamp_millis();
+        self.insert_private_message(delivery_id, message).await?;
         sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = $1 AND expires_at <= $2")
             .bind(device_id.as_slice())
             .bind(now)
@@ -55,8 +57,8 @@ impl PostgresDb {
         )
         .bind(device_id.as_slice())
         .bind(delivery_id)
-        .bind(&message.payload)
-        .bind(message.size as i32)
+        .bind(<&[u8]>::default())
+        .bind(0_i32)
         .bind(message.sent_at)
         .bind(message.expires_at)
         .bind(platform.name())
@@ -80,9 +82,13 @@ impl PostgresDb {
             .execute(&mut *tx)
             .await?;
         let row = sqlx::query(
-            "SELECT payload_blob, sent_at, expires_at, platform, provider_token \
-             FROM provider_pull_queue \
-             WHERE device_id = $1 AND delivery_id = $2 AND expires_at > $3",
+            "SELECT q.payload_blob AS queue_payload_blob, q.sent_at AS queue_sent_at, \
+                    q.expires_at AS queue_expires_at, q.platform, q.provider_token, \
+                    p.payload_blob AS shared_payload_blob, p.sent_at AS shared_sent_at, \
+                    p.expires_at AS shared_expires_at \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = $1 AND q.delivery_id = $2 AND q.expires_at > $3",
         )
         .bind(device_id.as_slice())
         .bind(delivery_id)
@@ -101,9 +107,9 @@ impl PostgresDb {
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
-                payload: r.get("payload_blob"),
-                sent_at: r.get("sent_at"),
-                expires_at: r.get("expires_at"),
+                payload: provider_payload_from_row(&r),
+                sent_at: provider_sent_at_from_row(&r),
+                expires_at: provider_expires_at_from_row(&r),
                 platform: r.get::<String, _>("platform").parse()?,
                 provider_token: r.get("provider_token"),
             })
@@ -127,10 +133,14 @@ impl PostgresDb {
             .execute(&mut *tx)
             .await?;
         let rows = sqlx::query(
-            "SELECT delivery_id, payload_blob, sent_at, expires_at, platform, provider_token \
-             FROM provider_pull_queue \
-             WHERE device_id = $1 AND expires_at > $2 \
-             ORDER BY created_at ASC LIMIT $3",
+            "SELECT q.delivery_id, q.payload_blob AS queue_payload_blob, q.sent_at AS queue_sent_at, \
+                    q.expires_at AS queue_expires_at, q.platform, q.provider_token, \
+                    p.payload_blob AS shared_payload_blob, p.sent_at AS shared_sent_at, \
+                    p.expires_at AS shared_expires_at \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = $1 AND q.expires_at > $2 \
+             ORDER BY q.created_at ASC LIMIT $3",
         )
         .bind(device_id.as_slice())
         .bind(now)
@@ -147,9 +157,9 @@ impl PostgresDb {
             out.push(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.clone(),
-                payload: r.get("payload_blob"),
-                sent_at: r.get("sent_at"),
-                expires_at: r.get("expires_at"),
+                payload: provider_payload_from_row(&r),
+                sent_at: provider_sent_at_from_row(&r),
+                expires_at: provider_expires_at_from_row(&r),
                 platform,
                 provider_token: r.get("provider_token"),
             });
@@ -183,9 +193,13 @@ impl PostgresDb {
             .execute(&mut *tx)
             .await?;
         let row = sqlx::query(
-            "SELECT payload_blob, sent_at, expires_at, platform, provider_token \
-             FROM provider_pull_queue \
-             WHERE device_id = $1 AND delivery_id = $2",
+            "SELECT q.payload_blob AS queue_payload_blob, q.sent_at AS queue_sent_at, \
+                    q.expires_at AS queue_expires_at, q.platform, q.provider_token, \
+                    p.payload_blob AS shared_payload_blob, p.sent_at AS shared_sent_at, \
+                    p.expires_at AS shared_expires_at \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = $1 AND q.delivery_id = $2",
         )
         .bind(device_id.as_slice())
         .bind(delivery_id)
@@ -203,9 +217,9 @@ impl PostgresDb {
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
-                payload: r.get("payload_blob"),
-                sent_at: r.get("sent_at"),
-                expires_at: r.get("expires_at"),
+                payload: provider_payload_from_row(&r),
+                sent_at: provider_sent_at_from_row(&r),
+                expires_at: provider_expires_at_from_row(&r),
                 platform: r.get::<String, _>("platform").parse()?,
                 provider_token: r.get("provider_token"),
             })
@@ -215,4 +229,24 @@ impl PostgresDb {
         tx.commit().await?;
         Ok(out)
     }
+}
+
+fn provider_payload_from_row(row: &sqlx::postgres::PgRow) -> Arc<[u8]> {
+    Arc::from(
+        row.get::<Option<Vec<u8>>, _>("shared_payload_blob")
+            .or_else(|| row.get::<Option<Vec<u8>>, _>("queue_payload_blob"))
+            .unwrap_or_default(),
+    )
+}
+
+fn provider_sent_at_from_row(row: &sqlx::postgres::PgRow) -> i64 {
+    row.get::<Option<i64>, _>("shared_sent_at")
+        .or_else(|| row.get::<Option<i64>, _>("queue_sent_at"))
+        .unwrap_or_default()
+}
+
+fn provider_expires_at_from_row(row: &sqlx::postgres::PgRow) -> i64 {
+    row.get::<Option<i64>, _>("shared_expires_at")
+        .or_else(|| row.get::<Option<i64>, _>("queue_expires_at"))
+        .unwrap_or_default()
 }

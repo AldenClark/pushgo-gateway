@@ -195,6 +195,48 @@ async fn provider_subscriptions_can_be_managed_by_device_key() {
 }
 
 #[tokio::test]
+async fn channel_password_argon2_hash_is_upgraded_to_blake3_after_successful_verify() {
+    let ctx = setup_sqlite_storage("channel-password-upgrade").await;
+    let channel_id = [7u8; 16];
+    let alias = "legacy-password-channel";
+    let password = "pw123456";
+    let argon2_hash = hash_channel_password_argon2(password).expect("argon2 hash should succeed");
+    assert!(argon2_hash.starts_with("$argon2"));
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let now = chrono::Utc::now().timestamp_millis();
+    sqlx::query(
+        "INSERT INTO channels (channel_id, password_hash, alias, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&channel_id[..])
+    .bind(&argon2_hash)
+    .bind(alias)
+    .bind(now)
+    .bind(now)
+    .execute(&mut conn)
+    .await
+    .expect("insert channel should succeed");
+
+    let info = ctx
+        .storage
+        .channel_info_with_password(channel_id, password)
+        .await
+        .expect("channel_info_with_password should succeed");
+    assert_eq!(info.expect("channel must exist").alias, alias);
+
+    let upgraded_hash: String =
+        sqlx::query_scalar("SELECT password_hash FROM channels WHERE channel_id = ?")
+            .bind(&channel_id[..])
+            .fetch_one(&mut conn)
+            .await
+            .expect("query password hash should succeed");
+    assert!(upgraded_hash.starts_with("$pushgo-blake3$v=1$"));
+}
+
+#[tokio::test]
 async fn dispatch_targets_follow_current_route_when_present() {
     let ctx = setup_sqlite_storage("dispatch-targets-current-route").await;
     let token = "android-token-current-route-000000000000000000000001";
@@ -473,7 +515,7 @@ async fn provider_pull_lifecycle_works() {
     let device_id: DeviceId = [3; 16];
     let delivery_id = "delivery-provider-lifecycle-001";
     let message = PrivateMessage {
-        payload: vec![1, 2, 3, 4],
+        payload: vec![1, 2, 3, 4].into(),
         size: 4,
         sent_at: now,
         expires_at: now + 300_000,
@@ -509,6 +551,47 @@ async fn provider_pull_lifecycle_works() {
 }
 
 #[tokio::test]
+async fn provider_pull_uses_legacy_queue_payload_when_shared_payload_missing() {
+    let ctx = setup_sqlite_storage("provider-pull-legacy-queue-payload").await;
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [17; 16];
+    let delivery_id = "delivery-provider-legacy-queue-001";
+    let legacy_payload = vec![0xAB, 0xCD, 0xEF];
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "INSERT INTO provider_pull_queue \
+         (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&device_id[..])
+    .bind(delivery_id)
+    .bind(&legacy_payload)
+    .bind(legacy_payload.len() as i64)
+    .bind(now)
+    .bind(now + 300_000)
+    .bind(Platform::ANDROID.name())
+    .bind("fcm-token-legacy-001")
+    .bind(now)
+    .bind(now)
+    .execute(&mut conn)
+    .await
+    .expect("legacy provider pull row insert should succeed");
+    drop(conn);
+
+    let pulled = ctx
+        .storage
+        .pull_provider_item(device_id, delivery_id, now + 1)
+        .await
+        .expect("pull should succeed")
+        .expect("item should exist");
+    assert_eq!(pulled.payload, legacy_payload.into());
+}
+
+#[tokio::test]
 async fn provider_ack_lifecycle_works() {
     let ctx = setup_sqlite_storage("provider-ack-lifecycle").await;
 
@@ -516,7 +599,7 @@ async fn provider_ack_lifecycle_works() {
     let device_id: DeviceId = [4; 16];
     let delivery_id = "delivery-provider-ack-001";
     let message = PrivateMessage {
-        payload: vec![8, 6, 4, 2],
+        payload: vec![8, 6, 4, 2].into(),
         size: 4,
         sent_at: now,
         expires_at: now + 300_000,
@@ -564,7 +647,7 @@ async fn provider_pull_items_limit_and_order_works() {
     ];
     for (index, delivery_id) in ids.iter().enumerate() {
         let message = PrivateMessage {
-            payload: vec![index as u8],
+            payload: vec![index as u8].into(),
             size: 1,
             sent_at: now + index as i64,
             expires_at: now + 600_000,
@@ -609,7 +692,7 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
 
     let existing_delivery = "delivery-private-existing-capacity-001";
     let existing_message = PrivateMessage {
-        payload: vec![9, 9, 9],
+        payload: vec![9, 9, 9].into(),
         size: 3,
         sent_at: now,
         expires_at: now + 600_000,
@@ -648,7 +731,7 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
     ];
     for (index, delivery_id) in provider_deliveries.iter().enumerate() {
         let message = PrivateMessage {
-            payload: vec![index as u8, 1, 2],
+            payload: vec![index as u8, 1, 2].into(),
             size: 3,
             sent_at: now + index as i64,
             expires_at: now + 600_000,
@@ -736,7 +819,7 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
     let device_b: DeviceId = [2; 16];
 
     let message = PrivateMessage {
-        payload: vec![9, 8, 7, 6],
+        payload: vec![9, 8, 7, 6].into(),
         size: 4,
         sent_at: now,
         expires_at: now + 300_000,
@@ -797,6 +880,174 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
 }
 
 #[tokio::test]
+async fn private_outbox_batch_prunes_device_overflow_and_orphan_payloads() {
+    let ctx = setup_sqlite_storage("private-outbox-batch-prunes-device").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [3; 16];
+    let mut batch = Vec::new();
+
+    for index in 0_i64..3 {
+        let delivery_id = format!("delivery-batch-prune-{index}");
+        let message = PrivateMessage {
+            payload: vec![index as u8].into(),
+            size: 1,
+            sent_at: now + index,
+            expires_at: now + 300_000,
+        };
+        ctx.storage
+            .insert_private_message(&delivery_id, &message)
+            .await
+            .expect("insert private message should succeed");
+        batch.push(PrivateOutboxBatchEntry {
+            device_id,
+            entry: PrivateOutboxEntry {
+                delivery_id,
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                attempts: 0,
+                occurred_at: now + index,
+                created_at: now + index,
+                claimed_at: None,
+                first_sent_at: None,
+                last_attempt_at: None,
+                acked_at: None,
+                fallback_sent_at: None,
+                next_attempt_at: now,
+                last_error_code: None,
+                last_error_detail: None,
+                updated_at: now + index,
+            },
+        });
+    }
+
+    let pruned = ctx
+        .storage
+        .enqueue_private_outbox_batch(&batch, 2, 100, None)
+        .await
+        .expect("batch enqueue should succeed");
+    assert_eq!(pruned, 1);
+    assert_eq!(
+        ctx.storage
+            .count_private_outbox_for_device(device_id)
+            .await
+            .expect("count should succeed"),
+        2
+    );
+    assert!(
+        ctx.storage
+            .load_private_message("delivery-batch-prune-0")
+            .await
+            .expect("payload lookup should succeed")
+            .is_none()
+    );
+    assert!(
+        ctx.storage
+            .load_private_message("delivery-batch-prune-2")
+            .await
+            .expect("payload lookup should succeed")
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn private_outbox_batch_protects_current_delivery_when_pruning() {
+    let ctx = setup_sqlite_storage("private-outbox-batch-protects-current").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [4; 16];
+
+    for index in 0_i64..2 {
+        let delivery_id = format!("delivery-batch-protected-old-{index}");
+        let message = PrivateMessage {
+            payload: vec![index as u8].into(),
+            size: 1,
+            sent_at: now + index,
+            expires_at: now + 300_000,
+        };
+        ctx.storage
+            .insert_private_message(&delivery_id, &message)
+            .await
+            .expect("insert old private message should succeed");
+        ctx.storage
+            .enqueue_private_outbox(
+                device_id,
+                &PrivateOutboxEntry {
+                    delivery_id,
+                    status: OUTBOX_STATUS_PENDING.to_string(),
+                    attempts: 0,
+                    occurred_at: now + index,
+                    created_at: now + index,
+                    claimed_at: None,
+                    first_sent_at: None,
+                    last_attempt_at: None,
+                    acked_at: None,
+                    fallback_sent_at: None,
+                    next_attempt_at: now,
+                    last_error_code: None,
+                    last_error_detail: None,
+                    updated_at: now + index,
+                },
+            )
+            .await
+            .expect("enqueue old outbox should succeed");
+    }
+
+    let current_delivery_id = "delivery-batch-protected-current";
+    let current_message = PrivateMessage {
+        payload: vec![9].into(),
+        size: 1,
+        sent_at: now + 3,
+        expires_at: now + 300_000,
+    };
+    ctx.storage
+        .insert_private_message(current_delivery_id, &current_message)
+        .await
+        .expect("insert current private message should succeed");
+    let pruned = ctx
+        .storage
+        .enqueue_private_outbox_batch(
+            &[PrivateOutboxBatchEntry {
+                device_id,
+                entry: PrivateOutboxEntry {
+                    delivery_id: current_delivery_id.to_string(),
+                    status: OUTBOX_STATUS_PENDING.to_string(),
+                    attempts: 0,
+                    occurred_at: now + 3,
+                    created_at: now + 3,
+                    claimed_at: None,
+                    first_sent_at: None,
+                    last_attempt_at: None,
+                    acked_at: None,
+                    fallback_sent_at: None,
+                    next_attempt_at: now,
+                    last_error_code: None,
+                    last_error_detail: None,
+                    updated_at: now + 3,
+                },
+            }],
+            2,
+            100,
+            Some(current_delivery_id),
+        )
+        .await
+        .expect("batch enqueue should succeed");
+
+    assert_eq!(pruned, 1);
+    assert!(
+        ctx.storage
+            .load_private_outbox_entry(device_id, current_delivery_id)
+            .await
+            .expect("current outbox lookup should succeed")
+            .is_some()
+    );
+    assert!(
+        ctx.storage
+            .load_private_outbox_entry(device_id, "delivery-batch-protected-old-0")
+            .await
+            .expect("old outbox lookup should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn maintenance_cleanup_prunes_expired_runtime_rows_and_orphan_devices() {
     let ctx = setup_sqlite_storage("maintenance-cleanup-defaults").await;
     let now = chrono::Utc::now().timestamp_millis();
@@ -816,7 +1067,7 @@ async fn maintenance_cleanup_prunes_expired_runtime_rows_and_orphan_devices() {
 
     let private_delivery_id = "maintenance-stale-private-outbox";
     let private_message = PrivateMessage {
-        payload: vec![1, 2, 3],
+        payload: vec![1, 2, 3].into(),
         size: 3,
         sent_at: now,
         expires_at: now + 300_000,
@@ -854,7 +1105,7 @@ async fn maintenance_cleanup_prunes_expired_runtime_rows_and_orphan_devices() {
             device_id,
             provider_delivery_id,
             &PrivateMessage {
-                payload: vec![4, 5, 6],
+                payload: vec![4, 5, 6].into(),
                 size: 3,
                 sent_at: stale_before,
                 expires_at: stale_before,
@@ -944,7 +1195,7 @@ async fn maintenance_cleanup_keeps_orphan_candidates_with_live_private_reference
             queue_device_id,
             "maintenance-live-provider-pull",
             &PrivateMessage {
-                payload: vec![3, 2, 1],
+                payload: vec![3, 2, 1].into(),
                 size: 3,
                 sent_at: now,
                 expires_at: now + 300_000,
@@ -987,7 +1238,7 @@ async fn maintenance_cleanup_does_not_delete_shared_delivery_for_other_devices()
     let device_b: DeviceId = [22; 16];
     let shared_private_delivery_id = "maintenance-shared-private-delivery";
     let private_message = PrivateMessage {
-        payload: vec![7, 8, 9],
+        payload: vec![7, 8, 9].into(),
         size: 3,
         sent_at: now,
         expires_at: now + 300_000,
@@ -1027,7 +1278,7 @@ async fn maintenance_cleanup_does_not_delete_shared_delivery_for_other_devices()
             device_a,
             provider_delivery_id,
             &PrivateMessage {
-                payload: vec![1],
+                payload: vec![1].into(),
                 size: 1,
                 sent_at: stale,
                 expires_at: stale,
@@ -1042,7 +1293,7 @@ async fn maintenance_cleanup_does_not_delete_shared_delivery_for_other_devices()
             device_b,
             provider_delivery_id,
             &PrivateMessage {
-                payload: vec![2],
+                payload: vec![2].into(),
                 size: 1,
                 sent_at: now,
                 expires_at: now + 300_000,
@@ -1204,7 +1455,7 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
     })
     .expect("provider pull envelope should encode");
     let message = PrivateMessage {
-        payload: envelope.clone(),
+        payload: envelope.clone().into(),
         size: envelope.len(),
         sent_at: now,
         expires_at: now + 300_000,
@@ -1372,7 +1623,7 @@ async fn upsert_device_route_coalesces_duplicate_provider_identities() {
     let now = chrono::Utc::now().timestamp_millis();
     let delivery_id = "delivery-provider-identity-coalesce-001";
     let message = PrivateMessage {
-        payload: vec![9, 8, 7, 6],
+        payload: vec![9, 8, 7, 6].into(),
         size: 4,
         sent_at: now,
         expires_at: now + 300_000,

@@ -32,6 +32,17 @@ pub(crate) async fn gateway_profile(State(state): State<AppState>) -> HttpResult
     ))
 }
 
+pub(crate) async fn private_memory(State(state): State<AppState>) -> HttpResult {
+    let private_outbox_total = if state.private_channel_enabled {
+        state.store.count_private_outbox_total().await.ok()
+    } else {
+        None
+    };
+    Ok(crate::api::ok(
+        runtime::PrivateRuntimeView::new(&state).memory_response(private_outbox_total),
+    ))
+}
+
 pub(crate) async fn private_network_diagnostics(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,

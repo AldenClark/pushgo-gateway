@@ -15,7 +15,10 @@ use crate::storage::{
 use crate::value::DeviceKeyRef;
 
 const STATS_FLUSH_INTERVAL_SECS: u64 = 2;
-const STATS_FLUSH_EVENT_THRESHOLD: usize = 1024;
+const STATS_CHANNEL_CAPACITY_MIN: usize = 256;
+const STATS_CHANNEL_CAPACITY_MAX: usize = 32_768;
+const STATS_FLUSH_EVENT_THRESHOLD_MIN: usize = 128;
+const STATS_FLUSH_EVENT_THRESHOLD_MAX: usize = 16_384;
 
 pub const OPS_METRIC_DISPATCH_PROVIDER_SEND_FAILED: &str = "dispatch.provider_send_failed";
 pub const OPS_METRIC_HTTP_RESPONSE_5XX: &str = "http.response_5xx";
@@ -75,7 +78,7 @@ enum StatsEvent {
 
 #[derive(Clone)]
 pub struct StatsCollector {
-    tx: Option<mpsc::UnboundedSender<StatsEvent>>,
+    tx: Option<mpsc::Sender<StatsEvent>>,
 }
 
 impl StatsCollector {
@@ -87,7 +90,8 @@ impl StatsCollector {
         if !enabled {
             return Arc::new(Self { tx: None });
         }
-        let (tx, rx) = mpsc::unbounded_channel();
+        let channel_capacity = stats_channel_capacity();
+        let (tx, rx) = mpsc::channel(channel_capacity);
         tokio::spawn(
             run_stats_worker(store, rx).instrument(tracing::info_span!("gateway.stats.worker")),
         );
@@ -100,14 +104,27 @@ impl StatsCollector {
             return;
         };
         let event_kind = stats_event_kind(&event);
-        if tx.send(event).is_err() {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "stats.event_dropped",
-                reason = %("worker_channel_closed"),
-                event_kind = %(event_kind)
-            );
+        if let Err(err) = tx.try_send(event) {
+            match err {
+                mpsc::error::TrySendError::Full(_) => {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::INFO,
+                        event = "stats.event_dropped",
+                        reason = %("worker_channel_full"),
+                        event_kind = %(event_kind)
+                    );
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "stats.event_dropped",
+                        reason = %("worker_channel_closed"),
+                        event_kind = %(event_kind)
+                    );
+                }
+            }
         }
     }
 
@@ -205,13 +222,14 @@ fn stats_event_kind(event: &StatsEvent) -> &'static str {
     }
 }
 
-async fn run_stats_worker(store: Storage, mut rx: mpsc::UnboundedReceiver<StatsEvent>) {
+async fn run_stats_worker(store: Storage, mut rx: mpsc::Receiver<StatsEvent>) {
+    let flush_event_threshold = stats_flush_event_threshold();
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
         event = "stats.worker_started",
         flush_interval_secs = (STATS_FLUSH_INTERVAL_SECS),
-        flush_event_threshold = (STATS_FLUSH_EVENT_THRESHOLD as u64)
+        flush_event_threshold = (flush_event_threshold as u64)
     );
 
     let mut interval = tokio::time::interval(Duration::from_secs(STATS_FLUSH_INTERVAL_SECS));
@@ -252,7 +270,7 @@ async fn run_stats_worker(store: Storage, mut rx: mpsc::UnboundedReceiver<StatsE
                     &mut gateway_rows,
                     &mut ops_rows,
                 );
-                if pending_events >= STATS_FLUSH_EVENT_THRESHOLD {
+                if pending_events >= flush_event_threshold {
                     sample_gateway_runtime_metrics(&store, &mut gateway_rows).await;
                     flush_stats_batch(
                         &store,
@@ -281,6 +299,29 @@ async fn run_stats_worker(store: Storage, mut rx: mpsc::UnboundedReceiver<StatsE
             }
         }
     }
+}
+
+fn stats_channel_capacity() -> usize {
+    if let Some(explicit) = std::env::var("PUSHGO_STATS_CHANNEL_CAPACITY")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return explicit.clamp(STATS_CHANNEL_CAPACITY_MIN, STATS_CHANNEL_CAPACITY_MAX);
+    }
+    1_024
+}
+
+fn stats_flush_event_threshold() -> usize {
+    if let Some(explicit) = std::env::var("PUSHGO_STATS_FLUSH_EVENT_THRESHOLD")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return explicit.clamp(
+            STATS_FLUSH_EVENT_THRESHOLD_MIN,
+            STATS_FLUSH_EVENT_THRESHOLD_MAX,
+        );
+    }
+    256
 }
 
 fn aggregate_event(

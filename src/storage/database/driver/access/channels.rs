@@ -32,6 +32,17 @@ impl ChannelQueryDatabaseAccess for DatabaseDriver {
     async fn rename_channel(&self, channel_id: [u8; 16], alias: &str) -> StoreResult<()> {
         delegate_db_async!(self, rename_channel(channel_id, alias))
     }
+
+    async fn update_channel_password_hash(
+        &self,
+        channel_id: [u8; 16],
+        password_hash: &str,
+    ) -> StoreResult<()> {
+        delegate_db_async!(
+            self,
+            update_channel_password_hash(channel_id, password_hash)
+        )
+    }
 }
 
 #[async_trait]

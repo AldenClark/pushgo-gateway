@@ -190,6 +190,22 @@ impl PrivateState {
         }
     }
 
+    pub fn memory_snapshot(&self) -> PrivateStateMemorySnapshot {
+        let fallback_task_queue_depth = self
+            .fallback_tasks
+            .as_ref()
+            .map(|engine| engine.depth())
+            .unwrap_or(0);
+        PrivateStateMemorySnapshot {
+            revoked_device_count: self.revoked_devices.read().len(),
+            session_control_count: self.session_controls.read().len(),
+            session_device_count: self.session_devices.read().len(),
+            fallback_task_queue_depth,
+            fallback_task_queue_capacity: private_fallback_task_command_capacity(),
+            hub: self.hub.memory_snapshot(),
+        }
+    }
+
     fn set_device_auth_expiry_by_id(
         &self,
         device_id: DeviceId,

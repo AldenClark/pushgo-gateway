@@ -203,6 +203,7 @@ pub async fn build_app(
         retransmit_max_retries: args.private_retx_max_retries,
         hot_cache_capacity: args.private_hot_cache_capacity,
         default_ttl_secs: args.private_default_ttl_secs,
+        online_fast_path_enabled: args.private_online_fast_path_enabled_resolved(),
         maintenance_cleanup: MaintenanceCleanupConfig {
             provider_pull_expired_batch: args.provider_pull_expired_batch,
             private_stale_outbox_ttl_secs: days_to_secs(args.private_stale_outbox_ttl_days),

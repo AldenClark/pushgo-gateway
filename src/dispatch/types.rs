@@ -21,9 +21,6 @@ pub(crate) struct ProviderPullDelivery {
     pub platform: Platform,
     pub provider_token: Arc<str>,
     pub delivery_id: Arc<str>,
-    pub payload: Arc<Vec<u8>>,
-    pub sent_at: i64,
-    pub expires_at: i64,
 }
 
 pub(crate) struct ApnsJob {

@@ -146,10 +146,7 @@ impl ProviderPullDelivery {
         provider_device_key: &str,
         platform: Platform,
         provider_token: &str,
-        private_payload: &[u8],
         delivery_id: &str,
-        sent_at: i64,
-        expires_at: i64,
     ) -> Option<Self> {
         let normalized_token = ProviderTokenRef::optional(Some(provider_token))?;
         let normalized_device_key = DeviceKeyRef::optional(Some(provider_device_key))?;
@@ -159,9 +156,6 @@ impl ProviderPullDelivery {
             platform,
             provider_token: std::sync::Arc::from(normalized_token.into_owned().into_boxed_str()),
             delivery_id: std::sync::Arc::from(delivery_id.to_string().into_boxed_str()),
-            payload: std::sync::Arc::new(private_payload.to_owned()),
-            sent_at,
-            expires_at,
         })
     }
 }
@@ -200,10 +194,7 @@ mod tests {
             "   ",
             Platform::ANDROID,
             "fcm-token",
-            b"payload",
             "delivery-1",
-            100,
-            200,
         );
         assert!(missing.is_none());
 
@@ -211,10 +202,7 @@ mod tests {
             "device-key-1",
             Platform::ANDROID,
             "fcm-token",
-            b"payload",
             "delivery-1",
-            100,
-            200,
         )
         .expect("delivery should be built");
         assert_eq!(present.device_id, derive_private_device_id("device-key-1"));
