@@ -150,7 +150,7 @@ impl<'a> PreparedDispatch<'a> {
                     )?;
                     provider_devices.push(ProviderDispatchDevice { info, device_key });
                 }
-                _ => {}
+                DispatchTarget::Private { .. } => {}
             }
         }
 

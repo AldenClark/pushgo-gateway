@@ -55,15 +55,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let apns_token_provider = Arc::new(RemoteApnsTokenProvider::new(
         token_service_url.as_str(),
         client.clone(),
-    )?);
+    ));
     let fcm_token_provider = Arc::new(RemoteFcmTokenProvider::new(
         token_service_url.as_str(),
         client.clone(),
-    )?);
+    ));
     let wns_token_provider = Arc::new(RemoteWnsTokenProvider::new(
         token_service_url.as_str(),
         client,
-    )?);
+    ));
 
     let apns = Arc::new(ApnsService::new(apns_token_provider, apns_endpoint)?);
     let fcm = Arc::new(FcmService::new(fcm_token_provider, FCM_SEND_BASE_URL)?);

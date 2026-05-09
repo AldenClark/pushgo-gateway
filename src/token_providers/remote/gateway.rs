@@ -49,10 +49,13 @@ pub(crate) struct GatewayTokenCache {
 impl GatewayTokenCache {
     pub(crate) fn new(client: Client, provider: GatewayProvider, base_url: &str) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
+        let expired_at = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
 
         let initial = GatewayTokenState {
             token: Arc::from(""),
-            expires_at: Instant::now() - Duration::from_secs(1),
+            expires_at: expired_at,
             project_id: None,
         };
         Self {

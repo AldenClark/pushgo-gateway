@@ -10,9 +10,9 @@ pub(crate) struct WnsTokenProvider {
 }
 
 impl WnsTokenProvider {
-    pub(crate) fn new(token_service_url: &str, client: reqwest::Client) -> Result<Self, Error> {
+    pub(crate) fn new(token_service_url: &str, client: reqwest::Client) -> Self {
         let cache = GatewayTokenCache::new(client, GatewayProvider::Wns, token_service_url);
-        Ok(Self { cache })
+        Self { cache }
     }
 }
 

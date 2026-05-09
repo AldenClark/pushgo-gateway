@@ -10,9 +10,9 @@ pub(crate) struct FcmTokenProvider {
 }
 
 impl FcmTokenProvider {
-    pub(crate) fn new(token_service_url: &str, client: reqwest::Client) -> Result<Self, Error> {
+    pub(crate) fn new(token_service_url: &str, client: reqwest::Client) -> Self {
         let cache = GatewayTokenCache::new(client, GatewayProvider::Fcm, token_service_url);
-        Ok(Self { cache })
+        Self { cache }
     }
 }
 
