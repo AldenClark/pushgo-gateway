@@ -212,16 +212,16 @@ fn infer_problem_spec(
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase());
 
-    if let Some(ref code) = normalized_code {
-        if let Some(inferred) = infer_problem_from_code(code.as_str()) {
-            return inferred;
-        }
+    if let Some(ref code) = normalized_code
+        && let Some(inferred) = infer_problem_from_code(code.as_str())
+    {
+        return inferred;
     }
 
-    if let Some(ref message) = normalized_detail {
-        if let Some(inferred) = infer_problem_from_detail(status, message.as_str()) {
-            return inferred;
-        }
+    if let Some(ref message) = normalized_detail
+        && let Some(inferred) = infer_problem_from_detail(status, message.as_str())
+    {
+        return inferred;
     }
 
     infer_problem_from_status(status)

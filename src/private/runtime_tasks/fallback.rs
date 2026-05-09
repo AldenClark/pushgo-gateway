@@ -655,8 +655,6 @@ mod tests {
             expires_at,
         )
         .payload;
-        let payload = std::sync::Arc::<[u8]>::from(payload);
-
         ctx.state
             .enqueue_private_delivery(device_id, delivery_id, payload.clone(), sent_at, expires_at)
             .await
@@ -713,8 +711,6 @@ mod tests {
             expires_at,
         )
         .payload;
-        let payload = std::sync::Arc::<[u8]>::from(payload);
-
         ctx.state
             .enqueue_private_delivery(device_id, delivery_id, payload, sent_at, expires_at)
             .await

@@ -37,14 +37,13 @@ impl Storage {
                 Some(trimmed)
             }
         });
-        let driver = DatabaseDriver::new(db_url).await.map_err(|err| {
+        let driver = DatabaseDriver::new(db_url).await.inspect_err(|err| {
             ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::WARN,
                 event = "storage.init_failed",
                 error = %(err.to_string())
             );
-            err
         })?;
         ::tracing::event!(
             target: "gateway.trace_event",

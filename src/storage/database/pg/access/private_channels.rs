@@ -228,11 +228,13 @@ impl PostgresDb {
                 .bind(&delivery_id)
                 .execute(&self.pool)
                 .await?;
-            sqlx::query("DELETE FROM private_outbox WHERE delivery_id = $1")
-                .bind(&delivery_id)
-                .execute(&self.pool)
-                .await?;
-            removed = removed.saturating_add(1);
+            removed = removed.saturating_add(
+                sqlx::query("DELETE FROM private_outbox WHERE delivery_id = $1")
+                    .bind(&delivery_id)
+                    .execute(&self.pool)
+                    .await?
+                    .rows_affected() as usize,
+            );
         }
 
         let dangling_rows = sqlx::query(
@@ -255,8 +257,9 @@ impl PostgresDb {
             .bind(&device_id)
             .bind(&delivery_id)
             .execute(&self.pool)
-            .await?;
-            removed = removed.saturating_add(1);
+            .await
+            .map(|result| result.rows_affected() as usize)
+            .map(|deleted| removed = removed.saturating_add(deleted))?;
         }
         Ok(removed)
     }

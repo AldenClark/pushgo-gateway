@@ -64,7 +64,9 @@ async fn raw_mcp_post(
         .method("POST")
         .uri("/mcp")
         .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream");
+        .header("accept", "application/json, text/event-stream")
+        .header("host", "localhost")
+        .header("mcp-protocol-version", "2025-11-25");
     if let Some(bearer) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
     }
@@ -90,6 +92,7 @@ async fn get_text(app: axum::Router, path: &str) -> (StatusCode, String) {
             Request::builder()
                 .method("GET")
                 .uri(path)
+                .header("host", "localhost")
                 .body(Body::empty())
                 .expect("request should build"),
         )
@@ -702,7 +705,7 @@ async fn oauth_metadata_returns_absolute_endpoints() {
             Request::builder()
                 .method("GET")
                 .uri("/.well-known/oauth-authorization-server")
-                .header("host", "sandbox.pushgo.dev")
+                .header("host", "localhost")
                 .header("x-forwarded-proto", "https")
                 .body(Body::empty())
                 .expect("request should build"),
@@ -888,7 +891,7 @@ async fn oauth_discovery_compat_endpoints_are_available() {
                 Request::builder()
                     .method("GET")
                     .uri(path)
-                    .header("host", "sandbox.pushgo.dev")
+                    .header("host", "localhost")
                     .header("x-forwarded-proto", "https")
                     .body(Body::empty())
                     .expect("request should build"),

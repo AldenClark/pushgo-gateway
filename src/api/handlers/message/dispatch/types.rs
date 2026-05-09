@@ -100,7 +100,7 @@ impl<'a> PreparedDispatch<'a> {
             .store
             .list_channel_dispatch_targets(channel_id, sent_at)
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::ERROR,
@@ -111,7 +111,6 @@ impl<'a> PreparedDispatch<'a> {
                     delivery_id = %(crate::util::redact_text(delivery_id_ref.as_ref())),
                     error = %(err.to_string())
                 );
-                err
             })?;
 
         let private_state = state.private.as_deref();
@@ -133,7 +132,7 @@ impl<'a> PreparedDispatch<'a> {
                     provider_token,
                     device_key,
                 } => {
-                    let info = DeviceInfo::from_token(platform, provider_token.as_str()).map_err(
+                    let info = DeviceInfo::from_token(platform, provider_token.as_str()).inspect_err(
                         |err| {
                             ::tracing::event!(
                                 target: "gateway.trace_event",
@@ -147,7 +146,6 @@ impl<'a> PreparedDispatch<'a> {
                                 platform = %(platform.name()),
                                 error = %(err.to_string())
                             );
-                            err
                         },
                     )?;
                     provider_devices.push(ProviderDispatchDevice { info, device_key });

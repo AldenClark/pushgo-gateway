@@ -163,7 +163,11 @@ async fn post_json_with_accept_language(
         .method("POST")
         .uri(path)
         .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream");
+        .header("accept", "application/json, text/event-stream")
+        .header("host", "localhost");
+    if path == "/mcp" {
+        builder = builder.header("mcp-protocol-version", "2025-11-25");
+    }
     if let Some(accept_language) = accept_language {
         builder = builder.header("accept-language", accept_language);
     }
@@ -196,7 +200,9 @@ async fn post_json_with_auth(
                 .uri(path)
                 .header("content-type", "application/json")
                 .header("accept", "application/json, text/event-stream")
+                .header("host", "localhost")
                 .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .header("mcp-protocol-version", "2025-11-25")
                 .body(Body::from(payload.to_string()))
                 .expect("request should build"),
         )
@@ -206,7 +212,14 @@ async fn post_json_with_auth(
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("response body should be readable");
-    let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+    let value = serde_json::from_slice::<Value>(&body).unwrap_or_else(|err| {
+        panic!(
+            "response should be valid JSON (status={}): {} | body={}",
+            status,
+            err,
+            String::from_utf8_lossy(&body)
+        )
+    });
     (status, value)
 }
 
@@ -221,6 +234,7 @@ async fn post_form(
                 .method("POST")
                 .uri(path)
                 .header("content-type", "application/x-www-form-urlencoded")
+                .header("host", "localhost")
                 .body(Body::from(form.as_bytes().to_vec()))
                 .expect("request should build"),
         )
@@ -240,6 +254,7 @@ async fn get_json(app: axum::Router, path: &str) -> (StatusCode, Value) {
             Request::builder()
                 .method("GET")
                 .uri(path)
+                .header("host", "localhost")
                 .body(Body::empty())
                 .expect("request should build"),
         )
