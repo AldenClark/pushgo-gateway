@@ -61,6 +61,19 @@ struct DuplicateProviderRouteRow {
     device_key: Option<String>,
 }
 
+fn resolve_private_device_id_for_duplicate(
+    duplicate: &DuplicateProviderRouteRow,
+) -> StoreResult<DeviceId> {
+    if let Some(device_key) = duplicate.device_key.as_deref()
+        && let Some(normalized) = DeviceKeyRef::optional(Some(device_key))
+    {
+        return Ok(PrivateDeviceId::derive(normalized.as_str()).into_inner());
+    }
+    PrivateDeviceId::parse_compat(duplicate.device_id.as_slice())
+        .map(PrivateDeviceId::into_inner)
+        .ok_or(StoreError::BinaryError)
+}
+
 async fn collect_duplicate_provider_routes_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     route: &DeviceRoutePersistenceValues,
@@ -71,11 +84,11 @@ async fn collect_duplicate_provider_routes_in_tx(
     let rows = sqlx::query(
         "SELECT device_id, device_key \
          FROM devices \
-         WHERE platform = ? AND provider_token = ? AND device_id <> ?",
+         WHERE platform = ? AND provider_token = ? AND (device_key IS NULL OR device_key <> ?)",
     )
     .bind(route.platform.as_str())
     .bind(provider_token)
-    .bind(route.device_id.as_slice())
+    .bind(route.device_key.as_str())
     .fetch_all(&mut **tx)
     .await?;
     Ok(rows
@@ -89,14 +102,14 @@ async fn collect_duplicate_provider_routes_in_tx(
 
 async fn load_device_delivery_ids_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
-    device_id: &[u8],
+    private_device_id: &[u8],
 ) -> StoreResult<Vec<String>> {
     let rows = sqlx::query(
         "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
          UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
     )
-    .bind(device_id)
-    .bind(device_id)
+    .bind(private_device_id)
+    .bind(private_device_id)
     .fetch_all(&mut **tx)
     .await?;
     Ok(rows.into_iter().map(|row| row.get("delivery_id")).collect())
@@ -130,8 +143,9 @@ async fn coalesce_duplicate_provider_routes_in_tx(
     }
 
     for duplicate in duplicates {
+        let duplicate_private_device_id = resolve_private_device_id_for_duplicate(&duplicate)?;
         let delivery_ids =
-            load_device_delivery_ids_in_tx(tx, duplicate.device_id.as_slice()).await?;
+            load_device_delivery_ids_in_tx(tx, duplicate_private_device_id.as_slice()).await?;
 
         sqlx::query(
             "INSERT INTO channel_subscriptions (channel_id, device_id, status, created_at, updated_at) \
@@ -165,12 +179,15 @@ async fn coalesce_duplicate_provider_routes_in_tx(
                updated_at = GREATEST(updated_at, VALUES(updated_at))",
         )
         .bind(route.device_id.as_slice())
-        .bind(duplicate.device_id.as_slice())
+        .bind(duplicate_private_device_id.as_slice())
         .execute(&mut **tx)
         .await?;
 
+        sqlx::query("DELETE FROM channel_subscriptions WHERE device_id = ?")
+            .bind(duplicate.device_id.as_slice())
+            .execute(&mut **tx)
+            .await?;
         for statement in [
-            "DELETE FROM channel_subscriptions WHERE device_id = ?",
             "DELETE FROM provider_pull_queue WHERE device_id = ?",
             "DELETE FROM private_bindings WHERE device_id = ?",
             "DELETE FROM private_outbox WHERE device_id = ?",
@@ -178,7 +195,7 @@ async fn coalesce_duplicate_provider_routes_in_tx(
             "DELETE FROM private_device_keys WHERE device_id = ?",
         ] {
             sqlx::query(statement)
-                .bind(duplicate.device_id.as_slice())
+                .bind(duplicate_private_device_id.as_slice())
                 .execute(&mut **tx)
                 .await?;
         }
