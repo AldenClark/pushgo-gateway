@@ -12,6 +12,19 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.7] - 2026-05-10
+
+### Changed
+- Bumped package/runtime version to `1.2.7` (release tag target: `v1.2.7`) and aligned lock metadata.
+- Added cross-backend migration regression coverage for legacy runtime hard-reset paths:
+  - SQLite: verifies base-channel data is preserved, legacy runtime rows are rebuilt/cleaned, and new route writes succeed after upgrade.
+  - PostgreSQL/MySQL: added equivalent docker-backed upgrade tests to enforce parity with SQLite migration expectations.
+- Completed release audit gates before this cut:
+  - `scripts/preflight_release_audit.sh all`
+  - `cargo clippy -p pushgo-gateway --all-targets -- -D warnings`
+  - `tests/blackbox/negative_suite.sh`
+  - `scripts/storage_crossdb_parity.sh` (3 rounds API/DB/hash parity all match)
+
 ## [v1.2.6] - 2026-04-24
 
 ### Changed

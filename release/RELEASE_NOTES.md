@@ -8,6 +8,12 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.7]
+
+### Improved
+- Strengthened database-upgrade reliability checks for SQLite, PostgreSQL, and MySQL using legacy-runtime migration scenarios that verify schema convergence and post-upgrade write/read behavior.
+- Improved release readiness confidence with a full preflight + blackbox + cross-database parity audit pass before publication.
+
 ## [v1.2.6]
 
 ### Changed

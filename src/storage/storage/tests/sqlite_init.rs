@@ -372,6 +372,71 @@ async fn sqlite_init_hard_resets_provider_pull_queue_without_schema_meta() {
 }
 
 #[tokio::test]
+async fn sqlite_init_hard_reset_legacy_runtime_preserves_base_data_and_recovers_writes() {
+    let ctx = setup_sqlite_storage_with_custom_schema(
+        "sqlite-hard-reset-preserve-base-and-recover-runtime",
+        &[
+            "CREATE TABLE IF NOT EXISTS channels (channel_id BLOB PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "INSERT INTO channels (channel_id, password_hash, alias, created_at, updated_at) VALUES (X'0102030405060708090A0B0C0D0E0F10', 'legacy-hash-boundary', 'legacy-boundary-channel', -1, 9223372036854775807)",
+            "CREATE TABLE IF NOT EXISTS private_bindings (platform INTEGER NOT NULL, token_hash BLOB NOT NULL, device_id BLOB NOT NULL, PRIMARY KEY (platform, token_hash))",
+            "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+            "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, next_attempt_at, last_error_code, updated_at) VALUES (X'11111111111111111111111111111111', 'legacy-delivery-boundary-sqlite', 'pending', 7, -1, 'legacy-error', -1)",
+            "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BLOB NOT NULL, device_id BLOB NOT NULL, platform TEXT NOT NULL, channel_type TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (channel_id, device_id))",
+        ],
+    )
+    .await;
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite verification connection should succeed");
+    let schema_version: Option<String> = sqlx::query_scalar(
+        "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = 'schema_version'",
+    )
+    .fetch_optional(&mut conn)
+    .await
+    .expect("sqlite schema version query should succeed");
+    assert_eq!(schema_version.as_deref(), Some(STORAGE_SCHEMA_VERSION));
+
+    let preserved_channel_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE alias = 'legacy-boundary-channel'")
+            .fetch_one(&mut conn)
+            .await
+            .expect("sqlite preserved channel query should succeed");
+    assert_eq!(preserved_channel_count, 1);
+
+    let legacy_outbox_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM private_outbox WHERE delivery_id = 'legacy-delivery-boundary-sqlite'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("sqlite legacy outbox query should succeed");
+    assert_eq!(legacy_outbox_count, 0);
+
+    let now = chrono::Utc::now().timestamp_millis();
+    ctx.storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: "sqlite-upgrade-boundary-device-key".to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some("android-token-sqlite-upgrade-boundary-000000000001".to_string()),
+            updated_at: now,
+        })
+        .await
+        .expect("sqlite route upsert should succeed after migration");
+    let routes = ctx
+        .storage
+        .load_device_routes()
+        .await
+        .expect("sqlite route load should succeed after migration");
+    assert!(
+        routes
+            .iter()
+            .any(|row| row.device_key == "sqlite-upgrade-boundary-device-key"),
+        "sqlite migrated schema should accept new route writes"
+    );
+}
+
+#[tokio::test]
 async fn sqlite_init_heals_missing_private_outbox_columns() {
     let ctx = setup_sqlite_storage_with_custom_schema(
         "sqlite-heal-private-outbox-columns",
