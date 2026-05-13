@@ -176,6 +176,7 @@ pub(crate) async fn channel_sync(
                         "password_mismatch" => StatusCode::FORBIDDEN,
                         "private_channel_disabled" => StatusCode::SERVICE_UNAVAILABLE,
                         "provider_token_missing" => StatusCode::BAD_REQUEST,
+                        "channel_subscriber_limit_exceeded" => StatusCode::BAD_REQUEST,
                         _ => StatusCode::BAD_REQUEST,
                     };
                     channels.push(ChannelSyncResult {
@@ -483,6 +484,10 @@ fn map_sync_store_error(err: StoreError) -> (&'static str, String) {
         StoreError::ChannelNotFound => (
             "channel_not_found",
             "channel not found on gateway".to_string(),
+        ),
+        StoreError::ChannelSubscriberLimitExceeded => (
+            "channel_subscriber_limit_exceeded",
+            "channel subscriber limit exceeded".to_string(),
         ),
         other => ("store_error", other.to_string()),
     }

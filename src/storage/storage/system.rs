@@ -138,7 +138,7 @@ impl Storage {
             .cleanup_expired_provider_pull_queue(now, config.provider_pull_expired_batch)
             .await?;
         let _pending_dedupe_pruned = self
-            .cleanup_pending_op_dedupe(now - OP_DEDUPE_PENDING_STALE_SECS, 2048)
+            .cleanup_pending_op_dedupe(now - OP_DEDUPE_PENDING_STALE_MILLIS, 2048)
             .await?;
         let dedupe_before = config.dedupe_before(now);
         let _semantic_dedupe_pruned = self.cleanup_semantic_id_dedupe(dedupe_before, 2048).await?;

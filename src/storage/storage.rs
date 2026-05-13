@@ -14,7 +14,7 @@ mod private_delivery;
 #[path = "storage/system.rs"]
 mod system;
 
-const OP_DEDUPE_PENDING_STALE_SECS: i64 = 2 * 60;
+const OP_DEDUPE_PENDING_STALE_MILLIS: i64 = 2 * 60 * 1000;
 
 #[derive(Debug, Clone)]
 pub struct Storage {

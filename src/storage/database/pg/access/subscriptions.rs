@@ -254,7 +254,29 @@ impl PostgresDb {
         channel_id: [u8; 16],
         device_id: DeviceId,
     ) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await?;
         let now = Utc::now().timestamp_millis();
+        let already_active: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM channel_subscriptions \
+             WHERE channel_id = $1 AND device_id = $2 AND status = 'active' \
+             LIMIT 1",
+        )
+        .bind(&channel_id[..])
+        .bind(&device_id[..])
+        .fetch_optional(&mut *tx)
+        .await?;
+        if already_active.is_none() {
+            let active_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM channel_subscriptions \
+                 WHERE channel_id = $1 AND status = 'active'",
+            )
+            .bind(&channel_id[..])
+            .fetch_one(&mut *tx)
+            .await?;
+            if active_count >= CHANNEL_SUBSCRIBER_LIMIT as i64 {
+                return Err(StoreError::ChannelSubscriberLimitExceeded);
+            }
+        }
         sqlx::query(
             "INSERT INTO channel_subscriptions (channel_id, device_id, status, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5) \
@@ -265,8 +287,9 @@ impl PostgresDb {
         .bind("active")
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 

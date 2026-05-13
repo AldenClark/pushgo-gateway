@@ -129,7 +129,6 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `PUSHGO_PRIVATE_FALLBACK_SEED_LIMIT` | Auto                                   | Fallback seed scan limit override (clamped 1024~500000) |
 | `PUSHGO_STATS_CHANNEL_CAPACITY`             | Auto                                   | Stats worker channel capacity override (clamped 256~32768) |
 | `PUSHGO_STATS_FLUSH_EVENT_THRESHOLD`        | Auto                                   | Stats flush threshold override (clamped 128~16384) |
-| `PUSHGO_SQLITE_MAX_CONNECTIONS`             | `4`                                    | SQLite pool max connections (clamped 1~32)                  |
 | `PUSHGO_SQLITE_IDLE_TIMEOUT_SECS`           | `60`                                   | SQLite idle connection timeout in seconds                   |
 | `PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY`    | `32`                                   | SQLite per-connection sqlx statement cache capacity         |
 | `PUSHGO_SQLITE_PAGE_CACHE_KIB`              | `1024`                                 | SQLite page-cache target per connection, in KiB             |

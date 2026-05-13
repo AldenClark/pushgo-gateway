@@ -8,6 +8,13 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.8]
+
+### Improved
+- Improved high-load stability for gateway message dispatch by fixing a pending dedupe cleanup timing bug that could surface as intermittent failures during slower fanout writes.
+- Added a clear 32-subscriber-per-channel limit response, including structured error code and localized message, so clients can handle full channels predictably.
+- Added benchmark tooling to make future gateway capacity checks reproducible without committing generated result artifacts.
+
 ## [v1.2.7]
 
 ### Improved

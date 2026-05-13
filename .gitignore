@@ -1,7 +1,10 @@
 **/.DS_Store
 /target/
 /dist/
+/docs/
 /scripts/
+bench/results/*
+!bench/results/.gitkeep
 /.cargo/
 /.env
 /.env.*

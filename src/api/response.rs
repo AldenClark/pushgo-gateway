@@ -466,6 +466,11 @@ fn infer_problem_from_detail(status: StatusCode, detail: &str) -> Option<Inferre
             category: ApiProblemCategory::Validation,
             retryable: false,
         },
+        "channel subscriber limit exceeded" => InferredProblem {
+            code: Some("channel_subscriber_limit_exceeded"),
+            category: ApiProblemCategory::Validation,
+            retryable: false,
+        },
         "invalid platform" => InferredProblem {
             code: Some("invalid_platform"),
             category: ApiProblemCategory::Validation,
@@ -707,6 +712,12 @@ fn localized_problem_message(
         (ApiLocale::ZhCn, Some("channels_limit_exceeded")) => {
             Some("单次同步的频道数量过多，请拆分后重试。")
         }
+        (ApiLocale::En, Some("channel_subscriber_limit_exceeded")) => Some(
+            "This channel already has 32 subscribers. Remove an unused subscriber before adding another device.",
+        ),
+        (ApiLocale::ZhCn, Some("channel_subscriber_limit_exceeded")) => {
+            Some("该频道已达到 32 个订阅者上限，请先移除不再使用的设备。")
+        }
         (ApiLocale::En, Some("channel_binding_invalid")) => {
             Some("Provide either a channel ID or a channel name, but not both.")
         }
@@ -873,6 +884,14 @@ impl IntoResponse for Error {
                 )
                 .with_status(StatusCode::BAD_REQUEST)
             }
+            Error::StoreError(StoreError::ChannelSubscriberLimitExceeded) => {
+                StatusResponse::error_with_status(
+                    StatusCode::BAD_REQUEST,
+                    "channel subscriber limit exceeded",
+                    Some(Cow::Borrowed("channel_subscriber_limit_exceeded")),
+                )
+                .with_status(StatusCode::BAD_REQUEST)
+            }
             Error::StoreError(StoreError::InvalidPlatform) => StatusResponse::error_with_status(
                 StatusCode::BAD_REQUEST,
                 "invalid platform",
@@ -941,6 +960,11 @@ fn emit_api_error_observation(error: &Error) {
             StatusCode::BAD_REQUEST.as_u16(),
             "store_error",
             Some("invalid_channel_name"),
+        ),
+        Error::StoreError(StoreError::ChannelSubscriberLimitExceeded) => (
+            StatusCode::BAD_REQUEST.as_u16(),
+            "store_error",
+            Some("channel_subscriber_limit_exceeded"),
         ),
         Error::StoreError(StoreError::InvalidPlatform) => (
             StatusCode::BAD_REQUEST.as_u16(),

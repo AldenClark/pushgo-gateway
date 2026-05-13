@@ -12,6 +12,16 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.8] - 2026-05-13
+
+### Changed
+- Bumped package/runtime version to `1.2.8` (release tag target: `v1.2.8`) and aligned lock metadata.
+- Added a cross-backend channel subscriber limit of 32 active subscribers per channel, with structured `channel_subscriber_limit_exceeded` API errors and localized response text.
+- Fixed the pending op-dedupe maintenance stale-window calculation to use milliseconds consistently, preventing recent pending dedupe rows from being pruned after roughly 120 ms instead of the intended 120 seconds.
+- Pinned SQLite runtime access to a single connection to match SQLite's single-writer behavior and reduce write-lock churn under high fanout load.
+- Added gateway benchmark tooling for message, event, private fanout, and resource-monitoring regression runs, while keeping generated result artifacts out of git.
+- Updated release workflow checkout steps to `actions/checkout@v6`.
+
 ## [v1.2.7] - 2026-05-10
 
 ### Changed

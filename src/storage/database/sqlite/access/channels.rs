@@ -97,6 +97,28 @@ impl SqliteDb {
         .map(|row| row.get::<Vec<u8>, _>("device_id"))
         .ok_or(StoreError::DeviceNotFound)?;
 
+        let already_active: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM channel_subscriptions \
+             WHERE channel_id = ? AND device_id = ? AND status = 'active' \
+             LIMIT 1",
+        )
+        .bind(&channel_bytes)
+        .bind(device_id.as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if already_active.is_none() {
+            let active_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM channel_subscriptions \
+                 WHERE channel_id = ? AND status = 'active'",
+            )
+            .bind(&channel_bytes)
+            .fetch_one(&mut *tx)
+            .await?;
+            if active_count >= CHANNEL_SUBSCRIBER_LIMIT as i64 {
+                return Err(StoreError::ChannelSubscriberLimitExceeded);
+            }
+        }
+
         sqlx::query(
             "INSERT INTO channel_subscriptions \
              (channel_id, device_id, status, created_at, updated_at) \

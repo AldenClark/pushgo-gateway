@@ -339,3 +339,90 @@ async fn channel_subscribe_accepts_apple_style_zh_hans_locale() {
         Some("zh-CN")
     );
 }
+
+#[tokio::test]
+async fn channel_subscribe_rejects_33rd_subscriber_with_structured_limit_error() {
+    let state = build_private_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let mut channel_id = String::new();
+    let mut first_device_key = String::new();
+
+    for index in 0..32 {
+        let (_status, register_body) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({
+                "platform": "android"
+            }),
+        )
+        .await;
+        let device_key = response_string_field(&register_body, "device_key").to_string();
+        if index == 0 {
+            first_device_key = device_key.clone();
+        }
+
+        let payload = if index == 0 {
+            json!({
+                "device_key": device_key,
+                "channel_name": "subscriber-limit",
+                "password": "password-1234"
+            })
+        } else {
+            json!({
+                "device_key": device_key,
+                "channel_id": channel_id,
+                "password": "password-1234"
+            })
+        };
+        let (status, body) = post_json(app.clone(), "/channel/subscribe", payload).await;
+        assert_eq!(status, StatusCode::OK);
+        if index == 0 {
+            channel_id = response_string_field(&body, "channel_id").to_string();
+        }
+    }
+
+    let (status, _resubscribe_body) = post_json(
+        app.clone(),
+        "/channel/subscribe",
+        json!({
+            "device_key": first_device_key,
+            "channel_id": channel_id,
+            "password": "password-1234"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({
+            "platform": "android"
+        }),
+    )
+    .await;
+    let extra_device_key = response_string_field(&register_body, "device_key").to_string();
+    let (status, body) = post_json_with_accept_language(
+        app,
+        "/channel/subscribe",
+        json!({
+            "device_key": extra_device_key,
+            "channel_id": channel_id,
+            "password": "password-1234"
+        }),
+        Some("zh-CN, en;q=0.8"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body.get("error_code").and_then(Value::as_str),
+        Some("channel_subscriber_limit_exceeded")
+    );
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("localized_message"))
+            .and_then(Value::as_str),
+        Some("该频道已达到 32 个订阅者上限，请先移除不再使用的设备。")
+    );
+}

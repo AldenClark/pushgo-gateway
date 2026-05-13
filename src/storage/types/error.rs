@@ -26,6 +26,8 @@ pub enum StoreError {
     ChannelPasswordMismatch,
     #[error("Channel alias missing")]
     ChannelAliasMissing,
+    #[error("Channel subscriber limit exceeded")]
+    ChannelSubscriberLimitExceeded,
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
     #[error("Password hash error: {0}")]

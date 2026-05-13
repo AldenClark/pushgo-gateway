@@ -14,6 +14,7 @@ pub const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-04-16-gateway-v7";
 pub const STORAGE_SCHEMA_VERSION_LEGACY: &str = "2026-04-13-gateway-v6";
 pub const STORAGE_SCHEMA_VERSION_OLDER_LEGACY: &str = "2026-03-26-gateway-v5";
 pub const STORAGE_SCHEMA_VERSION_OLDEST_LEGACY: &str = "2026-03-18-gateway-v4";
+pub const CHANNEL_SUBSCRIBER_LIMIT: usize = 32;
 const BLAKE3_PASSWORD_SCHEME: &str = "pushgo-blake3";
 const BLAKE3_PASSWORD_VERSION: &str = "v=1";
 const BLAKE3_PASSWORD_SALT_BYTES: usize = 16;

@@ -1155,6 +1155,45 @@ async fn maintenance_cleanup_prunes_expired_runtime_rows_and_orphan_devices() {
 }
 
 #[tokio::test]
+async fn maintenance_cleanup_keeps_recent_pending_op_dedupe_for_full_stale_window() {
+    let ctx = setup_sqlite_storage("maintenance-op-dedupe-stale-window").await;
+    let now = 1_700_000_000_000_i64;
+    let recent_key = "maintenance-op-dedupe-recent";
+    let stale_key = "maintenance-op-dedupe-stale";
+
+    ctx.storage
+        .reserve_op_dedupe_pending(recent_key, "delivery-recent-pending", now - 119_000)
+        .await
+        .expect("recent pending op dedupe should be reserved");
+    ctx.storage
+        .reserve_op_dedupe_pending(stale_key, "delivery-stale-pending", now - 121_000)
+        .await
+        .expect("stale pending op dedupe should be reserved");
+
+    ctx.storage
+        .run_maintenance_cleanup(now, MaintenanceCleanupConfig::default())
+        .await
+        .expect("maintenance cleanup should succeed");
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT dedupe_key, state FROM dispatch_op_dedupe ORDER BY dedupe_key ASC")
+            .fetch_all(&mut conn)
+            .await
+            .expect("op dedupe rows should be queryable");
+
+    assert_eq!(
+        rows,
+        vec![(
+            recent_key.to_string(),
+            DedupeState::Pending.as_str().to_string()
+        )]
+    );
+}
+
+#[tokio::test]
 async fn maintenance_cleanup_keeps_orphan_candidates_with_live_private_references() {
     let ctx = setup_sqlite_storage("maintenance-cleanup-live-references").await;
     let now = chrono::Utc::now().timestamp_millis();

@@ -79,7 +79,6 @@ const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 impl SqliteDb {
     pub async fn new(db_url: &str) -> StoreResult<Self> {
         ensure_sqlite_parent_dir(db_url)?;
-        let sqlite_max_connections = read_env_u32("PUSHGO_SQLITE_MAX_CONNECTIONS", 4, 1, 32);
         let sqlite_idle_timeout_secs = read_env_u64("PUSHGO_SQLITE_IDLE_TIMEOUT_SECS", 60, 1, 3600);
         let sqlite_statement_cache_capacity =
             read_env_usize("PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY", 32, 0, 512);
@@ -93,7 +92,7 @@ impl SqliteDb {
             .statement_cache_capacity(sqlite_statement_cache_capacity)
             .busy_timeout(Duration::from_secs(30));
         let pool = SqlitePoolOptions::new()
-            .max_connections(sqlite_max_connections)
+            .max_connections(1)
             .min_connections(0)
             .idle_timeout(Duration::from_secs(sqlite_idle_timeout_secs))
             .after_connect(move |conn, _meta| {
@@ -761,14 +760,6 @@ fn read_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
     std::env::var(name)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
-        .map(|value| value.clamp(min, max))
-        .unwrap_or(default)
-}
-
-fn read_env_u32(name: &str, default: u32, min: u32, max: u32) -> u32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
         .map(|value| value.clamp(min, max))
         .unwrap_or(default)
 }
