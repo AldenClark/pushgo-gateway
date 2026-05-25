@@ -182,3 +182,115 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, count_private_outbox_total())
     }
 }
+
+impl DatabaseDriver {
+    pub(crate) async fn insert_private_messages_batch(
+        &self,
+        entries: &[PrivateMessageBatchEntry],
+    ) -> StoreResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        match self {
+            DatabaseDriver::Sqlite(inner) => inner.insert_private_messages_batch(entries).await,
+            DatabaseDriver::MySql(_) | DatabaseDriver::Postgres(_) => {
+                for item in entries {
+                    self.insert_private_message(item.delivery_id.as_str(), &item.message)
+                        .await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) async fn list_private_outbox_with_messages(
+        &self,
+        device_id: DeviceId,
+        limit: usize,
+    ) -> StoreResult<Vec<PrivateOutboxMessageRow>> {
+        match self {
+            DatabaseDriver::Sqlite(inner) => {
+                inner
+                    .list_private_outbox_with_messages(device_id, limit)
+                    .await
+            }
+            DatabaseDriver::MySql(_) | DatabaseDriver::Postgres(_) => {
+                let entries = self.list_private_outbox(device_id, limit).await?;
+                let mut out = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let message = self
+                        .load_private_message(entry.delivery_id.as_str())
+                        .await?;
+                    out.push(PrivateOutboxMessageRow {
+                        device_id,
+                        entry,
+                        message,
+                    });
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    pub(crate) async fn enqueue_private_outbox_messages_batch(
+        &self,
+        entries: &[PrivateOutboxMessageBatchEntry],
+        max_pending_per_device: usize,
+    ) -> StoreResult<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        match self {
+            DatabaseDriver::Sqlite(inner) => {
+                inner
+                    .enqueue_private_outbox_messages_batch(entries, max_pending_per_device)
+                    .await
+            }
+            DatabaseDriver::MySql(_) | DatabaseDriver::Postgres(_) => {
+                let payloads = entries
+                    .iter()
+                    .map(|item| PrivateMessageBatchEntry {
+                        delivery_id: item.entry.delivery_id.clone(),
+                        message: item.message.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                self.insert_private_messages_batch(&payloads).await?;
+                let outbox = entries
+                    .iter()
+                    .map(|item| PrivateOutboxBatchEntry {
+                        device_id: item.device_id,
+                        entry: item.entry.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                self.enqueue_private_outbox_batch(
+                    &outbox,
+                    max_pending_per_device,
+                    i64::MAX as usize,
+                    None,
+                )
+                .await
+            }
+        }
+    }
+
+    pub(crate) async fn clear_private_outbox_entries(
+        &self,
+        entries: &[(DeviceId, String)],
+    ) -> StoreResult<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        match self {
+            DatabaseDriver::Sqlite(inner) => inner.clear_private_outbox_entries(entries).await,
+            DatabaseDriver::MySql(_) | DatabaseDriver::Postgres(_) => {
+                let mut removed = 0usize;
+                for (device_id, delivery_id) in entries {
+                    self.ack_private_delivery(*device_id, delivery_id.as_str())
+                        .await?;
+                    removed = removed.saturating_add(1);
+                }
+                Ok(removed)
+            }
+        }
+    }
+}

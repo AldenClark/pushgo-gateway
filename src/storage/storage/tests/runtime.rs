@@ -811,6 +811,117 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
 }
 
 #[tokio::test]
+async fn migrate_private_pending_to_provider_queue_batches_payloads_and_clears_outbox() {
+    let ctx = setup_sqlite_storage("private-to-provider-migration-batch").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [6; 16];
+    let provider_token = "fcm-token-private-to-provider-batch-001";
+    let delivery_ids = [
+        "delivery-private-to-provider-001",
+        "delivery-private-to-provider-002",
+        "delivery-private-to-provider-003",
+    ];
+
+    for (index, delivery_id) in delivery_ids.iter().enumerate() {
+        let message = PrivateMessage {
+            payload: vec![index as u8, 4, 5].into(),
+            size: 3,
+            sent_at: now + index as i64,
+            expires_at: now + 600_000,
+        };
+        ctx.storage
+            .insert_private_message(delivery_id, &message)
+            .await
+            .expect("private payload should be inserted");
+        ctx.storage
+            .enqueue_private_outbox(
+                device_id,
+                &PrivateOutboxEntry {
+                    delivery_id: delivery_id.to_string(),
+                    status: OUTBOX_STATUS_PENDING.to_string(),
+                    attempts: 0,
+                    occurred_at: now + index as i64,
+                    created_at: now + index as i64,
+                    claimed_at: None,
+                    first_sent_at: None,
+                    last_attempt_at: None,
+                    acked_at: None,
+                    fallback_sent_at: None,
+                    next_attempt_at: now,
+                    last_error_code: None,
+                    last_error_detail: None,
+                    updated_at: now,
+                },
+            )
+            .await
+            .expect("private outbox should be inserted");
+    }
+
+    let missing_delivery_id = "delivery-private-to-provider-missing-payload";
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "INSERT INTO private_outbox \
+         (device_id, delivery_id, status, attempts, occurred_at, created_at, next_attempt_at, updated_at) \
+         VALUES (?, ?, ?, 0, ?, ?, ?, ?)",
+    )
+    .bind(&device_id[..])
+    .bind(missing_delivery_id)
+    .bind(OUTBOX_STATUS_PENDING)
+    .bind(now + 10)
+    .bind(now + 10)
+    .bind(now)
+    .bind(now)
+    .execute(&mut conn)
+    .await
+    .expect("dangling private outbox should be inserted");
+    drop(conn);
+
+    let migrated = ctx
+        .storage
+        .migrate_private_pending_to_provider_queue(device_id, Platform::ANDROID, provider_token)
+        .await
+        .expect("private->provider migration should succeed");
+    assert_eq!(migrated, delivery_ids.len());
+
+    let private_pending = ctx
+        .storage
+        .count_private_outbox_for_device(device_id)
+        .await
+        .expect("private outbox count should succeed");
+    assert_eq!(private_pending, 0);
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let provider_pending: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM provider_pull_queue WHERE device_id = ?")
+            .bind(&device_id[..])
+            .fetch_one(&mut conn)
+            .await
+            .expect("provider pull count should be queryable");
+    assert_eq!(provider_pending, delivery_ids.len() as i64);
+
+    for delivery_id in delivery_ids {
+        let payload_exists: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM private_payloads WHERE delivery_id = ?")
+                .bind(delivery_id)
+                .fetch_one(&mut conn)
+                .await
+                .expect("payload count should be queryable");
+        assert_eq!(payload_exists, 1);
+    }
+    let missing_payload_exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM private_payloads WHERE delivery_id = ?")
+            .bind(missing_delivery_id)
+            .fetch_one(&mut conn)
+            .await
+            .expect("missing payload count should be queryable");
+    assert_eq!(missing_payload_exists, 0);
+}
+
+#[tokio::test]
 async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
     let ctx = setup_sqlite_storage("private-payload-cleanup").await;
 
@@ -877,6 +988,171 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
         .await
         .expect("shared payload second lookup should succeed");
     assert!(shared_after_all_acked.is_none());
+}
+
+#[tokio::test]
+async fn private_expired_cleanup_removes_expired_payloads_and_dangling_outbox() {
+    let ctx = setup_sqlite_storage("private-expired-cleanup-batch").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [3; 16];
+    let expired_delivery_id = "expired-private-cleanup-delivery";
+    let dangling_delivery_id = "dangling-private-cleanup-delivery";
+
+    ctx.storage
+        .insert_private_message(
+            expired_delivery_id,
+            &PrivateMessage {
+                payload: vec![1, 2, 3].into(),
+                size: 3,
+                sent_at: now - 10_000,
+                expires_at: now - 1_000,
+            },
+        )
+        .await
+        .expect("expired payload should be inserted");
+    ctx.storage
+        .enqueue_private_outbox(
+            device_id,
+            &PrivateOutboxEntry {
+                delivery_id: expired_delivery_id.to_string(),
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                attempts: 0,
+                occurred_at: now - 10_000,
+                created_at: now - 10_000,
+                claimed_at: None,
+                first_sent_at: None,
+                last_attempt_at: None,
+                acked_at: None,
+                fallback_sent_at: None,
+                next_attempt_at: now,
+                last_error_code: None,
+                last_error_detail: None,
+                updated_at: now - 10_000,
+            },
+        )
+        .await
+        .expect("expired outbox should be inserted");
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "INSERT INTO private_outbox \
+         (device_id, delivery_id, status, attempts, occurred_at, created_at, next_attempt_at, updated_at) \
+         VALUES (?, ?, ?, 0, ?, ?, ?, ?)",
+    )
+    .bind(&device_id[..])
+    .bind(dangling_delivery_id)
+    .bind(OUTBOX_STATUS_PENDING)
+    .bind(now - 9_000)
+    .bind(now - 9_000)
+    .bind(now)
+    .bind(now - 9_000)
+    .execute(&mut conn)
+    .await
+    .expect("dangling outbox should be inserted");
+    drop(conn);
+
+    let removed = ctx
+        .storage
+        .cleanup_private_expired_data(now, 16)
+        .await
+        .expect("private cleanup should succeed");
+    assert_eq!(removed, 2);
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let remaining_payloads: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM private_payloads WHERE delivery_id = ?")
+            .bind(expired_delivery_id)
+            .fetch_one(&mut conn)
+            .await
+            .expect("payload count should be queryable");
+    let remaining_outbox: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox WHERE delivery_id IN (?, ?)")
+            .bind(expired_delivery_id)
+            .bind(dangling_delivery_id)
+            .fetch_one(&mut conn)
+            .await
+            .expect("outbox count should be queryable");
+    assert_eq!(remaining_payloads, 0);
+    assert_eq!(remaining_outbox, 0);
+}
+
+#[tokio::test]
+async fn orphan_channel_cleanup_respects_telemetry_sidecar_stats() {
+    let ctx = setup_sqlite_storage("orphan-channel-telemetry-sidecar").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let old = now - 10 * 60 * 1000;
+    let protected_channel_id = [8u8; 16];
+    let removable_channel_id = [9u8; 16];
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    for (channel_id, alias) in [
+        (protected_channel_id, "orphan-protected-by-telemetry"),
+        (removable_channel_id, "orphan-removable-without-telemetry"),
+    ] {
+        sqlx::query(
+            "INSERT INTO channels (channel_id, password_hash, alias, created_at, updated_at) \
+             VALUES (?, 'test-password-hash', ?, ?, ?)",
+        )
+        .bind(&channel_id[..])
+        .bind(alias)
+        .bind(old)
+        .bind(old)
+        .execute(&mut conn)
+        .await
+        .expect("test channel should be inserted");
+    }
+    drop(conn);
+
+    ctx.storage
+        .apply_stats_batch(&StatsBatchWrite {
+            channels: vec![ChannelStatsDailyDelta {
+                channel_id: protected_channel_id,
+                bucket_date: "2026-05-25".to_string(),
+                messages_routed: 1,
+                ..ChannelStatsDailyDelta::default()
+            }],
+            ..StatsBatchWrite::default()
+        })
+        .await
+        .expect("telemetry stats should be written");
+
+    let cleanup = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now,
+            MaintenanceCleanupConfig {
+                orphan_channel_ttl_secs: 60,
+                orphan_channel_cleanup_enabled: true,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("maintenance cleanup should succeed");
+    assert_eq!(cleanup.orphan_channels_pruned, 1);
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let protected_exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE channel_id = ?")
+            .bind(&protected_channel_id[..])
+            .fetch_one(&mut conn)
+            .await
+            .expect("protected channel count should be queryable");
+    let removable_exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE channel_id = ?")
+            .bind(&removable_channel_id[..])
+            .fetch_one(&mut conn)
+            .await
+            .expect("removable channel count should be queryable");
+    assert_eq!(protected_exists, 1);
+    assert_eq!(removable_exists, 0);
 }
 
 #[tokio::test]
@@ -1175,9 +1451,9 @@ async fn maintenance_cleanup_keeps_recent_pending_op_dedupe_for_full_stale_windo
         .await
         .expect("maintenance cleanup should succeed");
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.dispatch_db_url)
         .await
-        .expect("sqlite test connection should succeed");
+        .expect("sqlite dispatch sidecar connection should succeed");
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT dedupe_key, state FROM dispatch_op_dedupe ORDER BY dedupe_key ASC")
             .fetch_all(&mut conn)

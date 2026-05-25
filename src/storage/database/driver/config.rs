@@ -1,10 +1,21 @@
 use super::*;
+use crate::storage::StorageInitConfig;
 
 pub(super) const DEFAULT_SQLITE_DB_URL: &str = "sqlite://./pushgo-gateway.db?mode=rwc";
 
 impl DatabaseDriver {
     pub async fn new(db_url: Option<&str>) -> StoreResult<Self> {
-        let normalized_db_url = Self::normalize_db_url(db_url);
+        Self::new_with_config(StorageInitConfig {
+            db_url: db_url.map(str::to_string),
+            stats_enabled: true,
+            mcp_enabled: true,
+            ..StorageInitConfig::default()
+        })
+        .await
+    }
+
+    pub async fn new_with_config(config: StorageInitConfig) -> StoreResult<Self> {
+        let normalized_db_url = Self::normalize_db_url(config.db_url.as_deref());
         let db_kind = DatabaseKind::from_url(normalized_db_url.as_str())?;
         ::tracing::event!(
             target: "gateway.trace_event",
@@ -14,7 +25,14 @@ impl DatabaseDriver {
         );
         match db_kind {
             DatabaseKind::Sqlite => Ok(DatabaseDriver::Sqlite(
-                SqliteDb::new(normalized_db_url.as_str()).await?,
+                SqliteDb::new_with_config(
+                    normalized_db_url.as_str(),
+                    config.sqlite_telemetry_db_url.as_deref(),
+                    config.sqlite_runtime_db_url.as_deref(),
+                    config.stats_enabled,
+                    config.mcp_enabled,
+                )
+                .await?,
             )),
             DatabaseKind::Postgres => Ok(DatabaseDriver::Postgres(
                 PostgresDb::new(normalized_db_url.as_str()).await?,

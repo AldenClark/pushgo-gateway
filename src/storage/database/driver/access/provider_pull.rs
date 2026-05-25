@@ -44,3 +44,30 @@ impl ProviderPullDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, ack_provider_item(device_id, delivery_id, now))
     }
 }
+
+impl DatabaseDriver {
+    pub(crate) async fn enqueue_provider_pull_items_batch(
+        &self,
+        entries: &[ProviderPullBatchEntry],
+    ) -> StoreResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        match self {
+            DatabaseDriver::Sqlite(inner) => inner.enqueue_provider_pull_items_batch(entries).await,
+            DatabaseDriver::MySql(_) | DatabaseDriver::Postgres(_) => {
+                for item in entries {
+                    self.enqueue_provider_pull_item(
+                        item.device_id,
+                        item.delivery_id.as_str(),
+                        &item.message,
+                        item.platform,
+                        item.provider_token.as_str(),
+                    )
+                    .await?;
+                }
+                Ok(())
+            }
+        }
+    }
+}

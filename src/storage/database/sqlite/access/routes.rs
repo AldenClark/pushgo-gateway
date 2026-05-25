@@ -213,7 +213,7 @@ impl SqliteDb {
                AND channel_type IS NOT NULL \
                AND route_updated_at IS NOT NULL",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(self.core_read_pool())
         .await?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
@@ -454,7 +454,7 @@ impl SqliteDb {
     }
 
     pub(super) async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.telemetry_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         for row in &batch.channels {
             sqlx::query(

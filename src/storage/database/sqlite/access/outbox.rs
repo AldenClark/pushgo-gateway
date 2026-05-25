@@ -177,7 +177,7 @@ impl SqliteDb {
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(OUTBOX_STATUS_SENT)
         .bind(limit as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(self.core_read_pool())
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
@@ -354,7 +354,7 @@ impl SqliteDb {
                 .bind(OUTBOX_STATUS_PENDING)
                 .bind(OUTBOX_STATUS_CLAIMED)
                 .bind(OUTBOX_STATUS_SENT)
-                .fetch_one(&self.pool)
+                .fetch_one(self.core_read_pool())
                 .await?;
         Ok(count as usize)
     }

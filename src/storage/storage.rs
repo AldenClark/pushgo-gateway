@@ -22,29 +22,42 @@ pub struct Storage {
     cache: Arc<CacheStore>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct StorageInitConfig {
+    pub db_url: Option<String>,
+    pub sqlite_telemetry_db_url: Option<String>,
+    pub sqlite_runtime_db_url: Option<String>,
+    pub stats_enabled: bool,
+    pub mcp_enabled: bool,
+}
+
 impl Storage {
     pub async fn new(db_url: Option<&str>) -> StoreResult<Self> {
+        Self::new_with_config(StorageInitConfig {
+            db_url: db_url.map(str::to_string),
+            stats_enabled: true,
+            mcp_enabled: true,
+            ..StorageInitConfig::default()
+        })
+        .await
+    }
+
+    pub async fn new_with_config(config: StorageInitConfig) -> StoreResult<Self> {
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "storage.init_started"
         );
-        let db_url = db_url.and_then(|url| {
-            let trimmed = url.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
-        let driver = DatabaseDriver::new(db_url).await.inspect_err(|err| {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "storage.init_failed",
-                error = %(err.to_string())
-            );
-        })?;
+        let driver = DatabaseDriver::new_with_config(config)
+            .await
+            .inspect_err(|err| {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "storage.init_failed",
+                    error = %(err.to_string())
+                );
+            })?;
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,

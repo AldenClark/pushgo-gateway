@@ -87,6 +87,35 @@ pub struct PrivateOutboxBatchEntry {
     pub entry: PrivateOutboxEntry,
 }
 
+#[derive(Debug, Clone)]
+pub struct PrivateMessageBatchEntry {
+    pub delivery_id: String,
+    pub message: PrivateMessage,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrivateOutboxMessageRow {
+    pub device_id: DeviceId,
+    pub entry: PrivateOutboxEntry,
+    pub message: Option<PrivateMessage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrivateOutboxMessageBatchEntry {
+    pub device_id: DeviceId,
+    pub entry: PrivateOutboxEntry,
+    pub message: PrivateMessage,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderPullBatchEntry {
+    pub device_id: DeviceId,
+    pub delivery_id: String,
+    pub message: PrivateMessage,
+    pub platform: super::Platform,
+    pub provider_token: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderPullItem {
     pub device_id: DeviceId,

@@ -59,6 +59,180 @@ async fn sqlite_new_creates_parent_directories() {
 }
 
 #[tokio::test]
+async fn sqlite_sidecars_are_not_created_when_features_are_disabled() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("pushgo.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+
+    let _storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(db_url),
+        stats_enabled: false,
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .expect("sqlite storage should initialize without sidecars");
+
+    assert!(!dir.path().join("pushgo.telemetry.sqlite").exists());
+    assert!(!dir.path().join("pushgo.runtime.sqlite").exists());
+    assert!(
+        dir.path().join("pushgo.dispatch.sqlite").exists(),
+        "dispatch sidecar is always initialized because dispatch dedupe is on the message send path"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_sidecars_migrate_legacy_stats_and_mcp_state() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("pushgo.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite setup connection should succeed");
+    sqlx::query("CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour TEXT PRIMARY KEY, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_outbox_depth_max INTEGER NOT NULL DEFAULT 0, dedupe_pending_max INTEGER NOT NULL DEFAULT 0, active_private_sessions_max INTEGER NOT NULL DEFAULT 0)")
+        .execute(&mut conn)
+        .await
+        .expect("legacy gateway stats table should be created");
+    sqlx::query("INSERT INTO gateway_stats_hourly (bucket_hour, messages_routed, deliveries_attempted, deliveries_acked, private_outbox_depth_max, dedupe_pending_max, active_private_sessions_max) VALUES ('2026-05-25T10', 7, 0, 0, 0, 0, 0)")
+        .execute(&mut conn)
+        .await
+        .expect("legacy gateway stats row should be inserted");
+    sqlx::query("CREATE TABLE IF NOT EXISTS mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)")
+        .execute(&mut conn)
+        .await
+        .expect("legacy mcp state table should be created");
+    sqlx::query("INSERT INTO mcp_state (state_key, state_json, updated_at) VALUES ('default', '{\"legacy\":true}', 1)")
+        .execute(&mut conn)
+        .await
+        .expect("legacy mcp state row should be inserted");
+    drop(conn);
+
+    let storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(db_url),
+        stats_enabled: true,
+        mcp_enabled: true,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .expect("sqlite storage should initialize with sidecars");
+
+    let telemetry_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("pushgo.telemetry.sqlite").to_string_lossy()
+    );
+    let runtime_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("pushgo.runtime.sqlite").to_string_lossy()
+    );
+
+    let mut telemetry_conn = SqliteConnection::connect(&telemetry_url)
+        .await
+        .expect("telemetry sidecar should open");
+    let migrated_count: i64 = sqlx::query_scalar(
+        "SELECT messages_routed FROM gateway_stats_hourly WHERE bucket_hour = '2026-05-25T10'",
+    )
+    .fetch_one(&mut telemetry_conn)
+    .await
+    .expect("migrated telemetry row should exist");
+    assert_eq!(migrated_count, 7);
+
+    storage
+        .save_mcp_state_json("{\"current\":true}")
+        .await
+        .expect("mcp state should save to runtime sidecar");
+    let mut runtime_conn = SqliteConnection::connect(&runtime_url)
+        .await
+        .expect("runtime sidecar should open");
+    let state_json: String =
+        sqlx::query_scalar("SELECT state_json FROM mcp_state WHERE state_key = 'default'")
+            .fetch_one(&mut runtime_conn)
+            .await
+            .expect("runtime mcp state should exist");
+    assert_eq!(state_json, "{\"current\":true}");
+}
+
+#[tokio::test]
+async fn sqlite_dispatch_sidecar_migrates_legacy_dedupe_and_handles_new_writes() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("pushgo.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite setup connection should succeed");
+    sqlx::query("CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)")
+        .execute(&mut conn)
+        .await
+        .expect("legacy delivery dedupe table should be created");
+    sqlx::query("INSERT INTO dispatch_delivery_dedupe (dedupe_key, delivery_id, state, created_at, updated_at, expires_at) VALUES ('legacy-dispatch-key', 'legacy-delivery', 'sent', 1, 1, NULL)")
+        .execute(&mut conn)
+        .await
+        .expect("legacy delivery dedupe row should be inserted");
+    drop(conn);
+
+    let storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        stats_enabled: false,
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .expect("sqlite storage should initialize with dispatch sidecar");
+
+    let dispatch_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("pushgo.dispatch.sqlite").to_string_lossy()
+    );
+    let mut dispatch_conn = SqliteConnection::connect(&dispatch_url)
+        .await
+        .expect("dispatch sidecar should open");
+    let legacy_delivery_id: String = sqlx::query_scalar(
+        "SELECT delivery_id FROM dispatch_delivery_dedupe WHERE dedupe_key = 'legacy-dispatch-key'",
+    )
+    .fetch_one(&mut dispatch_conn)
+    .await
+    .expect("legacy dispatch dedupe row should be migrated");
+    assert_eq!(legacy_delivery_id, "legacy-delivery");
+
+    assert!(
+        !storage
+            .reserve_delivery_dedupe("legacy-dispatch-key", "ignored-delivery", 2)
+            .await
+            .expect("legacy dispatch dedupe should be served from sidecar"),
+        "legacy sidecar row should block duplicate reservation"
+    );
+    assert!(
+        storage
+            .reserve_delivery_dedupe("new-dispatch-key", "new-delivery", 3)
+            .await
+            .expect("new dispatch dedupe should write to sidecar")
+    );
+
+    let sidecar_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM dispatch_delivery_dedupe WHERE dedupe_key = 'new-dispatch-key'",
+    )
+    .fetch_one(&mut dispatch_conn)
+    .await
+    .expect("new dispatch sidecar row should exist");
+    assert_eq!(sidecar_count, 1);
+
+    let mut core_conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("core db should open");
+    let core_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM dispatch_delivery_dedupe WHERE dedupe_key = 'new-dispatch-key'",
+    )
+    .fetch_one(&mut core_conn)
+    .await
+    .expect("core dispatch table should remain readable for rollback compatibility");
+    assert_eq!(core_count, 0);
+}
+
+#[tokio::test]
 async fn sqlite_init_accepts_previous_schema_version_and_upgrades_meta() {
     let ctx = setup_sqlite_storage_with_custom_schema(
         "sqlite-schema-version-upgrade",
@@ -618,9 +792,9 @@ async fn sqlite_cleanup_pending_op_dedupe_uses_created_at_oldest_first_and_limit
         .expect("first cleanup should succeed");
     assert_eq!(removed_first, 1);
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.dispatch_db_url)
         .await
-        .expect("sqlite test connection should succeed");
+        .expect("sqlite dispatch sidecar connection should succeed");
     let remain_after_first: Vec<(String, String)> =
         sqlx::query_as("SELECT dedupe_key, state FROM dispatch_op_dedupe ORDER BY dedupe_key ASC")
             .fetch_all(&mut conn)

@@ -17,7 +17,7 @@ impl SqliteDb {
              LIMIT 1",
         )
         .bind(normalized_key.as_str())
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.core_read_pool())
         .await?;
         Ok(row.map(|value| value.get("device_id")))
     }
@@ -33,7 +33,7 @@ impl SqliteDb {
              WHERE s.channel_id = ? AND s.status = 'active'",
         )
         .bind(&channel_id[..])
-        .fetch_all(&self.pool)
+        .fetch_all(self.core_read_pool())
         .await?;
 
         let mut devices = Vec::with_capacity(rows.len());
@@ -61,7 +61,7 @@ impl SqliteDb {
         )
         .bind(&channel_id[..])
         .bind(effective_at)
-        .fetch_all(&self.pool)
+        .fetch_all(self.core_read_pool())
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
@@ -145,7 +145,7 @@ impl SqliteDb {
              WHERE device_id = ? AND status = 'active'",
         )
         .bind(device_id.as_slice())
-        .fetch_all(&self.pool)
+        .fetch_all(self.core_read_pool())
         .await?;
         let mut channels = Vec::with_capacity(rows.len());
         for row in rows {
@@ -168,7 +168,7 @@ impl SqliteDb {
              WHERE device_id = ? AND status = 'active'",
         )
         .bind(&device_id[..])
-        .fetch_all(&self.pool)
+        .fetch_all(self.core_read_pool())
         .await?;
         let mut channels = Vec::with_capacity(rows.len());
         for row in rows {
@@ -188,7 +188,7 @@ impl SqliteDb {
     ) -> StoreResult<Option<(ChannelInfo, String)>> {
         let row = sqlx::query("SELECT alias, password_hash FROM channels WHERE channel_id = ?")
             .bind(&channel_id[..])
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.core_read_pool())
             .await?;
         Ok(row.map(|r| {
             (
@@ -336,7 +336,7 @@ impl SqliteDb {
         )
         .bind(&channel_id[..])
         .bind(subscribed_at_or_before)
-        .fetch_all(&self.pool)
+        .fetch_all(self.core_read_pool())
         .await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
@@ -362,7 +362,7 @@ impl SqliteDb {
         )
         .bind(platform_id)
         .bind(&token_hash)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.core_read_pool())
         .await?;
 
         if let Some(r) = row {

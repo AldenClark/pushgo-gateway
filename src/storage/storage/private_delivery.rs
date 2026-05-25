@@ -8,6 +8,8 @@ use crate::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
+const PRIVATE_MIGRATION_WRITE_BATCH_SIZE: usize = 64;
+
 impl Storage {
     pub async fn load_private_outbox_entry(
         &self,
@@ -146,10 +148,8 @@ impl Storage {
         limit: usize,
     ) -> StoreResult<Vec<ProviderPullItem>> {
         let items = self.db.pull_provider_items(device_id, now, limit).await?;
-        for item in &items {
-            self.clear_private_outbox_after_provider_delivery(item)
-                .await;
-        }
+        self.clear_private_outbox_after_provider_deliveries(&items)
+            .await;
         Ok(items)
     }
 
@@ -265,39 +265,53 @@ impl Storage {
             platform = %(platform.name()),
             pending = (pending as u64)
         );
-        let entries = self.db.list_private_outbox(device_id, pending).await?;
         let mut migrated = 0usize;
         let mut missing_messages = 0usize;
-        for entry in entries {
-            let Some(message) = self
+        let mut processed = 0usize;
+        loop {
+            let rows = self
                 .db
-                .load_private_message(entry.delivery_id.as_str())
-                .await?
-            else {
-                missing_messages = missing_messages.saturating_add(1);
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::INFO,
-                    event = "provider.pending_migration_message_missing",
-                    direction = %("private_to_provider"),
-                    device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
-                    delivery_id = %(crate::util::redact_text(entry.delivery_id.as_str()))
-                );
-                continue;
-            };
-            self.db
-                .enqueue_provider_pull_item(
-                    device_id,
-                    entry.delivery_id.as_str(),
-                    &message,
-                    platform,
-                    normalized_token.as_str(),
-                )
+                .list_private_outbox_with_messages(device_id, PRIVATE_MIGRATION_WRITE_BATCH_SIZE)
                 .await?;
-            migrated = migrated.saturating_add(1);
-        }
-        if migrated > 0 {
-            let _cleared = self.db.clear_private_outbox_for_device(device_id).await?;
+            if rows.is_empty() {
+                break;
+            }
+            processed = processed.saturating_add(rows.len());
+            let mut provider_batch = Vec::new();
+            let mut clear_batch = Vec::with_capacity(rows.len());
+            for row in rows {
+                let delivery_id = row.entry.delivery_id.clone();
+                clear_batch.push((row.device_id, delivery_id.clone()));
+                let Some(message) = row.message else {
+                    missing_messages = missing_messages.saturating_add(1);
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::INFO,
+                        event = "provider.pending_migration_message_missing",
+                        direction = %("private_to_provider"),
+                        device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                        delivery_id = %(crate::util::redact_text(delivery_id.as_str()))
+                    );
+                    continue;
+                };
+                provider_batch.push(ProviderPullBatchEntry {
+                    device_id,
+                    delivery_id,
+                    message,
+                    platform,
+                    provider_token: normalized_token.as_str().to_string(),
+                });
+            }
+            if !provider_batch.is_empty() {
+                self.db
+                    .enqueue_provider_pull_items_batch(&provider_batch)
+                    .await?;
+                migrated = migrated.saturating_add(provider_batch.len());
+            }
+            self.db.clear_private_outbox_entries(&clear_batch).await?;
+            if processed >= pending {
+                break;
+            }
         }
         ::tracing::event!(
             target: "gateway.trace_event",
@@ -318,7 +332,6 @@ impl Storage {
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
     ) -> StoreResult<usize> {
-        const BATCH_SIZE: usize = 512;
         let existing_pending = self.db.count_private_outbox_for_device(device_id).await?;
         let mut remaining_capacity = max_pending_per_device.saturating_sub(existing_pending);
         if remaining_capacity == 0 {
@@ -350,7 +363,7 @@ impl Storage {
         );
 
         loop {
-            let batch_size = remaining_capacity.min(BATCH_SIZE);
+            let batch_size = remaining_capacity.min(PRIVATE_MIGRATION_WRITE_BATCH_SIZE);
             if batch_size == 0 {
                 break;
             }
@@ -362,6 +375,7 @@ impl Storage {
                 break;
             }
             source_pulled = source_pulled.saturating_add(items.len());
+            let mut batch = Vec::with_capacity(items.len());
             for item in &items {
                 let message = PrivateMessage {
                     payload: item.payload.clone(),
@@ -369,9 +383,6 @@ impl Storage {
                     sent_at: item.sent_at,
                     expires_at: item.expires_at,
                 };
-                self.db
-                    .insert_private_message(item.delivery_id.as_str(), &message)
-                    .await?;
                 let entry = PrivateOutboxEntry {
                     delivery_id: item.delivery_id.clone(),
                     status: OUTBOX_STATUS_PENDING.to_string(),
@@ -388,12 +399,18 @@ impl Storage {
                     last_error_detail: None,
                     updated_at: now,
                 };
-                self.db.enqueue_private_outbox(device_id, &entry).await?;
-                migrated = migrated.saturating_add(1);
-                remaining_capacity = remaining_capacity.saturating_sub(1);
-                if remaining_capacity == 0 {
-                    break;
-                }
+                batch.push(PrivateOutboxMessageBatchEntry {
+                    device_id,
+                    entry,
+                    message,
+                });
+            }
+            if !batch.is_empty() {
+                self.db
+                    .enqueue_private_outbox_messages_batch(&batch, max_pending_per_device)
+                    .await?;
+                migrated = migrated.saturating_add(batch.len());
+                remaining_capacity = remaining_capacity.saturating_sub(batch.len());
             }
             if items.len() < batch_size || remaining_capacity == 0 {
                 break;
@@ -412,42 +429,55 @@ impl Storage {
         Ok(migrated)
     }
 
-    async fn clear_private_outbox_after_provider_delivery(&self, item: &ProviderPullItem) {
-        let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(item.payload.as_ref()) else {
-            emit_provider_pull_ack_skip(
-                "decode_failed",
-                item.device_id,
-                item.delivery_id.as_str(),
-                None,
-            );
-            return;
-        };
-        if !envelope.is_supported_version() {
-            emit_provider_pull_ack_skip(
-                "unsupported_payload_version",
-                item.device_id,
-                item.delivery_id.as_str(),
-                None,
-            );
+    async fn clear_private_outbox_after_provider_deliveries(&self, items: &[ProviderPullItem]) {
+        let mut linked = Vec::new();
+        for item in items {
+            if let Some(original_delivery_id) = linked_private_outbox_delivery_id(item) {
+                linked.push((
+                    item.device_id,
+                    original_delivery_id,
+                    item.delivery_id.clone(),
+                ));
+            }
+        }
+        if linked.is_empty() {
             return;
         }
-        let Some(original_delivery_id) = envelope
-            .data
-            .get("delivery_id")
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
+        let clear_keys = linked
+            .iter()
+            .map(|(device_id, original_delivery_id, _)| (*device_id, original_delivery_id.clone()))
+            .collect::<Vec<_>>();
+        if let Err(err) = self.db.clear_private_outbox_entries(&clear_keys).await {
+            for (device_id, original_delivery_id, delivery_id) in &linked {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "provider.pull_private_outbox_ack_failed",
+                    delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+                    original_delivery_id = %(crate::util::redact_text(original_delivery_id.as_str())),
+                    device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(device_id))),
+                    error = %(err.to_string())
+                );
+            }
+            return;
+        }
+        for (device_id, original_delivery_id, delivery_id) in &linked {
             emit_provider_pull_ack_skip(
-                "missing_original_delivery_id",
-                item.device_id,
-                item.delivery_id.as_str(),
-                None,
+                "acked_linked_private_outbox",
+                *device_id,
+                delivery_id.as_str(),
+                Some(original_delivery_id.as_str()),
             );
+        }
+    }
+
+    async fn clear_private_outbox_after_provider_delivery(&self, item: &ProviderPullItem) {
+        let Some(original_delivery_id) = linked_private_outbox_delivery_id(item) else {
             return;
         };
         if let Err(err) = self
-            .ack_private_delivery(item.device_id, original_delivery_id)
+            .db
+            .clear_private_outbox_entries(&[(item.device_id, original_delivery_id.clone())])
             .await
         {
             ::tracing::event!(
@@ -455,7 +485,7 @@ impl Storage {
                 ::tracing::Level::WARN,
                 event = "provider.pull_private_outbox_ack_failed",
                 delivery_id = %(crate::util::redact_text(item.delivery_id.as_str())),
-                original_delivery_id = %(crate::util::redact_text(original_delivery_id)),
+                original_delivery_id = %(crate::util::redact_text(original_delivery_id.as_str())),
                 device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&item.device_id))),
                 error = %(err.to_string())
             );
@@ -464,10 +494,47 @@ impl Storage {
                 "acked_linked_private_outbox",
                 item.device_id,
                 item.delivery_id.as_str(),
-                Some(original_delivery_id),
+                Some(original_delivery_id.as_str()),
             );
         }
     }
+}
+
+fn linked_private_outbox_delivery_id(item: &ProviderPullItem) -> Option<String> {
+    let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(item.payload.as_ref()) else {
+        emit_provider_pull_ack_skip(
+            "decode_failed",
+            item.device_id,
+            item.delivery_id.as_str(),
+            None,
+        );
+        return None;
+    };
+    if !envelope.is_supported_version() {
+        emit_provider_pull_ack_skip(
+            "unsupported_payload_version",
+            item.device_id,
+            item.delivery_id.as_str(),
+            None,
+        );
+        return None;
+    }
+    let Some(original_delivery_id) = envelope
+        .data
+        .get("delivery_id")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        emit_provider_pull_ack_skip(
+            "missing_original_delivery_id",
+            item.device_id,
+            item.delivery_id.as_str(),
+            None,
+        );
+        return None;
+    };
+    Some(original_delivery_id.to_string())
 }
 
 fn emit_provider_pull_ack_skip(

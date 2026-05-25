@@ -11,7 +11,7 @@ impl SqliteDb {
              FROM private_payloads WHERE delivery_id = ?",
         )
         .bind(delivery_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.core_read_pool())
         .await?;
 
         Ok(row.map(|r| PrivateMessage {
@@ -67,6 +67,81 @@ impl SqliteDb {
         .bind(now)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn enqueue_provider_pull_items_batch(
+        &self,
+        entries: &[ProviderPullBatchEntry],
+    ) -> StoreResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().timestamp_millis();
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+
+        for chunk in entries.chunks(64) {
+            let mut payload_query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "INSERT INTO private_payloads \
+                 (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) ",
+            );
+            payload_query.push_values(chunk, |mut row, item| {
+                row.push_bind(&item.delivery_id)
+                    .push_bind(item.message.payload.as_ref())
+                    .push_bind(item.message.size as i64)
+                    .push_bind(item.message.sent_at)
+                    .push_bind(item.message.expires_at)
+                    .push_bind(now)
+                    .push_bind(now);
+            });
+            payload_query.push(
+                " ON CONFLICT (delivery_id) DO UPDATE SET \
+                 payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, updated_at = EXCLUDED.updated_at",
+            );
+            payload_query.build().execute(&mut *tx).await?;
+        }
+
+        let mut expired_cleanup_devices = Vec::new();
+        for item in entries {
+            if !expired_cleanup_devices.contains(&item.device_id) {
+                expired_cleanup_devices.push(item.device_id);
+            }
+        }
+        for device_id in expired_cleanup_devices {
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND expires_at <= ?")
+                .bind(device_id.as_slice())
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        for chunk in entries.chunks(64) {
+            let mut queue_query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "INSERT INTO provider_pull_queue \
+                 (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) ",
+            );
+            queue_query.push_values(chunk, |mut row, item| {
+                row.push_bind(item.device_id.as_slice())
+                    .push_bind(&item.delivery_id)
+                    .push_bind(Vec::<u8>::new())
+                    .push_bind(0_i64)
+                    .push_bind(item.message.sent_at)
+                    .push_bind(item.message.expires_at)
+                    .push_bind(item.platform.name())
+                    .push_bind(&item.provider_token)
+                    .push_bind(now)
+                    .push_bind(now);
+            });
+            queue_query.push(
+                " ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
+                 payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, sent_at = EXCLUDED.sent_at, \
+                 expires_at = EXCLUDED.expires_at, platform = EXCLUDED.platform, provider_token = EXCLUDED.provider_token, updated_at = EXCLUDED.updated_at",
+            );
+            queue_query.build().execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 

@@ -40,6 +40,21 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
 ];
 
+const SQLITE_DISPATCH_TABLE_STATEMENTS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
+];
+
+const SQLITE_DISPATCH_INDEX_STATEMENTS: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_expires_idx ON dispatch_delivery_dedupe (expires_at)",
+    "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
+    "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
+    "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
+    "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
+    "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
+];
+
 const SQLITE_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS devices_device_key_uidx ON devices (device_key)",
     "CREATE INDEX IF NOT EXISTS devices_route_platform_type_updated_idx ON devices (platform, channel_type, route_updated_at)",
@@ -73,42 +88,105 @@ const SQLITE_RUNTIME_DROP_STATEMENTS: &[&str] = &[
     "DROP TABLE IF EXISTS device_route_audit",
     "DROP TABLE IF EXISTS device_stats_daily",
 ];
+const SQLITE_TELEMETRY_TABLE_STATEMENTS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS channel_stats_daily (channel_id BLOB NOT NULL, bucket_date TEXT NOT NULL, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_enqueued INTEGER NOT NULL DEFAULT 0, provider_attempted INTEGER NOT NULL DEFAULT 0, provider_failed INTEGER NOT NULL DEFAULT 0, provider_success INTEGER NOT NULL DEFAULT 0, private_realtime_delivered INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (channel_id, bucket_date))",
+    "CREATE TABLE IF NOT EXISTS device_stats_daily (device_key TEXT NOT NULL, bucket_date TEXT NOT NULL, messages_received INTEGER NOT NULL DEFAULT 0, messages_acked INTEGER NOT NULL DEFAULT 0, private_connected_count INTEGER NOT NULL DEFAULT 0, private_pull_count INTEGER NOT NULL DEFAULT 0, provider_success_count INTEGER NOT NULL DEFAULT 0, provider_failure_count INTEGER NOT NULL DEFAULT 0, private_outbox_enqueued_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (device_key, bucket_date))",
+    "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour TEXT PRIMARY KEY, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_outbox_depth_max INTEGER NOT NULL DEFAULT 0, dedupe_pending_max INTEGER NOT NULL DEFAULT 0, active_private_sessions_max INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS ops_stats_hourly (bucket_hour TEXT NOT NULL, metric_key TEXT NOT NULL, metric_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bucket_hour, metric_key))",
+];
+const SQLITE_RUNTIME_SIDECAR_TABLE_STATEMENTS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+];
+const SQLITE_SIDECAR_META_TABLE: &str = "CREATE TABLE IF NOT EXISTS pushgo_sidecar_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)";
+const SQLITE_DISPATCH_MIGRATION_META_KEY: &str = "dispatch_migrated_from_core_v1";
+const SQLITE_TELEMETRY_MIGRATION_META_KEY: &str = "telemetry_migrated_from_core_v1";
+const SQLITE_RUNTIME_MIGRATION_META_KEY: &str = "runtime_migrated_from_core_v1";
 const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
 const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 
 impl SqliteDb {
     pub async fn new(db_url: &str) -> StoreResult<Self> {
+        Self::new_with_config(db_url, None, None, true, true).await
+    }
+
+    pub async fn new_with_config(
+        db_url: &str,
+        telemetry_db_url: Option<&str>,
+        runtime_db_url: Option<&str>,
+        stats_enabled: bool,
+        mcp_enabled: bool,
+    ) -> StoreResult<Self> {
         ensure_sqlite_parent_dir(db_url)?;
-        let sqlite_idle_timeout_secs = read_env_u64("PUSHGO_SQLITE_IDLE_TIMEOUT_SECS", 60, 1, 3600);
-        let sqlite_statement_cache_capacity =
-            read_env_usize("PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY", 32, 0, 512);
-        let sqlite_page_cache_kib = read_env_i64("PUSHGO_SQLITE_PAGE_CACHE_KIB", 1024, 64, 262_144);
-        let sqlite_wal_autocheckpoint =
-            read_env_i64("PUSHGO_SQLITE_WAL_AUTOCHECKPOINT", 256, 1, 100_000);
-        let connect_options = SqliteConnectOptions::from_str(db_url)?
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
-            .foreign_keys(true)
-            .statement_cache_capacity(sqlite_statement_cache_capacity)
-            .busy_timeout(Duration::from_secs(30));
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .min_connections(0)
-            .idle_timeout(Duration::from_secs(sqlite_idle_timeout_secs))
-            .after_connect(move |conn, _meta| {
-                Box::pin(async move {
-                    let cache_size = format!("PRAGMA cache_size = -{sqlite_page_cache_kib}");
-                    conn.execute(cache_size.as_str()).await?;
-                    let wal_autocheckpoint =
-                        format!("PRAGMA wal_autocheckpoint = {sqlite_wal_autocheckpoint}");
-                    conn.execute(wal_autocheckpoint.as_str()).await?;
-                    Ok(())
-                })
-            })
-            .connect_with(connect_options)
+        let core_read_pool = connect_sqlite_pool(
+            db_url,
+            sqlite_core_read_connections(),
+            Duration::from_secs(sqlite_core_read_acquire_timeout_secs()),
+        )
+        .await?;
+        let pool = connect_sqlite_pool(
+            db_url,
+            1,
+            Duration::from_secs(sqlite_core_write_acquire_timeout_secs()),
+        )
+        .await?;
+        let dispatch_url = derive_sqlite_sidecar_url(db_url, "dispatch");
+        let telemetry_url = stats_enabled.then(|| {
+            telemetry_db_url
+                .map(str::to_string)
+                .unwrap_or_else(|| derive_sqlite_sidecar_url(db_url, "telemetry"))
+        });
+        let runtime_url = mcp_enabled.then(|| {
+            runtime_db_url
+                .map(str::to_string)
+                .unwrap_or_else(|| derive_sqlite_sidecar_url(db_url, "runtime"))
+        });
+        ensure_sqlite_parent_dir(dispatch_url.as_str())?;
+        let dispatch_pool = connect_sqlite_pool(
+            dispatch_url.as_str(),
+            1,
+            Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
+        )
+        .await?;
+        let telemetry_pool = if let Some(url) = telemetry_url.as_deref() {
+            ensure_sqlite_parent_dir(url)?;
+            let pool = connect_sqlite_pool(
+                url,
+                1,
+                Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
+            )
             .await?;
-        let this = Self { pool };
+            Some(pool)
+        } else {
+            None
+        };
+        let runtime_pool = if let Some(url) = runtime_url.as_deref() {
+            ensure_sqlite_parent_dir(url)?;
+            let pool = connect_sqlite_pool(
+                url,
+                1,
+                Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
+            )
+            .await?;
+            Some(pool)
+        } else {
+            None
+        };
+        let this = Self {
+            core_read_pool,
+            dispatch_pool,
+            telemetry_pool,
+            runtime_pool,
+            pool,
+        };
         this.init_schema().await?;
+        this.init_dispatch_sidecar(db_url, dispatch_url.as_str())
+            .await?;
+        if let Some(url) = telemetry_url.as_deref() {
+            this.init_telemetry_sidecar(db_url, url).await?;
+        }
+        if let Some(url) = runtime_url.as_deref() {
+            this.init_runtime_sidecar(db_url, url).await?;
+        }
         Ok(this)
     }
 
@@ -128,7 +206,8 @@ impl SqliteDb {
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&self.pool)
             .await?;
-        sqlx::query("PRAGMA busy_timeout = 5000")
+        let busy_timeout = format!("PRAGMA busy_timeout = {}", sqlite_busy_timeout_millis());
+        sqlx::query(busy_timeout.as_str())
             .execute(&self.pool)
             .await?;
         let cache_size = format!("PRAGMA cache_size = -{}", sqlite_page_cache_kib());
@@ -419,6 +498,83 @@ impl SqliteDb {
             pending_migrations = (plan.pending_migrations.len() as u64)
         );
         Ok(())
+    }
+
+    async fn init_dispatch_sidecar(
+        &self,
+        core_db_url: &str,
+        sidecar_db_url: &str,
+    ) -> StoreResult<()> {
+        sqlx::query(SQLITE_SIDECAR_META_TABLE)
+            .execute(&self.dispatch_pool)
+            .await?;
+        for stmt in SQLITE_DISPATCH_TABLE_STATEMENTS
+            .iter()
+            .chain(SQLITE_DISPATCH_INDEX_STATEMENTS.iter())
+        {
+            sqlx::query(stmt).execute(&self.dispatch_pool).await?;
+        }
+        migrate_sidecar_tables_once(
+            &self.dispatch_pool,
+            core_db_url,
+            sidecar_db_url,
+            SQLITE_DISPATCH_MIGRATION_META_KEY,
+            &[
+                "dispatch_delivery_dedupe",
+                "dispatch_op_dedupe",
+                "semantic_id_registry",
+            ],
+        )
+        .await
+    }
+
+    async fn init_telemetry_sidecar(
+        &self,
+        core_db_url: &str,
+        sidecar_db_url: &str,
+    ) -> StoreResult<()> {
+        let Some(pool) = &self.telemetry_pool else {
+            return Ok(());
+        };
+        sqlx::query(SQLITE_SIDECAR_META_TABLE).execute(pool).await?;
+        for stmt in SQLITE_TELEMETRY_TABLE_STATEMENTS {
+            sqlx::query(stmt).execute(pool).await?;
+        }
+        migrate_sidecar_tables_once(
+            pool,
+            core_db_url,
+            sidecar_db_url,
+            SQLITE_TELEMETRY_MIGRATION_META_KEY,
+            &[
+                "channel_stats_daily",
+                "device_stats_daily",
+                "gateway_stats_hourly",
+                "ops_stats_hourly",
+            ],
+        )
+        .await
+    }
+
+    async fn init_runtime_sidecar(
+        &self,
+        core_db_url: &str,
+        sidecar_db_url: &str,
+    ) -> StoreResult<()> {
+        let Some(pool) = &self.runtime_pool else {
+            return Ok(());
+        };
+        sqlx::query(SQLITE_SIDECAR_META_TABLE).execute(pool).await?;
+        for stmt in SQLITE_RUNTIME_SIDECAR_TABLE_STATEMENTS {
+            sqlx::query(stmt).execute(pool).await?;
+        }
+        migrate_sidecar_tables_once(
+            pool,
+            core_db_url,
+            sidecar_db_url,
+            SQLITE_RUNTIME_MIGRATION_META_KEY,
+            &["mcp_state"],
+        )
+        .await
     }
 
     async fn ensure_sqlite_schema_meta_table(&self) -> StoreResult<()> {
@@ -746,6 +902,172 @@ fn ensure_sqlite_parent_dir(db_url: &str) -> StoreResult<()> {
         fs::create_dir_all(parent)?;
     }
     Ok(())
+}
+
+async fn connect_sqlite_pool(
+    db_url: &str,
+    max_connections: u32,
+    acquire_timeout: Duration,
+) -> StoreResult<SqlitePool> {
+    let sqlite_idle_timeout_secs = read_env_u64("PUSHGO_SQLITE_IDLE_TIMEOUT_SECS", 60, 1, 3600);
+    let sqlite_statement_cache_capacity =
+        read_env_usize("PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY", 32, 0, 512);
+    let sqlite_page_cache_kib = sqlite_page_cache_kib();
+    let sqlite_wal_autocheckpoint = sqlite_wal_autocheckpoint();
+    let connect_options = SqliteConnectOptions::from_str(db_url)?
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .foreign_keys(true)
+        .statement_cache_capacity(sqlite_statement_cache_capacity)
+        .busy_timeout(Duration::from_millis(sqlite_busy_timeout_millis()));
+    Ok(SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .min_connections(0)
+        .acquire_timeout(acquire_timeout)
+        .idle_timeout(Duration::from_secs(sqlite_idle_timeout_secs))
+        .after_connect(move |conn, _meta| {
+            Box::pin(async move {
+                let cache_size = format!("PRAGMA cache_size = -{sqlite_page_cache_kib}");
+                conn.execute(cache_size.as_str()).await?;
+                let wal_autocheckpoint =
+                    format!("PRAGMA wal_autocheckpoint = {sqlite_wal_autocheckpoint}");
+                conn.execute(wal_autocheckpoint.as_str()).await?;
+                Ok(())
+            })
+        })
+        .connect_with(connect_options)
+        .await?)
+}
+
+async fn migrate_sidecar_tables_once(
+    sidecar_pool: &SqlitePool,
+    core_db_url: &str,
+    sidecar_db_url: &str,
+    meta_key: &str,
+    tables: &[&str],
+) -> StoreResult<()> {
+    let migrated: Option<String> =
+        sqlx::query_scalar("SELECT meta_value FROM pushgo_sidecar_meta WHERE meta_key = ?")
+            .bind(meta_key)
+            .fetch_optional(sidecar_pool)
+            .await?;
+    if migrated.is_some()
+        || sqlite_url_without_query(core_db_url) == sqlite_url_without_query(sidecar_db_url)
+    {
+        return Ok(());
+    }
+    let Some(core_path) = sqlite_path_from_url(core_db_url) else {
+        return Ok(());
+    };
+    let mut conn = sidecar_pool.acquire().await?;
+    sqlx::query("ATTACH DATABASE ? AS pushgo_core")
+        .bind(core_path)
+        .execute(&mut *conn)
+        .await?;
+    let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+    for table in tables {
+        if sqlite_attached_table_exists(&mut tx, "pushgo_core", table).await? {
+            let sql = format!("INSERT OR IGNORE INTO {table} SELECT * FROM pushgo_core.{table}");
+            sqlx::query(sql.as_str()).execute(&mut *tx).await?;
+        }
+    }
+    sqlx::query(
+        "INSERT INTO pushgo_sidecar_meta (meta_key, meta_value) VALUES (?, 'done') \
+         ON CONFLICT (meta_key) DO UPDATE SET meta_value = excluded.meta_value",
+    )
+    .bind(meta_key)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    sqlx::query("DETACH DATABASE pushgo_core")
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+async fn sqlite_attached_table_exists(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    schema: &str,
+    table: &str,
+) -> StoreResult<bool> {
+    let sql =
+        format!("SELECT 1 FROM {schema}.sqlite_master WHERE type = 'table' AND name = ? LIMIT 1");
+    let exists: Option<i64> = sqlx::query_scalar(sql.as_str())
+        .bind(table)
+        .fetch_optional(&mut **tx)
+        .await?;
+    Ok(exists.is_some())
+}
+
+fn derive_sqlite_sidecar_url(db_url: &str, suffix: &str) -> String {
+    let (base, query) = db_url.split_once('?').unwrap_or((db_url, ""));
+    let query = if query.is_empty() {
+        "?mode=rwc".to_string()
+    } else {
+        format!("?{query}")
+    };
+    let sidecar_base = if let Some(prefix) = base.strip_suffix(".sqlite") {
+        format!("{prefix}.{suffix}.sqlite")
+    } else if let Some(prefix) = base.strip_suffix(".db") {
+        format!("{prefix}.{suffix}.db")
+    } else {
+        format!("{base}.{suffix}.db")
+    };
+    sidecar_base + query.as_str()
+}
+
+fn sqlite_url_without_query(db_url: &str) -> &str {
+    db_url
+        .split_once('?')
+        .map(|(base, _)| base)
+        .unwrap_or(db_url)
+}
+
+fn sqlite_path_from_url(db_url: &str) -> Option<String> {
+    let raw_path = db_url
+        .trim()
+        .strip_prefix("sqlite://")?
+        .split('?')
+        .next()
+        .unwrap_or_default();
+    if raw_path.is_empty() || raw_path == ":memory:" {
+        return None;
+    }
+    Some(
+        raw_path
+            .strip_prefix("file:")
+            .unwrap_or(raw_path)
+            .to_string(),
+    )
+}
+
+fn sqlite_core_read_connections() -> u32 {
+    let cpu_default = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(2);
+    let default = cmp::min(cpu_default, 4);
+    read_env_usize("PUSHGO_SQLITE_CORE_READ_CONNECTIONS", default, 1, 16) as u32
+}
+
+fn sqlite_core_read_acquire_timeout_secs() -> u64 {
+    read_env_u64("PUSHGO_SQLITE_CORE_READ_ACQUIRE_TIMEOUT_SECS", 5, 1, 60)
+}
+
+fn sqlite_core_write_acquire_timeout_secs() -> u64 {
+    read_env_u64("PUSHGO_SQLITE_CORE_WRITE_ACQUIRE_TIMEOUT_SECS", 5, 1, 60)
+}
+
+fn sqlite_sidecar_acquire_timeout_millis() -> u64 {
+    read_env_u64(
+        "PUSHGO_SQLITE_SIDECAR_ACQUIRE_TIMEOUT_MILLIS",
+        200,
+        50,
+        10_000,
+    )
+}
+
+fn sqlite_busy_timeout_millis() -> u64 {
+    read_env_u64("PUSHGO_SQLITE_BUSY_TIMEOUT_MILLIS", 30_000, 100, 120_000)
 }
 
 fn sqlite_page_cache_kib() -> i64 {

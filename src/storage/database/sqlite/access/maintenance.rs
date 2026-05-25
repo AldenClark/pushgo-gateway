@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 impl SqliteDb {
     pub(super) async fn cleanup_expired_provider_pull_queue(
@@ -144,6 +145,11 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
+        if self.telemetry_pool.is_some() {
+            return self
+                .cleanup_orphan_channels_with_telemetry(before_ts, limit)
+                .await;
+        }
         let result = sqlx::query(
             "DELETE FROM channels \
              WHERE rowid IN ( \
@@ -193,7 +199,7 @@ impl SqliteDb {
         limit: usize,
     ) -> StoreResult<usize> {
         let gateway_rows = delete_limited_by_bucket_sqlite(
-            &self.pool,
+            self.telemetry_pool(),
             "gateway_stats_hourly",
             "bucket_hour",
             before_bucket,
@@ -201,7 +207,7 @@ impl SqliteDb {
         )
         .await?;
         let ops_rows = delete_limited_by_bucket_sqlite(
-            &self.pool,
+            self.telemetry_pool(),
             "ops_stats_hourly",
             "bucket_hour",
             before_bucket,
@@ -217,7 +223,7 @@ impl SqliteDb {
         limit: usize,
     ) -> StoreResult<usize> {
         let channel_rows = delete_limited_by_bucket_sqlite(
-            &self.pool,
+            self.telemetry_pool(),
             "channel_stats_daily",
             "bucket_date",
             before_bucket,
@@ -225,7 +231,7 @@ impl SqliteDb {
         )
         .await?;
         let device_rows = delete_limited_by_bucket_sqlite(
-            &self.pool,
+            self.telemetry_pool(),
             "device_stats_daily",
             "bucket_date",
             before_bucket,
@@ -312,7 +318,7 @@ impl SqliteDb {
         .bind(DedupeState::Sent.as_str())
         .bind(created_at)
         .bind(created_at)
-        .execute(&self.pool)
+        .execute(self.dispatch_pool())
         .await?;
         Ok(result.rows_affected() > 0)
     }
@@ -331,7 +337,7 @@ impl SqliteDb {
         .bind(semantic_id)
         .bind(created_at)
         .bind(created_at)
-        .execute(&self.pool)
+        .execute(self.dispatch_pool())
         .await?;
 
         if result.rows_affected() > 0 {
@@ -341,7 +347,7 @@ impl SqliteDb {
                 "SELECT semantic_id FROM semantic_id_registry WHERE dedupe_key = ?",
             )
             .bind(dedupe_key)
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.dispatch_pool())
             .await?;
             Ok(match existing {
                 Some(s) => SemanticIdReservation::Existing { semantic_id: s },
@@ -356,7 +362,7 @@ impl SqliteDb {
         delivery_id: &str,
         created_at: i64,
     ) -> StoreResult<OpDedupeReservation> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.dispatch_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let inserted = sqlx::query(
             "INSERT INTO dispatch_op_dedupe (dedupe_key, delivery_id, state, created_at, updated_at) \
@@ -420,7 +426,7 @@ impl SqliteDb {
         .bind(dedupe_key)
         .bind(delivery_id)
         .bind(DedupeState::Pending.as_str())
-        .execute(&self.pool)
+        .execute(self.dispatch_pool())
         .await?;
         Ok(result.rows_affected() > 0)
     }
@@ -437,7 +443,7 @@ impl SqliteDb {
         .bind(dedupe_key)
         .bind(delivery_id)
         .bind(DedupeState::Pending.as_str())
-        .execute(&self.pool)
+        .execute(self.dispatch_pool())
         .await?;
         Ok(())
     }
@@ -452,7 +458,7 @@ impl SqliteDb {
             .bind(Utc::now().timestamp_millis())
             .bind(dedupe_key)
             .bind(delivery_id)
-            .execute(&self.pool)
+            .execute(self.dispatch_pool())
             .await?;
         Ok(())
     }
@@ -486,20 +492,50 @@ impl SqliteDb {
                 .await?;
         }
         tx.commit().await?;
+        if let Some(pool) = &self.telemetry_pool {
+            let mut conn = pool.acquire().await?;
+            let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+            for table in [
+                "channel_stats_daily",
+                "device_stats_daily",
+                "gateway_stats_hourly",
+                "ops_stats_hourly",
+            ] {
+                sqlx::query(&format!("DELETE FROM {}", table))
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+        }
+        if let Some(pool) = &self.runtime_pool {
+            sqlx::query("DELETE FROM mcp_state").execute(pool).await?;
+        }
+        let mut conn = self.dispatch_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        for table in [
+            "dispatch_op_dedupe",
+            "dispatch_delivery_dedupe",
+            "semantic_id_registry",
+        ] {
+            sqlx::query(&format!("DELETE FROM {}", table))
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
     pub(super) async fn automation_counts(&self) -> StoreResult<AutomationCounts> {
         let channel_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM channels")
-            .fetch_one(&self.pool)
+            .fetch_one(self.core_read_pool())
             .await?;
         let subscription_count: i64 =
             sqlx::query_scalar("SELECT COUNT(1) FROM channel_subscriptions")
-                .fetch_one(&self.pool)
+                .fetch_one(self.core_read_pool())
                 .await?;
         let delivery_dedupe_pending_count: i64 =
             sqlx::query_scalar("SELECT COUNT(1) FROM dispatch_delivery_dedupe")
-                .fetch_one(&self.pool)
+                .fetch_one(self.dispatch_pool())
                 .await?;
 
         Ok(AutomationCounts {
@@ -513,7 +549,7 @@ impl SqliteDb {
         let state = sqlx::query_scalar::<_, String>(
             "SELECT state_json FROM mcp_state WHERE state_key = 'default'",
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.runtime_pool())
         .await?;
         Ok(state)
     }
@@ -526,9 +562,64 @@ impl SqliteDb {
         )
         .bind(state_json)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.runtime_pool())
         .await?;
         Ok(())
+    }
+}
+
+impl SqliteDb {
+    async fn cleanup_orphan_channels_with_telemetry(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let candidate_rows = sqlx::query(
+            "SELECT c.rowid, c.channel_id \
+             FROM channels c \
+             WHERE c.updated_at <= ? \
+               AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = c.channel_id) \
+             ORDER BY c.updated_at ASC \
+             LIMIT ?",
+        )
+        .bind(before_ts)
+        .bind(limit as i64)
+        .fetch_all(self.core_read_pool())
+        .await?;
+        if candidate_rows.is_empty() {
+            return Ok(0);
+        }
+        let candidate_channels = candidate_rows
+            .iter()
+            .map(|row| row.get::<Vec<u8>, _>("channel_id"))
+            .collect::<Vec<_>>();
+        let channels_with_traffic =
+            load_telemetry_channels_with_traffic(self.telemetry_pool(), &candidate_channels)
+                .await?;
+
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let mut removed = 0usize;
+        for row in candidate_rows {
+            let rowid: i64 = row.get("rowid");
+            let channel_id: Vec<u8> = row.get("channel_id");
+            if channels_with_traffic.contains(&channel_id) {
+                continue;
+            }
+            removed = removed.saturating_add(
+                sqlx::query(
+                    "DELETE FROM channels \
+                     WHERE rowid = ? \
+                       AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = channels.channel_id)",
+                )
+                .bind(rowid)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize,
+            );
+        }
+        tx.commit().await?;
+        Ok(removed)
     }
 }
 
@@ -582,6 +673,29 @@ async fn delete_limited_sqlite(
         .execute(pool)
         .await?;
     Ok(result.rows_affected() as usize)
+}
+
+async fn load_telemetry_channels_with_traffic(
+    pool: &sqlx::SqlitePool,
+    channel_ids: &[Vec<u8>],
+) -> StoreResult<HashSet<Vec<u8>>> {
+    if channel_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT DISTINCT channel_id FROM channel_stats_daily \
+         WHERE messages_routed > 0 AND channel_id IN (",
+    );
+    let mut separated = query.separated(", ");
+    for channel_id in channel_ids {
+        separated.push_bind(channel_id);
+    }
+    separated.push_unseparated(")");
+    let rows = query.build().fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<Vec<u8>, _>("channel_id"))
+        .collect())
 }
 
 async fn delete_limited_by_bucket_sqlite(

@@ -405,7 +405,8 @@ async fn prune_pg_device_outbox_overflow(
     .bind(OUTBOX_STATUS_SENT)
     .fetch_one(&mut **tx)
     .await?;
-    let excess = active_count.saturating_sub(max_pending_per_device as i64);
+    let max_pending_per_device = max_pending_per_device.min(i64::MAX as usize) as i64;
+    let excess = active_count.saturating_sub(max_pending_per_device);
     if excess <= 0 {
         return Ok(Vec::new());
     }
@@ -465,7 +466,8 @@ async fn prune_pg_global_outbox_overflow(
             .bind(OUTBOX_STATUS_SENT)
             .fetch_one(&mut **tx)
             .await?;
-    let excess = active_count.saturating_sub(global_max_pending as i64);
+    let global_max_pending = global_max_pending.min(i64::MAX as usize) as i64;
+    let excess = active_count.saturating_sub(global_max_pending);
     if excess <= 0 {
         return Ok(Vec::new());
     }

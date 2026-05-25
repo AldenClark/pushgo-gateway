@@ -7,7 +7,7 @@ use crate::{
     providers::{ApnsClient, FcmClient, WnsClient},
     routing::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord, derive_private_device_id},
     stats::StatsCollector,
-    storage::{DeviceRouteRecordRow, MaintenanceCleanupConfig, Storage},
+    storage::{DeviceRouteRecordRow, MaintenanceCleanupConfig, Storage, StorageInitConfig},
     value::DeviceKeyRef,
 };
 use axum::Router;
@@ -162,8 +162,15 @@ pub async fn build_app(
         ::tracing::Level::INFO,
         event = "gateway.app_build_started"
     );
-    let store = Storage::new(args.db_url.as_deref()).await?;
     let observability = args.observability_config();
+    let store = Storage::new_with_config(StorageInitConfig {
+        db_url: args.db_url.clone(),
+        sqlite_telemetry_db_url: args.sqlite_telemetry_db_url.clone(),
+        sqlite_runtime_db_url: args.sqlite_runtime_db_url.clone(),
+        stats_enabled: observability.stats_enabled,
+        mcp_enabled: args.mcp_enabled,
+    })
+    .await?;
     let stats = StatsCollector::spawn_with_mode(store.clone(), observability.stats_enabled);
     let device_registry = Arc::new(DeviceRegistry::new());
     let device_operation_guards = Arc::new(DeviceOperationGuards::default());

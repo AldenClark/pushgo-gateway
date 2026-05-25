@@ -308,6 +308,17 @@ pub struct Args {
     #[arg(env = "PUSHGO_DB_URL", long = "db-url")]
     pub db_url: Option<String>,
 
+    /// Optional SQLite telemetry sidecar URL. Defaults to a path derived from PUSHGO_DB_URL.
+    #[arg(
+        env = "PUSHGO_SQLITE_TELEMETRY_DB_URL",
+        long = "sqlite-telemetry-db-url"
+    )]
+    pub sqlite_telemetry_db_url: Option<String>,
+
+    /// Optional SQLite runtime sidecar URL. Defaults to a path derived from PUSHGO_DB_URL.
+    #[arg(env = "PUSHGO_SQLITE_RUNTIME_DB_URL", long = "sqlite-runtime-db-url")]
+    pub sqlite_runtime_db_url: Option<String>,
+
     /// QUIC bind address for the private transport listener.
     #[arg(
         env = "PUSHGO_PRIVATE_QUIC_BIND",

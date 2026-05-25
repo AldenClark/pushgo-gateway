@@ -13,7 +13,7 @@ impl SqliteDb {
         )
         .bind(&device_id[..])
         .bind(delivery_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.core_read_pool())
         .await?;
 
         Ok(row.map(|r| PrivateOutboxEntry {
@@ -40,7 +40,7 @@ impl SqliteDb {
     ) -> StoreResult<Option<ChannelInfo>> {
         let row = sqlx::query("SELECT alias FROM channels WHERE channel_id = ?")
             .bind(&channel_id[..])
-            .fetch_optional(&self.pool)
+            .fetch_optional(self.core_read_pool())
             .await?;
         Ok(row.map(|r| ChannelInfo {
             alias: r.get("alias"),

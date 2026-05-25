@@ -13,6 +13,7 @@ mod sqlite_init;
 struct SqliteTestContext {
     _dir: TempDir,
     db_url: String,
+    dispatch_db_url: String,
     storage: Storage,
 }
 
@@ -27,6 +28,12 @@ async fn setup_sqlite_storage(name: &str) -> SqliteTestContext {
     let db_path = dir.path().join(format!("{name}.sqlite"));
     std::fs::File::create(&db_path).expect("sqlite db file should be created");
     let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let dispatch_db_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path()
+            .join(format!("{name}.dispatch.sqlite"))
+            .to_string_lossy()
+    );
 
     bootstrap_sqlite_schema(&db_url)
         .await
@@ -39,6 +46,7 @@ async fn setup_sqlite_storage(name: &str) -> SqliteTestContext {
     SqliteTestContext {
         _dir: dir,
         db_url,
+        dispatch_db_url,
         storage,
     }
 }
@@ -48,12 +56,19 @@ async fn setup_sqlite_storage_without_bootstrap(name: &str) -> SqliteTestContext
     let db_path = dir.path().join(format!("{name}.sqlite"));
     std::fs::File::create(&db_path).expect("sqlite db file should be created");
     let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let dispatch_db_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path()
+            .join(format!("{name}.dispatch.sqlite"))
+            .to_string_lossy()
+    );
     let storage = Storage::new(Some(db_url.as_str()))
         .await
         .expect("sqlite storage should initialize with auto schema bootstrap");
     SqliteTestContext {
         _dir: dir,
         db_url,
+        dispatch_db_url,
         storage,
     }
 }
@@ -66,6 +81,12 @@ async fn setup_sqlite_storage_with_custom_schema(
     let db_path = dir.path().join(format!("{name}.sqlite"));
     std::fs::File::create(&db_path).expect("sqlite db file should be created");
     let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let dispatch_db_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path()
+            .join(format!("{name}.dispatch.sqlite"))
+            .to_string_lossy()
+    );
 
     let mut conn = SqliteConnection::connect(&db_url)
         .await
@@ -85,6 +106,7 @@ async fn setup_sqlite_storage_with_custom_schema(
     SqliteTestContext {
         _dir: dir,
         db_url,
+        dispatch_db_url,
         storage,
     }
 }

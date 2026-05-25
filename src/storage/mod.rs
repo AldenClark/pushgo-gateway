@@ -5,5 +5,5 @@ pub mod storage;
 pub mod types;
 
 pub use database::DatabaseAccess;
-pub use storage::Storage;
+pub use storage::{Storage, StorageInitConfig};
 pub use types::*;
