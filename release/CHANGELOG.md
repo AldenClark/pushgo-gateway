@@ -12,6 +12,22 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.9] - 2026-05-26
+
+### Changed
+- Bumped package/runtime version to `1.2.9` (release tag target: `v1.2.9`) and aligned release metadata.
+- Fixed provider token forced-refresh behavior so APNS/FCM/WNS credential refresh paths now bypass cached token info only on explicit fresh-refresh retry paths, while normal send flow remains cache-first.
+- Introduced explicit runtime profile selection (`small`/`public`, default `small`) and removed `auto` profile mode to keep runtime behavior deterministic and auditable.
+- Refined runtime tuning by profile across private runtime queues, dispatch workers, stats batching, provider in-flight limits, cache capacities/TTLs, and external DB pool sizing.
+- Consolidated several previously exposed runtime performance knobs into profile-owned constants to reduce low-value external tuning surface and avoid misconfiguration-driven regressions.
+- Reworked SQLite runtime bootstrap tuning to profile-driven internal defaults, including connection counts, acquire timeouts, busy timeout, statement/page cache sizing, and WAL checkpoint policy.
+- Added maintenance cleanup observability with per-phase elapsed timing fields and profile-aligned bounded batch settings for dedupe/session/provider-expired cleanup paths.
+- Hardened stats pipeline reliability by adding bounded retained-row trimming after write failures to prevent unbounded in-memory growth during downstream storage pressure.
+
+### Added
+- Added runtime profile configuration module and startup diagnostics fields that expose active profile and key runtime caps.
+- Added token-provider regression test coverage to verify fresh-refresh paths bypass cached remote token/project metadata as intended.
+
 ## [v1.2.8] - 2026-05-13
 
 ### Changed

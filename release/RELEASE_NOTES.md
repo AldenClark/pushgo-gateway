@@ -8,6 +8,14 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.9]
+
+### Improved
+- Improved credential-refresh reliability for APNS/FCM/WNS provider delivery: when token refresh is required, gateway now forces a fresh token-provider fetch only on the targeted retry path, while normal delivery keeps using cached credentials for lower latency and lower upstream load.
+- Improved runtime stability and predictability with explicit profile selection (`small` default, `public` for high-load deployments), so private deployments and public gateways can run with profile-appropriate queue, cache, dispatch, and DB-pool behavior.
+- Improved SQLite runtime robustness through profile-based internal tuning defaults (connection/acquire/busy/cache/WAL settings), reducing lock-churn and misconfiguration risk in small private deployments.
+- Improved long-run reliability under storage pressure by bounding retained stats rows after persistence failures, preventing in-memory growth during transient backend failures.
+
 ## [v1.2.8]
 
 ### Improved
