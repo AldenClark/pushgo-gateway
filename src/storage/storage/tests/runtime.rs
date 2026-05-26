@@ -559,7 +559,7 @@ async fn provider_pull_uses_legacy_queue_payload_when_shared_payload_missing() {
     let delivery_id = "delivery-provider-legacy-queue-001";
     let legacy_payload = vec![0xAB, 0xCD, 0xEF];
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     sqlx::query(
@@ -755,7 +755,7 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
         .expect("private pending count before migration should succeed");
     assert_eq!(private_pending_before, 1);
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     let provider_pending_before: i64 =
@@ -858,7 +858,7 @@ async fn migrate_private_pending_to_provider_queue_batches_payloads_and_clears_o
     }
 
     let missing_delivery_id = "delivery-private-to-provider-missing-payload";
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     sqlx::query(
@@ -892,7 +892,7 @@ async fn migrate_private_pending_to_provider_queue_batches_payloads_and_clears_o
         .expect("private outbox count should succeed");
     assert_eq!(private_pending, 0);
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     let provider_pending: i64 =
@@ -1033,7 +1033,7 @@ async fn private_expired_cleanup_removes_expired_payloads_and_dangling_outbox() 
         .await
         .expect("expired outbox should be inserted");
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     sqlx::query(
@@ -1060,7 +1060,7 @@ async fn private_expired_cleanup_removes_expired_payloads_and_dangling_outbox() 
         .expect("private cleanup should succeed");
     assert_eq!(removed, 2);
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     let remaining_payloads: i64 =
@@ -1409,7 +1409,7 @@ async fn maintenance_cleanup_prunes_expired_runtime_rows_and_orphan_devices() {
     assert_eq!(stats.provider_pull_pruned, 1);
     assert_eq!(stats.orphan_devices_pruned, 1);
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     let outbox_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox")
@@ -1420,6 +1420,10 @@ async fn maintenance_cleanup_prunes_expired_runtime_rows_and_orphan_devices() {
         .fetch_one(&mut conn)
         .await
         .expect("provider pull count should be queryable");
+    drop(conn);
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
     let route_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM devices WHERE device_key = ?")
         .bind(&old_route.device_key)
         .fetch_one(&mut conn)
@@ -1655,7 +1659,7 @@ async fn maintenance_cleanup_does_not_delete_shared_delivery_for_other_devices()
             .is_some()
     );
 
-    let mut conn = SqliteConnection::connect(&ctx.db_url)
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
         .await
         .expect("sqlite test connection should succeed");
     let live_provider_for_b: i64 = sqlx::query_scalar(

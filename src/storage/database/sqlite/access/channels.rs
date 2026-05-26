@@ -13,7 +13,7 @@ impl SqliteDb {
         )
         .bind(&device_id[..])
         .bind(delivery_id)
-        .fetch_optional(self.core_read_pool())
+        .fetch_optional(self.delivery_pool())
         .await?;
 
         Ok(row.map(|r| PrivateOutboxEntry {

@@ -14,7 +14,7 @@ use tempfile::TempDir;
 struct GatewayProcess {
     child: Child,
     _dir: TempDir,
-    db_url: String,
+    delivery_db_url: String,
     log_path: PathBuf,
     http_port: u16,
     token: String,
@@ -26,6 +26,12 @@ impl GatewayProcess {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let db_path = dir.path().join("gateway-provider-ingress.sqlite");
         let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+        let delivery_db_url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path()
+                .join("gateway-provider-ingress.delivery.sqlite")
+                .to_string_lossy()
+        );
         let log_path = dir.path().join("gateway-provider-ingress.log");
         let token = "blackbox-provider-token".to_string();
 
@@ -47,7 +53,7 @@ impl GatewayProcess {
         let gateway = Self {
             child,
             _dir: dir,
-            db_url,
+            delivery_db_url,
             log_path,
             http_port,
             token,
@@ -245,7 +251,7 @@ async fn send_message(client: &Client, gateway: &GatewayProcess, channel_id: &st
 }
 
 async fn wait_for_delivery_id(gateway: &GatewayProcess, excluded: &HashSet<String>) -> String {
-    let pool = sqlx::SqlitePool::connect(&gateway.db_url)
+    let pool = sqlx::SqlitePool::connect(&gateway.delivery_db_url)
         .await
         .expect("sqlite pool should connect");
     let deadline = Instant::now() + Duration::from_secs(20);

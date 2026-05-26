@@ -17,7 +17,7 @@ impl SqliteDb {
         .bind(at_ts)
         .bind(&device_id[..])
         .bind(delivery_id)
-        .execute(&self.pool)
+        .execute(self.delivery_pool())
         .await?;
         Ok(())
     }
@@ -37,7 +37,7 @@ impl SqliteDb {
         .bind(at_ts)
         .bind(&device_id[..])
         .bind(delivery_id)
-        .execute(&self.pool)
+        .execute(self.delivery_pool())
         .await?;
         Ok(())
     }
@@ -47,7 +47,7 @@ impl SqliteDb {
         device_id: DeviceId,
         delivery_id: &str,
     ) -> StoreResult<()> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
             .bind(&device_id[..])
@@ -72,7 +72,7 @@ impl SqliteDb {
         &self,
         device_id: DeviceId,
     ) -> StoreResult<Vec<String>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let rows = sqlx::query("SELECT delivery_id FROM private_outbox WHERE device_id = ?")
             .bind(&device_id[..])
@@ -104,7 +104,7 @@ impl SqliteDb {
         &self,
         device_id: DeviceId,
     ) -> StoreResult<Option<String>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query(
             "SELECT delivery_id FROM private_outbox \
@@ -134,7 +134,7 @@ impl SqliteDb {
     pub(super) async fn evict_oldest_pending_private_outbox_global(
         &self,
     ) -> StoreResult<Option<(DeviceId, String)>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let row = sqlx::query(
             "SELECT device_id, delivery_id FROM private_outbox \
@@ -177,7 +177,7 @@ impl SqliteDb {
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(OUTBOX_STATUS_SENT)
         .bind(limit as i64)
-        .fetch_all(self.core_read_pool())
+        .fetch_all(self.delivery_pool())
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
@@ -214,7 +214,7 @@ impl SqliteDb {
         limit: usize,
         claim_until_ts: i64,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let rows = sqlx::query(
             "SELECT device_id, delivery_id FROM private_outbox \
@@ -287,7 +287,7 @@ impl SqliteDb {
         limit: usize,
         claim_until_ts: i64,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let rows = sqlx::query(
             "SELECT delivery_id FROM private_outbox \
@@ -354,7 +354,7 @@ impl SqliteDb {
                 .bind(OUTBOX_STATUS_PENDING)
                 .bind(OUTBOX_STATUS_CLAIMED)
                 .bind(OUTBOX_STATUS_SENT)
-                .fetch_one(self.core_read_pool())
+                .fetch_one(self.delivery_pool())
                 .await?;
         Ok(count as usize)
     }

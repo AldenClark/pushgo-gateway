@@ -5,7 +5,12 @@ const SQLITE_PRIVATE_CLEANUP_BATCH_ROWS: usize = 256;
 
 impl SqliteDb {
     pub(super) async fn delete_private_device_state(&self, device_id: DeviceId) -> StoreResult<()> {
-        let mut conn = self.pool.acquire().await?;
+        sqlx::query("DELETE FROM private_bindings WHERE device_id = ?")
+            .bind(&device_id[..])
+            .execute(&self.pool)
+            .await?;
+
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let rows = sqlx::query("SELECT delivery_id FROM private_outbox WHERE device_id = ?")
             .bind(&device_id[..])
@@ -13,10 +18,6 @@ impl SqliteDb {
             .await?;
         let delivery_ids: Vec<String> = rows.into_iter().map(|r| r.get("delivery_id")).collect();
 
-        sqlx::query("DELETE FROM private_bindings WHERE device_id = ?")
-            .bind(&device_id[..])
-            .execute(&mut *tx)
-            .await?;
         sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
             .bind(&device_id[..])
             .execute(&mut *tx)
@@ -58,7 +59,7 @@ impl SqliteDb {
         .bind(message.expires_at)
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .execute(self.delivery_pool())
         .await?;
         Ok(())
     }
@@ -70,7 +71,7 @@ impl SqliteDb {
         if entries.is_empty() {
             return Ok(());
         }
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         insert_private_messages_sqlite_tx(&mut tx, entries).await?;
         tx.commit().await?;
@@ -103,7 +104,7 @@ impl SqliteDb {
         .bind(entry.last_error_code.as_deref())
         .bind(entry.last_error_detail.as_deref())
         .bind(entry.updated_at)
-        .execute(&self.pool)
+        .execute(self.delivery_pool())
         .await?;
         Ok(())
     }
@@ -120,7 +121,7 @@ impl SqliteDb {
         }
         let mut pruned = 0usize;
         for chunk in entries.chunks(SQLITE_PRIVATE_WRITE_BATCH_ROWS) {
-            let mut conn = self.pool.acquire().await?;
+            let mut conn = self.delivery_pool().acquire().await?;
             let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
             insert_private_outbox_sqlite_tx(&mut tx, chunk).await?;
             let mut pruned_delivery_ids = Vec::new();
@@ -158,7 +159,7 @@ impl SqliteDb {
         if entries.is_empty() {
             return Ok(0);
         }
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let payloads = entries
             .iter()
@@ -210,7 +211,7 @@ impl SqliteDb {
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(OUTBOX_STATUS_SENT)
         .bind(limit as i64)
-        .fetch_all(self.core_read_pool())
+        .fetch_all(self.delivery_pool())
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
@@ -255,7 +256,7 @@ impl SqliteDb {
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(OUTBOX_STATUS_SENT)
         .bind(limit as i64)
-        .fetch_all(self.core_read_pool())
+        .fetch_all(self.delivery_pool())
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
@@ -293,7 +294,7 @@ impl SqliteDb {
         .bind(OUTBOX_STATUS_PENDING)
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(OUTBOX_STATUS_SENT)
-        .fetch_one(self.core_read_pool())
+        .fetch_one(self.delivery_pool())
         .await?;
         Ok(count as usize)
     }
@@ -337,7 +338,7 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<(usize, usize)> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let expired_rows = sqlx::query(
             "SELECT delivery_id FROM private_payloads \
@@ -373,7 +374,7 @@ impl SqliteDb {
         &self,
         limit: usize,
     ) -> StoreResult<(usize, usize)> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let dangling_rows = sqlx::query(
             "SELECT o.device_id, o.delivery_id \
@@ -415,7 +416,7 @@ impl SqliteDb {
         }
         let mut removed = 0usize;
         for chunk in entries.chunks(SQLITE_PRIVATE_WRITE_BATCH_ROWS) {
-            let mut conn = self.pool.acquire().await?;
+            let mut conn = self.delivery_pool().acquire().await?;
             let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
             let mut delivery_ids = Vec::with_capacity(chunk.len());
             for (device_id, delivery_id) in chunk {

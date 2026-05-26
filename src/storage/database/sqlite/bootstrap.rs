@@ -55,6 +55,23 @@ const SQLITE_DISPATCH_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
 ];
 
+const SQLITE_DELIVERY_TABLE_STATEMENTS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+];
+
+const SQLITE_DELIVERY_INDEX_STATEMENTS: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS private_payloads_expires_idx ON private_payloads (expires_at)",
+    "CREATE INDEX IF NOT EXISTS private_outbox_delivery_idx ON private_outbox (delivery_id)",
+    "CREATE INDEX IF NOT EXISTS private_outbox_due_idx ON private_outbox (status, next_attempt_at, attempts)",
+    "CREATE INDEX IF NOT EXISTS private_outbox_device_status_order_idx ON private_outbox (device_id, status, occurred_at, created_at, delivery_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
+    "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)",
+    "CREATE INDEX IF NOT EXISTS provider_pull_queue_platform_token_idx ON provider_pull_queue (platform, provider_token)",
+];
+
 const SQLITE_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS devices_device_key_uidx ON devices (device_key)",
     "CREATE INDEX IF NOT EXISTS devices_route_platform_type_updated_idx ON devices (platform, channel_type, route_updated_at)",
@@ -101,6 +118,7 @@ const SQLITE_SIDECAR_META_TABLE: &str = "CREATE TABLE IF NOT EXISTS pushgo_sidec
 const SQLITE_DISPATCH_MIGRATION_META_KEY: &str = "dispatch_migrated_from_core_v1";
 const SQLITE_TELEMETRY_MIGRATION_META_KEY: &str = "telemetry_migrated_from_core_v1";
 const SQLITE_RUNTIME_MIGRATION_META_KEY: &str = "runtime_migrated_from_core_v1";
+const SQLITE_DELIVERY_MIGRATION_META_KEY: &str = "runtime_delivery_migrated_from_core_v1";
 const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
 const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 
@@ -129,6 +147,7 @@ impl SqliteDb {
             Duration::from_secs(sqlite_core_write_acquire_timeout_secs()),
         )
         .await?;
+        let delivery_url = derive_sqlite_sidecar_url(db_url, "delivery");
         let dispatch_url = derive_sqlite_sidecar_url(db_url, "dispatch");
         let telemetry_url = stats_enabled.then(|| {
             telemetry_db_url
@@ -140,6 +159,13 @@ impl SqliteDb {
                 .map(str::to_string)
                 .unwrap_or_else(|| derive_sqlite_sidecar_url(db_url, "runtime"))
         });
+        ensure_sqlite_parent_dir(delivery_url.as_str())?;
+        let delivery_pool = connect_sqlite_pool(
+            delivery_url.as_str(),
+            1,
+            Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
+        )
+        .await?;
         ensure_sqlite_parent_dir(dispatch_url.as_str())?;
         let dispatch_pool = connect_sqlite_pool(
             dispatch_url.as_str(),
@@ -173,12 +199,15 @@ impl SqliteDb {
         };
         let this = Self {
             core_read_pool,
+            delivery_pool,
             dispatch_pool,
             telemetry_pool,
             runtime_pool,
             pool,
         };
         this.init_schema().await?;
+        this.init_delivery_sidecar(db_url, delivery_url.as_str())
+            .await?;
         this.init_dispatch_sidecar(db_url, dispatch_url.as_str())
             .await?;
         if let Some(url) = telemetry_url.as_deref() {
@@ -526,6 +555,120 @@ impl SqliteDb {
             ],
         )
         .await
+    }
+
+    async fn init_delivery_sidecar(
+        &self,
+        core_db_url: &str,
+        sidecar_db_url: &str,
+    ) -> StoreResult<()> {
+        sqlx::query(SQLITE_SIDECAR_META_TABLE)
+            .execute(&self.delivery_pool)
+            .await?;
+        for stmt in SQLITE_DELIVERY_TABLE_STATEMENTS
+            .iter()
+            .chain(SQLITE_DELIVERY_INDEX_STATEMENTS.iter())
+        {
+            sqlx::query(stmt).execute(&self.delivery_pool).await?;
+        }
+        if sqlite_url_without_query(core_db_url) != sqlite_url_without_query(sidecar_db_url) {
+            self.sync_delivery_sidecar_from_core(core_db_url).await?;
+            sqlx::query(
+                "INSERT INTO pushgo_sidecar_meta (meta_key, meta_value) VALUES (?, 'done') \
+                 ON CONFLICT (meta_key) DO UPDATE SET meta_value = excluded.meta_value",
+            )
+            .bind(SQLITE_DELIVERY_MIGRATION_META_KEY)
+            .execute(&self.delivery_pool)
+            .await?;
+            for table in ["provider_pull_queue", "private_outbox", "private_payloads"] {
+                sqlx::query(&format!("DELETE FROM {table}"))
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn sync_delivery_sidecar_from_core(&self, core_db_url: &str) -> StoreResult<()> {
+        let Some(core_path) = sqlite_path_from_url(core_db_url) else {
+            return Ok(());
+        };
+        let mut conn = self.delivery_pool.acquire().await?;
+        sqlx::query("ATTACH DATABASE ? AS pushgo_core")
+            .bind(core_path)
+            .execute(&mut *conn)
+            .await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+
+        if sqlite_attached_table_exists(&mut tx, "pushgo_core", "private_payloads").await? {
+            sqlx::query(
+                "INSERT INTO private_payloads \
+                 (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) \
+                 SELECT delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at \
+                 FROM pushgo_core.private_payloads WHERE true \
+                 ON CONFLICT(delivery_id) DO UPDATE SET \
+                   payload_blob = excluded.payload_blob, \
+                   payload_size = excluded.payload_size, \
+                   sent_at = excluded.sent_at, \
+                   expires_at = excluded.expires_at, \
+                   created_at = excluded.created_at, \
+                   updated_at = excluded.updated_at \
+                 WHERE excluded.updated_at >= private_payloads.updated_at",
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        if sqlite_attached_table_exists(&mut tx, "pushgo_core", "private_outbox").await? {
+            sqlx::query(
+                "INSERT INTO private_outbox \
+                 (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
+                 SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+                 FROM pushgo_core.private_outbox WHERE true \
+                 ON CONFLICT(device_id, delivery_id) DO UPDATE SET \
+                   status = excluded.status, \
+                   attempts = excluded.attempts, \
+                   occurred_at = excluded.occurred_at, \
+                   created_at = excluded.created_at, \
+                   claimed_at = excluded.claimed_at, \
+                   first_sent_at = excluded.first_sent_at, \
+                   last_attempt_at = excluded.last_attempt_at, \
+                   acked_at = excluded.acked_at, \
+                   fallback_sent_at = excluded.fallback_sent_at, \
+                   next_attempt_at = excluded.next_attempt_at, \
+                   last_error_code = excluded.last_error_code, \
+                   last_error_detail = excluded.last_error_detail, \
+                   updated_at = excluded.updated_at \
+                 WHERE excluded.updated_at >= private_outbox.updated_at",
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        if sqlite_attached_table_exists(&mut tx, "pushgo_core", "provider_pull_queue").await? {
+            sqlx::query(
+                "INSERT INTO provider_pull_queue \
+                 (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+                 SELECT device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at \
+                 FROM pushgo_core.provider_pull_queue WHERE true \
+                 ON CONFLICT(device_id, delivery_id) DO UPDATE SET \
+                   payload_blob = excluded.payload_blob, \
+                   payload_size = excluded.payload_size, \
+                   sent_at = excluded.sent_at, \
+                   expires_at = excluded.expires_at, \
+                   platform = excluded.platform, \
+                   provider_token = excluded.provider_token, \
+                   created_at = excluded.created_at, \
+                   updated_at = excluded.updated_at \
+                 WHERE excluded.updated_at >= provider_pull_queue.updated_at",
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        sqlx::query("DETACH DATABASE pushgo_core")
+            .execute(&mut *conn)
+            .await?;
+        Ok(())
     }
 
     async fn init_telemetry_sidecar(

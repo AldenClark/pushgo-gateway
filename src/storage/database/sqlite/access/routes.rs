@@ -123,13 +123,15 @@ async fn cleanup_orphan_private_payloads_in_tx(
 async fn coalesce_duplicate_provider_routes_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     route: &DeviceRoutePersistenceValues,
-) -> StoreResult<()> {
+) -> StoreResult<Vec<Vec<u8>>> {
     let duplicates = collect_duplicate_provider_routes_in_tx(tx, route).await?;
     if duplicates.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
+    let mut duplicate_device_ids = Vec::with_capacity(duplicates.len());
     for duplicate in duplicates {
+        duplicate_device_ids.push(duplicate.device_id.clone());
         let delivery_ids =
             load_device_delivery_ids_in_tx(tx, duplicate.device_id.as_slice()).await?;
 
@@ -200,7 +202,7 @@ async fn coalesce_duplicate_provider_routes_in_tx(
         cleanup_orphan_private_payloads_in_tx(tx, &delivery_ids).await?;
     }
 
-    Ok(())
+    Ok(duplicate_device_ids)
 }
 
 impl SqliteDb {
@@ -236,8 +238,11 @@ impl SqliteDb {
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let values = route.persistence_values()?;
         upsert_device_route_in_tx(&mut tx, route).await?;
-        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        let duplicate_device_ids =
+            coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         tx.commit().await?;
+        self.coalesce_delivery_device_rows(&duplicate_device_ids, values.device_id.as_slice())
+            .await?;
         Ok(())
     }
 
@@ -250,9 +255,12 @@ impl SqliteDb {
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let values = route.persistence_values()?;
         upsert_device_route_in_tx(&mut tx, route).await?;
-        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        let duplicate_device_ids =
+            coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         insert_device_route_audit_in_tx(&mut tx, audit).await?;
         tx.commit().await?;
+        self.coalesce_delivery_device_rows(&duplicate_device_ids, values.device_id.as_slice())
+            .await?;
         Ok(())
     }
 
@@ -287,7 +295,8 @@ impl SqliteDb {
         };
 
         upsert_device_route_in_tx(&mut tx, route).await?;
-        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        let duplicate_device_ids =
+            coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         insert_device_route_audit_in_tx(&mut tx, audit).await?;
 
         if let (Some(old_key), Some(device_id)) = (old_key, old_device_id.as_deref()) {
@@ -317,6 +326,11 @@ impl SqliteDb {
         }
 
         tx.commit().await?;
+        self.coalesce_delivery_device_rows(&duplicate_device_ids, values.device_id.as_slice())
+            .await?;
+        if let Some(device_id) = old_device_id.as_deref() {
+            self.delete_delivery_device_state(device_id).await?;
+        }
         Ok(())
     }
 
@@ -366,6 +380,8 @@ impl SqliteDb {
         cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
 
         tx.commit().await?;
+        self.delete_delivery_device_state(device_id.as_slice())
+            .await?;
         Ok(())
     }
 
@@ -420,6 +436,8 @@ impl SqliteDb {
         cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
 
         tx.commit().await?;
+        self.delete_delivery_provider_token(platform_name, normalized_token.as_str())
+            .await?;
         Ok(())
     }
 
@@ -450,6 +468,97 @@ impl SqliteDb {
         .bind(entry.created_at)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn coalesce_delivery_device_rows(
+        &self,
+        duplicate_device_ids: &[Vec<u8>],
+        target_device_id: &[u8],
+    ) -> StoreResult<()> {
+        if duplicate_device_ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        for duplicate_device_id in duplicate_device_ids {
+            let delivery_ids = load_device_delivery_ids_in_tx(&mut tx, duplicate_device_id).await?;
+            sqlx::query(
+                "INSERT INTO provider_pull_queue \
+                 (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+                 SELECT ?, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at \
+                 FROM provider_pull_queue \
+                 WHERE device_id = ? \
+                 ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
+                   payload_blob = excluded.payload_blob, \
+                   payload_size = excluded.payload_size, \
+                   sent_at = MIN(provider_pull_queue.sent_at, excluded.sent_at), \
+                   expires_at = MAX(provider_pull_queue.expires_at, excluded.expires_at), \
+                   platform = excluded.platform, \
+                   provider_token = excluded.provider_token, \
+                   created_at = MIN(provider_pull_queue.created_at, excluded.created_at), \
+                   updated_at = MAX(provider_pull_queue.updated_at, excluded.updated_at)",
+            )
+            .bind(target_device_id)
+            .bind(duplicate_device_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ?")
+                .bind(duplicate_device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
+                .bind(duplicate_device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn delete_delivery_device_state(&self, device_id: &[u8]) -> StoreResult<()> {
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let delivery_ids = load_device_delivery_ids_in_tx(&mut tx, device_id).await?;
+        sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ?")
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
+        cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn delete_delivery_provider_token(
+        &self,
+        platform_name: &str,
+        provider_token: &str,
+    ) -> StoreResult<()> {
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let rows = sqlx::query(
+            "SELECT delivery_id FROM provider_pull_queue WHERE platform = ? AND provider_token = ?",
+        )
+        .bind(platform_name)
+        .bind(provider_token)
+        .fetch_all(&mut *tx)
+        .await?;
+        let delivery_ids = rows
+            .into_iter()
+            .map(|row| row.get("delivery_id"))
+            .collect::<Vec<String>>();
+        sqlx::query("DELETE FROM provider_pull_queue WHERE platform = ? AND provider_token = ?")
+            .bind(platform_name)
+            .bind(provider_token)
+            .execute(&mut *tx)
+            .await?;
+        cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
+        tx.commit().await?;
         Ok(())
     }
 

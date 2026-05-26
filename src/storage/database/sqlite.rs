@@ -15,6 +15,7 @@ mod bootstrap;
 #[derive(Debug, Clone)]
 pub struct SqliteDb {
     core_read_pool: SqlitePool,
+    delivery_pool: SqlitePool,
     dispatch_pool: SqlitePool,
     telemetry_pool: Option<SqlitePool>,
     runtime_pool: Option<SqlitePool>,
@@ -25,6 +26,10 @@ pub struct SqliteDb {
 impl SqliteDb {
     fn core_read_pool(&self) -> &SqlitePool {
         &self.core_read_pool
+    }
+
+    fn delivery_pool(&self) -> &SqlitePool {
+        &self.delivery_pool
     }
 
     fn dispatch_pool(&self) -> &SqlitePool {

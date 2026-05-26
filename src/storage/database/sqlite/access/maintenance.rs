@@ -7,7 +7,7 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let selected = select_delivery_keys(
             &mut tx,
@@ -42,7 +42,7 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         let selected = select_delivery_keys(
             &mut tx,
@@ -258,6 +258,9 @@ impl SqliteDb {
         for row in rows {
             let device_id: Vec<u8> = row.get("device_id");
             let device_key: Option<String> = row.try_get("device_key").ok();
+            if self.delivery_device_has_rows(device_id.as_slice()).await? {
+                continue;
+            }
             let delivery_ids = sqlx::query(
                 "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
                  UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
@@ -301,6 +304,19 @@ impl SqliteDb {
         }
         tx.commit().await?;
         Ok(deleted)
+    }
+
+    async fn delivery_device_has_rows(&self, device_id: &[u8]) -> StoreResult<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT \
+               (SELECT COUNT(1) FROM private_outbox WHERE device_id = ?) + \
+               (SELECT COUNT(1) FROM provider_pull_queue WHERE device_id = ?)",
+        )
+        .bind(device_id)
+        .bind(device_id)
+        .fetch_one(self.delivery_pool())
+        .await?;
+        Ok(count > 0)
     }
 
     pub(super) async fn reserve_delivery_dedupe(
@@ -487,6 +503,14 @@ impl SqliteDb {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         for table in tables {
+            sqlx::query(&format!("DELETE FROM {}", table))
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        for table in ["provider_pull_queue", "private_outbox", "private_payloads"] {
             sqlx::query(&format!("DELETE FROM {}", table))
                 .execute(&mut *tx)
                 .await?;

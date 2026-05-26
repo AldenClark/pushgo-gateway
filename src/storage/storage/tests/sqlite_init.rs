@@ -80,6 +80,187 @@ async fn sqlite_sidecars_are_not_created_when_features_are_disabled() {
         dir.path().join("pushgo.dispatch.sqlite").exists(),
         "dispatch sidecar is always initialized because dispatch dedupe is on the message send path"
     );
+    assert!(
+        dir.path().join("pushgo.delivery.sqlite").exists(),
+        "delivery sidecar is always initialized because private/provider delivery is on the message path"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_delivery_sidecar_migrates_legacy_delivery_rows_and_handles_new_writes() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("pushgo.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let now = chrono::Utc::now().timestamp_millis();
+
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite setup connection should succeed");
+    sqlx::query("CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+        .execute(&mut conn)
+        .await
+        .expect("legacy private payloads table should be created");
+    sqlx::query("CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))")
+        .execute(&mut conn)
+        .await
+        .expect("legacy private outbox table should be created");
+    sqlx::query("CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))")
+        .execute(&mut conn)
+        .await
+        .expect("legacy provider queue table should be created");
+    sqlx::query("CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)")
+        .execute(&mut conn)
+        .await
+        .expect("schema meta table should be created");
+    sqlx::query(
+        "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', ?)",
+    )
+    .bind(STORAGE_SCHEMA_VERSION)
+    .execute(&mut conn)
+    .await
+    .expect("schema version should be inserted");
+    sqlx::query("INSERT INTO private_payloads (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) VALUES ('legacy-delivery', X'010203', 3, ?, ?, ?, ?)")
+        .bind(now)
+        .bind(now + 300_000)
+        .bind(now)
+        .bind(now)
+        .execute(&mut conn)
+        .await
+        .expect("legacy payload should be inserted");
+    sqlx::query("INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, next_attempt_at, updated_at) VALUES (X'01010101010101010101010101010101', 'legacy-delivery', 'pending', 0, ?, ?, ?, ?)")
+        .bind(now)
+        .bind(now)
+        .bind(now + 30_000)
+        .bind(now)
+        .execute(&mut conn)
+        .await
+        .expect("legacy outbox should be inserted");
+    drop(conn);
+
+    let storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        stats_enabled: false,
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .expect("sqlite storage should initialize with delivery sidecar");
+
+    let delivery_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("pushgo.delivery.sqlite").to_string_lossy()
+    );
+    let mut delivery_conn = SqliteConnection::connect(&delivery_url)
+        .await
+        .expect("delivery sidecar should open");
+    let migrated_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM private_outbox WHERE delivery_id = 'legacy-delivery'",
+    )
+    .fetch_one(&mut delivery_conn)
+    .await
+    .expect("legacy outbox should be migrated");
+    assert_eq!(migrated_count, 1);
+
+    let new_delivery = "new-delivery-sidecar-only";
+    let message = PrivateMessage {
+        payload: vec![5, 6, 7].into(),
+        size: 3,
+        sent_at: now,
+        expires_at: now + 300_000,
+    };
+    storage
+        .enqueue_provider_pull_item(
+            [2; 16],
+            new_delivery,
+            &message,
+            Platform::ANDROID,
+            "token-new",
+        )
+        .await
+        .expect("new provider queue should write to delivery sidecar");
+    let sidecar_new_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM provider_pull_queue WHERE delivery_id = ?")
+            .bind(new_delivery)
+            .fetch_one(&mut delivery_conn)
+            .await
+            .expect("new provider row should be in sidecar");
+    assert_eq!(sidecar_new_count, 1);
+
+    let mut core_conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("core db should open");
+    let core_new_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM provider_pull_queue WHERE delivery_id = ?")
+            .bind(new_delivery)
+            .fetch_one(&mut core_conn)
+            .await
+            .expect("legacy core provider table should still be queryable");
+    assert_eq!(core_new_count, 0);
+    drop(core_conn);
+    drop(delivery_conn);
+    drop(storage);
+
+    let residual_provider_delivery = "residual-provider-after-meta";
+    let mut core_conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("core db should reopen");
+    sqlx::query("INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, next_attempt_at, updated_at) VALUES (X'01010101010101010101010101010101', 'legacy-delivery', 'acked', 1, ?, ?, ?, ?)")
+        .bind(now)
+        .bind(now)
+        .bind(now + 30_000)
+        .bind(now + 1_000)
+        .execute(&mut core_conn)
+        .await
+        .expect("post-meta core private outbox residue should be inserted");
+    sqlx::query("INSERT INTO provider_pull_queue (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) VALUES (X'02020202020202020202020202020202', ?, X'050607', 3, ?, ?, 'android', 'token-residual', ?, ?)")
+        .bind(residual_provider_delivery)
+        .bind(now)
+        .bind(now + 300_000)
+        .bind(now)
+        .bind(now + 1_000)
+        .execute(&mut core_conn)
+        .await
+        .expect("post-meta core provider residue should be inserted");
+    drop(core_conn);
+
+    let _storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        stats_enabled: false,
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .expect("sqlite storage should reconcile post-meta core residue");
+
+    let mut delivery_conn = SqliteConnection::connect(&delivery_url)
+        .await
+        .expect("delivery sidecar should reopen");
+    let legacy_status: String = sqlx::query_scalar(
+        "SELECT status FROM private_outbox WHERE delivery_id = 'legacy-delivery'",
+    )
+    .fetch_one(&mut delivery_conn)
+    .await
+    .expect("legacy outbox status should be queryable");
+    assert_eq!(legacy_status, "acked");
+    let residual_sidecar_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM provider_pull_queue WHERE delivery_id = ?")
+            .bind(residual_provider_delivery)
+            .fetch_one(&mut delivery_conn)
+            .await
+            .expect("post-meta provider residue should be reconciled into sidecar");
+    assert_eq!(residual_sidecar_count, 1);
+
+    let mut core_conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("core db should reopen after reconciliation");
+    let residual_core_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM provider_pull_queue WHERE delivery_id = ?")
+            .bind(residual_provider_delivery)
+            .fetch_one(&mut core_conn)
+            .await
+            .expect("post-meta provider residue should be cleared from core");
+    assert_eq!(residual_core_count, 0);
 }
 
 #[tokio::test]
