@@ -7,6 +7,8 @@ use std::{
 
 use reqwest::Url;
 
+use crate::runtime_config::{GatewayRuntimeProfile, GatewayRuntimeProfileSelection, RuntimeTuning};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObservabilityProfile {
     ProdMin,
@@ -54,8 +56,6 @@ pub struct McpPredefinedClient {
     client_id: Arc<str>,
     client_secret: Arc<str>,
 }
-
-const DEFAULT_PRIVATE_ONLINE_FAST_PATH_ENABLED: bool = false;
 
 impl PrivateTransports {
     #[must_use]
@@ -274,6 +274,14 @@ pub struct Args {
     )]
     pub private_transports: String,
 
+    /// Runtime profile for resource/performance defaults.
+    #[arg(
+        env = "PUSHGO_RUNTIME_PROFILE",
+        long = "runtime-profile",
+        default_value = "small"
+    )]
+    pub runtime_profile: String,
+
     /// Observability profile controlling diagnostics/tracing/stats defaults.
     #[arg(
         env = "PUSHGO_OBSERVABILITY_PROFILE",
@@ -282,13 +290,6 @@ pub struct Args {
     )]
     pub observability_profile: String,
 
-    /// Override diagnostics API switch from observability profile.
-    #[arg(
-        env = "PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED",
-        long = "observability-diagnostics-api-enabled"
-    )]
-    pub observability_diagnostics_api_enabled: Option<bool>,
-
     /// Override native tracing log level from observability profile default.
     #[arg(
         env = "PUSHGO_OBSERVABILITY_LOG_LEVEL",
@@ -296,28 +297,10 @@ pub struct Args {
     )]
     pub observability_log_level: Option<String>,
 
-    /// Override stats collection switch from observability profile.
-    #[arg(
-        env = "PUSHGO_OBSERVABILITY_STATS_ENABLED",
-        long = "observability-stats-enabled"
-    )]
-    pub observability_stats_enabled: Option<bool>,
-
     /// Database URL. Supported schemes: sqlite://, postgres://, postgresql://, pg://, mysql://.
     /// This value is required.
     #[arg(env = "PUSHGO_DB_URL", long = "db-url")]
     pub db_url: Option<String>,
-
-    /// Optional SQLite telemetry sidecar URL. Defaults to a path derived from PUSHGO_DB_URL.
-    #[arg(
-        env = "PUSHGO_SQLITE_TELEMETRY_DB_URL",
-        long = "sqlite-telemetry-db-url"
-    )]
-    pub sqlite_telemetry_db_url: Option<String>,
-
-    /// Optional SQLite runtime sidecar URL. Defaults to a path derived from PUSHGO_DB_URL.
-    #[arg(env = "PUSHGO_SQLITE_RUNTIME_DB_URL", long = "sqlite-runtime-db-url")]
-    pub sqlite_runtime_db_url: Option<String>,
 
     /// QUIC bind address for the private transport listener.
     #[arg(
@@ -375,253 +358,6 @@ pub struct Args {
     )]
     pub private_tcp_proxy_protocol: bool,
 
-    /// Private session TTL in seconds.
-    #[arg(
-        env = "PUSHGO_PRIVATE_SESSION_TTL",
-        long = "private-session-ttl",
-        default_value = "3600"
-    )]
-    pub private_session_ttl_secs: i64,
-
-    /// Private grace window for connection draining in seconds.
-    #[arg(
-        env = "PUSHGO_PRIVATE_GRACE_WINDOW",
-        long = "private-grace-window",
-        default_value = "60"
-    )]
-    pub private_grace_window_secs: u64,
-
-    /// Max pending private messages per device.
-    #[arg(
-        env = "PUSHGO_PRIVATE_MAX_PENDING",
-        long = "private-max-pending",
-        default_value = "200"
-    )]
-    pub private_max_pending_per_device: usize,
-
-    /// Max pull batch size per request.
-    #[arg(
-        env = "PUSHGO_PRIVATE_PULL_LIMIT",
-        long = "private-pull-limit",
-        default_value = "200"
-    )]
-    pub private_pull_limit: usize,
-
-    /// Ack timeout before scheduling system push fallback in seconds.
-    #[arg(
-        env = "PUSHGO_PRIVATE_ACK_TIMEOUT",
-        long = "private-ack-timeout",
-        default_value = "15"
-    )]
-    pub private_ack_timeout_secs: u64,
-
-    /// Max system-push fallback attempts after private ACK timeout.
-    #[arg(
-        env = "PUSHGO_PRIVATE_FALLBACK_MAX_ATTEMPTS",
-        long = "private-fallback-max-attempts",
-        default_value = "5"
-    )]
-    pub private_fallback_max_attempts: u32,
-
-    /// Max backoff in seconds for persisted fallback retries.
-    #[arg(
-        env = "PUSHGO_PRIVATE_FALLBACK_MAX_BACKOFF",
-        long = "private-fallback-max-backoff",
-        default_value = "300"
-    )]
-    pub private_fallback_max_backoff_secs: u64,
-
-    /// Retransmit budget window in seconds for private in-connection retries.
-    #[arg(
-        env = "PUSHGO_PRIVATE_RETX_WINDOW_SECS",
-        long = "private-retx-window-secs",
-        default_value = "10"
-    )]
-    pub private_retx_window_secs: u64,
-
-    /// Max retransmit frames allowed per device within one budget window.
-    #[arg(
-        env = "PUSHGO_PRIVATE_RETX_MAX_PER_WINDOW",
-        long = "private-retx-max-per-window",
-        default_value = "128"
-    )]
-    pub private_retx_max_per_window: u32,
-
-    /// Max retransmit frames sent per tick per connection.
-    #[arg(
-        env = "PUSHGO_PRIVATE_RETX_MAX_PER_TICK",
-        long = "private-retx-max-per-tick",
-        default_value = "16"
-    )]
-    pub private_retx_max_per_tick: usize,
-
-    /// Max retransmit retries per in-flight delivery before giving up in-channel retransmit.
-    #[arg(
-        env = "PUSHGO_PRIVATE_RETX_MAX_RETRIES",
-        long = "private-retx-max-retries",
-        default_value = "5"
-    )]
-    pub private_retx_max_retries: u8,
-
-    /// Global max pending private outbox entries.
-    #[arg(
-        env = "PUSHGO_PRIVATE_GLOBAL_MAX_PENDING",
-        long = "private-global-max-pending",
-        default_value = "5000000"
-    )]
-    pub private_global_max_pending: usize,
-
-    /// In-memory hot cache capacity for private messages.
-    #[arg(
-        env = "PUSHGO_PRIVATE_HOT_CACHE_CAPACITY",
-        long = "private-hot-cache-capacity",
-        default_value = "50000"
-    )]
-    pub private_hot_cache_capacity: usize,
-
-    /// Default private message TTL in seconds.
-    #[arg(
-        env = "PUSHGO_PRIVATE_DEFAULT_TTL",
-        long = "private-default-ttl",
-        default_value = "2592000"
-    )]
-    pub private_default_ttl_secs: i64,
-
-    /// If true, online private devices use deliver-first fast path (fallback to enqueue when send fails).
-    #[arg(
-        env = "PUSHGO_PRIVATE_ONLINE_FAST_PATH_ENABLED",
-        long = "private-online-fast-path-enabled"
-    )]
-    pub private_online_fast_path_enabled: Option<bool>,
-
-    /// Batch size for deleting expired provider pull queue rows.
-    #[arg(
-        env = "PUSHGO_PROVIDER_PULL_EXPIRED_BATCH",
-        long = "provider-pull-expired-batch",
-        default_value = "2048"
-    )]
-    pub provider_pull_expired_batch: usize,
-
-    /// Hard-delete private outbox rows older than this many days.
-    #[arg(
-        env = "PUSHGO_PRIVATE_STALE_OUTBOX_TTL_DAYS",
-        long = "private-stale-outbox-ttl-days",
-        default_value = "30"
-    )]
-    pub private_stale_outbox_ttl_days: i64,
-
-    /// Hard-delete route-only devices with no live references after this many days.
-    #[arg(
-        env = "PUSHGO_ORPHAN_DEVICE_TTL_DAYS",
-        long = "orphan-device-ttl-days",
-        default_value = "30"
-    )]
-    pub orphan_device_ttl_days: i64,
-
-    /// Soft-unsubscribe inactive subscribed devices after this many days when enabled.
-    #[arg(
-        env = "PUSHGO_STALE_SUBSCRIPTION_TTL_DAYS",
-        long = "stale-subscription-ttl-days",
-        default_value = "120"
-    )]
-    pub stale_subscription_ttl_days: i64,
-
-    /// Hard-delete soft-unsubscribed devices with no references after this many days when enabled.
-    #[arg(
-        env = "PUSHGO_SOFT_DELETED_DEVICE_TTL_DAYS",
-        long = "soft-deleted-device-ttl-days",
-        default_value = "30"
-    )]
-    pub soft_deleted_device_ttl_days: i64,
-
-    /// Hard-delete empty channels after this many days when enabled.
-    #[arg(
-        env = "PUSHGO_ORPHAN_CHANNEL_TTL_DAYS",
-        long = "orphan-channel-ttl-days",
-        default_value = "180"
-    )]
-    pub orphan_channel_ttl_days: i64,
-
-    /// Keep sent dispatch/semantic dedupe rows for this many days.
-    #[arg(
-        env = "PUSHGO_DEDUPE_RETENTION_DAYS",
-        long = "dedupe-retention-days",
-        default_value = "30"
-    )]
-    pub dedupe_retention_days: i64,
-
-    /// Keep audit rows for this many days when retention cleanup is enabled.
-    #[arg(
-        env = "PUSHGO_AUDIT_RETENTION_DAYS",
-        long = "audit-retention-days",
-        default_value = "180"
-    )]
-    pub audit_retention_days: i64,
-
-    /// Keep hourly stats rows for this many days when stats retention cleanup is enabled.
-    #[arg(
-        env = "PUSHGO_HOURLY_STATS_RETENTION_DAYS",
-        long = "hourly-stats-retention-days",
-        default_value = "90"
-    )]
-    pub hourly_stats_retention_days: i64,
-
-    /// Keep daily stats rows for this many days when stats retention cleanup is enabled.
-    #[arg(
-        env = "PUSHGO_DAILY_STATS_RETENTION_DAYS",
-        long = "daily-stats-retention-days",
-        default_value = "400"
-    )]
-    pub daily_stats_retention_days: i64,
-
-    /// Batch size for maintenance deletes other than provider pull expiry.
-    #[arg(
-        env = "PUSHGO_MAINTENANCE_DELETE_BATCH",
-        long = "maintenance-delete-batch",
-        default_value = "256"
-    )]
-    pub maintenance_delete_batch: usize,
-
-    /// Enable inactive-subscription soft cleanup.
-    #[arg(
-        env = "PUSHGO_STALE_SUBSCRIPTION_CLEANUP_ENABLED",
-        long = "stale-subscription-cleanup-enabled",
-        default_value = "false"
-    )]
-    pub stale_subscription_cleanup_enabled: bool,
-
-    /// Enable hard cleanup for devices whose subscriptions were already soft-deleted.
-    #[arg(
-        env = "PUSHGO_SOFT_DELETED_DEVICE_CLEANUP_ENABLED",
-        long = "soft-deleted-device-cleanup-enabled",
-        default_value = "false"
-    )]
-    pub soft_deleted_device_cleanup_enabled: bool,
-
-    /// Enable empty-channel cleanup.
-    #[arg(
-        env = "PUSHGO_ORPHAN_CHANNEL_CLEANUP_ENABLED",
-        long = "orphan-channel-cleanup-enabled",
-        default_value = "false"
-    )]
-    pub orphan_channel_cleanup_enabled: bool,
-
-    /// Enable audit retention cleanup.
-    #[arg(
-        env = "PUSHGO_AUDIT_RETENTION_CLEANUP_ENABLED",
-        long = "audit-retention-cleanup-enabled",
-        default_value = "false"
-    )]
-    pub audit_retention_cleanup_enabled: bool,
-
-    /// Enable stats retention cleanup.
-    #[arg(
-        env = "PUSHGO_STATS_RETENTION_CLEANUP_ENABLED",
-        long = "stats-retention-cleanup-enabled",
-        default_value = "false"
-    )]
-    pub stats_retention_cleanup_enabled: bool,
-
     /// Enable MCP endpoint (`/mcp`) and related routes.
     #[arg(
         env = "PUSHGO_MCP_ENABLED",
@@ -630,41 +366,9 @@ pub struct Args {
     )]
     pub mcp_enabled: bool,
 
-    /// Access token TTL for MCP OAuth (seconds).
-    #[arg(
-        env = "PUSHGO_MCP_ACCESS_TOKEN_TTL_SECS",
-        long = "mcp-access-token-ttl-secs",
-        default_value = "900"
-    )]
-    pub mcp_access_token_ttl_secs: i64,
-
     /// Public base URL used by externally exposed gateway URLs.
     #[arg(env = "PUSHGO_PUBLIC_BASE_URL", long = "public-base-url")]
     pub public_base_url: Option<String>,
-
-    /// Refresh token absolute TTL (seconds).
-    #[arg(
-        env = "PUSHGO_MCP_REFRESH_TOKEN_ABSOLUTE_TTL_SECS",
-        long = "mcp-refresh-token-absolute-ttl-secs",
-        default_value = "2592000"
-    )]
-    pub mcp_refresh_token_absolute_ttl_secs: i64,
-
-    /// Refresh token idle TTL (seconds).
-    #[arg(
-        env = "PUSHGO_MCP_REFRESH_TOKEN_IDLE_TTL_SECS",
-        long = "mcp-refresh-token-idle-ttl-secs",
-        default_value = "604800"
-    )]
-    pub mcp_refresh_token_idle_ttl_secs: i64,
-
-    /// Bind session TTL for MCP channel bind pages (seconds).
-    #[arg(
-        env = "PUSHGO_MCP_BIND_SESSION_TTL_SECS",
-        long = "mcp-bind-session-ttl-secs",
-        default_value = "600"
-    )]
-    pub mcp_bind_session_ttl_secs: i64,
 
     /// Enable dynamic client registration for MCP OAuth.
     #[arg(
@@ -692,6 +396,10 @@ impl Args {
         self.observability_profile = self.observability_profile.trim().to_string();
         if self.observability_profile.is_empty() {
             self.observability_profile = ObservabilityProfile::ProdMin.as_str().to_string();
+        }
+        self.runtime_profile = self.runtime_profile.trim().to_string();
+        if self.runtime_profile.is_empty() {
+            self.runtime_profile = GatewayRuntimeProfileSelection::Small.as_str().to_string();
         }
         self.private_transports = self.private_transports.trim().to_string();
         if self.private_transports.is_empty() {
@@ -726,6 +434,26 @@ impl Args {
             .filter(|entry| !entry.is_empty())
             .map(McpPredefinedClient::parse)
             .collect()
+    }
+
+    pub fn runtime_profile_selection(&self) -> Result<GatewayRuntimeProfileSelection, IoError> {
+        GatewayRuntimeProfileSelection::parse(self.runtime_profile.as_str()).ok_or_else(|| {
+            IoError::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "invalid PUSHGO_RUNTIME_PROFILE `{}` (expected small or public)",
+                    self.runtime_profile
+                ),
+            )
+        })
+    }
+
+    pub fn runtime_profile(&self) -> Result<GatewayRuntimeProfile, IoError> {
+        Ok(self.runtime_profile_selection()?.resolve())
+    }
+
+    pub fn runtime_tuning(&self) -> Result<RuntimeTuning, IoError> {
+        Ok(RuntimeTuning::for_profile(self.runtime_profile()?))
     }
 
     fn validate_private_transport_dependencies(
@@ -789,25 +517,13 @@ impl Args {
             .unwrap_or(ObservabilityProfile::ProdMin);
         let mut config = profile.defaults();
 
-        if let Some(enabled) = self.observability_diagnostics_api_enabled {
-            config.diagnostics_api_enabled = enabled;
-        }
         if let Some(raw) = self.observability_log_level.as_deref()
             && let Some(log_level) = ObservabilityLogLevel::parse(raw)
         {
             config.log_level = log_level;
         }
-        if let Some(enabled) = self.observability_stats_enabled {
-            config.stats_enabled = enabled;
-        }
 
         config
-    }
-
-    #[must_use]
-    pub fn private_online_fast_path_enabled_resolved(&self) -> bool {
-        self.private_online_fast_path_enabled
-            .unwrap_or(DEFAULT_PRIVATE_ONLINE_FAST_PATH_ENABLED)
     }
 }
 
@@ -900,6 +616,8 @@ fn validate_bind_addr(env_name: &str, raw: &str, message: &str) -> Result<Socket
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+
+    use crate::{runtime_config::GatewayRuntimeProfile, storage::DatabaseKind};
 
     use super::{
         Args, ObservabilityLogLevel, ObservabilityProfile, PrivateTransports,
@@ -1207,31 +925,102 @@ mod tests {
     }
 
     #[test]
-    fn private_defaults_are_direct_values() {
+    fn runtime_profile_defaults_to_small() {
         let args = Args::parse_from(["pushgo-gateway", "--db-url", "sqlite:///tmp/pushgo.db"])
             .normalized();
-        assert_eq!(args.private_max_pending_per_device, 200);
-        assert_eq!(args.private_pull_limit, 200);
-        assert_eq!(args.private_global_max_pending, 5_000_000);
-        assert_eq!(args.private_hot_cache_capacity, 50_000);
-        assert!(!args.private_online_fast_path_enabled_resolved());
+        assert_eq!(
+            args.runtime_profile().unwrap(),
+            GatewayRuntimeProfile::Small
+        );
+        let tuning = args.runtime_tuning().unwrap();
+        assert_eq!(tuning.profile, GatewayRuntimeProfile::Small);
+        assert_eq!(tuning.private.max_pending_per_device, 96);
+        assert_eq!(tuning.sqlite.core_read_connections, 2);
     }
 
     #[test]
-    fn explicit_private_values_are_preserved() {
+    fn runtime_profile_default_stays_small_for_postgres() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "postgres://pushgo:pushgo@localhost/pushgo",
+        ])
+        .normalized();
+        assert_eq!(
+            args.runtime_profile().unwrap(),
+            GatewayRuntimeProfile::Small
+        );
+        let tuning = args.runtime_tuning().unwrap();
+        assert_eq!(tuning.profile, GatewayRuntimeProfile::Small);
+        assert_eq!(tuning.private.max_pending_per_device, 96);
+        assert_eq!(tuning.external_db.max_connections, 8);
+    }
+
+    #[test]
+    fn runtime_profile_public_is_explicit() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "postgres://pushgo:pushgo@localhost/pushgo",
+            "--runtime-profile",
+            "public",
+        ])
+        .normalized();
+        assert_eq!(
+            args.runtime_profile().unwrap(),
+            GatewayRuntimeProfile::Public
+        );
+        let tuning = args.runtime_tuning().unwrap();
+        assert_eq!(tuning.profile, GatewayRuntimeProfile::Public);
+        assert_eq!(tuning.external_db.max_connections, 64);
+    }
+
+    #[test]
+    fn runtime_profile_does_not_change_database_driver_selection() {
         let args = Args::parse_from([
             "pushgo-gateway",
             "--db-url",
             "sqlite:///tmp/pushgo.db",
-            "--private-max-pending=48",
-            "--private-global-max-pending=12345",
-            "--private-hot-cache-capacity=777",
-            "--private-online-fast-path-enabled=false",
+            "--runtime-profile",
+            "public",
         ])
         .normalized();
-        assert_eq!(args.private_max_pending_per_device, 48);
-        assert_eq!(args.private_global_max_pending, 12_345);
-        assert_eq!(args.private_hot_cache_capacity, 777);
-        assert!(!args.private_online_fast_path_enabled_resolved());
+        assert_eq!(
+            args.runtime_profile().unwrap(),
+            GatewayRuntimeProfile::Public
+        );
+        assert_eq!(
+            DatabaseKind::from_url(args.db_url.as_deref().unwrap()).unwrap(),
+            DatabaseKind::Sqlite
+        );
+    }
+
+    #[test]
+    fn runtime_profile_rejects_invalid_value() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--runtime-profile",
+            "huge",
+        ])
+        .normalized();
+        let error = args
+            .runtime_profile()
+            .expect_err("invalid runtime profile must fail");
+        assert!(error.to_string().contains("invalid PUSHGO_RUNTIME_PROFILE"));
+    }
+
+    #[test]
+    fn runtime_profile_rejects_auto() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--runtime-profile",
+            "auto",
+        ])
+        .normalized();
+        assert!(args.runtime_profile().is_err());
     }
 }

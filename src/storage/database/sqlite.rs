@@ -5,7 +5,7 @@ use sqlx::{
     Connection, Executor, Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use std::{cmp, fs, path::Path, str::FromStr, time::Duration};
+use std::{fs, path::Path, str::FromStr, time::Duration};
 
 #[path = "sqlite/access.rs"]
 mod access;

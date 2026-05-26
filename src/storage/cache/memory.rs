@@ -3,40 +3,12 @@ use std::sync::Arc;
 use chrono::Utc;
 use scc::HashCache;
 
-use crate::storage::{ChannelInfo, DeviceInfo, DispatchTarget};
+use crate::{
+    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
+    storage::{ChannelInfo, DeviceInfo, DispatchTarget},
+};
 
 use super::{CacheAccess, CacheMemorySnapshot, DispatchTargetsCacheEntry};
-
-const DISPATCH_TARGETS_CACHE_TTL_MS_DEFAULT: i64 = 2000;
-const DISPATCH_TARGETS_CACHE_TTL_MS_MIN: i64 = 200;
-const DISPATCH_TARGETS_CACHE_TTL_MS_MAX: i64 = 10_000;
-
-#[derive(Debug, Clone, Copy)]
-struct CacheCapacityPlan {
-    device_min: usize,
-    device_max: usize,
-    channel_info_min: usize,
-    channel_info_max: usize,
-    channel_devices_min: usize,
-    channel_devices_max: usize,
-    dispatch_targets_min: usize,
-    dispatch_targets_max: usize,
-}
-
-impl CacheCapacityPlan {
-    const fn default() -> Self {
-        Self {
-            device_min: 128,
-            device_max: 2_048,
-            channel_info_min: 128,
-            channel_info_max: 2_048,
-            channel_devices_min: 256,
-            channel_devices_max: 4_096,
-            dispatch_targets_min: 256,
-            dispatch_targets_max: 4_096,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct InMemoryCache {
@@ -50,7 +22,12 @@ pub struct InMemoryCache {
 impl InMemoryCache {
     #[must_use]
     pub fn new() -> Self {
-        let caps = CacheCapacityPlan::default();
+        Self::with_profile(GatewayRuntimeProfile::Small)
+    }
+
+    #[must_use]
+    pub fn with_profile(profile: GatewayRuntimeProfile) -> Self {
+        let caps = RuntimeTuning::for_profile(profile).cache;
         Self {
             device_cache: Arc::new(HashCache::with_capacity(caps.device_min, caps.device_max)),
             channel_info_cache: Arc::new(HashCache::with_capacity(
@@ -65,21 +42,8 @@ impl InMemoryCache {
                 caps.dispatch_targets_min,
                 caps.dispatch_targets_max,
             )),
-            dispatch_targets_cache_ttl_ms: Self::read_dispatch_targets_cache_ttl_ms(),
+            dispatch_targets_cache_ttl_ms: caps.dispatch_targets_ttl_ms,
         }
-    }
-
-    fn read_dispatch_targets_cache_ttl_ms() -> i64 {
-        std::env::var("PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS")
-            .ok()
-            .and_then(|value| value.trim().parse::<i64>().ok())
-            .map(|value| {
-                value.clamp(
-                    DISPATCH_TARGETS_CACHE_TTL_MS_MIN,
-                    DISPATCH_TARGETS_CACHE_TTL_MS_MAX,
-                )
-            })
-            .unwrap_or(DISPATCH_TARGETS_CACHE_TTL_MS_DEFAULT)
     }
 
     pub fn memory_snapshot(&self) -> CacheMemorySnapshot {

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use reqwest::Client;
-use tokio::time::sleep;
+use tokio::{sync::Semaphore, time::sleep};
 
 use crate::{
     Error,
@@ -9,6 +9,7 @@ use crate::{
         BoxFuture, DispatchResult, ProviderFailure, ProviderFailureKind, TokenInfo, WnsClient,
         WnsTokenProvider, error::trimmed_body_text, wns::WnsPayload,
     },
+    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
 };
 
 const WNS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -20,19 +21,31 @@ const WNS_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 pub struct WnsService {
     client: Client,
     token_provider: Arc<dyn WnsTokenProvider>,
+    limiter: Arc<Semaphore>,
 }
 
 impl WnsService {
     pub fn new(token_provider: Arc<dyn WnsTokenProvider>) -> Result<Self, Error> {
+        Self::new_with_profile(token_provider, GatewayRuntimeProfile::Small)
+    }
+
+    pub fn new_with_profile(
+        token_provider: Arc<dyn WnsTokenProvider>,
+        runtime_profile: GatewayRuntimeProfile,
+    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
             .timeout(WNS_TIMEOUT)
             .build()
             .map_err(|err| Error::Internal(err.to_string()))?;
+        let max_in_flight = RuntimeTuning::for_profile(runtime_profile)
+            .provider
+            .wns_max_in_flight;
 
         Ok(Self {
             client,
             token_provider,
+            limiter: Arc::new(Semaphore::new(max_in_flight)),
         })
     }
 
@@ -103,6 +116,15 @@ impl WnsService {
         priority: Option<u8>,
         ttl_seconds: Option<u32>,
     ) -> DispatchResult {
+        let _permit = match self.limiter.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                return DispatchResult::from_error(
+                    0,
+                    Error::Internal("WNS concurrency limiter closed".to_string()),
+                );
+            }
+        };
         let mut request = self
             .client
             .post(device_token)

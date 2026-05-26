@@ -150,10 +150,12 @@ pub async fn build_app(
     wns: Arc<dyn WnsClient>,
     docs_html: &'static str,
 ) -> Result<AppRuntime, Box<dyn std::error::Error>> {
+    let runtime_tuning = args.runtime_tuning()?;
     let _build_span = tracing::info_span!(
         "gateway.app.build",
         http_addr = %args.http_addr,
         observability_profile = %args.observability_config().profile.as_str(),
+        runtime_profile = %runtime_tuning.profile.as_str(),
         mcp_enabled = args.mcp_enabled
     )
     .entered();
@@ -165,18 +167,21 @@ pub async fn build_app(
     let observability = args.observability_config();
     let store = Storage::new_with_config(StorageInitConfig {
         db_url: args.db_url.clone(),
-        sqlite_telemetry_db_url: args.sqlite_telemetry_db_url.clone(),
-        sqlite_runtime_db_url: args.sqlite_runtime_db_url.clone(),
+        runtime_profile: runtime_tuning.profile,
         stats_enabled: observability.stats_enabled,
         mcp_enabled: args.mcp_enabled,
     })
     .await?;
-    let stats = StatsCollector::spawn_with_mode(store.clone(), observability.stats_enabled);
+    let stats = StatsCollector::spawn_with_mode(
+        store.clone(),
+        observability.stats_enabled,
+        runtime_tuning.profile,
+    );
     let device_registry = Arc::new(DeviceRegistry::new());
     let device_operation_guards = Arc::new(DeviceOperationGuards::default());
     restore_device_registry(&store, &device_registry).await?;
 
-    let (dispatch, receivers) = DispatchChannels::new();
+    let (dispatch, receivers) = DispatchChannels::with_profile(runtime_tuning.profile);
 
     let auth = match args.token.as_deref() {
         None => AuthMode::Disabled,
@@ -186,6 +191,7 @@ pub async fn build_app(
     let private_channel_enabled = private_transports.any_enabled();
 
     let private_config = PrivateConfig {
+        runtime_profile: runtime_tuning.profile,
         private_quic_bind: private_transports
             .quic
             .then(|| args.private_quic_bind.clone()),
@@ -196,38 +202,48 @@ pub async fn build_app(
         tcp_proxy_protocol: args.private_tcp_proxy_protocol,
         private_tls_cert_path: args.private_tls_cert_path.clone(),
         private_tls_key_path: args.private_tls_key_path.clone(),
-        session_ttl_secs: args.private_session_ttl_secs,
-        grace_window_secs: args.private_grace_window_secs,
-        max_pending_per_device: args.private_max_pending_per_device,
-        global_max_pending: args.private_global_max_pending,
-        pull_limit: args.private_pull_limit,
-        ack_timeout_secs: args.private_ack_timeout_secs,
-        fallback_max_attempts: args.private_fallback_max_attempts,
-        fallback_max_backoff_secs: args.private_fallback_max_backoff_secs,
-        retransmit_window_secs: args.private_retx_window_secs,
-        retransmit_max_per_window: args.private_retx_max_per_window,
-        retransmit_max_per_tick: args.private_retx_max_per_tick,
-        retransmit_max_retries: args.private_retx_max_retries,
-        hot_cache_capacity: args.private_hot_cache_capacity,
-        default_ttl_secs: args.private_default_ttl_secs,
-        online_fast_path_enabled: args.private_online_fast_path_enabled_resolved(),
+        session_ttl_secs: runtime_tuning.private.session_ttl_secs,
+        grace_window_secs: runtime_tuning.private.grace_window_secs,
+        max_pending_per_device: runtime_tuning.private.max_pending_per_device,
+        global_max_pending: runtime_tuning.private.global_max_pending,
+        pull_limit: runtime_tuning.private.pull_limit,
+        ack_timeout_secs: runtime_tuning.private.ack_timeout_secs,
+        fallback_max_attempts: runtime_tuning.private.fallback_max_attempts,
+        fallback_max_backoff_secs: runtime_tuning.private.fallback_max_backoff_secs,
+        retransmit_window_secs: runtime_tuning.private.retransmit_window_secs,
+        retransmit_max_per_window: runtime_tuning.private.retransmit_max_per_window,
+        retransmit_max_per_tick: runtime_tuning.private.retransmit_max_per_tick,
+        retransmit_max_retries: runtime_tuning.private.retransmit_max_retries,
+        hot_cache_capacity: runtime_tuning.private.hot_cache_capacity,
+        default_ttl_secs: runtime_tuning.private.default_ttl_secs,
+        online_fast_path_enabled: runtime_tuning.private.online_fast_path_enabled,
         maintenance_cleanup: MaintenanceCleanupConfig {
-            provider_pull_expired_batch: args.provider_pull_expired_batch,
-            private_stale_outbox_ttl_secs: days_to_secs(args.private_stale_outbox_ttl_days),
-            orphan_device_ttl_secs: days_to_secs(args.orphan_device_ttl_days),
-            stale_subscription_ttl_secs: days_to_secs(args.stale_subscription_ttl_days),
-            soft_deleted_device_ttl_secs: days_to_secs(args.soft_deleted_device_ttl_days),
-            orphan_channel_ttl_secs: days_to_secs(args.orphan_channel_ttl_days),
-            dedupe_retention_secs: days_to_secs(args.dedupe_retention_days),
-            audit_retention_secs: days_to_secs(args.audit_retention_days),
-            hourly_stats_retention_secs: days_to_secs(args.hourly_stats_retention_days),
-            daily_stats_retention_secs: days_to_secs(args.daily_stats_retention_days),
-            delete_batch: args.maintenance_delete_batch,
-            stale_subscription_cleanup_enabled: args.stale_subscription_cleanup_enabled,
-            soft_deleted_device_cleanup_enabled: args.soft_deleted_device_cleanup_enabled,
-            orphan_channel_cleanup_enabled: args.orphan_channel_cleanup_enabled,
-            audit_retention_cleanup_enabled: args.audit_retention_cleanup_enabled,
-            stats_retention_cleanup_enabled: args.stats_retention_cleanup_enabled,
+            provider_pull_expired_batch: runtime_tuning.maintenance.provider_pull_expired_batch,
+            private_stale_outbox_ttl_secs: runtime_tuning.maintenance.private_stale_outbox_ttl_secs,
+            orphan_device_ttl_secs: runtime_tuning.maintenance.orphan_device_ttl_secs,
+            stale_subscription_ttl_secs: runtime_tuning.maintenance.stale_subscription_ttl_secs,
+            soft_deleted_device_ttl_secs: runtime_tuning.maintenance.soft_deleted_device_ttl_secs,
+            orphan_channel_ttl_secs: runtime_tuning.maintenance.orphan_channel_ttl_secs,
+            dedupe_retention_secs: runtime_tuning.maintenance.dedupe_retention_secs,
+            audit_retention_secs: runtime_tuning.maintenance.audit_retention_secs,
+            hourly_stats_retention_secs: runtime_tuning.maintenance.hourly_stats_retention_secs,
+            daily_stats_retention_secs: runtime_tuning.maintenance.daily_stats_retention_secs,
+            delete_batch: runtime_tuning.maintenance.delete_batch,
+            stale_subscription_cleanup_enabled: runtime_tuning
+                .maintenance
+                .stale_subscription_cleanup_enabled,
+            soft_deleted_device_cleanup_enabled: runtime_tuning
+                .maintenance
+                .soft_deleted_device_cleanup_enabled,
+            orphan_channel_cleanup_enabled: runtime_tuning
+                .maintenance
+                .orphan_channel_cleanup_enabled,
+            audit_retention_cleanup_enabled: runtime_tuning
+                .maintenance
+                .audit_retention_cleanup_enabled,
+            stats_retention_cleanup_enabled: runtime_tuning
+                .maintenance
+                .stats_retention_cleanup_enabled,
         },
         gateway_token: args.token.clone(),
     }
@@ -255,6 +271,7 @@ pub async fn build_app(
         store: store.clone(),
         private: private.clone(),
         stats: Arc::clone(&stats),
+        runtime_profile: runtime_tuning.profile,
     }
     .spawn(receivers);
 
@@ -284,10 +301,10 @@ pub async fn build_app(
         let config = McpConfig {
             bootstrap_http_addr: Arc::from(args.http_addr.clone().into_boxed_str()),
             public_base_url: public_base_url.clone(),
-            access_token_ttl_secs: args.mcp_access_token_ttl_secs,
-            refresh_token_absolute_ttl_secs: args.mcp_refresh_token_absolute_ttl_secs,
-            refresh_token_idle_ttl_secs: args.mcp_refresh_token_idle_ttl_secs,
-            bind_session_ttl_secs: args.mcp_bind_session_ttl_secs,
+            access_token_ttl_secs: runtime_tuning.mcp.access_token_ttl_secs,
+            refresh_token_absolute_ttl_secs: runtime_tuning.mcp.refresh_token_absolute_ttl_secs,
+            refresh_token_idle_ttl_secs: runtime_tuning.mcp.refresh_token_idle_ttl_secs,
+            bind_session_ttl_secs: runtime_tuning.mcp.bind_session_ttl_secs,
             dcr_enabled: args.mcp_dcr_enabled,
             predefined_clients,
         };
@@ -319,11 +336,6 @@ pub async fn build_app(
         event = "gateway.app_build_finished"
     );
     Ok(AppRuntime { router, private })
-}
-
-fn days_to_secs(days: i64) -> i64 {
-    const DAY_SECS: i64 = 24 * 60 * 60;
-    days.saturating_mul(DAY_SECS)
 }
 
 fn derive_wss_advertised_port(public_base_url: Option<&str>) -> u16 {

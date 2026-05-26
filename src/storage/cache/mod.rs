@@ -1,4 +1,7 @@
-use crate::storage::types::{ChannelInfo, DeviceInfo, DispatchTarget, DispatchTargetsCacheEntry};
+use crate::{
+    runtime_config::GatewayRuntimeProfile,
+    storage::types::{ChannelInfo, DeviceInfo, DispatchTarget, DispatchTargetsCacheEntry},
+};
 use serde::Serialize;
 
 mod memory;
@@ -26,6 +29,10 @@ pub struct CacheMemorySnapshot {
 impl CacheStore {
     pub fn new() -> Self {
         CacheStore::InMemory(InMemoryCache::new())
+    }
+
+    pub fn with_profile(profile: GatewayRuntimeProfile) -> Self {
+        CacheStore::InMemory(InMemoryCache::with_profile(profile))
     }
 
     pub fn memory_snapshot(&self) -> CacheMemorySnapshot {

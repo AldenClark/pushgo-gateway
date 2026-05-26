@@ -1,7 +1,7 @@
 use crate::storage::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::{MySqlPool, Row};
+use sqlx::{MySqlPool, Row, mysql::MySqlPoolOptions};
 
 #[path = "mysql/access.rs"]
 mod access;

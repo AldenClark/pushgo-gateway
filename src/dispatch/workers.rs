@@ -10,6 +10,7 @@ pub(crate) struct DispatchWorkerDeps {
     pub store: Storage,
     pub private: Option<Arc<PrivateState>>,
     pub stats: Arc<StatsCollector>,
+    pub runtime_profile: GatewayRuntimeProfile,
 }
 
 impl DispatchWorkerDeps {
@@ -24,7 +25,7 @@ impl DispatchWorkerDeps {
             fcm: self.fcm,
             wns: self.wns,
             runtime,
-            config: DispatchRuntimeConfig::from_env(),
+            config: DispatchRuntimeConfig::from_profile(self.runtime_profile),
         };
         pool.spawn(receivers);
     }

@@ -119,6 +119,7 @@ impl FallbackRuntime {
         let batch_size = batch_size.max(1);
         let max_rounds = max_rounds.max(1);
         let max_processed_total = max_processed_total.max(batch_size);
+        let started = Instant::now();
         let mut processed_total = 0usize;
         let mut rounds_executed = 0usize;
         for round in 0..max_rounds {
@@ -184,7 +185,8 @@ impl FallbackRuntime {
                 rounds_executed = (rounds_executed as u64),
                 batch_size = (batch_size as u64),
                 max_rounds = (max_rounds as u64),
-                max_processed_total = (max_processed_total as u64)
+                max_processed_total = (max_processed_total as u64),
+                elapsed_ms = (started.elapsed().as_millis() as u64)
             );
         }
         Ok(())
@@ -251,6 +253,7 @@ impl FallbackRuntime {
     }
 
     pub(super) async fn run_maintenance_tick(&self) -> Result<(), crate::Error> {
+        let started = Instant::now();
         let now = chrono::Utc::now().timestamp_millis();
         let cleanup: MaintenanceCleanupStats = self
             .state
@@ -268,6 +271,14 @@ impl FallbackRuntime {
         let target_hot_cache = self.state.hub.hot_cache_target_for_pending(pending_outbox);
         self.state.hub.compact_hot_cache(target_hot_cache);
         self.try_trim_allocator();
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.maintenance_tick_finished",
+            elapsed_ms = (started.elapsed().as_millis() as u64),
+            pending_outbox = (pending_outbox as u64),
+            target_hot_cache = (target_hot_cache as u64)
+        );
         Ok(())
     }
 
@@ -293,7 +304,9 @@ impl FallbackRuntime {
         if total_pending == 0 {
             return;
         }
-        let seed_limit = total_pending.min(crate::private::private_fallback_seed_limit());
+        let seed_limit = total_pending.min(crate::private::private_fallback_seed_limit(
+            self.state.config.runtime_profile,
+        ));
         let entries = match self.state.hub.list_due_outbox(i64::MAX, seed_limit).await {
             Ok(value) => value,
             Err(err) => {
@@ -553,6 +566,7 @@ mod tests {
 
     fn test_private_config() -> PrivateConfig {
         PrivateConfig {
+            runtime_profile: crate::runtime_config::GatewayRuntimeProfile::Small,
             private_quic_bind: None,
             private_tcp_bind: None,
             tcp_tls_offload: false,

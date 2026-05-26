@@ -9,6 +9,7 @@ use pushgo_gateway::{
     args::{Args, ObservabilityConfig, ObservabilityLogLevel, PrivateTransports},
     private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
+    runtime_config::RuntimeTuning,
 };
 
 use crate::token_providers::remote::{
@@ -32,6 +33,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         eprintln!("invalid observability log level `{raw_level}`, fallback to default `warn`");
     }
     let private_transports = args.private_transports()?;
+    let runtime_tuning = args.runtime_tuning()?;
     let observability = args.observability_config();
     init_native_tracing(observability.log_level);
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
@@ -42,6 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &args,
         private_transports,
         &observability,
+        runtime_tuning,
         apns_endpoint,
         token_service_url.as_str(),
     );
@@ -65,9 +68,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         client,
     ));
 
-    let apns = Arc::new(ApnsService::new(apns_token_provider, apns_endpoint)?);
-    let fcm = Arc::new(FcmService::new(fcm_token_provider, FCM_SEND_BASE_URL)?);
-    let wns = Arc::new(WnsService::new(wns_token_provider)?);
+    let apns = Arc::new(ApnsService::new_with_profile(
+        apns_token_provider,
+        apns_endpoint,
+        runtime_tuning.profile,
+    )?);
+    let fcm = Arc::new(FcmService::new_with_profile(
+        fcm_token_provider,
+        FCM_SEND_BASE_URL,
+        runtime_tuning.profile,
+    )?);
+    let wns = Arc::new(WnsService::new_with_profile(
+        wns_token_provider,
+        runtime_tuning.profile,
+    )?);
 
     let docs_html = include_str!("api/docs.html");
     let AppRuntime { router, private } = build_app(&args, apns, fcm, wns, docs_html).await?;
@@ -148,6 +162,7 @@ fn print_startup_diagnostics(
     args: &Args,
     private_transports: PrivateTransports,
     observability: &ObservabilityConfig,
+    runtime_tuning: RuntimeTuning,
     apns_endpoint: &str,
     token_service_url: &str,
 ) {
@@ -161,8 +176,16 @@ fn print_startup_diagnostics(
         private_transport_quic_enabled = (private_transports.quic),
         private_transport_tcp_enabled = (private_transports.tcp),
         private_transport_wss_enabled = (private_transports.wss),
+        runtime_profile = %(runtime_tuning.profile.as_str()),
         observability_profile = %(observability.profile.as_str()),
-        private_online_fast_path_enabled = (args.private_online_fast_path_enabled_resolved()),
+        private_online_fast_path_enabled = (runtime_tuning.private.online_fast_path_enabled),
+        dispatch_worker_count = (runtime_tuning.dispatch.worker_count as u64),
+        dispatch_queue_capacity = (runtime_tuning.dispatch.queue_capacity as u64),
+        stats_channel_capacity = (runtime_tuning.stats.channel_capacity as u64),
+        external_db_max_connections = (runtime_tuning.external_db.max_connections as u64),
+        provider_apns_max_in_flight = (runtime_tuning.provider.apns_max_in_flight as u64),
+        provider_fcm_max_in_flight = (runtime_tuning.provider.fcm_max_in_flight as u64),
+        provider_wns_max_in_flight = (runtime_tuning.provider.wns_max_in_flight as u64),
         diagnostics_api_enabled = (observability.diagnostics_api_enabled),
         observability_log_level = %(observability.log_level.as_str()),
         stats_enabled = (observability.stats_enabled),

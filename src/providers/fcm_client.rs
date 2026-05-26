@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use reqwest::Client;
 use serde::Deserialize;
-use tokio::time::sleep;
+use tokio::{sync::Semaphore, time::sleep};
 
 use crate::{
     Error,
@@ -10,6 +10,7 @@ use crate::{
         BoxFuture, DispatchResult, FcmClient, FcmTokenProvider, ProviderFailure,
         ProviderFailureKind, TokenInfo, error::trimmed_body_text, fcm::FcmPayload,
     },
+    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
 };
 
 const FCM_TIMEOUT: Duration = Duration::from_secs(60);
@@ -20,21 +21,34 @@ pub struct FcmService {
     client: Client,
     token_provider: Arc<dyn FcmTokenProvider>,
     base_url: Arc<str>,
+    limiter: Arc<Semaphore>,
 }
 
 impl FcmService {
     pub fn new(token_provider: Arc<dyn FcmTokenProvider>, base_url: &str) -> Result<Self, Error> {
+        Self::new_with_profile(token_provider, base_url, GatewayRuntimeProfile::Small)
+    }
+
+    pub fn new_with_profile(
+        token_provider: Arc<dyn FcmTokenProvider>,
+        base_url: &str,
+        runtime_profile: GatewayRuntimeProfile,
+    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
             .timeout(FCM_TIMEOUT)
             .build()
             .map_err(|err| Error::Internal(err.to_string()))?;
         let normalized_base_url = normalize_base_url(base_url)?;
+        let max_in_flight = RuntimeTuning::for_profile(runtime_profile)
+            .provider
+            .fcm_max_in_flight;
 
         Ok(Self {
             client,
             token_provider,
             base_url: Arc::from(normalized_base_url),
+            limiter: Arc::new(Semaphore::new(max_in_flight)),
         })
     }
 
@@ -98,6 +112,15 @@ impl FcmService {
             "{}/v1/projects/{}/messages:send",
             self.base_url, access.project_id
         );
+        let _permit = match self.limiter.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                return DispatchResult::from_error(
+                    0,
+                    Error::Internal("FCM concurrency limiter closed".to_string()),
+                );
+            }
+        };
 
         let response = match self
             .client

@@ -15,6 +15,7 @@ use warp_link_coordination::InMemoryCoordinator;
 
 use crate::{
     routing::DeviceRegistry,
+    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
     stats::StatsCollector,
     storage::{
         DeviceId, MaintenanceCleanupConfig, MaintenanceCleanupStats, Platform, PrivateMessage,
@@ -66,17 +67,6 @@ pub struct PrivateStateMemorySnapshot {
     pub hub: PrivateHubMemorySnapshot,
 }
 
-const MAINTENANCE_INTERVAL_SECS: i64 = 60;
-const FALLBACK_TASK_COMMAND_CAPACITY_MIN: usize = 64;
-const FALLBACK_TASK_COMMAND_CAPACITY_MAX: usize = 262_144;
-const CONNECTION_QUEUE_CAPACITY_MIN: usize = 16;
-const CONNECTION_QUEUE_CAPACITY_MAX: usize = 2_048;
-const FALLBACK_SEED_LIMIT_MIN: usize = 1_024;
-const FALLBACK_SEED_LIMIT_MAX: usize = 500_000;
-const CLAIM_ACK_ACTIVE_MAX_ROUNDS: usize = 4;
-const CLAIM_ACK_IDLE_MAX_ROUNDS: usize = 1;
-const CLAIM_ACK_ACTIVE_PROCESS_BUDGET: usize = 4_096;
-const CLAIM_ACK_IDLE_PROCESS_BUDGET: usize = 256;
 const FALLBACK_SCHEDULER_COMPACT_MIN_HEAP: usize = 8_192;
 const FALLBACK_SCHEDULER_COMPACT_MIN_STALE: usize = 2_048;
 const FALLBACK_SCHEDULER_COMPACT_RATIO: usize = 3;
@@ -88,6 +78,7 @@ const PRIVATE_DRAINING_DELIVERY_WINDOW_RTT_PADDING_MS: f64 = 2_000.0;
 const PRIVATE_DEFAULT_TTL_SECONDS_MAX: i64 = 30 * 24 * 60 * 60;
 #[derive(Debug, Clone)]
 pub struct PrivateConfig {
+    pub runtime_profile: GatewayRuntimeProfile,
     pub private_quic_bind: Option<String>,
     pub private_tcp_bind: Option<String>,
     pub tcp_tls_offload: bool,
@@ -221,17 +212,22 @@ mod tests {
 struct FallbackTaskEngine {
     tx: Sender<FallbackTaskCommand>,
     rx: Mutex<Option<Receiver<FallbackTaskCommand>>>,
+    capacity: usize,
     depth: AtomicUsize,
     resync_requested: AtomicBool,
     resync_notify: tokio::sync::Notify,
 }
 
 impl FallbackTaskEngine {
-    fn new() -> Arc<Self> {
-        let (tx, rx) = flume::bounded(fallback_task_command_capacity());
+    fn new(runtime_profile: GatewayRuntimeProfile) -> Arc<Self> {
+        let capacity = RuntimeTuning::for_profile(runtime_profile)
+            .private
+            .fallback_task_queue_capacity;
+        let (tx, rx) = flume::bounded(capacity);
         Arc::new(Self {
             tx,
             rx: Mutex::new(Some(rx)),
+            capacity,
             depth: AtomicUsize::new(0),
             resync_requested: AtomicBool::new(false),
             resync_notify: tokio::sync::Notify::new(),
@@ -294,6 +290,10 @@ impl FallbackTaskEngine {
         self.depth.load(Ordering::Relaxed)
     }
 
+    fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     fn request_resync(&self) {
         self.resync_requested.store(true, Ordering::Relaxed);
         self.resync_notify.notify_one();
@@ -310,41 +310,16 @@ impl FallbackTaskEngine {
     }
 }
 
-fn fallback_task_command_capacity() -> usize {
-    if let Some(explicit) = std::env::var("PUSHGO_PRIVATE_FALLBACK_TASK_QUEUE_CAPACITY")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-    {
-        return explicit.clamp(
-            FALLBACK_TASK_COMMAND_CAPACITY_MIN,
-            FALLBACK_TASK_COMMAND_CAPACITY_MAX,
-        );
-    }
-    2_048
+pub(crate) fn private_connection_queue_capacity(runtime_profile: GatewayRuntimeProfile) -> usize {
+    RuntimeTuning::for_profile(runtime_profile)
+        .private
+        .connection_queue_capacity
 }
 
-pub(crate) fn private_fallback_task_command_capacity() -> usize {
-    fallback_task_command_capacity()
-}
-
-pub(crate) fn private_connection_queue_capacity() -> usize {
-    if let Some(explicit) = std::env::var("PUSHGO_PRIVATE_CONNECTION_QUEUE_CAPACITY")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-    {
-        return explicit.clamp(CONNECTION_QUEUE_CAPACITY_MIN, CONNECTION_QUEUE_CAPACITY_MAX);
-    }
-    64
-}
-
-pub(crate) fn private_fallback_seed_limit() -> usize {
-    if let Some(explicit) = std::env::var("PUSHGO_PRIVATE_FALLBACK_SEED_LIMIT")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-    {
-        return explicit.clamp(FALLBACK_SEED_LIMIT_MIN, FALLBACK_SEED_LIMIT_MAX);
-    }
-    10_000
+pub(crate) fn private_fallback_seed_limit(runtime_profile: GatewayRuntimeProfile) -> usize {
+    RuntimeTuning::for_profile(runtime_profile)
+        .private
+        .fallback_seed_limit
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -426,19 +401,20 @@ impl PrivateState {
 
         let worker_span = tracing::info_span!("gateway.private.fallback_worker");
         tokio::spawn(async move {
+            let private_tuning = RuntimeTuning::for_profile(state.config.runtime_profile).private;
             let runtime = FallbackRuntime::new(Arc::clone(&state));
             let mut scheduler = FallbackScheduler::default();
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.fallback_worker_started",
-                maintenance_interval_secs = (MAINTENANCE_INTERVAL_SECS)
+                maintenance_interval_secs = (private_tuning.maintenance_interval_secs)
             );
             runtime.seed_fallback_tasks(&mut scheduler).await;
             scheduler.schedule_maintenance(
                 chrono::Utc::now()
                     .timestamp_millis()
-                    .saturating_add(MAINTENANCE_INTERVAL_SECS * 1000),
+                    .saturating_add(private_tuning.maintenance_interval_secs * 1000),
             );
             engine.sync_scheduler_depth(&state, &scheduler);
             let stop_reason = loop {
@@ -446,15 +422,17 @@ impl PrivateState {
                     break "shutdown_flag";
                 }
                 if engine.consume_resync_request() {
-                    if let Err(err) = runtime.resync_fallback_tasks(&mut scheduler, 200_000).await {
-                                                ::tracing::event!(
+                    let resync_limit =
+                        crate::private::private_fallback_seed_limit(state.config.runtime_profile);
+                    if let Err(err) = runtime.resync_fallback_tasks(&mut scheduler, resync_limit).await {
+                        ::tracing::event!(
                             target: "gateway.trace_event",
                             ::tracing::Level::WARN,
                             event = "private.fallback_resync_failed",
                             error = %(err.to_string())
                         );
                     } else {
-                                                ::tracing::event!(
+                        ::tracing::event!(
                             target: "gateway.trace_event",
                             ::tracing::Level::INFO,
                             event = "private.fallback_resync_applied",
@@ -480,7 +458,7 @@ impl PrivateState {
                     },
                     _ = tokio::time::sleep_until(wake_at) => {
                         let now = chrono::Utc::now().timestamp_millis();
-                        let due_tasks = scheduler.pop_due(now, 1024);
+                        let due_tasks = scheduler.pop_due(now, private_tuning.fallback_due_batch);
                         if !due_tasks.is_empty() {
                             let due_tasks_count = due_tasks.len();
                             let mut max_lag_ms = 0u64;
@@ -499,7 +477,7 @@ impl PrivateState {
                                             );
                                         }
                                         scheduler.schedule_maintenance(
-                                            now.saturating_add(MAINTENANCE_INTERVAL_SECS * 1000),
+                                            now.saturating_add(private_tuning.maintenance_interval_secs * 1000),
                                         );
                                         run_claim_worker = true;
                                     }
@@ -515,12 +493,12 @@ impl PrivateState {
                                 run_claim_worker = (run_claim_worker)
                             );
                             if run_claim_worker
-                                && let Err(err) =
-                                    runtime.run_claim_ack_drain(
+                                && let Err(err) = runtime
+                                    .run_claim_ack_drain(
                                         &mut scheduler,
-                                        1024,
-                                        CLAIM_ACK_ACTIVE_MAX_ROUNDS,
-                                        CLAIM_ACK_ACTIVE_PROCESS_BUDGET,
+                                        private_tuning.active_claim_batch,
+                                        private_tuning.active_claim_max_rounds,
+                                        private_tuning.active_claim_process_budget,
                                     )
                                     .await
                             {
@@ -535,15 +513,16 @@ impl PrivateState {
                                 state.metrics.mark_task_lag_ms(max_lag_ms);
                             }
                         } else if let Err(err) =
-                            runtime.run_claim_ack_drain(
-                                &mut scheduler,
-                                256,
-                                CLAIM_ACK_IDLE_MAX_ROUNDS,
-                                CLAIM_ACK_IDLE_PROCESS_BUDGET,
-                            )
-                            .await
+                            runtime
+                                .run_claim_ack_drain(
+                                    &mut scheduler,
+                                    private_tuning.idle_claim_batch,
+                                    private_tuning.idle_claim_max_rounds,
+                                    private_tuning.idle_claim_process_budget,
+                                )
+                                .await
                         {
-                                                        ::tracing::event!(
+                            ::tracing::event!(
                                 target: "gateway.trace_event",
                                 ::tracing::Level::WARN,
                                 event = "private.claim_ack_drain_idle_failed",

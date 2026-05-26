@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_config::{GatewayRuntimeProfile, RuntimeTuning};
 use crate::storage::database::migration::{
     AppliedSchemaMigration, SchemaMigrationDefinition, SchemaMigrationPlan,
     validate_applied_schema_migrations,
@@ -124,75 +125,56 @@ const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 
 impl SqliteDb {
     pub async fn new(db_url: &str) -> StoreResult<Self> {
-        Self::new_with_config(db_url, None, None, true, true).await
+        Self::new_with_config(db_url, GatewayRuntimeProfile::Small, true, true).await
     }
 
     pub async fn new_with_config(
         db_url: &str,
-        telemetry_db_url: Option<&str>,
-        runtime_db_url: Option<&str>,
+        runtime_profile: GatewayRuntimeProfile,
         stats_enabled: bool,
         mcp_enabled: bool,
     ) -> StoreResult<Self> {
+        let tuning = RuntimeTuning::for_profile(runtime_profile).sqlite;
         ensure_sqlite_parent_dir(db_url)?;
         let core_read_pool = connect_sqlite_pool(
             db_url,
-            sqlite_core_read_connections(),
-            Duration::from_secs(sqlite_core_read_acquire_timeout_secs()),
+            tuning.core_read_connections,
+            tuning.core_read_acquire_timeout,
+            tuning,
         )
         .await?;
-        let pool = connect_sqlite_pool(
-            db_url,
-            1,
-            Duration::from_secs(sqlite_core_write_acquire_timeout_secs()),
-        )
-        .await?;
+        let pool =
+            connect_sqlite_pool(db_url, 1, tuning.core_write_acquire_timeout, tuning).await?;
         let delivery_url = derive_sqlite_sidecar_url(db_url, "delivery");
         let dispatch_url = derive_sqlite_sidecar_url(db_url, "dispatch");
-        let telemetry_url = stats_enabled.then(|| {
-            telemetry_db_url
-                .map(str::to_string)
-                .unwrap_or_else(|| derive_sqlite_sidecar_url(db_url, "telemetry"))
-        });
-        let runtime_url = mcp_enabled.then(|| {
-            runtime_db_url
-                .map(str::to_string)
-                .unwrap_or_else(|| derive_sqlite_sidecar_url(db_url, "runtime"))
-        });
+        let telemetry_url = stats_enabled.then(|| derive_sqlite_sidecar_url(db_url, "telemetry"));
+        let runtime_url = mcp_enabled.then(|| derive_sqlite_sidecar_url(db_url, "runtime"));
         ensure_sqlite_parent_dir(delivery_url.as_str())?;
         let delivery_pool = connect_sqlite_pool(
             delivery_url.as_str(),
             1,
-            Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
+            tuning.sidecar_acquire_timeout,
+            tuning,
         )
         .await?;
         ensure_sqlite_parent_dir(dispatch_url.as_str())?;
         let dispatch_pool = connect_sqlite_pool(
             dispatch_url.as_str(),
             1,
-            Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
+            tuning.sidecar_acquire_timeout,
+            tuning,
         )
         .await?;
         let telemetry_pool = if let Some(url) = telemetry_url.as_deref() {
             ensure_sqlite_parent_dir(url)?;
-            let pool = connect_sqlite_pool(
-                url,
-                1,
-                Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
-            )
-            .await?;
+            let pool = connect_sqlite_pool(url, 1, tuning.sidecar_acquire_timeout, tuning).await?;
             Some(pool)
         } else {
             None
         };
         let runtime_pool = if let Some(url) = runtime_url.as_deref() {
             ensure_sqlite_parent_dir(url)?;
-            let pool = connect_sqlite_pool(
-                url,
-                1,
-                Duration::from_millis(sqlite_sidecar_acquire_timeout_millis()),
-            )
-            .await?;
+            let pool = connect_sqlite_pool(url, 1, tuning.sidecar_acquire_timeout, tuning).await?;
             Some(pool)
         } else {
             None
@@ -205,7 +187,7 @@ impl SqliteDb {
             runtime_pool,
             pool,
         };
-        this.init_schema().await?;
+        this.init_schema(tuning).await?;
         this.init_delivery_sidecar(db_url, delivery_url.as_str())
             .await?;
         this.init_dispatch_sidecar(db_url, dispatch_url.as_str())
@@ -219,7 +201,10 @@ impl SqliteDb {
         Ok(this)
     }
 
-    async fn init_schema(&self) -> StoreResult<()> {
+    async fn init_schema(
+        &self,
+        tuning: crate::runtime_config::SqliteRuntimeTuning,
+    ) -> StoreResult<()> {
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
@@ -235,16 +220,14 @@ impl SqliteDb {
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&self.pool)
             .await?;
-        let busy_timeout = format!("PRAGMA busy_timeout = {}", sqlite_busy_timeout_millis());
+        let busy_timeout = format!("PRAGMA busy_timeout = {}", tuning.busy_timeout.as_millis());
         sqlx::query(busy_timeout.as_str())
             .execute(&self.pool)
             .await?;
-        let cache_size = format!("PRAGMA cache_size = -{}", sqlite_page_cache_kib());
+        let cache_size = format!("PRAGMA cache_size = -{}", tuning.page_cache_kib);
         sqlx::query(cache_size.as_str()).execute(&self.pool).await?;
-        let wal_autocheckpoint = format!(
-            "PRAGMA wal_autocheckpoint = {}",
-            sqlite_wal_autocheckpoint()
-        );
+        let wal_autocheckpoint =
+            format!("PRAGMA wal_autocheckpoint = {}", tuning.wal_autocheckpoint);
         sqlx::query(wal_autocheckpoint.as_str())
             .execute(&self.pool)
             .await?;
@@ -1051,23 +1034,21 @@ async fn connect_sqlite_pool(
     db_url: &str,
     max_connections: u32,
     acquire_timeout: Duration,
+    tuning: crate::runtime_config::SqliteRuntimeTuning,
 ) -> StoreResult<SqlitePool> {
-    let sqlite_idle_timeout_secs = read_env_u64("PUSHGO_SQLITE_IDLE_TIMEOUT_SECS", 60, 1, 3600);
-    let sqlite_statement_cache_capacity =
-        read_env_usize("PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY", 32, 0, 512);
-    let sqlite_page_cache_kib = sqlite_page_cache_kib();
-    let sqlite_wal_autocheckpoint = sqlite_wal_autocheckpoint();
+    let sqlite_page_cache_kib = tuning.page_cache_kib;
+    let sqlite_wal_autocheckpoint = tuning.wal_autocheckpoint;
     let connect_options = SqliteConnectOptions::from_str(db_url)?
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
-        .statement_cache_capacity(sqlite_statement_cache_capacity)
-        .busy_timeout(Duration::from_millis(sqlite_busy_timeout_millis()));
+        .statement_cache_capacity(tuning.statement_cache_capacity)
+        .busy_timeout(tuning.busy_timeout);
     Ok(SqlitePoolOptions::new()
         .max_connections(max_connections)
         .min_connections(0)
         .acquire_timeout(acquire_timeout)
-        .idle_timeout(Duration::from_secs(sqlite_idle_timeout_secs))
+        .idle_timeout(tuning.idle_timeout)
         .after_connect(move |conn, _meta| {
             Box::pin(async move {
                 let cache_size = format!("PRAGMA cache_size = -{sqlite_page_cache_kib}");
@@ -1182,65 +1163,4 @@ fn sqlite_path_from_url(db_url: &str) -> Option<String> {
             .unwrap_or(raw_path)
             .to_string(),
     )
-}
-
-fn sqlite_core_read_connections() -> u32 {
-    let cpu_default = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(2);
-    let default = cmp::min(cpu_default, 4);
-    read_env_usize("PUSHGO_SQLITE_CORE_READ_CONNECTIONS", default, 1, 16) as u32
-}
-
-fn sqlite_core_read_acquire_timeout_secs() -> u64 {
-    read_env_u64("PUSHGO_SQLITE_CORE_READ_ACQUIRE_TIMEOUT_SECS", 5, 1, 60)
-}
-
-fn sqlite_core_write_acquire_timeout_secs() -> u64 {
-    read_env_u64("PUSHGO_SQLITE_CORE_WRITE_ACQUIRE_TIMEOUT_SECS", 5, 1, 60)
-}
-
-fn sqlite_sidecar_acquire_timeout_millis() -> u64 {
-    read_env_u64(
-        "PUSHGO_SQLITE_SIDECAR_ACQUIRE_TIMEOUT_MILLIS",
-        200,
-        50,
-        10_000,
-    )
-}
-
-fn sqlite_busy_timeout_millis() -> u64 {
-    read_env_u64("PUSHGO_SQLITE_BUSY_TIMEOUT_MILLIS", 30_000, 100, 120_000)
-}
-
-fn sqlite_page_cache_kib() -> i64 {
-    read_env_i64("PUSHGO_SQLITE_PAGE_CACHE_KIB", 1024, 64, 262_144)
-}
-
-fn sqlite_wal_autocheckpoint() -> i64 {
-    read_env_i64("PUSHGO_SQLITE_WAL_AUTOCHECKPOINT", 256, 1, 100_000)
-}
-
-fn read_env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .map(|value| value.clamp(min, max))
-        .unwrap_or(default)
-}
-
-fn read_env_u64(name: &str, default: u64, min: u64, max: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(|value| value.clamp(min, max))
-        .unwrap_or(default)
-}
-
-fn read_env_i64(name: &str, default: i64, min: i64, max: i64) -> i64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .map(|value| value.clamp(min, max))
-        .unwrap_or(default)
 }

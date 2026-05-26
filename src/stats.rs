@@ -2,23 +2,21 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
 use hashbrown::HashMap;
 use tokio::{sync::mpsc, time::Duration};
 use tracing::Instrument;
 
-use crate::storage::{
-    AutomationCounts, ChannelStatsDailyDelta, DeviceStatsDailyDelta, GatewayStatsHourlyDelta,
-    OpsStatsHourlyDelta, StatsBatchWrite, Storage,
-};
 use crate::value::DeviceKeyRef;
-
-const STATS_FLUSH_INTERVAL_SECS: u64 = 2;
-const STATS_CHANNEL_CAPACITY_MIN: usize = 256;
-const STATS_CHANNEL_CAPACITY_MAX: usize = 32_768;
-const STATS_FLUSH_EVENT_THRESHOLD_MIN: usize = 128;
-const STATS_FLUSH_EVENT_THRESHOLD_MAX: usize = 16_384;
+use crate::{
+    runtime_config::{GatewayRuntimeProfile, RuntimeTuning, StatsRuntimeTuning},
+    storage::{
+        AutomationCounts, ChannelStatsDailyDelta, DeviceStatsDailyDelta, GatewayStatsHourlyDelta,
+        OpsStatsHourlyDelta, StatsBatchWrite, Storage,
+    },
+};
 
 pub const OPS_METRIC_DISPATCH_PROVIDER_SEND_FAILED: &str = "dispatch.provider_send_failed";
 pub const OPS_METRIC_HTTP_RESPONSE_5XX: &str = "http.response_5xx";
@@ -83,17 +81,25 @@ pub struct StatsCollector {
 
 impl StatsCollector {
     pub fn spawn(store: Storage) -> Arc<Self> {
-        Self::spawn_with_mode(store, true)
+        Self::spawn_with_mode(store, true, GatewayRuntimeProfile::Small)
     }
 
-    pub fn spawn_with_mode(store: Storage, enabled: bool) -> Arc<Self> {
+    pub fn spawn_with_mode(
+        store: Storage,
+        enabled: bool,
+        runtime_profile: GatewayRuntimeProfile,
+    ) -> Arc<Self> {
         if !enabled {
             return Arc::new(Self { tx: None });
         }
-        let channel_capacity = stats_channel_capacity();
+        let tuning = RuntimeTuning::for_profile(runtime_profile).stats;
+        let channel_capacity = tuning.channel_capacity;
         let (tx, rx) = mpsc::channel(channel_capacity);
         tokio::spawn(
-            run_stats_worker(store, rx).instrument(tracing::info_span!("gateway.stats.worker")),
+            run_stats_worker(store, rx, tuning).instrument(tracing::info_span!(
+                "gateway.stats.worker",
+                runtime_profile = %runtime_profile.as_str()
+            )),
         );
         Arc::new(Self { tx: Some(tx) })
     }
@@ -222,17 +228,23 @@ fn stats_event_kind(event: &StatsEvent) -> &'static str {
     }
 }
 
-async fn run_stats_worker(store: Storage, mut rx: mpsc::Receiver<StatsEvent>) {
-    let flush_event_threshold = stats_flush_event_threshold();
+async fn run_stats_worker(
+    store: Storage,
+    mut rx: mpsc::Receiver<StatsEvent>,
+    tuning: StatsRuntimeTuning,
+) {
+    let flush_event_threshold = tuning.flush_event_threshold;
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
         event = "stats.worker_started",
-        flush_interval_secs = (STATS_FLUSH_INTERVAL_SECS),
-        flush_event_threshold = (flush_event_threshold as u64)
+        flush_interval_secs = (tuning.flush_interval_secs),
+        flush_event_threshold = (flush_event_threshold as u64),
+        retained_row_limit = (tuning.retained_row_limit as u64),
+        sample_gateway_runtime_metrics = (tuning.sample_gateway_runtime_metrics)
     );
 
-    let mut interval = tokio::time::interval(Duration::from_secs(STATS_FLUSH_INTERVAL_SECS));
+    let mut interval = tokio::time::interval(Duration::from_secs(tuning.flush_interval_secs));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let mut channel_rows: HashMap<([u8; 16], String), ChannelStatsDailyDelta> = HashMap::new();
@@ -245,13 +257,16 @@ async fn run_stats_worker(store: Storage, mut rx: mpsc::Receiver<StatsEvent>) {
         tokio::select! {
             maybe_event = rx.recv() => {
                 let Some(event) = maybe_event else {
-                    sample_gateway_runtime_metrics(&store, &mut gateway_rows).await;
+                    if tuning.sample_gateway_runtime_metrics {
+                        sample_gateway_runtime_metrics(&store, &mut gateway_rows).await;
+                    }
                     flush_stats_batch(
                         &store,
                         &mut channel_rows,
                         &mut device_rows,
                         &mut gateway_rows,
                         &mut ops_rows,
+                        tuning.retained_row_limit,
                     )
                     .await;
                                         ::tracing::event!(
@@ -271,20 +286,25 @@ async fn run_stats_worker(store: Storage, mut rx: mpsc::Receiver<StatsEvent>) {
                     &mut ops_rows,
                 );
                 if pending_events >= flush_event_threshold {
-                    sample_gateway_runtime_metrics(&store, &mut gateway_rows).await;
+                    if tuning.sample_gateway_runtime_metrics {
+                        sample_gateway_runtime_metrics(&store, &mut gateway_rows).await;
+                    }
                     flush_stats_batch(
                         &store,
                         &mut channel_rows,
                         &mut device_rows,
                         &mut gateway_rows,
                         &mut ops_rows,
+                        tuning.retained_row_limit,
                     )
                     .await;
                     pending_events = 0;
                 }
             }
             _ = interval.tick() => {
-                sample_gateway_runtime_metrics(&store, &mut gateway_rows).await;
+                if tuning.sample_gateway_runtime_metrics {
+                    sample_gateway_runtime_metrics(&store, &mut gateway_rows).await;
+                }
                 if pending_events > 0 || !gateway_rows.is_empty() || !ops_rows.is_empty() {
                     flush_stats_batch(
                         &store,
@@ -292,6 +312,7 @@ async fn run_stats_worker(store: Storage, mut rx: mpsc::Receiver<StatsEvent>) {
                         &mut device_rows,
                         &mut gateway_rows,
                         &mut ops_rows,
+                        tuning.retained_row_limit,
                     )
                     .await;
                     pending_events = 0;
@@ -299,29 +320,6 @@ async fn run_stats_worker(store: Storage, mut rx: mpsc::Receiver<StatsEvent>) {
             }
         }
     }
-}
-
-fn stats_channel_capacity() -> usize {
-    if let Some(explicit) = std::env::var("PUSHGO_STATS_CHANNEL_CAPACITY")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-    {
-        return explicit.clamp(STATS_CHANNEL_CAPACITY_MIN, STATS_CHANNEL_CAPACITY_MAX);
-    }
-    1_024
-}
-
-fn stats_flush_event_threshold() -> usize {
-    if let Some(explicit) = std::env::var("PUSHGO_STATS_FLUSH_EVENT_THRESHOLD")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-    {
-        return explicit.clamp(
-            STATS_FLUSH_EVENT_THRESHOLD_MIN,
-            STATS_FLUSH_EVENT_THRESHOLD_MAX,
-        );
-    }
-    256
 }
 
 fn aggregate_event(
@@ -517,6 +515,7 @@ async fn flush_stats_batch(
     device_rows: &mut HashMap<(String, String), DeviceStatsDailyDelta>,
     gateway_rows: &mut HashMap<String, GatewayStatsHourlyDelta>,
     ops_rows: &mut HashMap<(String, String), OpsStatsHourlyDelta>,
+    retained_row_limit: usize,
 ) {
     if channel_rows.is_empty()
         && device_rows.is_empty()
@@ -542,8 +541,17 @@ async fn flush_stats_batch(
         .extend(gateway_rows.drain().map(|(_, row)| row));
     batch.ops.extend(ops_rows.drain().map(|(_, row)| row));
 
+    let write_started = Instant::now();
     if let Err(err) = store.apply_stats_batch(&batch).await {
+        let elapsed_ms = write_started.elapsed().as_millis() as u64;
         restore_failed_stats_batch(&batch, channel_rows, device_rows, gateway_rows, ops_rows);
+        let dropped_rows = trim_retained_stats_rows(
+            channel_rows,
+            device_rows,
+            gateway_rows,
+            ops_rows,
+            retained_row_limit,
+        );
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
@@ -552,9 +560,12 @@ async fn flush_stats_batch(
             device_rows = (device_count as u64),
             gateway_rows = (gateway_count as u64),
             ops_rows = (ops_count as u64),
+            dropped_retained_rows = (dropped_rows as u64),
+            elapsed_ms = (elapsed_ms),
             error = %(err.to_string())
         );
     } else {
+        let elapsed_ms = write_started.elapsed().as_millis() as u64;
         static STATS_BATCH_FLUSH_COUNT: AtomicU64 = AtomicU64::new(0);
         let count = STATS_BATCH_FLUSH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if should_emit_stats_batch_trace(count) {
@@ -566,7 +577,8 @@ async fn flush_stats_batch(
                 channel_rows = (channel_count as u64),
                 device_rows = (device_count as u64),
                 gateway_rows = (gateway_count as u64),
-                ops_rows = (ops_count as u64)
+                ops_rows = (ops_count as u64),
+                elapsed_ms = (elapsed_ms)
             );
         }
     }
@@ -575,6 +587,42 @@ async fn flush_stats_batch(
 #[inline]
 fn should_emit_stats_batch_trace(count: u64) -> bool {
     count <= 8 || count.is_power_of_two()
+}
+
+fn retained_stats_row_count(
+    channel_rows: &HashMap<([u8; 16], String), ChannelStatsDailyDelta>,
+    device_rows: &HashMap<(String, String), DeviceStatsDailyDelta>,
+    gateway_rows: &HashMap<String, GatewayStatsHourlyDelta>,
+    ops_rows: &HashMap<(String, String), OpsStatsHourlyDelta>,
+) -> usize {
+    channel_rows.len() + device_rows.len() + gateway_rows.len() + ops_rows.len()
+}
+
+fn trim_retained_stats_rows(
+    channel_rows: &mut HashMap<([u8; 16], String), ChannelStatsDailyDelta>,
+    device_rows: &mut HashMap<(String, String), DeviceStatsDailyDelta>,
+    gateway_rows: &mut HashMap<String, GatewayStatsHourlyDelta>,
+    ops_rows: &mut HashMap<(String, String), OpsStatsHourlyDelta>,
+    retained_row_limit: usize,
+) -> usize {
+    let mut dropped = 0usize;
+    while retained_stats_row_count(channel_rows, device_rows, gateway_rows, ops_rows)
+        > retained_row_limit
+    {
+        if let Some(key) = ops_rows.keys().next().cloned() {
+            ops_rows.remove(&key);
+        } else if let Some(key) = gateway_rows.keys().next().cloned() {
+            gateway_rows.remove(&key);
+        } else if let Some(key) = device_rows.keys().next().cloned() {
+            device_rows.remove(&key);
+        } else if let Some(key) = channel_rows.keys().next().cloned() {
+            channel_rows.remove(&key);
+        } else {
+            break;
+        }
+        dropped = dropped.saturating_add(1);
+    }
+    dropped
 }
 
 fn restore_failed_stats_batch(

@@ -27,18 +27,17 @@ impl DatabaseDriver {
             DatabaseKind::Sqlite => Ok(DatabaseDriver::Sqlite(
                 SqliteDb::new_with_config(
                     normalized_db_url.as_str(),
-                    config.sqlite_telemetry_db_url.as_deref(),
-                    config.sqlite_runtime_db_url.as_deref(),
+                    config.runtime_profile,
                     config.stats_enabled,
                     config.mcp_enabled,
                 )
                 .await?,
             )),
             DatabaseKind::Postgres => Ok(DatabaseDriver::Postgres(
-                PostgresDb::new(normalized_db_url.as_str()).await?,
+                PostgresDb::new(normalized_db_url.as_str(), config.runtime_profile).await?,
             )),
             DatabaseKind::Mysql => Ok(DatabaseDriver::MySql(
-                MySqlDb::new(normalized_db_url.as_str()).await?,
+                MySqlDb::new(normalized_db_url.as_str(), config.runtime_profile).await?,
             )),
         }
     }

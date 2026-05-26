@@ -3,6 +3,7 @@ use crate::storage::database::{
     DeviceRouteDatabaseAccess, PrivateMessageDatabaseAccess, StatsDatabaseAccess,
     SystemStateDatabaseAccess,
 };
+use std::time::Instant;
 
 impl Storage {
     pub async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()> {
@@ -118,14 +119,22 @@ impl Storage {
         config: MaintenanceCleanupConfig,
     ) -> StoreResult<MaintenanceCleanupStats> {
         let config = config.normalized();
+        let cleanup_started = Instant::now();
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "storage.maintenance_cleanup_started",
             now = (now)
         );
+        let mut phase_started = Instant::now();
         let private_sessions_pruned = self.db.cleanup_private_sessions(now).await?;
-        let private_outbox_pruned = self.cleanup_private_expired_data(now, 2048).await?;
+        let private_sessions_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
+        let private_outbox_pruned = self
+            .cleanup_private_expired_data(now, config.delete_batch)
+            .await?;
+        let private_expired_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let stale_private_outbox_pruned = self
             .db
             .cleanup_stale_private_outbox(
@@ -133,21 +142,35 @@ impl Storage {
                 config.delete_batch,
             )
             .await?;
+        let stale_outbox_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let provider_pull_pruned = self
             .db
             .cleanup_expired_provider_pull_queue(now, config.provider_pull_expired_batch)
             .await?;
+        let provider_pull_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let _pending_dedupe_pruned = self
-            .cleanup_pending_op_dedupe(now - OP_DEDUPE_PENDING_STALE_MILLIS, 2048)
+            .cleanup_pending_op_dedupe(now - OP_DEDUPE_PENDING_STALE_MILLIS, config.delete_batch)
             .await?;
+        let pending_dedupe_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let dedupe_before = config.dedupe_before(now);
-        let _semantic_dedupe_pruned = self.cleanup_semantic_id_dedupe(dedupe_before, 2048).await?;
-        let _delivery_dedupe_pruned = self.cleanup_delivery_dedupe(dedupe_before, 2048).await?;
+        let _semantic_dedupe_pruned = self
+            .cleanup_semantic_id_dedupe(dedupe_before, config.delete_batch)
+            .await?;
+        let _delivery_dedupe_pruned = self
+            .cleanup_delivery_dedupe(dedupe_before, config.delete_batch)
+            .await?;
+        let dedupe_elapsed_ms = phase_started.elapsed().as_millis() as u64;
 
+        phase_started = Instant::now();
         let orphan_devices_pruned = self
             .db
             .cleanup_orphan_devices(config.orphan_device_before(now), config.delete_batch)
             .await?;
+        let orphan_devices_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let stale_subscriptions_pruned = if config.stale_subscription_cleanup_enabled {
             self.db
                 .cleanup_stale_subscriptions(
@@ -159,6 +182,8 @@ impl Storage {
         } else {
             0
         };
+        let stale_subscriptions_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let soft_deleted_devices_pruned = if config.soft_deleted_device_cleanup_enabled {
             self.db
                 .cleanup_soft_deleted_devices(
@@ -169,6 +194,8 @@ impl Storage {
         } else {
             0
         };
+        let soft_deleted_devices_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let orphan_channels_pruned = if config.orphan_channel_cleanup_enabled {
             self.db
                 .cleanup_orphan_channels(config.orphan_channel_before(now), config.delete_batch)
@@ -176,6 +203,8 @@ impl Storage {
         } else {
             0
         };
+        let orphan_channels_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let audit_rows_pruned = if config.audit_retention_cleanup_enabled {
             self.db
                 .cleanup_audit_rows(config.audit_before(now), config.delete_batch)
@@ -183,6 +212,8 @@ impl Storage {
         } else {
             0
         };
+        let audit_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
         let (hourly_stats_pruned, daily_stats_pruned) = if config.stats_retention_cleanup_enabled {
             let hourly = self
                 .db
@@ -199,6 +230,7 @@ impl Storage {
         } else {
             (0, 0)
         };
+        let stats_elapsed_ms = phase_started.elapsed().as_millis() as u64;
         let private_outbox_pruned =
             private_outbox_pruned.saturating_add(stale_private_outbox_pruned);
         if stale_subscriptions_pruned > 0
@@ -222,7 +254,20 @@ impl Storage {
             orphan_channels_pruned = (orphan_channels_pruned as u64),
             audit_rows_pruned = (audit_rows_pruned as u64),
             hourly_stats_pruned = (hourly_stats_pruned as u64),
-            daily_stats_pruned = (daily_stats_pruned as u64)
+            daily_stats_pruned = (daily_stats_pruned as u64),
+            elapsed_ms = (cleanup_started.elapsed().as_millis() as u64),
+            private_sessions_elapsed_ms = (private_sessions_elapsed_ms),
+            private_expired_elapsed_ms = (private_expired_elapsed_ms),
+            stale_outbox_elapsed_ms = (stale_outbox_elapsed_ms),
+            provider_pull_elapsed_ms = (provider_pull_elapsed_ms),
+            pending_dedupe_elapsed_ms = (pending_dedupe_elapsed_ms),
+            dedupe_elapsed_ms = (dedupe_elapsed_ms),
+            orphan_devices_elapsed_ms = (orphan_devices_elapsed_ms),
+            stale_subscriptions_elapsed_ms = (stale_subscriptions_elapsed_ms),
+            soft_deleted_devices_elapsed_ms = (soft_deleted_devices_elapsed_ms),
+            orphan_channels_elapsed_ms = (orphan_channels_elapsed_ms),
+            audit_elapsed_ms = (audit_elapsed_ms),
+            stats_elapsed_ms = (stats_elapsed_ms)
         );
         Ok(MaintenanceCleanupStats {
             private_sessions_pruned,

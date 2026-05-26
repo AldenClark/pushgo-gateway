@@ -50,12 +50,6 @@ impl GatewayProcess {
             .arg(&token)
             .arg("--private-transports")
             .arg("quic,tcp,wss")
-            .arg("--private-ack-timeout")
-            .arg("1")
-            .arg("--private-fallback-max-attempts")
-            .arg("3")
-            .arg("--private-fallback-max-backoff")
-            .arg("4")
             .arg("--private-tcp-bind")
             .arg(format!("127.0.0.1:{private_tcp_port}"))
             .arg("--private-tcp-port")
@@ -330,9 +324,9 @@ async fn read_next_deliver(
     >,
     profile: &Arc<PushgoWireProfile>,
 ) -> (String, Vec<u8>, Option<u64>) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(12);
     loop {
-        let next = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        let next = tokio::time::timeout(Duration::from_secs(5), ws.next())
             .await
             .expect("deliver timeout")
             .expect("websocket should stay open")

@@ -29,6 +29,7 @@ impl StateTestContext {
 
 fn test_private_config() -> PrivateConfig {
     PrivateConfig {
+        runtime_profile: crate::runtime_config::GatewayRuntimeProfile::Small,
         private_quic_bind: None,
         private_tcp_bind: None,
         tcp_tls_offload: false,

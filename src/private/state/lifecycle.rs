@@ -10,7 +10,8 @@ impl PrivateState {
     ) -> Self {
         let hub = Arc::new(PrivateHub::new(store, &config));
         let owner = format!("gateway-{}", std::process::id());
-        let fallback_tasks = (config.ack_timeout_secs > 0).then(FallbackTaskEngine::new);
+        let fallback_tasks =
+            (config.ack_timeout_secs > 0).then(|| FallbackTaskEngine::new(config.runtime_profile));
         let state = PrivateState {
             hub,
             config,
@@ -201,7 +202,11 @@ impl PrivateState {
             session_control_count: self.session_controls.read().len(),
             session_device_count: self.session_devices.read().len(),
             fallback_task_queue_depth,
-            fallback_task_queue_capacity: private_fallback_task_command_capacity(),
+            fallback_task_queue_capacity: self
+                .fallback_tasks
+                .as_ref()
+                .map(|engine| engine.capacity())
+                .unwrap_or(0),
             hub: self.hub.memory_snapshot(),
         }
     }

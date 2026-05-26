@@ -1,3 +1,4 @@
+use crate::runtime_config::GatewayRuntimeProfile;
 use crate::storage::{
     cache::{CacheAccess, CacheMemorySnapshot, CacheStore},
     database::DatabaseDriver,
@@ -22,13 +23,23 @@ pub struct Storage {
     cache: Arc<CacheStore>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StorageInitConfig {
     pub db_url: Option<String>,
-    pub sqlite_telemetry_db_url: Option<String>,
-    pub sqlite_runtime_db_url: Option<String>,
+    pub runtime_profile: GatewayRuntimeProfile,
     pub stats_enabled: bool,
     pub mcp_enabled: bool,
+}
+
+impl Default for StorageInitConfig {
+    fn default() -> Self {
+        Self {
+            db_url: None,
+            runtime_profile: GatewayRuntimeProfile::Small,
+            stats_enabled: false,
+            mcp_enabled: false,
+        }
+    }
 }
 
 impl Storage {
@@ -43,6 +54,7 @@ impl Storage {
     }
 
     pub async fn new_with_config(config: StorageInitConfig) -> StoreResult<Self> {
+        let runtime_profile = config.runtime_profile;
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
@@ -65,7 +77,7 @@ impl Storage {
         );
         Ok(Self {
             db: Arc::new(driver),
-            cache: Arc::new(CacheStore::new()),
+            cache: Arc::new(CacheStore::with_profile(runtime_profile)),
         })
     }
 

@@ -63,6 +63,7 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss`) |
+| `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | No                | Resource/performance profile (`small`/`public`); never changes the database driver selected by `--db-url` |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | No                | Observability matrix profile (`prod_min`/`ops`/`incident`/`debug`) |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | No                | Native tracing log level (`off`/`error`/`warn`/`info`/`debug`/`trace`) |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
@@ -86,35 +87,22 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | No                | Whether Raw TCP TLS is offloaded at the edge proxy (offload=true means gateway Raw TCP is plain) |
 | `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | No            | Expect PROXY protocol v1 on Raw TCP ingress          |
 
-### Private Runtime Limits
+### Runtime Profiles
 
-| CLI Flag                          | Env                                    | Default                    | Required | Description                                       |
-| --------------------------------- | -------------------------------------- | -------------------------- | -------- | ------------------------------------------------- |
-| `--private-session-ttl`           | `PUSHGO_PRIVATE_SESSION_TTL`           | `3600`                     | No                | Private session TTL in seconds                         |
-| `--private-grace-window`          | `PUSHGO_PRIVATE_GRACE_WINDOW`          | `60`                       | No                | Grace window for connection transition in seconds      |
-| `--private-max-pending`           | `PUSHGO_PRIVATE_MAX_PENDING`           | `200`                      | No                | Max pending messages per device                        |
-| `--private-pull-limit`            | `PUSHGO_PRIVATE_PULL_LIMIT`            | `200`                      | No                | Max items per pull request                             |
-| `--private-ack-timeout`           | `PUSHGO_PRIVATE_ACK_TIMEOUT`           | `15`                       | No                | ACK scheduling timeout parameter                       |
-| `--private-fallback-max-attempts` | `PUSHGO_PRIVATE_FALLBACK_MAX_ATTEMPTS` | `5`                        | No                | Max retry attempts for private queue scheduling        |
-| `--private-fallback-max-backoff`  | `PUSHGO_PRIVATE_FALLBACK_MAX_BACKOFF`  | `300`                      | No                | Max backoff for private queue scheduling (seconds)     |
-| `--private-retx-window-secs`      | `PUSHGO_PRIVATE_RETX_WINDOW_SECS`      | `10`                       | No                | Retransmission budget window (seconds)                 |
-| `--private-retx-max-per-window`   | `PUSHGO_PRIVATE_RETX_MAX_PER_WINDOW`   | `128`                      | No                | Max retransmission frames per window                   |
-| `--private-retx-max-per-tick`     | `PUSHGO_PRIVATE_RETX_MAX_PER_TICK`     | `16`                       | No                | Max retransmission frames per tick                     |
-| `--private-retx-max-retries`      | `PUSHGO_PRIVATE_RETX_MAX_RETRIES`      | `5`                        | No                | Max retries per delivery                               |
-| `--private-global-max-pending`    | `PUSHGO_PRIVATE_GLOBAL_MAX_PENDING`    | `5000000`                  | No                | Global pending cap for private queue                   |
-| `--private-hot-cache-capacity`    | `PUSHGO_PRIVATE_HOT_CACHE_CAPACITY`    | `50000`                    | No                | Hot-cache capacity for private payloads                |
-| `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `2592000`                  | No                | Default TTL for private messages (seconds)             |
-| `--private-online-fast-path-enabled` | `PUSHGO_PRIVATE_ONLINE_FAST_PATH_ENABLED` | `false` | No | Deliver-first fast path for online private devices (falls back to enqueue on send failure) |
+Fine-grained performance/resource knobs are internal profile defaults, not public CLI/env parameters.
+
+| Profile | Intended deployment | Key defaults |
+| ------- | ------------------- | ------------ |
+| `small` | Tiny/private SQLite deployment | Lower SQLite/cache/queue footprints, 10s stats flush, no idle gateway metric sampling, 5min maintenance tick, provider in-flight caps 32/32/16 |
+| `public` | Large external-DB gateway, primarily PostgreSQL | Larger dispatch/stats queues, 2s stats flush, gateway metric sampling, external DB pool max 64/min 4, provider in-flight caps 128/256/128 |
+
+Database driver selection is always based on `--db-url`; setting `--runtime-profile=public` with a SQLite URL still uses SQLite, and setting `--runtime-profile=small` with a PostgreSQL URL still uses PostgreSQL. If omitted, `small` is used.
 
 ### MCP / OAuth
 
 | CLI Flag                                  | Env                                             | Default     | Required | Description                                                            |
 | ----------------------------------------- | ----------------------------------------------- | ----------- | -------- | ---------------------------------------------------------------------- |
 | `--mcp-enabled`                           | `PUSHGO_MCP_ENABLED`                            | `false`     | No       | Enable MCP HTTP endpoint (`/mcp`) and related OAuth / bind routes      |
-| `--mcp-access-token-ttl-secs`             | `PUSHGO_MCP_ACCESS_TOKEN_TTL_SECS`              | `900`       | No       | MCP OAuth access token TTL in seconds                                  |
-| `--mcp-refresh-token-absolute-ttl-secs`   | `PUSHGO_MCP_REFRESH_TOKEN_ABSOLUTE_TTL_SECS`    | `2592000`   | No       | MCP OAuth refresh token absolute TTL in seconds                        |
-| `--mcp-refresh-token-idle-ttl-secs`       | `PUSHGO_MCP_REFRESH_TOKEN_IDLE_TTL_SECS`        | `604800`    | No       | MCP OAuth refresh token idle TTL in seconds                            |
-| `--mcp-bind-session-ttl-secs`             | `PUSHGO_MCP_BIND_SESSION_TTL_SECS`              | `600`       | No       | MCP channel-bind page session TTL in seconds                           |
 | `--mcp-dcr-enabled`                       | `PUSHGO_MCP_DCR_ENABLED`                        | `true`      | No       | Enable OAuth Dynamic Client Registration                               |
 | `--mcp-predefined-clients`                | `PUSHGO_MCP_PREDEFINED_CLIENTS`                 | None        | No       | Predefined OAuth clients as `client_id:client_secret` joined by `;` or newlines |
 
@@ -122,22 +110,7 @@ Advanced env-only runtime tunables are listed in a separate section below.
 
 | Env                                         | Default                                | Description                                                                 |
 | ------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------- |
-| `PUSHGO_DISPATCH_WORKER_COUNT`              | Auto                                   | Dispatch worker count override (clamped 2~256) |
-| `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | Auto                                   | Dispatch queue capacity override (clamped 256~131072) |
-| `PUSHGO_PRIVATE_FALLBACK_TASK_QUEUE_CAPACITY` | Auto                                 | Private fallback scheduler queue override (clamped 64~262144) |
-| `PUSHGO_PRIVATE_CONNECTION_QUEUE_CAPACITY` | Auto                                 | Per-connection private delivery queue override (clamped 16~2048) |
-| `PUSHGO_PRIVATE_FALLBACK_SEED_LIMIT` | Auto                                   | Fallback seed scan limit override (clamped 1024~500000) |
-| `PUSHGO_STATS_CHANNEL_CAPACITY`             | Auto                                   | Stats worker channel capacity override (clamped 256~32768) |
-| `PUSHGO_STATS_FLUSH_EVENT_THRESHOLD`        | Auto                                   | Stats flush threshold override (clamped 128~16384) |
-| `PUSHGO_SQLITE_IDLE_TIMEOUT_SECS`           | `60`                                   | SQLite idle connection timeout in seconds                   |
-| `PUSHGO_SQLITE_STATEMENT_CACHE_CAPACITY`    | `32`                                   | SQLite per-connection sqlx statement cache capacity         |
-| `PUSHGO_SQLITE_PAGE_CACHE_KIB`              | `1024`                                 | SQLite page-cache target per connection, in KiB             |
-| `PUSHGO_SQLITE_WAL_AUTOCHECKPOINT`          | `256`                                  | SQLite WAL autocheckpoint page threshold                    |
-| `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | In-process APNS max concurrent sends                                        |
-| `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | Dispatch-target cache TTL in milliseconds (200~10000)                       |
-| `PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED` | None                                | Optional override for diagnostics API switch                                 |
 | `PUSHGO_OBSERVABILITY_LOG_LEVEL`              | `warn`                              | Optional override for native tracing log level                               |
-| `PUSHGO_OBSERVABILITY_STATS_ENABLED`           | None                                | Optional override for stats collection                                       |
 | `RUST_LOG`                                    | None                                | Optional full EnvFilter directive override (higher priority than profile/level) |
 
 ## Channel Password Hash Strategy
@@ -486,6 +459,7 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss`）      |
+| `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | 否       | 资源/性能档位（`small`/`public`）；不会改变 `--db-url` 选择的数据库驱动 |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | 否       | 可观测矩阵档位（`prod_min`/`ops`/`incident`/`debug`） |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | 否       | 原生 tracing 日志级别（`off`/`error`/`warn`/`info`/`debug`/`trace`） |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
@@ -509,34 +483,22 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | 否       | Raw TCP 是否由边缘代理卸载 TLS（offload=true 时 gateway 侧明文） |
 | `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | 否   | Raw TCP 入站是否要求 PROXY protocol v1    |
 
-### Private Runtime Limits
+### Runtime Profiles
 
-| CLI Flag                          | Env                                    | 默认值                     | 必填 | 说明                                                 |
-| --------------------------------- | -------------------------------------- | -------------------------- | ---- | ---------------------------------------------------- |
-| `--private-session-ttl`           | `PUSHGO_PRIVATE_SESSION_TTL`           | `3600`                     | 否       | 私有会话 TTL（秒）                                   |
-| `--private-grace-window`          | `PUSHGO_PRIVATE_GRACE_WINDOW`          | `60`                       | 否       | 连接切换宽限窗口（秒）                               |
-| `--private-max-pending`           | `PUSHGO_PRIVATE_MAX_PENDING`           | `200`                      | 否       | 单设备最大待处理消息数                               |
-| `--private-pull-limit`            | `PUSHGO_PRIVATE_PULL_LIMIT`            | `200`                      | 否       | 单次 pull 上限                                       |
-| `--private-ack-timeout`           | `PUSHGO_PRIVATE_ACK_TIMEOUT`           | `15`                       | 否       | ACK 调度超时参数                                     |
-| `--private-fallback-max-attempts` | `PUSHGO_PRIVATE_FALLBACK_MAX_ATTEMPTS` | `5`                        | 否       | 私有队列调度最大重试次数                             |
-| `--private-fallback-max-backoff`  | `PUSHGO_PRIVATE_FALLBACK_MAX_BACKOFF`  | `300`                      | 否       | 私有队列调度最大退避（秒）                           |
-| `--private-retx-window-secs`      | `PUSHGO_PRIVATE_RETX_WINDOW_SECS`      | `10`                       | 否       | 重传预算窗口（秒）                                   |
-| `--private-retx-max-per-window`   | `PUSHGO_PRIVATE_RETX_MAX_PER_WINDOW`   | `128`                      | 否       | 窗口内最大重传帧数                                   |
-| `--private-retx-max-per-tick`     | `PUSHGO_PRIVATE_RETX_MAX_PER_TICK`     | `16`                       | 否       | 单 tick 最大重传帧数                                 |
-| `--private-retx-max-retries`      | `PUSHGO_PRIVATE_RETX_MAX_RETRIES`      | `5`                        | 否       | 单条消息最大重传次数                                 |
-| `--private-global-max-pending`    | `PUSHGO_PRIVATE_GLOBAL_MAX_PENDING`    | `5000000`                  | 否       | 全局私有队列待处理上限                               |
-| `--private-hot-cache-capacity`    | `PUSHGO_PRIVATE_HOT_CACHE_CAPACITY`    | `50000`                    | 否       | 私有热缓存容量                                       |
-| `--private-default-ttl`           | `PUSHGO_PRIVATE_DEFAULT_TTL`           | `2592000`                  | 否       | 私有消息默认 TTL（秒）                               |
+细粒度性能/资源旋钮现在是内部 profile 默认值，不再作为公共 CLI/env 参数暴露。
+
+| Profile | 适用部署 | 关键默认值 |
+| ------- | -------- | ---------- |
+| `small` | 极小规模私有 SQLite 部署 | 更低 SQLite/cache/队列占用，stats 10 秒刷盘，空闲时不采样 gateway 指标，maintenance 5 分钟 tick，provider 并发 32/32/16 |
+| `public` | 大规模外部 DB 网关，主要是 PostgreSQL | 更大的 dispatch/stats 队列，stats 2 秒刷盘，采样 gateway 指标，外部 DB pool max 64/min 4，provider 并发 128/256/128 |
+
+数据库驱动始终由 `--db-url` 决定；设置 `--runtime-profile=public` 加 SQLite URL 仍然使用 SQLite，设置 `--runtime-profile=small` 加 PostgreSQL URL 仍然使用 PostgreSQL。不传时默认使用 `small`。
 
 ### MCP / OAuth
 
 | CLI Flag                                | Env                                           | 默认值      | 必填 | 说明                                                   |
 | --------------------------------------- | --------------------------------------------- | ----------- | ---- | ------------------------------------------------------ |
 | `--mcp-enabled`                         | `PUSHGO_MCP_ENABLED`                          | `false`     | 否   | 开启 MCP HTTP 入口（`/mcp`）及相关 OAuth / 绑定路由   |
-| `--mcp-access-token-ttl-secs`           | `PUSHGO_MCP_ACCESS_TOKEN_TTL_SECS`            | `900`       | 否   | MCP OAuth access token TTL（秒）                      |
-| `--mcp-refresh-token-absolute-ttl-secs` | `PUSHGO_MCP_REFRESH_TOKEN_ABSOLUTE_TTL_SECS`  | `2592000`   | 否   | MCP OAuth refresh token 绝对 TTL（秒）                |
-| `--mcp-refresh-token-idle-ttl-secs`     | `PUSHGO_MCP_REFRESH_TOKEN_IDLE_TTL_SECS`      | `604800`    | 否   | MCP OAuth refresh token 空闲 TTL（秒）                |
-| `--mcp-bind-session-ttl-secs`           | `PUSHGO_MCP_BIND_SESSION_TTL_SECS`            | `600`       | 否   | MCP 频道绑定页面会话 TTL（秒）                        |
 | `--mcp-dcr-enabled`                     | `PUSHGO_MCP_DCR_ENABLED`                      | `true`      | 否   | 是否开启 OAuth Dynamic Client Registration            |
 | `--mcp-predefined-clients`              | `PUSHGO_MCP_PREDEFINED_CLIENTS`               | 无          | 否   | 预置 OAuth 客户端，格式为 `client_id:client_secret`，用 `;` 或换行分隔 |
 
@@ -544,13 +506,7 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 
 | Env                                         | 默认值                                 | 说明                                                                      |
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
-| `PUSHGO_DISPATCH_WORKER_COUNT`              | 自动                                   | 分发 worker 数量（2~256；自动为 `cpu*2`，并限制在 4~64）                |
-| `PUSHGO_DISPATCH_QUEUE_CAPACITY`            | 自动                                   | 分发队列容量（256~131072；自动为 `workers*64`）                          |
-| `PUSHGO_APNS_MAX_IN_FLIGHT`                 | `100`                                  | 进程内 APNS 最大发送并发数                                                |
-| `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS`      | `2000`                                 | dispatch targets 缓存 TTL（毫秒，200~10000）                              |
-| `PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED` | 无                                 | 可选覆盖 diagnostics API 开关                                             |
 | `PUSHGO_OBSERVABILITY_LOG_LEVEL`              | `warn`                             | 可选覆盖原生 tracing 日志级别                                             |
-| `PUSHGO_OBSERVABILITY_STATS_ENABLED`           | 无                                 | 可选覆盖统计采集开关                                                      |
 | `RUST_LOG`                                    | 无                                 | 可选覆盖完整 EnvFilter 指令（优先级高于 profile/level）                   |
 
 ### 运营统计（入库）

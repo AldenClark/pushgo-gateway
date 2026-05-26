@@ -83,8 +83,13 @@ pub(crate) enum DispatchError {
 }
 
 impl DispatchChannels {
+    #[cfg(test)]
     pub(crate) fn new() -> (Self, DispatchWorkerReceivers) {
-        let config = DispatchRuntimeConfig::from_env();
+        Self::with_profile(GatewayRuntimeProfile::Small)
+    }
+
+    pub(crate) fn with_profile(profile: GatewayRuntimeProfile) -> (Self, DispatchWorkerReceivers) {
+        let config = DispatchRuntimeConfig::from_profile(profile);
         let (apns_tx, apns_rx) = flume::bounded(config.queue_capacity);
         let (fcm_tx, fcm_rx) = flume::bounded(config.queue_capacity);
         let (wns_tx, wns_rx) = flume::bounded(config.queue_capacity);

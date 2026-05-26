@@ -6,6 +6,7 @@ pub(crate) mod mcp;
 pub mod private;
 pub mod providers;
 pub(crate) mod routing;
+pub mod runtime_config;
 pub mod stats;
 pub mod storage;
 pub mod util;

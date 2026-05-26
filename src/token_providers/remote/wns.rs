@@ -22,6 +22,6 @@ impl WnsTokenProviderTrait for WnsTokenProvider {
     }
 
     fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>> {
-        Box::pin(async move { self.cache.token_info().await })
+        Box::pin(async move { self.cache.token_info_fresh().await })
     }
 }

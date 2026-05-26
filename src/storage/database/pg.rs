@@ -1,7 +1,7 @@
 use crate::storage::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 
 #[path = "pg/access.rs"]
 mod access;

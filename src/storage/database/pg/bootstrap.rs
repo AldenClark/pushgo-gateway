@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_config::{GatewayRuntimeProfile, RuntimeTuning};
 use crate::storage::database::migration::{
     AppliedSchemaMigration, SchemaMigrationDefinition, SchemaMigrationPlan,
     validate_applied_schema_migrations,
@@ -77,8 +78,16 @@ const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
 const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 
 impl PostgresDb {
-    pub async fn new(db_url: &str) -> StoreResult<Self> {
-        let pool = PgPool::connect(db_url).await?;
+    pub async fn new(db_url: &str, runtime_profile: GatewayRuntimeProfile) -> StoreResult<Self> {
+        let tuning = RuntimeTuning::for_profile(runtime_profile).external_db;
+        let pool = PgPoolOptions::new()
+            .max_connections(tuning.max_connections)
+            .min_connections(tuning.min_connections)
+            .acquire_timeout(tuning.acquire_timeout)
+            .idle_timeout(tuning.idle_timeout)
+            .max_lifetime(tuning.max_lifetime)
+            .connect(db_url)
+            .await?;
         let this = Self { pool };
         this.init_schema().await?;
         Ok(this)

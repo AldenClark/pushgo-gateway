@@ -10,6 +10,7 @@ use crate::{
         ApnsClient, ApnsTokenProvider, BoxFuture, DispatchResult, ProviderFailure,
         ProviderFailureKind, TokenInfo, apns::ApnsPayload, error::trimmed_body_text,
     },
+    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
     storage::Platform,
 };
 
@@ -21,10 +22,6 @@ const APNS_TIMEOUT: Duration = Duration::from_secs(60);
 const APNS_MAX_RETRY: usize = 3;
 const APNS_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 
-// In-process APNs concurrency cap; tune based on latency and throughput.
-const APNS_MAX_IN_FLIGHT_DEFAULT: usize = 100;
-const APNS_MAX_IN_FLIGHT_ENV: &str = "PUSHGO_APNS_MAX_IN_FLIGHT";
-
 /// APNs client with token caching and bounded retries.
 pub struct ApnsService {
     token_provider: Arc<dyn ApnsTokenProvider>,
@@ -35,17 +32,23 @@ pub struct ApnsService {
 
 impl ApnsService {
     pub fn new(token_provider: Arc<dyn ApnsTokenProvider>, endpoint: &str) -> Result<Self, Error> {
+        Self::new_with_profile(token_provider, endpoint, GatewayRuntimeProfile::Small)
+    }
+
+    pub fn new_with_profile(
+        token_provider: Arc<dyn ApnsTokenProvider>,
+        endpoint: &str,
+        runtime_profile: GatewayRuntimeProfile,
+    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent(concat!("pushgo-gateway/", env!("CARGO_PKG_VERSION")))
             .timeout(APNS_TIMEOUT)
             .build()
             .map_err(|err| Error::Internal(err.to_string()))?;
 
-        let max_in_flight = std::env::var(APNS_MAX_IN_FLIGHT_ENV)
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(APNS_MAX_IN_FLIGHT_DEFAULT);
+        let max_in_flight = RuntimeTuning::for_profile(runtime_profile)
+            .provider
+            .apns_max_in_flight;
 
         Ok(Self {
             token_provider,

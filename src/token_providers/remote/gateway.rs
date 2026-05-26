@@ -133,6 +133,16 @@ impl GatewayTokenCache {
         }
     }
 
+    pub(crate) async fn token_info_fresh(&self) -> Result<TokenInfo, Error> {
+        self.fetch_and_store().await
+    }
+
+    pub(crate) async fn token_info_with_project_fresh(
+        &self,
+    ) -> Result<(TokenInfo, Arc<str>), Error> {
+        self.fetch_and_store_with_project().await
+    }
+
     pub(crate) async fn refresh_now(&self) -> Result<Arc<str>, Error> {
         let info = self.fetch_and_store().await?;
         Ok(info.token)
@@ -294,5 +304,78 @@ where
                 Ok(Some(trimmed.to_string()))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::{GatewayProvider, GatewayTokenCache};
+
+    #[tokio::test]
+    async fn fresh_token_info_with_project_bypasses_cached_token() {
+        let (base_url, request_count) = spawn_token_service(2).await;
+        let cache = GatewayTokenCache::new(reqwest::Client::new(), GatewayProvider::Fcm, &base_url);
+
+        let (first, first_project) = cache
+            .token_info_with_project()
+            .await
+            .expect("initial token should fetch");
+        assert_eq!(&*first.token, "token-1");
+        assert_eq!(&*first_project, "project-1");
+
+        let (cached, cached_project) = cache
+            .token_info_with_project()
+            .await
+            .expect("cached token should return");
+        assert_eq!(&*cached.token, "token-1");
+        assert_eq!(&*cached_project, "project-1");
+
+        let (fresh, fresh_project) = cache
+            .token_info_with_project_fresh()
+            .await
+            .expect("fresh token should refetch");
+        assert_eq!(&*fresh.token, "token-2");
+        assert_eq!(&*fresh_project, "project-2");
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
+    }
+
+    async fn spawn_token_service(max_requests: usize) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let served_count = Arc::clone(&request_count);
+        tokio::spawn(async move {
+            for _ in 0..max_requests {
+                let (mut socket, _) = listener.accept().await.expect("request should accept");
+                let mut buffer = [0u8; 1024];
+                let _ = socket.read(&mut buffer).await;
+                let next = served_count.fetch_add(1, Ordering::SeqCst) + 1;
+                let body = format!(
+                    r#"{{"success":true,"data":{{"token":"token-{next}","expires_in":3600,"project_id":"project-{next}"}}}}"#
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("response should write");
+            }
+        });
+        (format!("http://{addr}"), request_count)
     }
 }

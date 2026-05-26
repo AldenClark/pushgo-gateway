@@ -26,7 +26,7 @@ impl FcmTokenProviderTrait for FcmTokenProvider {
 
     fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<FcmAccess, Error>> {
         Box::pin(async move {
-            let (token, project_id) = self.cache.token_info_with_project().await?;
+            let (token, project_id) = self.cache.token_info_with_project_fresh().await?;
             Ok(FcmAccess { token, project_id })
         })
     }
