@@ -27,7 +27,9 @@ pub(crate) use compat::{
     compat_ntfy_post, compat_ntfy_put, compat_serverchan_get, compat_serverchan_post,
     message_to_channel_get,
 };
-pub(crate) use dispatch::dispatch_entity_notification;
+pub(crate) use dispatch::{
+    DispatchAlert, DispatchEntityPayload, DispatchRequest, dispatch_entity_notification,
+};
 pub(crate) use ids::{OpId, ResolvedSemanticId, SemanticScope};
 use payload::OptionalText;
 
@@ -268,16 +270,12 @@ pub(crate) async fn dispatch_message_authorized_intent(
         let summary = dispatch_entity_notification(
             state,
             channel_id,
-            op_id.into_inner(),
-            occurred_at,
-            Some(title),
-            normalized_body,
-            severity,
-            ttl,
-            custom_data,
-            "message",
-            &message_id,
-            extra_fields,
+            DispatchRequest::new(
+                op_id.into_inner(),
+                occurred_at,
+                DispatchAlert::new(Some(title), normalized_body, severity, ttl),
+                DispatchEntityPayload::message(message_id.clone(), custom_data, extra_fields),
+            ),
         )
         .await?;
 

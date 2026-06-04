@@ -15,7 +15,10 @@ use super::{
             EntityId, ExtensionObjectRef, MetadataEntries, NormalizedImageUrls, NormalizedTags,
             ObjectPatchRef, OptionalText,
         },
-        message::{OpId, ResolvedSemanticId, SemanticScope, dispatch_entity_notification},
+        message::{
+            DispatchAlert, DispatchEntityPayload, DispatchRequest, OpId, ResolvedSemanticId,
+            SemanticScope, dispatch_entity_notification,
+        },
     },
     EventCloseRequest, EventCommand, EventCreateRequest, EventProfile, EventSummary,
     EventUpdateRequest,
@@ -255,16 +258,17 @@ async fn event_to_channel_with_command(
                 dispatch_entity_notification(
                     &state,
                     channel_id,
-                    op_id.clone(),
-                    event_time,
-                    notification_title.clone(),
-                    notification_body.clone(),
-                    None,
-                    None,
-                    custom_data.clone(),
-                    "event",
-                    &event_id,
-                    extra,
+                    DispatchRequest::new(
+                        op_id.clone(),
+                        event_time,
+                        DispatchAlert::new(
+                            notification_title.clone(),
+                            notification_body.clone(),
+                            None,
+                            None,
+                        ),
+                        DispatchEntityPayload::event(event_id.clone(), custom_data.clone(), extra),
+                    ),
                 )
                 .await?,
             )

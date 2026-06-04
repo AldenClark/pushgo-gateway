@@ -142,8 +142,8 @@ impl ResumeState {
         }
         let acked: Vec<u64> = self
             .inflight
-            .iter()
-            .filter_map(|(seq, _)| (*seq <= last_acked_seq).then_some(*seq))
+            .keys()
+            .filter_map(|seq| (*seq <= last_acked_seq).then_some(*seq))
             .collect();
         let mut acked_delivery_ids = Vec::with_capacity(acked.len());
         for seq in acked {

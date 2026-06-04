@@ -61,28 +61,6 @@ impl ThingCommandKind {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn thing_update_does_not_patch_state() {
-        assert_eq!(ThingCommandKind::Update.state_patch(), None);
-        assert_eq!(
-            ThingCommandKind::Create.state_patch(),
-            Some(ThingState::Active)
-        );
-        assert_eq!(
-            ThingCommandKind::Archive.state_patch(),
-            Some(ThingState::Inactive)
-        );
-        assert_eq!(
-            ThingCommandKind::Delete.state_patch(),
-            Some(ThingState::Decommissioned)
-        );
-    }
-}
-
 impl ThingProfile {
     pub(super) fn push_unique_image(&mut self, value: &str) {
         if self.primary_image.as_deref() == Some(value) {
@@ -241,5 +219,27 @@ fn attr_value_text(value: &JsonValue) -> String {
         JsonValue::Object(_) | JsonValue::Array(_) => {
             serde_json::to_string(value).unwrap_or_default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thing_update_does_not_patch_state() {
+        assert_eq!(ThingCommandKind::Update.state_patch(), None);
+        assert_eq!(
+            ThingCommandKind::Create.state_patch(),
+            Some(ThingState::Active)
+        );
+        assert_eq!(
+            ThingCommandKind::Archive.state_patch(),
+            Some(ThingState::Inactive)
+        );
+        assert_eq!(
+            ThingCommandKind::Delete.state_patch(),
+            Some(ThingState::Decommissioned)
+        );
     }
 }

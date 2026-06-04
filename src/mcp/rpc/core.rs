@@ -2,6 +2,8 @@ use super::*;
 
 const CHANNEL_RECENT_SUMMARY_LIMIT: usize = 20;
 
+type SchemaProperties = serde_json::Map<String, Value>;
+
 #[derive(Debug, Deserialize)]
 struct ToolCallEnvelope {
     name: String,
@@ -13,6 +15,129 @@ pub(super) struct McpRpcService<'a> {
     pub(super) state: &'a AppState,
     pub(super) mcp: &'a McpState,
     pub(super) auth: &'a McpAuthContext,
+}
+
+fn schema_object(required: &[&str], properties: SchemaProperties) -> Value {
+    let required = required
+        .iter()
+        .map(|field| Value::String((*field).to_string()))
+        .collect::<Vec<_>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties,
+    })
+}
+
+fn string_property() -> Value {
+    json!({"type": "string"})
+}
+
+fn integer_property() -> Value {
+    json!({"type": "integer"})
+}
+
+fn object_property() -> Value {
+    json!({"type": "object"})
+}
+
+fn string_array_property() -> Value {
+    json!({"type": "array", "items": {"type": "string"}})
+}
+
+fn ciphertext_property() -> Value {
+    json!({"type": "string", "description": "可选密文(JSON字符串)，仅使用当前接口同名业务字段"})
+}
+
+fn insert_auth_properties(properties: &mut SchemaProperties) {
+    properties.insert("channel_id".to_string(), string_property());
+    properties.insert("password".to_string(), string_property());
+    properties.insert("op_id".to_string(), string_property());
+}
+
+fn insert_event_patch_properties(properties: &mut SchemaProperties) {
+    properties.insert("thing_id".to_string(), string_property());
+    properties.insert("event_time".to_string(), integer_property());
+    properties.insert("title".to_string(), string_property());
+    properties.insert("description".to_string(), string_property());
+    properties.insert("status".to_string(), string_property());
+    properties.insert("message".to_string(), string_property());
+    properties.insert("severity".to_string(), string_property());
+    properties.insert("tags".to_string(), string_array_property());
+    properties.insert("images".to_string(), string_array_property());
+    properties.insert("ciphertext".to_string(), ciphertext_property());
+    properties.insert("attrs".to_string(), object_property());
+    properties.insert("metadata".to_string(), object_property());
+}
+
+fn event_create_schema() -> Value {
+    let mut properties = SchemaProperties::new();
+    insert_auth_properties(&mut properties);
+    insert_event_patch_properties(&mut properties);
+    properties.insert("started_at".to_string(), integer_property());
+    schema_object(&["channel_id"], properties)
+}
+
+fn event_update_schema() -> Value {
+    let mut properties = SchemaProperties::new();
+    insert_auth_properties(&mut properties);
+    properties.insert("event_id".to_string(), string_property());
+    insert_event_patch_properties(&mut properties);
+    schema_object(&["channel_id", "event_id"], properties)
+}
+
+fn event_close_schema() -> Value {
+    let mut properties = SchemaProperties::new();
+    insert_auth_properties(&mut properties);
+    properties.insert("event_id".to_string(), string_property());
+    insert_event_patch_properties(&mut properties);
+    properties.insert("ended_at".to_string(), integer_property());
+    schema_object(&["channel_id", "event_id"], properties)
+}
+
+fn insert_thing_patch_properties(properties: &mut SchemaProperties) {
+    properties.insert("title".to_string(), string_property());
+    properties.insert("description".to_string(), string_property());
+    properties.insert("tags".to_string(), string_array_property());
+    properties.insert("external_ids".to_string(), object_property());
+    properties.insert("location_type".to_string(), string_property());
+    properties.insert("location_value".to_string(), string_property());
+    properties.insert("primary_image".to_string(), string_property());
+    properties.insert("images".to_string(), string_array_property());
+    properties.insert("ciphertext".to_string(), ciphertext_property());
+    properties.insert("observed_at".to_string(), integer_property());
+    properties.insert("attrs".to_string(), object_property());
+    properties.insert("metadata".to_string(), object_property());
+}
+
+fn thing_create_schema() -> Value {
+    let mut properties = SchemaProperties::new();
+    insert_auth_properties(&mut properties);
+    properties.insert("created_at".to_string(), integer_property());
+    insert_thing_patch_properties(&mut properties);
+    schema_object(&["channel_id"], properties)
+}
+
+fn thing_update_schema() -> Value {
+    let mut properties = SchemaProperties::new();
+    insert_auth_properties(&mut properties);
+    properties.insert("thing_id".to_string(), string_property());
+    insert_thing_patch_properties(&mut properties);
+    schema_object(&["channel_id", "thing_id"], properties)
+}
+
+fn thing_archive_schema() -> Value {
+    thing_update_schema()
+}
+
+fn thing_delete_schema() -> Value {
+    let mut properties = SchemaProperties::new();
+    insert_auth_properties(&mut properties);
+    properties.insert("thing_id".to_string(), string_property());
+    properties.insert("deleted_at".to_string(), integer_property());
+    insert_thing_patch_properties(&mut properties);
+    schema_object(&["channel_id", "thing_id"], properties)
 }
 
 impl<'a> McpRpcService<'a> {
@@ -213,6 +338,14 @@ impl McpRpcService<'_> {
     }
 
     pub(super) fn tools_list_result(&self) -> Value {
+        let event_create_schema = event_create_schema();
+        let event_update_schema = event_update_schema();
+        let event_close_schema = event_close_schema();
+        let thing_create_schema = thing_create_schema();
+        let thing_update_schema = thing_update_schema();
+        let thing_archive_schema = thing_archive_schema();
+        let thing_delete_schema = thing_delete_schema();
+
         json!({
           "tools": [
             {
@@ -243,37 +376,37 @@ impl McpRpcService<'_> {
             {
               "name": "pushgo.event.create",
               "description": "创建事件（event/create）。字段与网关事件接口保持一致。",
-              "inputSchema": {"type":"object","additionalProperties":false,"required":["channel_id"],"properties":{"channel_id":{"type":"string"},"password":{"type":"string"},"op_id":{"type":"string"},"thing_id":{"type":"string"},"event_time":{"type":"integer"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string"},"message":{"type":"string"},"severity":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"images":{"type":"array","items":{"type":"string"}},"ciphertext":{"type":"string","description":"可选密文(JSON字符串)，仅使用当前接口同名业务字段"},"started_at":{"type":"integer"},"attrs":{"type":"object"},"metadata":{"type":"object"}}}
+              "inputSchema": event_create_schema
             },
             {
               "name": "pushgo.event.update",
               "description": "更新事件（event/update）。",
-              "inputSchema": {"type":"object","additionalProperties":false,"required":["channel_id","event_id"],"properties":{"channel_id":{"type":"string"},"password":{"type":"string"},"op_id":{"type":"string"},"event_id":{"type":"string"},"thing_id":{"type":"string"},"event_time":{"type":"integer"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string"},"message":{"type":"string"},"severity":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"images":{"type":"array","items":{"type":"string"}},"ciphertext":{"type":"string","description":"可选密文(JSON字符串)，仅使用当前接口同名业务字段"},"attrs":{"type":"object"},"metadata":{"type":"object"}}}
+              "inputSchema": event_update_schema
             },
             {
               "name": "pushgo.event.close",
               "description": "关闭事件（event/close）。",
-              "inputSchema": {"type":"object","additionalProperties":false,"required":["channel_id","event_id"],"properties":{"channel_id":{"type":"string"},"password":{"type":"string"},"op_id":{"type":"string"},"event_id":{"type":"string"},"thing_id":{"type":"string"},"event_time":{"type":"integer"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string"},"message":{"type":"string"},"severity":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"images":{"type":"array","items":{"type":"string"}},"ciphertext":{"type":"string","description":"可选密文(JSON字符串)，仅使用当前接口同名业务字段"},"ended_at":{"type":"integer"},"attrs":{"type":"object"},"metadata":{"type":"object"}}}
+              "inputSchema": event_close_schema
             },
             {
               "name": "pushgo.thing.create",
               "description": "创建对象（thing/create）。",
-              "inputSchema": {"type":"object","additionalProperties":false,"required":["channel_id"],"properties":{"channel_id":{"type":"string"},"password":{"type":"string"},"op_id":{"type":"string"},"created_at":{"type":"integer"},"title":{"type":"string"},"description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"external_ids":{"type":"object"},"location_type":{"type":"string"},"location_value":{"type":"string"},"primary_image":{"type":"string"},"images":{"type":"array","items":{"type":"string"}},"ciphertext":{"type":"string","description":"可选密文(JSON字符串)，仅使用当前接口同名业务字段"},"observed_at":{"type":"integer"},"attrs":{"type":"object"},"metadata":{"type":"object"}}}
+              "inputSchema": thing_create_schema
             },
             {
               "name": "pushgo.thing.update",
               "description": "更新对象（thing/update）。",
-              "inputSchema": {"type":"object","additionalProperties":false,"required":["channel_id","thing_id"],"properties":{"channel_id":{"type":"string"},"password":{"type":"string"},"op_id":{"type":"string"},"thing_id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"external_ids":{"type":"object"},"location_type":{"type":"string"},"location_value":{"type":"string"},"primary_image":{"type":"string"},"images":{"type":"array","items":{"type":"string"}},"ciphertext":{"type":"string","description":"可选密文(JSON字符串)，仅使用当前接口同名业务字段"},"observed_at":{"type":"integer"},"attrs":{"type":"object"},"metadata":{"type":"object"}}}
+              "inputSchema": thing_update_schema
             },
             {
               "name": "pushgo.thing.archive",
               "description": "归档对象（thing/archive）。",
-              "inputSchema": {"type":"object","additionalProperties":false,"required":["channel_id","thing_id"],"properties":{"channel_id":{"type":"string"},"password":{"type":"string"},"op_id":{"type":"string"},"thing_id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"external_ids":{"type":"object"},"location_type":{"type":"string"},"location_value":{"type":"string"},"primary_image":{"type":"string"},"images":{"type":"array","items":{"type":"string"}},"ciphertext":{"type":"string","description":"可选密文(JSON字符串)，仅使用当前接口同名业务字段"},"observed_at":{"type":"integer"},"attrs":{"type":"object"},"metadata":{"type":"object"}}}
+              "inputSchema": thing_archive_schema
             },
             {
               "name": "pushgo.thing.delete",
               "description": "删除对象（thing/delete）。",
-              "inputSchema": {"type":"object","additionalProperties":false,"required":["channel_id","thing_id"],"properties":{"channel_id":{"type":"string"},"password":{"type":"string"},"op_id":{"type":"string"},"thing_id":{"type":"string"},"deleted_at":{"type":"integer"},"title":{"type":"string"},"description":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"external_ids":{"type":"object"},"location_type":{"type":"string"},"location_value":{"type":"string"},"primary_image":{"type":"string"},"images":{"type":"array","items":{"type":"string"}},"ciphertext":{"type":"string","description":"可选密文(JSON字符串)，仅使用当前接口同名业务字段"},"observed_at":{"type":"integer"},"attrs":{"type":"object"},"metadata":{"type":"object"}}}
+              "inputSchema": thing_delete_schema
             },
             {
               "name": "pushgo.channel.bind.start",
@@ -432,4 +565,57 @@ impl McpRpcService<'_> {
 
 fn parse_status_response(body: &[u8]) -> Result<Value, String> {
     serde_json::from_slice::<Value>(body).map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_property(schema: &Value, name: &str) -> bool {
+        schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("schema properties")
+            .contains_key(name)
+    }
+
+    #[test]
+    fn event_tool_schemas_keep_route_specific_lifecycle_fields_separate() {
+        let create_schema = event_create_schema();
+        assert!(has_property(&create_schema, "started_at"));
+        assert!(!has_property(&create_schema, "ended_at"));
+
+        let update_schema = event_update_schema();
+        assert!(has_property(&update_schema, "event_id"));
+        assert!(!has_property(&update_schema, "started_at"));
+        assert!(!has_property(&update_schema, "ended_at"));
+
+        let close_schema = event_close_schema();
+        assert!(has_property(&close_schema, "event_id"));
+        assert!(!has_property(&close_schema, "started_at"));
+        assert!(has_property(&close_schema, "ended_at"));
+    }
+
+    #[test]
+    fn thing_tool_schemas_keep_delete_fields_out_of_update_and_archive() {
+        let create_schema = thing_create_schema();
+        assert!(has_property(&create_schema, "created_at"));
+        assert!(!has_property(&create_schema, "thing_id"));
+        assert!(!has_property(&create_schema, "deleted_at"));
+
+        let update_schema = thing_update_schema();
+        assert!(has_property(&update_schema, "thing_id"));
+        assert!(!has_property(&update_schema, "created_at"));
+        assert!(!has_property(&update_schema, "deleted_at"));
+
+        let archive_schema = thing_archive_schema();
+        assert!(has_property(&archive_schema, "thing_id"));
+        assert!(!has_property(&archive_schema, "created_at"));
+        assert!(!has_property(&archive_schema, "deleted_at"));
+
+        let delete_schema = thing_delete_schema();
+        assert!(has_property(&delete_schema, "thing_id"));
+        assert!(!has_property(&delete_schema, "created_at"));
+        assert!(has_property(&delete_schema, "deleted_at"));
+    }
 }

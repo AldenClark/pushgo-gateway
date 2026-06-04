@@ -53,6 +53,256 @@ pub(super) struct ResolvedProviderTarget<'a> {
     pub(super) provider_pull_delivery: Option<ProviderPullDelivery>,
 }
 
+pub(crate) struct DispatchAlert {
+    pub(crate) title: Option<String>,
+    pub(crate) body: Option<String>,
+    pub(crate) severity: Option<String>,
+    pub(crate) ttl: Option<i64>,
+}
+
+impl DispatchAlert {
+    pub(crate) fn new(
+        title: Option<String>,
+        body: Option<String>,
+        severity: Option<String>,
+        ttl: Option<i64>,
+    ) -> Self {
+        Self {
+            title,
+            body,
+            severity,
+            ttl,
+        }
+    }
+}
+
+pub(crate) struct DispatchRequest {
+    pub(crate) op_id: String,
+    pub(crate) occurred_at: i64,
+    pub(crate) alert: DispatchAlert,
+    pub(crate) payload: DispatchEntityPayload,
+}
+
+impl DispatchRequest {
+    pub(crate) fn new(
+        op_id: String,
+        occurred_at: i64,
+        alert: DispatchAlert,
+        payload: DispatchEntityPayload,
+    ) -> Self {
+        Self {
+            op_id,
+            occurred_at,
+            alert,
+            payload,
+        }
+    }
+}
+
+pub(super) struct DispatchBuildContext {
+    pub(super) channel_id: [u8; 16],
+    pub(super) channel_id_value: String,
+    pub(super) sent_at: i64,
+    pub(super) delivery_id: String,
+    pub(super) correlation_id: Arc<str>,
+    pub(super) delivery_id_ref: Arc<str>,
+}
+
+impl DispatchBuildContext {
+    pub(super) fn new(
+        channel_id: [u8; 16],
+        channel_id_value: String,
+        sent_at: i64,
+        delivery_id: String,
+        correlation_id: Arc<str>,
+        delivery_id_ref: Arc<str>,
+    ) -> Self {
+        Self {
+            channel_id,
+            channel_id_value,
+            sent_at,
+            delivery_id,
+            correlation_id,
+            delivery_id_ref,
+        }
+    }
+}
+
+pub(crate) enum DispatchEntityPayload {
+    Message {
+        message_id: String,
+        custom_data: HashMap<String, String>,
+        fields: HashMap<String, String>,
+    },
+    Thing {
+        thing_id: String,
+        custom_data: HashMap<String, String>,
+        fields: HashMap<String, String>,
+    },
+    Event {
+        event_id: String,
+        custom_data: HashMap<String, String>,
+        fields: HashMap<String, String>,
+    },
+}
+
+impl DispatchEntityPayload {
+    pub(crate) fn message(
+        message_id: String,
+        custom_data: HashMap<String, String>,
+        fields: HashMap<String, String>,
+    ) -> Self {
+        Self::Message {
+            message_id,
+            custom_data,
+            fields,
+        }
+    }
+
+    pub(crate) fn thing(
+        thing_id: String,
+        custom_data: HashMap<String, String>,
+        fields: HashMap<String, String>,
+    ) -> Self {
+        Self::Thing {
+            thing_id,
+            custom_data,
+            fields,
+        }
+    }
+
+    pub(crate) fn event(
+        event_id: String,
+        custom_data: HashMap<String, String>,
+        fields: HashMap<String, String>,
+    ) -> Self {
+        Self::Event {
+            event_id,
+            custom_data,
+            fields,
+        }
+    }
+
+    pub(crate) fn kind(&self) -> EntityKind {
+        match self {
+            Self::Message { .. } => EntityKind::Message,
+            Self::Thing { .. } => EntityKind::Thing,
+            Self::Event { .. } => EntityKind::Event,
+        }
+    }
+
+    pub(crate) fn entity_id(&self) -> &str {
+        match self {
+            Self::Message { message_id, .. } => message_id,
+            Self::Thing { thing_id, .. } => thing_id,
+            Self::Event { event_id, .. } => event_id,
+        }
+    }
+
+    fn into_parts(
+        self,
+    ) -> (
+        EntityKind,
+        String,
+        HashMap<String, String>,
+        HashMap<String, String>,
+    ) {
+        match self {
+            Self::Message {
+                message_id,
+                custom_data,
+                fields,
+            } => {
+                let mut fields = retain_allowed(fields, MESSAGE_FIELD_KEYS);
+                fields.insert("message_id".to_string(), message_id.clone());
+                (
+                    EntityKind::Message,
+                    message_id,
+                    retain_allowed(custom_data, MESSAGE_CUSTOM_KEYS),
+                    fields,
+                )
+            }
+            Self::Thing {
+                thing_id,
+                custom_data,
+                fields,
+            } => {
+                let mut fields = retain_allowed(fields, THING_FIELD_KEYS);
+                fields.insert("thing_id".to_string(), thing_id.clone());
+                (
+                    EntityKind::Thing,
+                    thing_id,
+                    retain_allowed(custom_data, ENTITY_CUSTOM_KEYS),
+                    fields,
+                )
+            }
+            Self::Event {
+                event_id,
+                custom_data,
+                fields,
+            } => {
+                let mut fields = retain_allowed(fields, EVENT_FIELD_KEYS);
+                fields.insert("event_id".to_string(), event_id.clone());
+                (
+                    EntityKind::Event,
+                    event_id,
+                    retain_allowed(custom_data, ENTITY_CUSTOM_KEYS),
+                    fields,
+                )
+            }
+        }
+    }
+}
+
+const MESSAGE_CUSTOM_KEYS: &[&str] = &["url", "images", "ciphertext", "metadata"];
+const ENTITY_CUSTOM_KEYS: &[&str] = &["ciphertext", "metadata"];
+const MESSAGE_FIELD_KEYS: &[&str] = &["message_id", "tags", "thing_id"];
+const THING_FIELD_KEYS: &[&str] = &[
+    "occurred_at",
+    "observed_at",
+    "thing_id",
+    "attrs",
+    "tags",
+    "images",
+    "external_ids",
+    "title",
+    "description",
+    "primary_image",
+    "created_at",
+    "state",
+    "deleted_at",
+    "location_type",
+    "location_value",
+    "location",
+];
+const EVENT_FIELD_KEYS: &[&str] = &[
+    "event_id",
+    "event_state",
+    "occurred_at",
+    "event_time",
+    "thing_id",
+    "attrs",
+    "tags",
+    "images",
+    "title",
+    "description",
+    "status",
+    "message",
+    "severity",
+    "started_at",
+    "ended_at",
+];
+
+fn retain_allowed(
+    input: HashMap<String, String>,
+    allowed_keys: &[&str],
+) -> HashMap<String, String> {
+    input
+        .into_iter()
+        .filter(|(key, _)| allowed_keys.contains(&key.as_str()))
+        .collect()
+}
+
 #[derive(Default)]
 pub(super) struct DispatchProgress {
     pub(super) private_enqueued: HashSet<DeviceId>,
@@ -67,33 +317,35 @@ pub(super) struct DispatchProgress {
 }
 
 impl<'a> PreparedDispatch<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn build(
         state: &'a AppState,
-        channel_id: [u8; 16],
-        channel_id_value: String,
-        op_id: String,
-        occurred_at: i64,
-        title: Option<String>,
-        body: Option<String>,
-        severity: Option<String>,
-        ttl: Option<i64>,
-        custom_data: HashMap<String, String>,
-        entity_type: &'a str,
-        entity_id: &'a str,
-        extra_fields: HashMap<String, String>,
-        sent_at: i64,
-        delivery_id: String,
-        correlation_id: Arc<str>,
-        delivery_id_ref: Arc<str>,
+        request: DispatchRequest,
+        context: DispatchBuildContext,
     ) -> Result<Self, Error> {
+        let DispatchRequest {
+            op_id,
+            occurred_at,
+            alert,
+            payload,
+        } = request;
+        let DispatchBuildContext {
+            channel_id,
+            channel_id_value,
+            sent_at,
+            delivery_id,
+            correlation_id,
+            delivery_id_ref,
+        } = context;
+        let (entity_kind, entity_id, custom_data, extra_fields) = payload.into_parts();
+        let entity_type = entity_kind.as_str();
         let entity_id = entity_id.trim().to_string();
-        let entity_kind = EntityKind::detect(Some(entity_type));
-        let resolved_title = OptionalText::normalize(title.as_deref());
-        let resolved_body = OptionalText::normalize(body.as_deref());
+        let resolved_title = OptionalText::normalize(alert.title.as_deref());
+        let resolved_body = OptionalText::normalize(alert.body.as_deref());
 
-        let severity = NotificationSeverity::normalize(severity);
-        let effective_ttl = ttl.map(|expires_at| expires_at.min(sent_at + MAX_PROVIDER_TTL_MILLIS));
+        let severity = NotificationSeverity::normalize(alert.severity);
+        let effective_ttl = alert
+            .ttl
+            .map(|expires_at| expires_at.min(sent_at + MAX_PROVIDER_TTL_MILLIS));
         let ttl_seconds = effective_ttl
             .map(|expires_at| ProviderTtl::remaining(sent_at, expires_at).into_inner());
         let dispatch_targets = state
@@ -164,7 +416,7 @@ impl<'a> PreparedDispatch<'a> {
             body: embed_standard_text
                 .then_some(resolved_body.as_deref())
                 .flatten(),
-            severity: (entity_type == "message").then_some(severity.as_str()),
+            severity: (entity_kind == EntityKind::Message).then_some(severity.as_str()),
             schema_version: SCHEMA_VERSION,
             payload_version: PAYLOAD_VERSION,
             op_id: &op_id,

@@ -14,7 +14,10 @@ use super::{
             EntityId, ExtensionObjectRef, MetadataEntries, NormalizedImageUrls, NormalizedTags,
             OptionalText, OptionalUrl,
         },
-        message::{OpId, ResolvedSemanticId, SemanticScope, dispatch_entity_notification},
+        message::{
+            DispatchAlert, DispatchEntityPayload, DispatchRequest, OpId, ResolvedSemanticId,
+            SemanticScope, dispatch_entity_notification,
+        },
     },
     ThingArchiveRequest, ThingCommand, ThingCommandKind, ThingCreateRequest, ThingDeleteRequest,
     ThingProfile, ThingSummary, ThingUpdateRequest,
@@ -240,16 +243,12 @@ async fn thing_to_channel_with_command(
                 dispatch_entity_notification(
                     &state,
                     channel_id,
-                    op_id.clone(),
-                    observed_at,
-                    notification_title,
-                    notification_body,
-                    None,
-                    None,
-                    custom_data,
-                    "thing",
-                    &thing_id,
-                    extra,
+                    DispatchRequest::new(
+                        op_id.clone(),
+                        observed_at,
+                        DispatchAlert::new(notification_title, notification_body, None, None),
+                        DispatchEntityPayload::thing(thing_id.clone(), custom_data, extra),
+                    ),
                 )
                 .await?,
             )

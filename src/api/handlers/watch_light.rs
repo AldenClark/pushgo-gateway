@@ -106,12 +106,10 @@ impl<'a> WatchLightPayload<'a> {
         let mut output = HashMap::with_capacity(8);
         output.insert("watch_light_kind".to_string(), "event".to_string());
         output.insert("event_id".to_string(), event_id.clone());
-        output.insert(
-            "title".to_string(),
-            profile
-                .title
-                .or_else(|| self.field("title"))
-                .unwrap_or(event_id),
+        Self::insert_if_present(
+            &mut output,
+            "title",
+            profile.title.or_else(|| self.field("title")),
         );
         Self::insert_if_present(
             &mut output,
@@ -140,12 +138,10 @@ impl<'a> WatchLightPayload<'a> {
         let mut output = HashMap::with_capacity(8);
         output.insert("watch_light_kind".to_string(), "thing".to_string());
         output.insert("thing_id".to_string(), thing_id.clone());
-        output.insert(
-            "title".to_string(),
-            profile
-                .title
-                .or_else(|| self.field("title"))
-                .unwrap_or(thing_id),
+        Self::insert_if_present(
+            &mut output,
+            "title",
+            profile.title.or_else(|| self.field("title")),
         );
         Self::insert_if_present(
             &mut output,
@@ -228,6 +224,50 @@ mod tests {
             Some("thing")
         );
         assert_eq!(output.get("image").map(String::as_str), Some("https://img"));
+    }
+
+    #[test]
+    fn thing_patch_without_title_does_not_emit_fallback_title() {
+        let mut payload = HashMap::new();
+        payload.insert("entity_type".to_string(), "thing".to_string());
+        payload.insert("thing_id".to_string(), "thing-1".to_string());
+        payload.insert("attrs".to_string(), r#"{"count":2}"#.to_string());
+
+        let output = quantize_watch_payload(&payload);
+
+        assert_eq!(
+            output.get("watch_light_kind").map(String::as_str),
+            Some("thing")
+        );
+        assert_eq!(output.get("thing_id").map(String::as_str), Some("thing-1"));
+        assert_eq!(
+            output.get("attrs").map(String::as_str),
+            Some(r#"{"count":2}"#)
+        );
+        assert!(!output.contains_key("title"));
+        assert!(!output.contains_key("body"));
+    }
+
+    #[test]
+    fn event_patch_without_title_does_not_emit_fallback_title() {
+        let mut payload = HashMap::new();
+        payload.insert("entity_type".to_string(), "event".to_string());
+        payload.insert("event_id".to_string(), "event-1".to_string());
+        payload.insert("event_state".to_string(), "CLOSED".to_string());
+
+        let output = quantize_watch_payload(&payload);
+
+        assert_eq!(
+            output.get("watch_light_kind").map(String::as_str),
+            Some("event")
+        );
+        assert_eq!(output.get("event_id").map(String::as_str), Some("event-1"));
+        assert_eq!(
+            output.get("event_state").map(String::as_str),
+            Some("CLOSED")
+        );
+        assert!(!output.contains_key("title"));
+        assert!(!output.contains_key("body"));
     }
 
     #[test]

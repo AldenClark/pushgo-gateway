@@ -42,24 +42,22 @@ use tracing::{
     record_provider_cache_enqueue_failed, record_provider_enqueue_failed, record_provider_enqueued,
     record_provider_path_rejected,
 };
-use types::{DispatchProgress, PreparedDispatch, ProviderPayloads, ResolvedProviderTarget};
+pub(crate) use types::{DispatchAlert, DispatchEntityPayload, DispatchRequest};
+use types::{
+    DispatchBuildContext, DispatchProgress, PreparedDispatch, ProviderPayloads,
+    ResolvedProviderTarget,
+};
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_entity_notification(
     state: &AppState,
     channel_id: [u8; 16],
-    op_id: String,
-    occurred_at: i64,
-    title: Option<String>,
-    body: Option<String>,
-    severity: Option<String>,
-    ttl: Option<i64>,
-    custom_data: HashMap<String, String>,
-    entity_type: &str,
-    entity_id: &str,
-    extra_fields: HashMap<String, String>,
+    mut request: DispatchRequest,
 ) -> Result<NotificationDispatchSummary, Error> {
-    let op_id = OpId::parse(&op_id)?.into_inner();
+    let entity_kind = request.payload.kind();
+    let entity_type = entity_kind.as_str();
+    let entity_id = request.payload.entity_id().trim().to_string();
+    let op_id = OpId::parse(&request.op_id)?.into_inner();
+    request.op_id = op_id.clone();
     let trace_id = generate_hex_id_128();
     let channel_id_value = format_channel_id(&channel_id);
     let trace_channel_id = channel_id_value.clone();
@@ -70,7 +68,7 @@ pub(crate) async fn dispatch_entity_notification(
     let delivery_id_ref = Arc::<str>::from(delivery_id.clone().into_boxed_str());
     let op_guard = match DispatchOpGuard::begin(
         state,
-        SemanticScope::new(&channel_id_value, entity_type, entity_id)
+        SemanticScope::new(&channel_id_value, entity_type, &entity_id)
             .op_dedupe_key(&OpId::parse(&op_id)?),
         delivery_id.clone(),
         sent_at,
@@ -95,22 +93,15 @@ pub(crate) async fn dispatch_entity_notification(
     let dispatch_result = async {
         let prepared = PreparedDispatch::build(
             state,
-            channel_id,
-            channel_id_value,
-            op_id,
-            occurred_at,
-            title,
-            body,
-            severity,
-            ttl,
-            custom_data,
-            entity_type,
-            entity_id,
-            extra_fields,
-            sent_at,
-            delivery_id,
-            Arc::clone(&correlation_id),
-            Arc::clone(&delivery_id_ref),
+            request,
+            DispatchBuildContext::new(
+                channel_id,
+                channel_id_value,
+                sent_at,
+                delivery_id,
+                Arc::clone(&correlation_id),
+                Arc::clone(&delivery_id_ref),
+            ),
         )
         .await?;
         emit_dispatch_request_started(&prepared);
