@@ -21,8 +21,6 @@ pub struct Aps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_available: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sound: Option<Sound>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub mutable_content: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
@@ -47,18 +45,6 @@ pub struct Alert {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-}
-
-/// Sound configuration (name or detailed settings).
-#[derive(Debug, Serialize, Clone)]
-#[serde(untagged)]
-pub enum Sound {
-    Name(String),
-    Detailed {
-        name: String,
-        critical: u8,
-        volume: f32,
-    },
 }
 
 /// Full APNs payload with flattened client data.
@@ -104,7 +90,6 @@ impl ApnsPayload {
             normalized_body
         };
         let interruption_level = interruption_level_for(&level).to_string();
-        let sound = build_sound_for_level(&level);
         Self {
             aps: Aps {
                 alert: Some(Alert {
@@ -112,7 +97,6 @@ impl ApnsPayload {
                     body: resolved_body,
                 }),
                 content_available: None,
-                sound,
                 mutable_content: Some(1),
                 thread_id,
                 interruption_level: Some(interruption_level),
@@ -148,7 +132,6 @@ impl ApnsPayload {
             aps: Aps {
                 alert: Some(Alert { title, body }),
                 content_available: None,
-                sound: None,
                 mutable_content: Some(1),
                 thread_id,
                 interruption_level: None,
@@ -210,24 +193,6 @@ fn interruption_level_for(level: &str) -> &'static str {
     }
 }
 
-fn build_sound_for_level(level: &str) -> Option<Sound> {
-    let name = match level {
-        "critical" => "alert.caf",
-        "high" => "level-up.caf",
-        "low" => return None,
-        _ => "bubble-pop.caf",
-    }
-    .to_string();
-    if level == "critical" {
-        return Some(Sound::Detailed {
-            name,
-            critical: 1,
-            volume: 1.0,
-        });
-    }
-    Some(Sound::Name(name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::ApnsPayload;
@@ -261,5 +226,20 @@ mod tests {
                 .and_then(|alert| alert.body.as_deref()),
             Some("Wakeup body")
         );
+    }
+
+    #[test]
+    fn alert_payload_leaves_sound_selection_to_clients() {
+        let payload = ApnsPayload::new(
+            Some("Title".to_string()),
+            Some("Body".to_string()),
+            None,
+            None,
+            "critical".to_string(),
+            None,
+            SharedStringMap::default(),
+        );
+        let json = serde_json::to_value(&payload).expect("serialize APNs payload");
+        assert!(json["aps"].get("sound").is_none());
     }
 }

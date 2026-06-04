@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::api::{deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
@@ -35,33 +35,36 @@ pub(super) struct EventCommonFields {
     pub(super) op_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct EventPayloadFields {
-    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
-    pub(super) event_time: Option<i64>,
-    pub(super) title: Option<String>,
-    pub(super) description: Option<String>,
-    pub(super) status: Option<String>,
-    pub(super) message: Option<String>,
-    pub(super) severity: Option<String>,
+pub(crate) struct EventPatchFields {
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) message: Option<String>,
+    pub(crate) severity: Option<String>,
     #[serde(default)]
-    pub(super) tags: Option<Vec<String>>,
+    pub(crate) tags: Option<Vec<String>>,
     #[serde(default)]
-    pub(super) images: Vec<String>,
+    pub(crate) images: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    pub(super) ciphertext: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
-    pub(super) started_at: Option<i64>,
-    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
-    pub(super) ended_at: Option<i64>,
+    pub(crate) ciphertext: Option<String>,
     #[serde(default)]
-    pub(super) attrs: JsonMap<String, JsonValue>,
-    #[serde(
-        default,
-        deserialize_with = "super::super::message::deserialize_metadata_map"
-    )]
-    pub(super) metadata: JsonMap<String, JsonValue>,
+    pub(crate) attrs: Option<JsonMap<String, JsonValue>>,
+    #[serde(default, deserialize_with = "deserialize_optional_metadata_map")]
+    pub(crate) metadata: Option<JsonMap<String, JsonValue>>,
+}
+
+fn deserialize_optional_metadata_map<'de, D>(
+    deserializer: D,
+) -> Result<Option<JsonMap<String, JsonValue>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<JsonValue>::deserialize(deserializer)?;
+    raw.map(super::super::message::parse_metadata_map_value)
+        .transpose()
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,8 +74,12 @@ pub(crate) struct EventCreateRequest {
     pub(super) common: EventCommonFields,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub(super) thing_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
+    pub(super) event_time: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
+    pub(super) started_at: Option<i64>,
     #[serde(flatten)]
-    pub(super) payload: EventPayloadFields,
+    pub(super) patch: EventPatchFields,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,8 +90,10 @@ pub(crate) struct EventUpdateRequest {
     pub(super) event_id: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub(super) thing_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
+    pub(super) event_time: Option<i64>,
     #[serde(flatten)]
-    pub(super) payload: EventPayloadFields,
+    pub(super) patch: EventPatchFields,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,8 +104,12 @@ pub(crate) struct EventCloseRequest {
     pub(super) event_id: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub(super) thing_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
+    pub(super) event_time: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
+    pub(super) ended_at: Option<i64>,
     #[serde(flatten)]
-    pub(super) payload: EventPayloadFields,
+    pub(super) patch: EventPatchFields,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,15 +122,32 @@ pub(crate) struct EventSummary {
     pub(super) accepted: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EventRouteAction {
-    Create,
-    Update,
-    Close,
-}
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
 
-impl EventRouteAction {
-    pub(super) fn requested_state(self) -> crate::storage::EventState {
-        self.target_state()
+    use super::EventUpdateRequest;
+
+    #[test]
+    fn event_update_preserves_missing_patch_field_presence() {
+        let request: EventUpdateRequest = serde_json::from_value(json!({
+            "channel_id": "channel",
+            "event_id": "event-1",
+            "event_time": 1_700_000_000_000i64,
+            "metadata": { "source": "sensor" }
+        }))
+        .expect("event update should parse");
+
+        assert!(request.patch.images.is_none());
+        assert!(request.patch.attrs.is_none());
+        assert_eq!(
+            request
+                .patch
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("source"))
+                .and_then(|value| value.as_str()),
+            Some("sensor")
+        );
     }
 }

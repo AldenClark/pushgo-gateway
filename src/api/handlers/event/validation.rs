@@ -1,42 +1,8 @@
 use crate::{api::Error, storage::EventState};
 
-use super::{EventProfile, EventRouteAction};
+use super::{EventCommandKind, EventProfile};
 
-impl EventRouteAction {
-    pub(super) fn validate_temporal_fields(
-        self,
-        started_at: Option<i64>,
-        ended_at: Option<i64>,
-    ) -> Result<(), Error> {
-        match self {
-            EventRouteAction::Create => {
-                if ended_at.is_some() {
-                    return Err(Error::validation_code(
-                        "ended_at is only allowed on /event/close",
-                        "ended_at_forbidden_on_create",
-                    ));
-                }
-            }
-            EventRouteAction::Update => {
-                if started_at.is_some() || ended_at.is_some() {
-                    return Err(Error::validation_code(
-                        "started_at and ended_at are not allowed on /event/update",
-                        "event_temporal_fields_forbidden_on_update",
-                    ));
-                }
-            }
-            EventRouteAction::Close => {
-                if started_at.is_some() {
-                    return Err(Error::validation_code(
-                        "started_at is only allowed on /event/create",
-                        "started_at_forbidden_on_close",
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
+impl EventCommandKind {
     pub(super) fn validate_required_fields(
         self,
         title: Option<&str>,
@@ -45,7 +11,7 @@ impl EventRouteAction {
         severity: &Option<String>,
     ) -> Result<(), Error> {
         match self {
-            EventRouteAction::Create => {
+            EventCommandKind::Create => {
                 if title.is_none() || status.is_none() || message.is_none() || severity.is_none() {
                     return Err(Error::validation_code(
                         "title, status, message and severity are required on /event/create",
@@ -53,14 +19,7 @@ impl EventRouteAction {
                     ));
                 }
             }
-            EventRouteAction::Update | EventRouteAction::Close => {
-                if status.is_none() || message.is_none() || severity.is_none() {
-                    return Err(Error::validation_code(
-                        "status, message and severity are required on /event/update and /event/close",
-                        "event_update_required_fields_missing",
-                    ));
-                }
-            }
+            EventCommandKind::Update | EventCommandKind::Close => {}
         }
         Ok(())
     }
@@ -72,8 +31,8 @@ impl EventRouteAction {
         event_time: i64,
     ) -> Option<i64> {
         match self {
-            EventRouteAction::Create => incoming.or(existing).or(Some(event_time)),
-            EventRouteAction::Update | EventRouteAction::Close => existing,
+            EventCommandKind::Create => incoming.or(existing).or(Some(event_time)),
+            EventCommandKind::Update | EventCommandKind::Close => existing,
         }
     }
 
@@ -84,15 +43,16 @@ impl EventRouteAction {
         event_time: i64,
     ) -> Option<i64> {
         match self {
-            EventRouteAction::Close => incoming.or(existing).or(Some(event_time)),
-            EventRouteAction::Create | EventRouteAction::Update => existing,
+            EventCommandKind::Close => incoming.or(existing).or(Some(event_time)),
+            EventCommandKind::Create | EventCommandKind::Update => existing,
         }
     }
 
-    pub(super) fn target_state(self) -> EventState {
+    pub(super) fn state_patch(self) -> Option<EventState> {
         match self {
-            EventRouteAction::Create | EventRouteAction::Update => EventState::Ongoing,
-            EventRouteAction::Close => EventState::Closed,
+            EventCommandKind::Create => Some(EventState::Ongoing),
+            EventCommandKind::Update => None,
+            EventCommandKind::Close => Some(EventState::Closed),
         }
     }
 }
@@ -108,5 +68,37 @@ impl EventProfile {
             && self.images.is_empty()
             && self.started_at.is_none()
             && self.ended_at.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_update_and_close_do_not_require_full_status_fields() {
+        assert!(
+            EventCommandKind::Update
+                .validate_required_fields(None, &None, &None, &None)
+                .is_ok()
+        );
+        assert!(
+            EventCommandKind::Close
+                .validate_required_fields(None, &None, &None, &None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn event_update_does_not_patch_state() {
+        assert_eq!(EventCommandKind::Update.state_patch(), None);
+        assert_eq!(
+            EventCommandKind::Create.state_patch(),
+            Some(EventState::Ongoing)
+        );
+        assert_eq!(
+            EventCommandKind::Close.state_patch(),
+            Some(EventState::Closed)
+        );
     }
 }

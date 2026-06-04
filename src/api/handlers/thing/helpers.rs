@@ -4,35 +4,34 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{api::Error, storage::ThingState, value::ExternalIdKey};
 
-use super::{ThingIntent, ThingProfile, ThingRouteAction};
+use super::{ThingCommandKind, ThingPatchFields, ThingProfile};
 
-impl ThingRouteAction {
-    pub(super) fn resolved_state(self) -> ThingState {
+impl ThingCommandKind {
+    pub(super) fn state_patch(self) -> Option<ThingState> {
         match self {
-            ThingRouteAction::Create | ThingRouteAction::Update => ThingState::Active,
-            ThingRouteAction::Archive => ThingState::Inactive,
-            ThingRouteAction::Delete => ThingState::Decommissioned,
+            ThingCommandKind::Create => Some(ThingState::Active),
+            ThingCommandKind::Update => None,
+            ThingCommandKind::Archive => Some(ThingState::Inactive),
+            ThingCommandKind::Delete => Some(ThingState::Decommissioned),
         }
     }
 
     pub(super) fn notification_label(self) -> &'static str {
         match self {
-            ThingRouteAction::Create => "创建",
-            ThingRouteAction::Update => "更新",
-            ThingRouteAction::Archive => "存档",
-            ThingRouteAction::Delete => "删除",
+            ThingCommandKind::Create => "创建",
+            ThingCommandKind::Update => "更新",
+            ThingCommandKind::Archive => "存档",
+            ThingCommandKind::Delete => "删除",
         }
     }
 
     pub(super) fn build_notification_content(
         self,
-        payload: &ThingIntent,
+        patch: &ThingPatchFields,
         profile: Option<&ThingProfile>,
         normalized_description: Option<String>,
     ) -> (Option<String>, Option<String>) {
-        let requested_title = payload
-            .payload
-            .mutable
+        let requested_title = patch
             .title
             .as_deref()
             .map(str::trim)
@@ -46,19 +45,41 @@ impl ThingRouteAction {
             .map(str::to_string);
 
         let title_raw = match self {
-            ThingRouteAction::Create => requested_title,
-            ThingRouteAction::Update | ThingRouteAction::Archive | ThingRouteAction::Delete => {
+            ThingCommandKind::Create => requested_title,
+            ThingCommandKind::Update | ThingCommandKind::Archive | ThingCommandKind::Delete => {
                 requested_title.or(fallback_title)
             }
         };
         let title = title_raw.map(|value| format!("{}: {value}", self.notification_label()));
         let body = match self {
-            ThingRouteAction::Create => requested_body,
-            ThingRouteAction::Update | ThingRouteAction::Archive | ThingRouteAction::Delete => {
-                requested_body.or_else(|| attrs_summary_lines(&payload.payload.mutable.attrs))
+            ThingCommandKind::Create => requested_body,
+            ThingCommandKind::Update | ThingCommandKind::Archive | ThingCommandKind::Delete => {
+                requested_body.or_else(|| patch.attrs.as_ref().and_then(attrs_summary_lines))
             }
         };
         (title, body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thing_update_does_not_patch_state() {
+        assert_eq!(ThingCommandKind::Update.state_patch(), None);
+        assert_eq!(
+            ThingCommandKind::Create.state_patch(),
+            Some(ThingState::Active)
+        );
+        assert_eq!(
+            ThingCommandKind::Archive.state_patch(),
+            Some(ThingState::Inactive)
+        );
+        assert_eq!(
+            ThingCommandKind::Delete.state_patch(),
+            Some(ThingState::Decommissioned)
+        );
     }
 }
 

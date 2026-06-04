@@ -121,7 +121,7 @@ fn thing_create_normalizes_timestamps_to_millis() {
     let parsed =
         serde_json::from_str::<ThingCreateRequest>(raw).expect("thing create should parse payload");
     assert_eq!(parsed.created_at, Some(1_710_000_000_123));
-    assert_eq!(parsed.payload.observed_at, Some(1_710_000_000_456));
+    assert_eq!(parsed.patch.observed_at, Some(1_710_000_000_456));
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn thing_delete_normalizes_deleted_at_to_millis() {
     let parsed =
         serde_json::from_str::<ThingDeleteRequest>(raw).expect("thing delete should parse payload");
     assert_eq!(parsed.deleted_at, Some(1_710_000_000_789));
-    assert_eq!(parsed.payload.observed_at, Some(1_710_000_000_999));
+    assert_eq!(parsed.patch.observed_at, Some(1_710_000_000_999));
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn thing_create_accepts_ciphertext_field() {
     let parsed =
         serde_json::from_str::<ThingCreateRequest>(raw).expect("thing create should parse payload");
     assert_eq!(
-        parsed.payload.ciphertext.as_deref(),
+        parsed.patch.ciphertext.as_deref(),
         Some("encrypted-payload")
     );
 }

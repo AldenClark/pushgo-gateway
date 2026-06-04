@@ -77,14 +77,28 @@ fn event_create_normalizes_timestamps_to_millis() {
         "message":"m",
         "severity":"normal",
         "event_time":1710000000123,
-        "started_at":"1710000000456",
-        "ended_at":1710000000789
+        "started_at":"1710000000456"
     }"#;
     let parsed =
         serde_json::from_str::<EventCreateRequest>(raw).expect("event create should parse payload");
-    assert_eq!(parsed.payload.event_time, Some(1_710_000_000_123));
-    assert_eq!(parsed.payload.started_at, Some(1_710_000_000_456));
-    assert_eq!(parsed.payload.ended_at, Some(1_710_000_000_789));
+    assert_eq!(parsed.event_time, Some(1_710_000_000_123));
+    assert_eq!(parsed.started_at, Some(1_710_000_000_456));
+}
+
+#[test]
+fn event_create_rejects_ended_at_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "title":"t",
+        "status":"open",
+        "message":"m",
+        "severity":"normal",
+        "event_time":1710000000123,
+        "ended_at":1710000000789
+    }"#;
+    let parsed = serde_json::from_str::<EventCreateRequest>(raw);
+    assert!(parsed.is_err(), "event create should reject ended_at");
 }
 
 #[test]
@@ -102,7 +116,7 @@ fn event_create_accepts_ciphertext_field() {
     let parsed =
         serde_json::from_str::<EventCreateRequest>(raw).expect("event create should parse payload");
     assert_eq!(
-        parsed.payload.ciphertext.as_deref(),
+        parsed.patch.ciphertext.as_deref(),
         Some("encrypted-payload")
     );
 }

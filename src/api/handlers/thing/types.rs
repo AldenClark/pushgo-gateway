@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::api::{deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
@@ -41,32 +41,41 @@ pub(super) struct ThingCommonFields {
     pub(super) op_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ThingMutablePayloadFields {
-    pub(super) title: Option<String>,
-    pub(super) description: Option<String>,
+pub(crate) struct ThingPatchFields {
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
     #[serde(default)]
-    pub(super) tags: Option<Vec<String>>,
+    pub(crate) tags: Option<Vec<String>>,
     #[serde(default)]
-    pub(super) external_ids: JsonMap<String, JsonValue>,
-    pub(super) location_type: Option<String>,
-    pub(super) location_value: Option<String>,
+    pub(crate) external_ids: Option<JsonMap<String, JsonValue>>,
+    pub(crate) location_type: Option<String>,
+    pub(crate) location_value: Option<String>,
     #[serde(default)]
-    pub(super) primary_image: Option<String>,
+    pub(crate) primary_image: Option<String>,
     #[serde(default)]
-    pub(super) images: Vec<String>,
+    pub(crate) images: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    pub(super) ciphertext: Option<String>,
+    pub(crate) ciphertext: Option<String>,
     #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
-    pub(super) observed_at: Option<i64>,
+    pub(crate) observed_at: Option<i64>,
     #[serde(default)]
-    pub(super) attrs: JsonMap<String, JsonValue>,
-    #[serde(
-        default,
-        deserialize_with = "super::super::message::deserialize_metadata_map"
-    )]
-    pub(super) metadata: JsonMap<String, JsonValue>,
+    pub(crate) attrs: Option<JsonMap<String, JsonValue>>,
+    #[serde(default, deserialize_with = "deserialize_optional_metadata_map")]
+    pub(crate) metadata: Option<JsonMap<String, JsonValue>>,
+}
+
+fn deserialize_optional_metadata_map<'de, D>(
+    deserializer: D,
+) -> Result<Option<JsonMap<String, JsonValue>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<JsonValue>::deserialize(deserializer)?;
+    raw.map(super::super::message::parse_metadata_map_value)
+        .transpose()
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,7 +86,7 @@ pub(crate) struct ThingCreateRequest {
     #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) created_at: Option<i64>,
     #[serde(flatten)]
-    pub(super) payload: ThingMutablePayloadFields,
+    pub(super) patch: ThingPatchFields,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,7 +96,7 @@ pub(crate) struct ThingUpdateRequest {
     pub(super) common: ThingCommonFields,
     pub(super) thing_id: String,
     #[serde(flatten)]
-    pub(super) payload: ThingMutablePayloadFields,
+    pub(super) patch: ThingPatchFields,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,7 +106,7 @@ pub(crate) struct ThingArchiveRequest {
     pub(super) common: ThingCommonFields,
     pub(super) thing_id: String,
     #[serde(flatten)]
-    pub(super) payload: ThingMutablePayloadFields,
+    pub(super) patch: ThingPatchFields,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,14 +118,7 @@ pub(crate) struct ThingDeleteRequest {
     #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
     pub(super) deleted_at: Option<i64>,
     #[serde(flatten)]
-    pub(super) payload: ThingMutablePayloadFields,
-}
-
-#[derive(Debug)]
-pub(super) struct ThingPayloadFields {
-    pub(super) created_at: Option<i64>,
-    pub(super) deleted_at: Option<i64>,
-    pub(super) mutable: ThingMutablePayloadFields,
+    pub(super) patch: ThingPatchFields,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,10 +129,33 @@ pub(crate) struct ThingSummary {
     pub(super) accepted: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ThingRouteAction {
-    Create,
-    Update,
-    Archive,
-    Delete,
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ThingUpdateRequest;
+
+    #[test]
+    fn thing_update_preserves_missing_patch_field_presence() {
+        let request: ThingUpdateRequest = serde_json::from_value(json!({
+            "channel_id": "channel",
+            "thing_id": "thing-1",
+            "observed_at": 1_700_000_000_000i64,
+            "metadata": { "source": "sensor" }
+        }))
+        .expect("thing update should parse");
+
+        assert!(request.patch.images.is_none());
+        assert!(request.patch.attrs.is_none());
+        assert!(request.patch.external_ids.is_none());
+        assert_eq!(
+            request
+                .patch
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("source"))
+                .and_then(|value| value.as_str()),
+            Some("sensor")
+        );
+    }
 }
