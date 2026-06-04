@@ -155,10 +155,15 @@ impl<'a> PreparedDispatch<'a> {
         }
 
         let mut custom_data = CustomPayloadData::new(custom_data);
+        let embed_standard_text = should_embed_standard_notification_text(entity_kind);
         custom_data.apply_standard_fields(StandardFields {
             channel_id: &channel_id_value,
-            title: resolved_title.as_deref(),
-            body: resolved_body.as_deref(),
+            title: embed_standard_text
+                .then_some(resolved_title.as_deref())
+                .flatten(),
+            body: embed_standard_text
+                .then_some(resolved_body.as_deref())
+                .flatten(),
             severity: (entity_type == "message").then_some(severity.as_str()),
             schema_version: SCHEMA_VERSION,
             payload_version: PAYLOAD_VERSION,
@@ -180,7 +185,9 @@ impl<'a> PreparedDispatch<'a> {
         );
         let resolved_title = resolved_title.or(derived_notification_text.title);
         let resolved_body = resolved_body.or(derived_notification_text.body);
-        custom_data.ensure_notification_title(resolved_title.as_deref());
+        if should_promote_notification_title(entity_kind) {
+            custom_data.ensure_notification_title(resolved_title.as_deref());
+        }
         let prepared_payload = custom_data
             .prepare_dispatch(channel_id_value.as_str(), entity_kind)
             .map_err(|err| {
@@ -260,6 +267,14 @@ impl<'a> PreparedDispatch<'a> {
                 || progress.provider_attempted > 0,
         }
     }
+}
+
+fn should_promote_notification_title(entity_kind: EntityKind) -> bool {
+    entity_kind == EntityKind::Message
+}
+
+fn should_embed_standard_notification_text(entity_kind: EntityKind) -> bool {
+    entity_kind == EntityKind::Message
 }
 
 impl ProviderPayloads {
@@ -378,5 +393,26 @@ impl DispatchProgress {
                 ..DeviceDispatchDelta::default()
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        EntityKind, should_embed_standard_notification_text, should_promote_notification_title,
+    };
+
+    #[test]
+    fn only_messages_promote_derived_notification_title_into_payload() {
+        assert!(should_promote_notification_title(EntityKind::Message));
+        assert!(!should_promote_notification_title(EntityKind::Thing));
+        assert!(!should_promote_notification_title(EntityKind::Event));
+    }
+
+    #[test]
+    fn only_messages_embed_standard_notification_text_into_payload() {
+        assert!(should_embed_standard_notification_text(EntityKind::Message));
+        assert!(!should_embed_standard_notification_text(EntityKind::Thing));
+        assert!(!should_embed_standard_notification_text(EntityKind::Event));
     }
 }
