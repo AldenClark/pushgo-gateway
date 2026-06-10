@@ -8,6 +8,14 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.10]
+
+### Improved
+- Improved entity update consistency across HTTP and MCP routes: thing/event create, update, close, archive, and delete flows now enforce the correct field set for each operation instead of accepting mixed lifecycle payloads.
+- Improved downstream patch fidelity for message, thing, and event notifications by forwarding only supported entity fields, which reduces accidental payload drift for clients consuming gateway updates.
+- Improved notification payload hygiene so alert title/body text stays in the delivery alert layer and no longer leaks into entity patch state.
+- Improved watch-light patch behavior for thing/event updates that do not set a new title, avoiding synthetic fallback titles in lightweight notification payloads.
+
 ## [v1.2.9]
 
 ### Improved

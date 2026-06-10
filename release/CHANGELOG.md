@@ -12,6 +12,16 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.10] - 2026-06-10
+
+### Changed
+- Bumped package/runtime version to `1.2.10` and aligned lockfile metadata for this release line.
+- Unified thing/event mutation semantics across gateway HTTP handlers and MCP entity RPC paths by splitting create/update/close/archive payload shapes, so each operation now accepts only the fields that are valid for that lifecycle step.
+- Hardened entity patch propagation to retain only entity-kind-specific fields in downstream dispatch payloads, preventing route-to-route drift and accidental field carryover between message, thing, and event updates.
+- Kept notification alert text out of entity patch payload state, so title/body used for delivery alerts no longer pollute stored or forwarded entity field sets.
+- Refined watch-light projection behavior for event/thing patches so patch notifications without an explicit title no longer synthesize fallback titles from entity identifiers.
+- Refreshed selected dependency versions in this release window, including `tokio`, `chrono`, `jsonwebtoken`, `reqwest`, `dashmap`, `hashbrown`, `scc`, `rmcp`, `tracing`, and `tracing-subscriber`.
+
 ## [v1.2.9] - 2026-05-26
 
 ### Changed
