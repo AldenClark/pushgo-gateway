@@ -1077,7 +1077,9 @@ fn mqtt_error_from_api(err: Error) -> MqttError {
         Error::TooBusy => MqttErrorKind::Quota,
         Error::Validation {
             code: Some(code), ..
-        } if code.contains("topic") => MqttErrorKind::Topic,
+        } if code.contains("topic") || code.as_ref() == "channel_id_invalid" => {
+            MqttErrorKind::Topic
+        }
         Error::Validation { .. } => MqttErrorKind::Payload,
         _ => MqttErrorKind::Internal,
     };
@@ -1316,6 +1318,22 @@ mod tests {
         stream
     }
 
+    async fn connect_publish_client(addr: SocketAddr, client_id: &str) -> TcpStream {
+        let mut stream = TcpStream::connect(addr)
+            .await
+            .expect("MQTT stream should connect");
+        write_client_packet(
+            &mut stream,
+            ClientPacket::Connect(connect_with_device_type(client_id, "publish")),
+        )
+        .await;
+        match read_server_packet(&mut stream).await {
+            Packet::ConnAck(connack) => assert_eq!(connack.code, ConnectReturnCode::Success),
+            packet => panic!("expected CONNACK success, got {packet:?}"),
+        }
+        stream
+    }
+
     fn connect_with_device_type(client_id: &str, device_type: &str) -> Connect {
         let mut connect = Connect::new(client_id);
         connect.properties = Some(ConnectProperties {
@@ -1333,6 +1351,21 @@ mod tests {
             authentication_data: None,
         });
         connect
+    }
+
+    fn publish_properties(password: Option<&str>) -> PublishProperties {
+        PublishProperties {
+            payload_format_indicator: Some(1),
+            message_expiry_interval: None,
+            topic_alias: None,
+            response_topic: None,
+            correlation_data: None,
+            user_properties: password
+                .map(|password| vec![(MQTT_PASSWORD_PROPERTY.to_string(), password.to_string())])
+                .unwrap_or_default(),
+            subscription_identifiers: Vec::new(),
+            content_type: Some("application/json".to_string()),
+        }
     }
 
     fn connect_with_device_type_and_keep_alive(
@@ -1740,6 +1773,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mqtt_subscribe_connect_reuses_existing_device_key_without_reassignment() {
+        let ctx = MqttFlowTestContext::new().await;
+        let device_key = "mqtt-existing-device-key";
+        ctx.restore_private_route(device_key).await;
+        let mut stream = TcpStream::connect(ctx.addr)
+            .await
+            .expect("MQTT stream should connect");
+
+        write_client_packet(
+            &mut stream,
+            ClientPacket::Connect(connect_with_device_type(device_key, "subscribe")),
+        )
+        .await;
+
+        match read_server_packet_labeled(&mut stream, "CONNACK").await {
+            Packet::ConnAck(connack) => {
+                assert_eq!(connack.code, ConnectReturnCode::Success);
+                let props = connack.properties.expect("connack should include props");
+                assert!(
+                    props.assigned_client_identifier.is_none(),
+                    "existing MQTT device key should not be reassigned"
+                );
+                assert_eq!(props.session_expiry_interval, Some(0));
+            }
+            packet => panic!("expected CONNACK success, got {packet:?}"),
+        }
+        assert!(
+            ctx.private
+                .hub
+                .is_online(derive_private_device_id(device_key))
+        );
+        let rows = ctx
+            .state
+            .store
+            .load_device_routes()
+            .await
+            .expect("routes should load");
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.device_key == device_key)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn mqtt_connack_advertises_server_keep_alive_when_client_is_unbounded() {
         let ctx = MqttFlowTestContext::new().await;
         let mut stream = TcpStream::connect(ctx.addr)
@@ -1828,6 +1907,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mqtt_publish_connect_ignores_client_id_and_can_publish_without_route() {
+        let ctx = MqttFlowTestContext::new().await;
+        let owner_key = "mqtt-publish-only-channel-owner";
+        let channel_password = "mqtt-pub-only-pass";
+        ctx.restore_private_route(owner_key).await;
+        let channel_id = ctx.create_channel(owner_key, channel_password).await;
+        let mut stream = connect_publish_client(ctx.addr, "publish-client-id-is-ignored").await;
+
+        assert!(
+            ctx.state
+                .store
+                .load_device_routes()
+                .await
+                .expect("routes should load")
+                .iter()
+                .all(|row| row.device_key != "publish-client-id-is-ignored"),
+            "publish-only client id must not be persisted"
+        );
+
+        let mut publish = Publish::new(
+            MqttMessageTopic::format(channel_id.as_str()),
+            QoS::AtLeastOnce,
+            br#"{"title":"publish-only message"}"#.to_vec(),
+        );
+        publish.pkid = 41;
+        publish.properties = Some(publish_properties(Some(channel_password)));
+        write_client_packet(&mut stream, ClientPacket::Publish(publish)).await;
+
+        match read_server_packet_labeled(&mut stream, "publish-only PUBACK").await {
+            Packet::PubAck(puback) => {
+                assert_eq!(puback.pkid, 41);
+                assert_eq!(puback.reason, PubAckReason::Success);
+            }
+            packet => panic!("expected PUBACK success, got {packet:?}"),
+        }
+        assert_eq!(ctx.private.metrics.snapshot().mqtt_publish_success, 1);
+    }
+
+    #[tokio::test]
     async fn mqtt_connect_requires_device_type() {
         let ctx = MqttFlowTestContext::new().await;
         let mut stream = TcpStream::connect(ctx.addr)
@@ -1846,6 +1964,81 @@ mod tests {
                 );
             }
             packet => panic!("expected CONNACK rejection, got {packet:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mqtt_connect_rejects_non_v5_invalid_device_type_and_non_connect_first_packet() {
+        let ctx = MqttFlowTestContext::new().await;
+
+        let mut stream = TcpStream::connect(ctx.addr)
+            .await
+            .expect("MQTT stream should connect");
+        stream
+            .write_all(&[
+                0x10, 0x14, // CONNECT, remaining length
+                0x00, 0x04, b'M', b'Q', b'T', b'T', 0x04, // MQTT 3.1.1
+                0x02, // clean session
+                0x00, 0x0A, // keep alive
+                0x00, 0x08, b'm', b'q', b't', b't', b'-', b'v', b'4', b'x',
+            ])
+            .await
+            .expect("MQTT v4 CONNECT should write");
+        match read_server_packet_labeled(&mut stream, "non-v5 CONNACK").await {
+            Packet::ConnAck(connack) => {
+                assert_eq!(connack.code, ConnectReturnCode::UnsupportedProtocolVersion);
+                assert_eq!(
+                    connack
+                        .properties
+                        .and_then(|props| props.reason_string)
+                        .as_deref(),
+                    Some("mqtt5_required")
+                );
+            }
+            packet => panic!("expected CONNACK protocol rejection, got {packet:?}"),
+        }
+
+        let mut stream = TcpStream::connect(ctx.addr)
+            .await
+            .expect("MQTT stream should connect");
+        write_client_packet(
+            &mut stream,
+            ClientPacket::Connect(connect_with_device_type("", "sidecar")),
+        )
+        .await;
+        match read_server_packet_labeled(&mut stream, "invalid device_type CONNACK").await {
+            Packet::ConnAck(connack) => {
+                assert_eq!(connack.code, ConnectReturnCode::PayloadFormatInvalid);
+                assert_eq!(
+                    connack
+                        .properties
+                        .and_then(|props| props.reason_string)
+                        .as_deref(),
+                    Some("device_type_invalid")
+                );
+            }
+            packet => panic!("expected CONNACK device type rejection, got {packet:?}"),
+        }
+
+        let mut stream = TcpStream::connect(ctx.addr)
+            .await
+            .expect("MQTT stream should connect");
+        stream
+            .write_all(&[0xC0, 0x00])
+            .await
+            .expect("PINGREQ should write");
+        match read_server_packet_labeled(&mut stream, "first packet CONNACK").await {
+            Packet::ConnAck(connack) => {
+                assert_eq!(connack.code, ConnectReturnCode::ProtocolError);
+                assert_eq!(
+                    connack
+                        .properties
+                        .and_then(|props| props.reason_string)
+                        .as_deref(),
+                    Some("first packet must be CONNECT")
+                );
+            }
+            packet => panic!("expected CONNACK first-packet rejection, got {packet:?}"),
         }
     }
 
@@ -1943,6 +2136,79 @@ mod tests {
                 );
             }
             packet => panic!("expected DISCONNECT topic alias rejection, got {packet:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mqtt_publish_errors_map_to_mqtt5_reason_codes_and_properties() {
+        let (ctx, mut stream, device_key, channel_id, channel_password) =
+            setup_connected_channel().await;
+
+        let cases = [
+            (
+                format!("pushgo/{channel_id}/events"),
+                Some(channel_password.as_str()),
+                br#"{"title":"bad topic"}"#.to_vec(),
+                PubAckReason::TopicNameInvalid,
+                "mqtt_topic_invalid",
+            ),
+            (
+                MqttMessageTopic::format(channel_id.as_str()),
+                None,
+                br#"{"title":"missing password"}"#.to_vec(),
+                PubAckReason::NotAuthorized,
+                "channel_password_required",
+            ),
+            (
+                MqttMessageTopic::format(channel_id.as_str()),
+                Some(channel_password.as_str()),
+                br#"{"body":"missing title"}"#.to_vec(),
+                PubAckReason::PayloadFormatInvalid,
+                "payload_invalid",
+            ),
+        ];
+
+        for (idx, (topic, password, payload, reason, error_code)) in cases.into_iter().enumerate() {
+            let pkid = 50 + idx as u16;
+            let mut publish = Publish::new(topic, QoS::AtLeastOnce, payload);
+            publish.pkid = pkid;
+            publish.properties = Some(publish_properties(password));
+            write_client_packet(&mut stream, ClientPacket::Publish(publish)).await;
+            match read_server_packet_labeled(&mut stream, "error PUBACK").await {
+                Packet::PubAck(puback) => {
+                    assert_eq!(puback.pkid, pkid);
+                    assert_eq!(puback.reason, reason);
+                    let props = puback.properties.expect("puback should include props");
+                    assert_eq!(
+                        user_property(&props.user_properties, "pushgo-error-code"),
+                        Some(error_code)
+                    );
+                    assert!(props.reason_string.is_some());
+                }
+                packet => panic!("expected PUBACK error, got {packet:?}"),
+            }
+        }
+
+        let mut stream = connect_client(ctx.addr, device_key.as_str()).await;
+        let mut wildcard_topic = Publish::new(
+            "pushgo/+/messages",
+            QoS::AtLeastOnce,
+            br#"{"title":"wildcard publish topic"}"#.to_vec(),
+        );
+        wildcard_topic.pkid = 60;
+        wildcard_topic.properties = Some(publish_properties(Some(channel_password.as_str())));
+        write_client_packet(&mut stream, ClientPacket::Publish(wildcard_topic)).await;
+        match read_server_packet_labeled(&mut stream, "wildcard topic PUBACK").await {
+            Packet::PubAck(puback) => {
+                assert_eq!(puback.pkid, 60);
+                assert_eq!(puback.reason, PubAckReason::TopicNameInvalid);
+                let props = puback.properties.expect("puback should include props");
+                assert_eq!(
+                    user_property(&props.user_properties, "pushgo-error-code"),
+                    Some("mqtt_topic_filter_not_supported")
+                );
+            }
+            packet => panic!("expected PUBACK wildcard topic rejection, got {packet:?}"),
         }
     }
 
@@ -2102,6 +2368,124 @@ mod tests {
                 );
             }
             packet => panic!("expected SUBACK retain options rejection, got {packet:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mqtt_subscribe_and_unsubscribe_report_auth_topic_and_idempotent_results() {
+        let (ctx, mut stream, device_key, channel_id, channel_password) =
+            setup_connected_channel().await;
+
+        let mut missing_password = Subscribe::new(
+            MqttMessageTopic::format(channel_id.as_str()),
+            QoS::AtLeastOnce,
+        );
+        missing_password.pkid = 70;
+        missing_password.properties = Some(SubscribeProperties {
+            id: None,
+            user_properties: Vec::new(),
+        });
+        write_client_packet(&mut stream, ClientPacket::Subscribe(missing_password)).await;
+        match read_server_packet_labeled(&mut stream, "missing password SUBACK").await {
+            Packet::SubAck(suback) => {
+                assert_eq!(suback.pkid, 70);
+                assert_eq!(
+                    suback.return_codes,
+                    vec![SubscribeReasonCode::NotAuthorized]
+                );
+                assert_eq!(
+                    suback
+                        .properties
+                        .and_then(|props| props.reason_string)
+                        .as_deref(),
+                    Some("pushgo-password is required")
+                );
+            }
+            packet => panic!("expected SUBACK missing password rejection, got {packet:?}"),
+        }
+
+        let mut wildcard = Subscribe::new("pushgo/+/messages", QoS::AtLeastOnce);
+        wildcard.pkid = 71;
+        wildcard.properties = Some(SubscribeProperties {
+            id: None,
+            user_properties: vec![(
+                MQTT_PASSWORD_PROPERTY.to_string(),
+                channel_password.to_string(),
+            )],
+        });
+        write_client_packet(&mut stream, ClientPacket::Subscribe(wildcard)).await;
+        match read_server_packet_labeled(&mut stream, "wildcard SUBACK").await {
+            Packet::SubAck(suback) => {
+                assert_eq!(suback.pkid, 71);
+                assert_eq!(
+                    suback.return_codes,
+                    vec![SubscribeReasonCode::WildcardSubscriptionsNotSupported]
+                );
+            }
+            packet => panic!("expected SUBACK wildcard rejection, got {packet:?}"),
+        }
+
+        let mut subscribe = Subscribe::new(
+            MqttMessageTopic::format(channel_id.as_str()),
+            QoS::AtLeastOnce,
+        );
+        subscribe.pkid = 72;
+        subscribe.properties = Some(SubscribeProperties {
+            id: None,
+            user_properties: vec![(
+                MQTT_PASSWORD_PROPERTY.to_string(),
+                channel_password.to_string(),
+            )],
+        });
+        write_client_packet(&mut stream, ClientPacket::Subscribe(subscribe)).await;
+        match read_server_packet_labeled(&mut stream, "valid SUBACK").await {
+            Packet::SubAck(suback) => {
+                assert_eq!(suback.pkid, 72);
+                assert_eq!(suback.return_codes, vec![SubscribeReasonCode::QoS1]);
+            }
+            packet => panic!("expected SUBACK success, got {packet:?}"),
+        }
+
+        let device_id = derive_private_device_id(device_key.as_str());
+        let parsed_channel = ChannelId::parse(channel_id.as_str())
+            .expect("channel id should parse")
+            .into_inner();
+        let subscribed = ctx
+            .state
+            .store
+            .list_private_subscribed_channels_for_device(device_id)
+            .await
+            .expect("subscriptions should load");
+        assert!(subscribed.contains(&parsed_channel));
+
+        for pkid in [73, 74] {
+            let mut unsubscribe = Unsubscribe::new(MqttMessageTopic::format(channel_id.as_str()));
+            unsubscribe.pkid = pkid;
+            unsubscribe.properties = Some(UnsubscribeProperties {
+                user_properties: Vec::new(),
+            });
+            write_client_packet(&mut stream, ClientPacket::Unsubscribe(unsubscribe)).await;
+            match read_server_packet_labeled(&mut stream, "UNSUBACK").await {
+                Packet::UnsubAck(unsuback) => {
+                    assert_eq!(unsuback.pkid, pkid);
+                    assert_eq!(unsuback.reasons, vec![UnsubAckReason::Success]);
+                }
+                packet => panic!("expected UNSUBACK success, got {packet:?}"),
+            }
+        }
+
+        let mut invalid_unsubscribe = Unsubscribe::new(format!("pushgo/{channel_id}/events"));
+        invalid_unsubscribe.pkid = 75;
+        invalid_unsubscribe.properties = Some(UnsubscribeProperties {
+            user_properties: Vec::new(),
+        });
+        write_client_packet(&mut stream, ClientPacket::Unsubscribe(invalid_unsubscribe)).await;
+        match read_server_packet_labeled(&mut stream, "invalid UNSUBACK").await {
+            Packet::UnsubAck(unsuback) => {
+                assert_eq!(unsuback.pkid, 75);
+                assert_eq!(unsuback.reasons, vec![UnsubAckReason::TopicFilterInvalid]);
+            }
+            packet => panic!("expected UNSUBACK invalid topic, got {packet:?}"),
         }
     }
 
