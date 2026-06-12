@@ -40,6 +40,7 @@ pub struct PrivateTransports {
     pub quic: bool,
     pub tcp: bool,
     pub wss: bool,
+    pub mqtt: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +65,7 @@ impl PrivateTransports {
             quic: false,
             tcp: false,
             wss: false,
+            mqtt: false,
         }
     }
 
@@ -73,12 +75,13 @@ impl PrivateTransports {
             quic: true,
             tcp: true,
             wss: true,
+            mqtt: true,
         }
     }
 
     #[must_use]
     pub const fn any_enabled(self) -> bool {
-        self.quic || self.tcp || self.wss
+        self.quic || self.tcp || self.wss || self.mqtt
     }
 }
 
@@ -266,7 +269,7 @@ pub struct Args {
 
     /// Private transport switch. Supports:
     /// - boolean form: true/false
-    /// - explicit set: none or comma-separated quic,tcp,wss
+    /// - explicit set: none or comma-separated quic,tcp,wss,mqtt
     #[arg(
         env = "PUSHGO_PRIVATE_TRANSPORTS",
         long = "private-transports",
@@ -318,11 +321,11 @@ pub struct Args {
     )]
     pub private_quic_port: u16,
 
-    /// TLS certificate path (PEM) used by private QUIC and by private TCP when TLS is gateway-terminated.
+    /// TLS certificate path (PEM) used by private QUIC and by opt-in private TCP/MQTT TLS.
     #[arg(env = "PUSHGO_PRIVATE_TLS_CERT", long = "private-tls-cert")]
     pub private_tls_cert_path: Option<String>,
 
-    /// TLS private key path (PEM) used by private QUIC and by private TCP when TLS is gateway-terminated.
+    /// TLS private key path (PEM) used by private QUIC and by opt-in private TCP/MQTT TLS.
     #[arg(env = "PUSHGO_PRIVATE_TLS_KEY", long = "private-tls-key")]
     pub private_tls_key_path: Option<String>,
 
@@ -342,13 +345,13 @@ pub struct Args {
     )]
     pub private_tcp_port: u16,
 
-    /// If true, private TCP listener runs in plain mode for edge-terminated TLS.
+    /// If true, private TCP listener terminates TLS in gateway. By default private TCP is plain.
     #[arg(
-        env = "PUSHGO_PRIVATE_TCP_TLS_OFFLOAD",
-        long = "private-tcp-tls-offload",
+        env = "PUSHGO_PRIVATE_TCP_TLS_ENABLED",
+        long = "private-tcp-tls-enabled",
         default_value = "false"
     )]
-    pub private_tcp_tls_offload: bool,
+    pub private_tcp_tls_enabled: bool,
 
     /// If true, expects HAProxy PROXY protocol v1 on private TCP inbound.
     #[arg(
@@ -357,6 +360,34 @@ pub struct Args {
         default_value = "false"
     )]
     pub private_tcp_proxy_protocol: bool,
+
+    /// MQTT bind address for the private transport listener.
+    #[arg(
+        env = "PUSHGO_MQTT_BIND",
+        long = "mqtt-bind",
+        default_value = "127.0.0.1:1883"
+    )]
+    pub mqtt_bind: String,
+
+    /// Advertised MQTT port for private channel clients.
+    #[arg(env = "PUSHGO_MQTT_PORT", long = "mqtt-port", default_value = "1883")]
+    pub mqtt_port: u16,
+
+    /// If true, MQTT listener terminates TLS in gateway. By default MQTT is plain.
+    #[arg(
+        env = "PUSHGO_MQTT_TLS_ENABLED",
+        long = "mqtt-tls-enabled",
+        default_value = "false"
+    )]
+    pub mqtt_tls_enabled: bool,
+
+    /// Maximum MQTT packet size accepted by the gateway.
+    #[arg(
+        env = "PUSHGO_MQTT_MAX_PACKET_BYTES",
+        long = "mqtt-max-packet-bytes",
+        default_value = "32768"
+    )]
+    pub mqtt_max_packet_bytes: usize,
 
     /// Enable MCP endpoint (`/mcp`) and related routes.
     #[arg(
@@ -476,10 +507,16 @@ impl Args {
                 "PUSHGO_PRIVATE_TRANSPORTS includes `quic`, but PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY are required",
             ));
         }
-        if transports.tcp && !self.private_tcp_tls_offload && !tls_identity_ready {
+        if transports.tcp && self.private_tcp_tls_enabled && !tls_identity_ready {
             return Err(IoError::new(
                 ErrorKind::InvalidInput,
-                "PUSHGO_PRIVATE_TRANSPORTS includes `tcp` with PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false, but PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY are required",
+                "PUSHGO_PRIVATE_TRANSPORTS includes `tcp` with PUSHGO_PRIVATE_TCP_TLS_ENABLED=true, but PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY are required",
+            ));
+        }
+        if transports.mqtt && self.mqtt_tls_enabled && !tls_identity_ready {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                "PUSHGO_PRIVATE_TRANSPORTS includes `mqtt` with PUSHGO_MQTT_TLS_ENABLED=true, but PUSHGO_PRIVATE_TLS_CERT and PUSHGO_PRIVATE_TLS_KEY are required",
             ));
         }
         if transports.quic {
@@ -505,6 +542,25 @@ impl Args {
                 return Err(IoError::new(
                     ErrorKind::InvalidInput,
                     "PUSHGO_PRIVATE_TRANSPORTS includes `tcp`, but PUSHGO_PRIVATE_TCP_PORT must be greater than 0",
+                ));
+            }
+        }
+        if transports.mqtt {
+            validate_bind_addr(
+                "PUSHGO_MQTT_BIND",
+                self.mqtt_bind.as_str(),
+                "PUSHGO_PRIVATE_TRANSPORTS includes `mqtt`, but PUSHGO_MQTT_BIND must be a valid socket address",
+            )?;
+            if self.mqtt_port == 0 {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    "PUSHGO_PRIVATE_TRANSPORTS includes `mqtt`, but PUSHGO_MQTT_PORT must be greater than 0",
+                ));
+            }
+            if self.mqtt_max_packet_bytes < 1024 {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    "PUSHGO_MQTT_MAX_PACKET_BYTES must be at least 1024",
                 ));
             }
         }
@@ -583,11 +639,12 @@ fn parse_private_transports(raw: &str) -> Result<PrivateTransports, IoError> {
             "quic" => transports.quic = true,
             "tcp" => transports.tcp = true,
             "wss" => transports.wss = true,
+            "mqtt" => transports.mqtt = true,
             unknown => {
                 return Err(IoError::new(
                     ErrorKind::InvalidInput,
                     format!(
-                        "invalid private transport `{unknown}` in PUSHGO_PRIVATE_TRANSPORTS (expected true/false/none or quic,tcp,wss)"
+                        "invalid private transport `{unknown}` in PUSHGO_PRIVATE_TRANSPORTS (expected true/false/none or quic,tcp,wss,mqtt)"
                     ),
                 ));
             }
@@ -718,7 +775,6 @@ mod tests {
         let args = Args::parse_from([
             "pushgo-gateway",
             "--private-transports=tcp,wss",
-            "--private-tcp-tls-offload",
             "--db-url",
             "sqlite:///tmp/pushgo.db",
         ])
@@ -730,6 +786,30 @@ mod tests {
                 quic: false,
                 tcp: true,
                 wss: true,
+                mqtt: false,
+            }
+        );
+    }
+
+    #[test]
+    fn private_transports_supports_mqtt() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=mqtt",
+            "--mqtt-bind",
+            "127.0.0.1:1883",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        assert_eq!(
+            args.private_transports()
+                .expect("mqtt transport should parse"),
+            PrivateTransports {
+                quic: false,
+                tcp: false,
+                wss: false,
+                mqtt: true,
             }
         );
     }
@@ -773,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn private_transports_rejects_tcp_without_tls_identity_when_offload_disabled() {
+    fn private_transports_allows_tcp_without_tls_identity_when_tls_disabled() {
         let args = Args::parse_from([
             "pushgo-gateway",
             "--private-transports=tcp",
@@ -781,11 +861,60 @@ mod tests {
             "sqlite:///tmp/pushgo.db",
         ])
         .normalized();
+        let transports = args
+            .private_transports()
+            .expect("tcp without tls identity should be plain by default");
+        assert!(transports.tcp);
+    }
+
+    #[test]
+    fn private_transports_rejects_tcp_without_tls_identity_when_tls_enabled() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=tcp",
+            "--private-tcp-tls-enabled",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
         let error = args
             .private_transports()
-            .expect_err("tcp without tls identity must fail when offload is disabled");
+            .expect_err("tcp without tls identity must fail when tls is enabled");
         assert!(error.to_string().contains(
-            "PUSHGO_PRIVATE_TRANSPORTS includes `tcp` with PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false"
+            "PUSHGO_PRIVATE_TRANSPORTS includes `tcp` with PUSHGO_PRIVATE_TCP_TLS_ENABLED=true"
+        ));
+    }
+
+    #[test]
+    fn private_transports_allows_mqtt_without_tls_identity_when_tls_disabled() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=mqtt",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let transports = args
+            .private_transports()
+            .expect("mqtt without tls identity should be plain by default");
+        assert!(transports.mqtt);
+    }
+
+    #[test]
+    fn private_transports_rejects_mqtt_without_tls_identity_when_tls_enabled() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--private-transports=mqtt",
+            "--mqtt-tls-enabled",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+        ])
+        .normalized();
+        let error = args
+            .private_transports()
+            .expect_err("mqtt without tls identity must fail when tls is enabled");
+        assert!(error.to_string().contains(
+            "PUSHGO_PRIVATE_TRANSPORTS includes `mqtt` with PUSHGO_MQTT_TLS_ENABLED=true"
         ));
     }
 
@@ -796,7 +925,6 @@ mod tests {
             "--private-transports=tcp",
             "--private-tcp-bind",
             "invalid-bind",
-            "--private-tcp-tls-offload",
             "--db-url",
             "sqlite:///tmp/pushgo.db",
         ])
@@ -856,6 +984,7 @@ mod tests {
                 quic: false,
                 tcp: false,
                 wss: true,
+                mqtt: false,
             }
         );
     }

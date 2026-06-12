@@ -54,6 +54,7 @@ pub struct DeviceRegistryStats {
     pub watchos_devices: usize,
     pub android_devices: usize,
     pub windows_devices: usize,
+    pub mqtt_devices: usize,
     pub provider_routes: usize,
 }
 

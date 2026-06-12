@@ -85,12 +85,15 @@ impl PostgresDb {
                 });
 
             if channel_type.eq_ignore_ascii_case("private") {
+                let platform_raw: String = row.get("platform");
+                let platform: Platform = platform_raw.parse()?;
                 if raw_device_id.len() == 16 {
                     let mut id = [0u8; 16];
                     id.copy_from_slice(&raw_device_id);
                     out.push(DispatchTarget::Private {
                         device_id: id,
                         device_key,
+                        platform,
                     });
                 }
                 continue;
@@ -98,6 +101,9 @@ impl PostgresDb {
 
             let platform_raw: String = row.get("platform");
             let platform: Platform = platform_raw.parse()?;
+            if !platform.supports_provider_push() {
+                continue;
+            }
             if let Some(token) = route_provider_token
                 && let Some(token) = ProviderTokenRef::optional(Some(token.as_str()))
                 && let Some(device_key) = device_key
@@ -177,6 +183,7 @@ impl PostgresDb {
             (
                 ChannelInfo {
                     alias: r.get("alias"),
+                    password_hash: r.get("password_hash"),
                 },
                 r.get("password_hash"),
             )

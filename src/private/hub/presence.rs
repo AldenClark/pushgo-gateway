@@ -97,6 +97,7 @@ impl PrivateHub {
                     conn_id,
                     sender: sender.clone(),
                 }),
+                mqtt_active: None,
                 draining: Vec::new(),
             });
                 ::tracing::event!(
@@ -117,7 +118,8 @@ impl PrivateHub {
                 .active_conn_ids()
                 .into_iter()
                 .flatten()
-                .any(|active_id| active_id == conn_id);
+                .any(|active_id| active_id == conn_id)
+                || presence.active_mqtt_conn_id() == Some(conn_id);
             if !is_active {
                 return;
             }
@@ -137,6 +139,7 @@ impl PrivateHub {
             .into_iter()
             .flatten()
             .any(|id| id == conn_id)
+            || presence.active_mqtt_conn_id() == Some(conn_id)
         {
             return ConnectionMode::Active;
         }
@@ -156,6 +159,13 @@ impl PrivateHub {
         self.presence
             .get(&device_id)
             .map(|presence| presence.has_active())
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn has_active_mqtt_connection(&self, device_id: DeviceId) -> bool {
+        self.presence
+            .get(&device_id)
+            .map(|presence| presence.active_mqtt_conn_id().is_some())
             .unwrap_or(false)
     }
 
@@ -202,6 +212,13 @@ impl PrivateHub {
             {
                 entry.wss_active = None;
             }
+            if entry
+                .mqtt_active
+                .as_ref()
+                .is_some_and(|active| active.conn_id == conn_id)
+            {
+                entry.mqtt_active = None;
+            }
             entry.draining.retain(|item| item.conn_id != conn_id);
             if !entry.has_active() && entry.draining.is_empty() {
                 remove_presence = true;
@@ -219,6 +236,53 @@ impl PrivateHub {
             removed_presence = (remove_presence)
         );
     }
+
+    pub(crate) fn register_mqtt_connection(
+        &self,
+        device_id: DeviceId,
+        conn_id: u64,
+        sender: Sender<protocol::DeliverEnvelope>,
+    ) -> RegisterConnectionOutcome {
+        let now = Instant::now();
+        let mut superseded_conn_id = None;
+        self.presence
+            .entry(device_id)
+            .and_modify(|presence| {
+                presence.draining.retain(|item| item.drain_until > now);
+                if let Some(previous) = presence.mqtt_active.replace(ActiveConn {
+                    conn_id,
+                    sender: sender.clone(),
+                }) {
+                    drop(previous.sender);
+                    superseded_conn_id = Some(previous.conn_id);
+                }
+            })
+            .or_insert_with(|| Presence {
+                quic_active: None,
+                tcp_active: None,
+                wss_active: None,
+                mqtt_active: Some(ActiveConn {
+                    conn_id,
+                    sender: sender.clone(),
+                }),
+                draining: Vec::new(),
+            });
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.presence_connection_registered",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            conn_id = (conn_id),
+            transport = %("Mqtt"),
+            superseded_previous = (superseded_conn_id.is_some())
+        );
+        RegisterConnectionOutcome { superseded_conn_id }
+    }
+
+    pub(crate) fn unregister_mqtt_connection(&self, device_id: DeviceId, conn_id: u64) {
+        self.unregister_connection(device_id, conn_id);
+    }
+
     pub async fn deliver_to_device(
         &self,
         device_id: DeviceId,

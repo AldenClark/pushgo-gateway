@@ -38,12 +38,13 @@ impl MySqlDb {
         &self,
         channel_id: [u8; 16],
     ) -> StoreResult<Option<ChannelInfo>> {
-        let row = sqlx::query("SELECT alias FROM channels WHERE channel_id = ?")
+        let row = sqlx::query("SELECT alias, password_hash FROM channels WHERE channel_id = ?")
             .bind(&channel_id[..])
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.map(|r| ChannelInfo {
             alias: r.get("alias"),
+            password_hash: r.get("password_hash"),
         }))
     }
 

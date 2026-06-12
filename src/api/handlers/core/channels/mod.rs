@@ -1,5 +1,5 @@
-mod audit;
-mod private_cleanup;
+pub(crate) mod audit;
+pub(crate) mod private_cleanup;
 mod subscription;
 mod sync;
 mod tests;

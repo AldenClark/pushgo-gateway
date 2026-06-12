@@ -2,7 +2,7 @@ use crate::{
     api::Error, app::AppState, routing::DeviceRouteRecord, storage::SubscriptionAuditWrite,
 };
 
-pub(super) async fn append_subscription_audit(
+pub(crate) async fn append_subscription_audit(
     state: &AppState,
     channel_id: [u8; 16],
     device_key: &str,

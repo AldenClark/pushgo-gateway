@@ -225,7 +225,9 @@ async fn channel_password_argon2_hash_is_upgraded_to_blake3_after_successful_ver
         .channel_info_with_password(channel_id, password)
         .await
         .expect("channel_info_with_password should succeed");
-    assert_eq!(info.expect("channel must exist").alias, alias);
+    let info = info.expect("channel must exist");
+    assert_eq!(info.alias, alias);
+    assert!(info.password_hash.starts_with("$pushgo-blake3$v=1$"));
 
     let upgraded_hash: String =
         sqlx::query_scalar("SELECT password_hash FROM channels WHERE channel_id = ?")
@@ -234,6 +236,18 @@ async fn channel_password_argon2_hash_is_upgraded_to_blake3_after_successful_ver
             .await
             .expect("query password hash should succeed");
     assert!(upgraded_hash.starts_with("$pushgo-blake3$v=1$"));
+
+    let cached = ctx
+        .storage
+        .channel_info_with_password(channel_id, password)
+        .await
+        .expect("cached channel_info_with_password should succeed")
+        .expect("channel should stay cached");
+    assert_eq!(cached.alias, alias);
+    assert_eq!(cached.password_hash, upgraded_hash);
+    let snapshot = ctx.storage.cache_memory_snapshot();
+    assert_eq!(snapshot.channel_info_cache_entries, 1);
+    assert!(snapshot.channel_info_password_hash_bytes >= upgraded_hash.len());
 }
 
 #[tokio::test]
@@ -288,9 +302,11 @@ async fn dispatch_targets_follow_current_route_when_present() {
         DispatchTarget::Private {
             device_id: private_device_id,
             device_key: private_device_key,
+            platform,
         } => {
             assert_eq!(private_device_id, &device_id);
             assert_eq!(private_device_key.as_deref(), Some(device_key));
+            assert_eq!(*platform, Platform::ANDROID);
         }
         other => panic!("expected private target after route switch, got {other:?}"),
     }
@@ -338,6 +354,104 @@ async fn dispatch_targets_follow_current_route_when_present() {
         .await
         .expect("fetch with matching current route should succeed");
     assert_eq!(restored.len(), 1);
+}
+
+#[tokio::test]
+async fn dispatch_targets_skip_mqtt_provider_route_rows() {
+    let ctx = setup_sqlite_storage("dispatch-targets-skip-mqtt-provider-route").await;
+    let token = "android-token-skip-mqtt-provider-route-000000000001";
+    let device_key = "dispatch-targets-skip-mqtt-provider-route-device-key";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        token,
+        "skip-mqtt-provider-route",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let channel_id = subscribe.channel_id;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id = derive_private_device_id(device_key);
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+
+    sqlx::query(
+        "UPDATE devices \
+         SET platform = 'mqtt', platform_code = ?, channel_type = 'apns', provider_token = ?, route_updated_at = ? \
+         WHERE device_id = ?",
+    )
+    .bind(Platform::MQTT.to_byte() as i64)
+    .bind("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+    .bind(now + 1)
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("direct mqtt provider route mutation should succeed");
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 2)
+        .await
+        .expect("dispatch target fetch should succeed");
+    assert!(
+        targets.is_empty(),
+        "mqtt provider route rows must not become provider dispatch targets"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_targets_include_mqtt_private_platform() {
+    let ctx = setup_sqlite_storage("dispatch-targets-mqtt-private-platform").await;
+    let token = "android-token-mqtt-private-platform-00000000000001";
+    let device_key = "dispatch-targets-mqtt-private-platform-device";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        token,
+        "mqtt-private-platform",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let channel_id = subscribe.channel_id;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id = derive_private_device_id(device_key);
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+
+    sqlx::query(
+        "UPDATE devices \
+         SET platform = 'mqtt', platform_code = ?, channel_type = 'private', provider_token = NULL, route_updated_at = ? \
+         WHERE device_id = ?",
+    )
+    .bind(Platform::MQTT.to_byte() as i64)
+    .bind(now + 1)
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("direct mqtt private route mutation should succeed");
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(channel_id, now + 2)
+        .await
+        .expect("dispatch target fetch should succeed");
+    assert_eq!(targets.len(), 1);
+    match &targets[0] {
+        DispatchTarget::Private {
+            device_id: target_device_id,
+            device_key: target_device_key,
+            platform,
+        } => {
+            assert_eq!(target_device_id, &device_id);
+            assert_eq!(target_device_key.as_deref(), Some(device_key));
+            assert_eq!(*platform, Platform::MQTT);
+        }
+        other => panic!("expected mqtt private target, got {other:?}"),
+    }
 }
 
 #[tokio::test]

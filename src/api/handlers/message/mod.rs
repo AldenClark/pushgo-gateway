@@ -12,7 +12,7 @@ use crate::{
     app::AppState,
 };
 
-use super::channel_auth::{AuthorizedChannel, authorize_channel_by_password};
+use super::channel_auth::AuthorizedChannel;
 use super::entity_input::{EntityId, MetadataEntries, NormalizedImageUrls, NormalizedTags};
 
 mod compat;
@@ -78,22 +78,6 @@ impl MessageIntent {
         }
         MetadataEntries::new(&self.metadata).validate()?;
         Ok(())
-    }
-
-    fn into_dispatch(self) -> MessageDispatchIntent {
-        MessageDispatchIntent {
-            op_id: self.op_id,
-            occurred_at: self.occurred_at,
-            title: self.title,
-            body: self.body,
-            severity: self.severity,
-            ttl: self.ttl,
-            url: self.url,
-            images: self.images,
-            ciphertext: self.ciphertext,
-            tags: self.tags,
-            metadata: self.metadata,
-        }
     }
 }
 
@@ -170,10 +154,45 @@ pub(super) async fn dispatch_message_intent(
     scoped_thing_id: Option<String>,
 ) -> HttpResult {
     payload.validate_payload()?;
-    let authorized =
-        authorize_channel_by_password(state, &payload.channel_id, &payload.password).await?;
-    dispatch_message_authorized_intent(state, authorized, payload.into_dispatch(), scoped_thing_id)
-        .await
+    let response_thing_id = scoped_thing_id;
+    let outcome = crate::services::send_message(
+        state,
+        crate::services::MessageSendCommand {
+            channel_id: payload.channel_id,
+            password: payload.password,
+            op_id: payload.op_id,
+            thing_id: response_thing_id.clone(),
+            occurred_at: payload.occurred_at,
+            title: payload.title,
+            body: payload.body,
+            severity: payload.severity,
+            ttl: payload.ttl,
+            url: payload.url,
+            images: payload.images,
+            ciphertext: payload.ciphertext,
+            tags: payload.tags,
+            metadata: payload.metadata,
+            source: "http",
+        },
+    )
+    .await?;
+    let summary = outcome.summary;
+    let error_message = summary.failure_error_message();
+    let mut response_data = MessageSummary {
+        channel_id: summary.channel_id,
+        op_id: summary.op_id,
+        message_id: outcome.message_id,
+        thing_id: response_thing_id,
+        accepted: true,
+    };
+    if let Some(error_message) = error_message {
+        response_data.accepted = false;
+        return Ok(
+            crate::api::StatusResponse::err_with_data(error_message, response_data)
+                .with_status(StatusCode::SERVICE_UNAVAILABLE),
+        );
+    }
+    Ok(crate::api::ok(response_data))
 }
 
 pub(crate) async fn dispatch_message_authorized_intent(
@@ -182,6 +201,56 @@ pub(crate) async fn dispatch_message_authorized_intent(
     payload: MessageDispatchIntent,
     scoped_thing_id: Option<String>,
 ) -> HttpResult {
+    let response_thing_id = scoped_thing_id.clone();
+    let (summary, message_id) =
+        dispatch_message_authorized_summary(state, authorized_channel, payload, scoped_thing_id)
+            .await?;
+    let error_message = summary.failure_error_message();
+    let mut response_data = MessageSummary {
+        channel_id: summary.channel_id,
+        op_id: summary.op_id,
+        message_id,
+        thing_id: response_thing_id,
+        accepted: true,
+    };
+    if let Some(error_message) = error_message {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "message.route_dispatch_rejected",
+            channel_id = %(crate::util::redact_text(response_data.channel_id.as_str())),
+            message_id = %(crate::util::redact_text(response_data.message_id.as_str())),
+            reason = %(error_message)
+        );
+        response_data.accepted = false;
+        return Ok(
+            crate::api::StatusResponse::err_with_data(error_message, response_data)
+                .with_status(StatusCode::SERVICE_UNAVAILABLE),
+        );
+    }
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "message.route_completed",
+        channel_id = %(crate::util::redact_text(response_data.channel_id.as_str())),
+        message_id = %(crate::util::redact_text(response_data.message_id.as_str())),
+        accepted = (response_data.accepted)
+    );
+    Ok(crate::api::ok(response_data))
+}
+
+pub(crate) async fn dispatch_message_authorized_summary(
+    state: &AppState,
+    authorized_channel: AuthorizedChannel,
+    payload: MessageDispatchIntent,
+    scoped_thing_id: Option<String>,
+) -> Result<
+    (
+        crate::api::handlers::dispatch_lifecycle::NotificationDispatchSummary,
+        String,
+    ),
+    Error,
+> {
     let span = tracing::info_span!(
         "gateway.api.message.dispatch",
         has_thing_id = scoped_thing_id.is_some()
@@ -278,39 +347,7 @@ pub(crate) async fn dispatch_message_authorized_intent(
             ),
         )
         .await?;
-
-        let error_message = summary.failure_error_message();
-        let mut response_data = MessageSummary {
-            channel_id: summary.channel_id,
-            op_id: summary.op_id,
-            message_id,
-            thing_id: scoped_thing_id,
-            accepted: true,
-        };
-        if let Some(error_message) = error_message {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "message.route_dispatch_rejected",
-                channel_id = %(crate::util::redact_text(response_data.channel_id.as_str())),
-                message_id = %(crate::util::redact_text(response_data.message_id.as_str())),
-                reason = %(error_message)
-            );
-            response_data.accepted = false;
-            return Ok(
-                crate::api::StatusResponse::err_with_data(error_message, response_data)
-                    .with_status(StatusCode::SERVICE_UNAVAILABLE),
-            );
-        }
-        ::tracing::event!(
-            target: "gateway.trace_event",
-            ::tracing::Level::INFO,
-            event = "message.route_completed",
-            channel_id = %(crate::util::redact_text(response_data.channel_id.as_str())),
-            message_id = %(crate::util::redact_text(response_data.message_id.as_str())),
-            accepted = (response_data.accepted)
-        );
-        Ok(crate::api::ok(response_data))
+        Ok((summary, message_id))
     };
     tracing::Instrument::instrument(fut, span)
         .await

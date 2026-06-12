@@ -3,14 +3,17 @@ use axum::{extract::State, http::StatusCode};
 use crate::{
     api::{ApiJson, ChannelAlias, ChannelId, ChannelPassword, Error, HttpResult},
     app::AppState,
-    routing::{DeviceChannelType, derive_private_device_id},
+    routing::DeviceChannelType,
+    services::{
+        ChannelSubscribeCommand, ChannelUnsubscribeCommand, subscribe_private_device_to_channel,
+        unsubscribe_private_device_from_channel,
+    },
     storage::DeviceRouteRecordRow,
     value::DeviceKeyRef,
 };
 
 use super::{
     audit::append_subscription_audit,
-    private_cleanup::clear_private_pending_for_channel,
     types::{
         ChannelSubscribeRequest, ChannelSubscribeResponse, ChannelUnsubscribeRequest,
         ChannelUnsubscribeResponse,
@@ -83,20 +86,26 @@ pub(crate) async fn channel_subscribe(
                         "private channel is disabled",
                     ));
                 }
-                let out = state
-                    .store
-                    .upsert_private_channel(
-                        channel_id.map(ChannelId::into_inner),
-                        channel_name.map(ChannelAlias::as_str),
-                        password.as_str(),
-                    )
-                    .await?;
-                let device_id = derive_private_device_id(device_key.as_str());
-                state
-                    .store
-                    .private_subscribe_channel(out.channel_id, device_id)
-                    .await?;
-                out
+                let outcome = subscribe_private_device_to_channel(
+                    &state,
+                    ChannelSubscribeCommand {
+                        device_key: device_key.as_str().to_string(),
+                        channel_id: channel_id.as_ref().map(ToString::to_string),
+                        channel_name: channel_name
+                            .as_ref()
+                            .map(|alias| alias.as_str().to_string()),
+                        password: password.as_str().to_string(),
+                        source: "http",
+                        allow_create_channel: true,
+                    },
+                )
+                .await?;
+                return Ok(crate::api::ok(ChannelSubscribeResponse {
+                    channel_id: outcome.channel_id,
+                    channel_name: outcome.channel_name,
+                    created: outcome.created,
+                    subscribed: outcome.subscribed,
+                }));
             }
             _ => {
                 let provider_token = route
@@ -205,32 +214,19 @@ pub(crate) async fn channel_unsubscribe(
                         "private channel is disabled",
                     ));
                 }
-                let Some(private_state) = state.private.as_ref() else {
-                    ::tracing::event!(
-                        target: "gateway.trace_event",
-                        ::tracing::Level::WARN,
-                        event = "channel.unsubscribe_rejected",
-                        device_key = %(crate::util::redact_text(device_key.as_str())),
-                        reason = %("private_runtime_unavailable")
-                    );
-                    return Ok(crate::api::err(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "private channel runtime is unavailable",
-                    ));
-                };
-                let device_id = derive_private_device_id(device_key.as_str());
-                state
-                    .store
-                    .private_unsubscribe_channel(channel_id.into_inner(), device_id)
-                    .await?;
-                let _cleared = clear_private_pending_for_channel(
+                let outcome = unsubscribe_private_device_from_channel(
                     &state,
-                    private_state,
-                    device_id,
-                    channel_id.into_inner(),
+                    ChannelUnsubscribeCommand {
+                        device_key: device_key.as_str().to_string(),
+                        channel_id: channel_id.to_string(),
+                        source: "http",
+                    },
                 )
                 .await?;
-                true
+                return Ok(crate::api::ok(ChannelUnsubscribeResponse {
+                    channel_id: outcome.channel_id,
+                    removed: outcome.removed,
+                }));
             }
             _ => {
                 state

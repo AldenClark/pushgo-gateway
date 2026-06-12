@@ -24,6 +24,7 @@ const BLAKE3_PASSWORD_DOMAIN: &[u8] = b"pushgo.gateway.channel.password.v1";
 #[derive(Debug, Clone)]
 pub struct ChannelInfo {
     pub alias: String,
+    pub password_hash: String,
 }
 
 #[derive(Debug, Clone)]

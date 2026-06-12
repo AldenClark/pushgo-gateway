@@ -19,6 +19,7 @@ pub struct CacheMemorySnapshot {
     pub device_cache_token_bytes: usize,
     pub channel_info_cache_entries: usize,
     pub channel_info_alias_bytes: usize,
+    pub channel_info_password_hash_bytes: usize,
     pub channel_devices_cache_entries: usize,
     pub channel_devices_device_entries: usize,
     pub channel_devices_token_bytes: usize,

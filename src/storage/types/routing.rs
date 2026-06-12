@@ -63,10 +63,18 @@ impl DeviceRouteRecordRow {
     }
 
     pub fn persistence_values(&self) -> StoreResult<DeviceRoutePersistenceValues> {
+        let channel_type = self.channel_type_kind()?;
+        let platform = self.platform_kind()?;
         let provider_token = ProviderTokenRef::optional(self.provider_token.as_deref())
             .map(ProviderTokenRef::into_owned);
         let device_id = self.device_id_bytes()?;
-        let platform = self.platform_kind()?;
+        if channel_type.is_private() {
+            if provider_token.is_some() {
+                return Err(StoreError::InvalidDeviceToken);
+            }
+        } else if !platform.supports_provider_push() {
+            return Err(StoreError::InvalidPlatform);
+        }
         let device_key =
             DeviceKeyRef::parse(&self.device_key).map_err(|_| StoreError::InvalidDeviceToken)?;
         let token_raw = if let Some(token) = provider_token.as_deref() {
@@ -131,6 +139,7 @@ pub enum DispatchTarget {
     Private {
         device_id: DeviceId,
         device_key: Option<String>,
+        platform: Platform,
     },
 }
 
@@ -172,5 +181,39 @@ mod tests {
             updated_at: 1,
         };
         assert!(invalid_channel.channel_type_kind().is_err());
+    }
+
+    #[test]
+    fn mqtt_private_route_persists_as_device_key_backed_identity() {
+        let route = DeviceRouteRecordRow {
+            device_key: "mqtt-device-key-1".to_string(),
+            platform: "mqtt".to_string(),
+            channel_type: "private".to_string(),
+            provider_token: None,
+            updated_at: 1,
+        };
+        let values = route
+            .persistence_values()
+            .expect("mqtt private route should persist");
+        assert_eq!(values.platform, "mqtt");
+        assert_eq!(values.channel_type, "private");
+        assert_eq!(values.token_raw, b"mqtt-device-key-1");
+    }
+
+    #[test]
+    fn mqtt_provider_route_is_rejected_before_persistence() {
+        let route = DeviceRouteRecordRow {
+            device_key: "mqtt-device-key-1".to_string(),
+            platform: "mqtt".to_string(),
+            channel_type: "apns".to_string(),
+            provider_token: Some(
+                "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_string(),
+            ),
+            updated_at: 1,
+        };
+        assert!(
+            route.persistence_values().is_err(),
+            "mqtt must not be persisted as a provider push route"
+        );
     }
 }

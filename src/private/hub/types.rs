@@ -23,6 +23,7 @@ struct Presence {
     quic_active: Option<ActiveConn>,
     tcp_active: Option<ActiveConn>,
     wss_active: Option<ActiveConn>,
+    mqtt_active: Option<ActiveConn>,
     draining: Vec<DrainingConn>,
 }
 
@@ -58,6 +59,10 @@ impl Presence {
         ]
     }
 
+    fn active_mqtt_conn_id(&self) -> Option<u64> {
+        self.mqtt_active.as_ref().map(|active| active.conn_id)
+    }
+
     fn delivery_senders(&self, now: Instant) -> Vec<Sender<protocol::DeliverEnvelope>> {
         let mut senders = Vec::with_capacity(3 + self.draining.len());
         if let Some(active) = self.quic_active.as_ref() {
@@ -69,6 +74,9 @@ impl Presence {
         if let Some(active) = self.wss_active.as_ref() {
             senders.push(active.sender.clone());
         }
+        if let Some(active) = self.mqtt_active.as_ref() {
+            senders.push(active.sender.clone());
+        }
         for draining in &self.draining {
             if draining.delivery_until > now {
                 senders.push(draining.sender.clone());
@@ -78,7 +86,10 @@ impl Presence {
     }
 
     fn has_active(&self) -> bool {
-        self.quic_active.is_some() || self.tcp_active.is_some() || self.wss_active.is_some()
+        self.quic_active.is_some()
+            || self.tcp_active.is_some()
+            || self.wss_active.is_some()
+            || self.mqtt_active.is_some()
     }
 }
 

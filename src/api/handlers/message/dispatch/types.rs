@@ -376,7 +376,29 @@ impl<'a> PreparedDispatch<'a> {
         let mut provider_devices = Vec::new();
         for target in dispatch_targets {
             match target {
-                DispatchTarget::Private { device_id, .. } if private_enabled => {
+                DispatchTarget::Private {
+                    device_id,
+                    platform,
+                    device_key,
+                } if private_enabled => {
+                    if platform == Platform::MQTT
+                        && !is_mqtt_supported_private_payload(entity_kind, &extra_fields)
+                    {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::DEBUG,
+                            event = "dispatch.private_target_skipped",
+                            channel_id = %(crate::util::redact_text(channel_id_value.as_str())),
+                            op_id = %(crate::util::redact_text(op_id.as_str())),
+                            correlation_id = %(crate::util::redact_text(correlation_id.as_ref())),
+                            delivery_id = %(crate::util::redact_text(delivery_id_ref.as_ref())),
+                            device_key = %(crate::util::redact_text(device_key.as_deref().unwrap_or(""))),
+                            platform = %(platform.name()),
+                            entity_type = %(entity_type),
+                            reason = %("mqtt_supports_channel_messages_only")
+                        );
+                        continue;
+                    }
                     private_subscribers.push(device_id);
                 }
                 DispatchTarget::Provider {
@@ -384,6 +406,21 @@ impl<'a> PreparedDispatch<'a> {
                     provider_token,
                     device_key,
                 } => {
+                    if !platform.supports_provider_push() {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::WARN,
+                            event = "dispatch.provider_target_skipped",
+                            channel_id = %(crate::util::redact_text(channel_id_value.as_str())),
+                            op_id = %(crate::util::redact_text(op_id.as_str())),
+                            correlation_id = %(crate::util::redact_text(correlation_id.as_ref())),
+                            delivery_id = %(crate::util::redact_text(delivery_id_ref.as_ref())),
+                            device_key = %(crate::util::redact_text(device_key.as_str())),
+                            platform = %(platform.name()),
+                            reason = %("unsupported_provider_platform")
+                        );
+                        continue;
+                    }
                     let info = DeviceInfo::from_token(platform, provider_token.as_str()).inspect_err(
                         |err| {
                             ::tracing::event!(
@@ -529,6 +566,13 @@ fn should_embed_standard_notification_text(entity_kind: EntityKind) -> bool {
     entity_kind == EntityKind::Message
 }
 
+fn is_mqtt_supported_private_payload(
+    entity_kind: EntityKind,
+    extra_fields: &HashMap<String, String>,
+) -> bool {
+    entity_kind == EntityKind::Message && !extra_fields.contains_key("thing_id")
+}
+
 impl ProviderPayloads {
     pub(super) fn build(prepared: &PreparedDispatch<'_>) -> Self {
         let mut has_android = false;
@@ -650,8 +694,11 @@ impl DispatchProgress {
 
 #[cfg(test)]
 mod tests {
+    use hashbrown::HashMap;
+
     use super::{
-        EntityKind, should_embed_standard_notification_text, should_promote_notification_title,
+        EntityKind, is_mqtt_supported_private_payload, should_embed_standard_notification_text,
+        should_promote_notification_title,
     };
 
     #[test]
@@ -666,5 +713,29 @@ mod tests {
         assert!(should_embed_standard_notification_text(EntityKind::Message));
         assert!(!should_embed_standard_notification_text(EntityKind::Thing));
         assert!(!should_embed_standard_notification_text(EntityKind::Event));
+    }
+
+    #[test]
+    fn mqtt_private_targets_only_accept_channel_level_messages() {
+        let empty = HashMap::new();
+        assert!(is_mqtt_supported_private_payload(
+            EntityKind::Message,
+            &empty
+        ));
+        assert!(!is_mqtt_supported_private_payload(
+            EntityKind::Thing,
+            &empty
+        ));
+        assert!(!is_mqtt_supported_private_payload(
+            EntityKind::Event,
+            &empty
+        ));
+
+        let mut thing_scoped = HashMap::new();
+        thing_scoped.insert("thing_id".to_string(), "thing-1".to_string());
+        assert!(!is_mqtt_supported_private_payload(
+            EntityKind::Message,
+            &thing_scoped
+        ));
     }
 }

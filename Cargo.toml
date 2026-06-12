@@ -86,6 +86,8 @@ parking_lot = "0.12.5"
 scc = "3.7.2"
 rustls = "0.23.40"
 tokio-rustls = "0.26.4"
+mqttbytes = "0.6.0"
+bytes = "1.11.1"
 rmcp = { version = "1.7.0", features = ["transport-streamable-http-server"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = [

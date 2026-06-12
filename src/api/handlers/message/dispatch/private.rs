@@ -14,6 +14,10 @@ pub(super) async fn enqueue_private_deliveries(
     for device_id in private_dispatch.subscribers.iter().copied() {
         if private_dispatch.state.config.online_fast_path_enabled
             && private_dispatch.state.hub.is_online(device_id)
+            && !private_dispatch
+                .state
+                .hub
+                .has_active_mqtt_connection(device_id)
         {
             let delivered = private_dispatch.state.hub.try_deliver_to_device(
                 device_id,
@@ -48,7 +52,11 @@ pub(super) async fn enqueue_private_deliveries(
             Ok(()) => {
                 progress.private_enqueue_stats.record_success();
                 progress.record_private_success(device_id);
-                if !private_dispatch.state.config.online_fast_path_enabled
+                if (!private_dispatch.state.config.online_fast_path_enabled
+                    || private_dispatch
+                        .state
+                        .hub
+                        .has_active_mqtt_connection(device_id))
                     && private_dispatch.state.hub.is_online(device_id)
                 {
                     let delivered = private_dispatch.state.hub.try_deliver_to_device(

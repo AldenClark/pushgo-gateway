@@ -16,9 +16,11 @@ use crate::{
     app::{AppState, AuthMode, DeviceOperationGuards},
     dispatch::DispatchChannels,
     mcp::{McpConfig, McpState},
+    private::{PrivateConfig, PrivateState},
     routing::{DeviceRegistry, DeviceRouteRecord},
+    runtime_config::GatewayRuntimeProfile,
     stats::StatsCollector,
-    storage::{Platform, Storage},
+    storage::{MaintenanceCleanupConfig, Platform, Storage},
 };
 
 mod channel_sync;
@@ -62,6 +64,9 @@ async fn build_test_state() -> AppState {
             wss_port: 6666,
             wss_path: Arc::from("/private/ws"),
             ws_subprotocol: Arc::from("pushgo-private.v1"),
+            mqtt_enabled: false,
+            mqtt_port: None,
+            mqtt_tls_required: false,
         },
         private: None,
         store,
@@ -133,7 +138,16 @@ async fn seed_provider_channel_for_router_test(
 
 async fn build_private_test_state() -> AppState {
     let mut state = build_test_state().await;
+    let registry = Arc::clone(&state.device_registry);
+    let stats = Arc::clone(&state.stats);
+    let private = Arc::new(PrivateState::new(
+        state.store.clone(),
+        test_private_config(),
+        registry,
+        stats,
+    ));
     state.private_channel_enabled = true;
+    state.private = Some(private);
     state
 }
 
@@ -147,6 +161,37 @@ async fn build_diagnostics_test_state() -> AppState {
     let mut state = build_test_state().await;
     state.diagnostics_api_enabled = true;
     state
+}
+
+fn test_private_config() -> PrivateConfig {
+    PrivateConfig {
+        runtime_profile: GatewayRuntimeProfile::Small,
+        private_quic_bind: None,
+        private_tcp_bind: None,
+        mqtt: None,
+        tcp_tls_enabled: false,
+        tcp_proxy_protocol: false,
+        private_tls_cert_path: None,
+        private_tls_key_path: None,
+        session_ttl_secs: 60,
+        grace_window_secs: 10,
+        max_pending_per_device: 16,
+        global_max_pending: 64,
+        pull_limit: 32,
+        ack_timeout_secs: 5,
+        fallback_max_attempts: 3,
+        fallback_max_backoff_secs: 60,
+        retransmit_window_secs: 30,
+        retransmit_max_per_window: 10,
+        retransmit_max_per_tick: 16,
+        retransmit_max_retries: 3,
+        hot_cache_capacity: 64,
+        default_ttl_secs: 60,
+        online_fast_path_enabled: true,
+        maintenance_cleanup: MaintenanceCleanupConfig::default(),
+        gateway_token: None,
+    }
+    .normalized()
 }
 
 async fn post_json(app: axum::Router, path: &str, payload: Value) -> (StatusCode, Value) {

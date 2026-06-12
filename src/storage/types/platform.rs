@@ -12,6 +12,7 @@ pub enum Platform {
     WATCHOS = 4,
     ANDROID = 5,
     WINDOWS = 6,
+    MQTT = 7,
 }
 
 impl FromStr for Platform {
@@ -27,6 +28,7 @@ impl FromStr for Platform {
             "watchos" => Ok(Platform::WATCHOS),
             "android" => Ok(Platform::ANDROID),
             "windows" | "win" => Ok(Platform::WINDOWS),
+            "mqtt" => Ok(Platform::MQTT),
             _ => Err(StoreError::InvalidPlatform),
         }
     }
@@ -46,6 +48,7 @@ impl Platform {
             4 => Some(Platform::WATCHOS),
             5 => Some(Platform::ANDROID),
             6 => Some(Platform::WINDOWS),
+            7 => Some(Platform::MQTT),
             _ => None,
         }
     }
@@ -58,6 +61,7 @@ impl Platform {
             Platform::WATCHOS => "watchos",
             Platform::ANDROID => "android",
             Platform::WINDOWS => "windows",
+            Platform::MQTT => "mqtt",
         }
     }
 
@@ -66,6 +70,7 @@ impl Platform {
         match self {
             Platform::ANDROID => "fcm",
             Platform::WINDOWS => "wns",
+            Platform::MQTT => "private",
             Platform::IOS | Platform::MACOS | Platform::WATCHOS => "apns",
         }
     }
@@ -75,8 +80,21 @@ impl Platform {
         match self {
             Platform::ANDROID => "FCM",
             Platform::WINDOWS => "WNS",
+            Platform::MQTT => "MQTT",
             Platform::IOS | Platform::MACOS | Platform::WATCHOS => "APNS",
         }
+    }
+
+    #[inline]
+    pub fn supports_provider_push(self) -> bool {
+        matches!(
+            self,
+            Platform::IOS
+                | Platform::MACOS
+                | Platform::WATCHOS
+                | Platform::ANDROID
+                | Platform::WINDOWS
+        )
     }
 }
 

@@ -22,6 +22,9 @@ fn transport_hints_returns_profile_capabilities() {
         wss_port: 443,
         wss_path: Arc::from("/private/ws"),
         ws_subprotocol: Arc::from(PRIVATE_WS_SUBPROTOCOL),
+        mqtt_enabled: true,
+        mqtt_port: Some(1883),
+        mqtt_tls_required: true,
     };
 
     let hints = profile.hints(Some("https://sandbox.pushgo.dev"));
@@ -37,6 +40,12 @@ fn transport_hints_returns_profile_capabilities() {
         Some("wss://sandbox.pushgo.dev/private/ws")
     );
     assert_eq!(hints.ws_subprotocol, PRIVATE_WS_SUBPROTOCOL);
+    assert!(hints.mqtt_enabled);
+    assert_eq!(hints.mqtt_port, Some(1883));
+    assert!(hints.mqtt_tls_required);
+    assert_eq!(hints.mqtt_protocol, "mqtt5");
+    assert_eq!(hints.mqtt_qos, 1);
+    assert_eq!(hints.mqtt_topic_template, "pushgo/{channel_id}/messages");
 }
 
 #[test]

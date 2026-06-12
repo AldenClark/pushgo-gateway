@@ -95,6 +95,15 @@ impl ApnsService {
                     ),
                 );
             }
+            Platform::MQTT => {
+                return DispatchResult::from_error(
+                    0,
+                    Error::validation_code(
+                        "mqtt platform must be delivered via private MQTT transport",
+                        "mqtt_platform_requires_private_transport",
+                    ),
+                );
+            }
         };
         let topic = match payload.topic_override() {
             Some(topic) => topic.to_string(),

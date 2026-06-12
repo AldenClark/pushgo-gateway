@@ -3,7 +3,7 @@
 `pushgo-gateway` is the gateway service for PushGo, with three core capability groups:
 
 - Public API: HTTP endpoints for devices, channels, messages, and events
-- Private transport: real-time delivery over QUIC / Raw TCP / WSS
+- Private transport: real-time delivery over QUIC / Raw TCP / WSS / MQTT 5
 - MCP gateway: MCP HTTP endpoint, OAuth flow, and channel-binding pages for MCP clients
 
 ## Project Links
@@ -30,17 +30,23 @@ In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_UR
 - QUIC: dedicated UDP listener (`--private-quic-bind`)
 - Raw TCP: dedicated TCP listener (`--private-tcp-bind`)
 - WSS: upgraded from HTTP at `/private/ws` with subprotocol `pushgo-private.v1`
+- MQTT 5: dedicated TCP listener (`--mqtt-bind`) using QoS 1 only
 
 ### 2) Parameter dependency map
 
-- `--private-transports` is the master switch for private runtime. It supports `true`/`false` and explicit sets like `quic,tcp,wss`.
+- `--private-transports` is the master switch for private runtime. It supports `true`/`false` and explicit sets like `quic,tcp,wss,mqtt`.
 - Private runtime has no implicit fallback: only transports listed in `--private-transports` are enabled.
 - `--private-*-bind` always means the local listener address owned by gateway.
 - `--private-*-port` always means the port advertised to app clients via `/gateway/profile` (`transport` hints).
 - If `quic` is enabled, `--private-tls-cert` + `--private-tls-key` are required.
-- If `tcp` is enabled and `--private-tcp-tls-offload=false`, `--private-tls-cert` + `--private-tls-key` are required.
-- `--private-tcp-tls-offload=true` only changes Raw TCP to plain mode behind edge TLS termination.
+- Raw TCP is plain by default. Set `--private-tcp-tls-enabled=true` only when gateway should terminate TLS itself.
 - WSS has no separate bind flag; it rides on `--http-addr` and is typically exposed by edge TLS.
+- MQTT is plain by default. Set `--mqtt-tls-enabled=true` only when gateway should terminate MQTT/TLS itself.
+- MQTT accepts only MQTT 5 and QoS 1. CONNECT must include MQTT 5 User Property `device_type=publish` or `device_type=subscribe`.
+- `device_type=publish` creates a temporary publish-only connection and is not persisted as a device route; any CONNECT client id on publish-only connections is ignored. `device_type=subscribe` is a persistent MQTT device identity; use an existing `client_id=<device_key>` or leave `client_id` empty and store the CONNACK Assigned Client Identifier as the new device key.
+- MQTT does not expose broker-style session persistence: CONNACK advertises `session_expiry_interval=0`, no retained messages, no topic aliases, no subscription identifiers, no wildcard/shared subscriptions. PushGo channel subscriptions are persisted by gateway and outlive the TCP connection.
+- MQTT message topic is `pushgo/{channel_id}/messages`. Channel password is passed as MQTT 5 User Property `pushgo-password`; gateway token, when configured, is passed as MQTT username. Each SUBSCRIBE packet may contain only one topic filter.
+- MQTT downlink delivers channel-level message payloads only. Event, thing, thing-scoped message, and thing-scoped event payloads are not enqueued to MQTT devices.
 
 ## MCP Runtime Model
 
@@ -62,7 +68,7 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--token`                         | `PUSHGO_TOKEN`                         | None                       | No                | Public API auth token (`Authorization: Bearer <token>` first; fallback `?token=<token>` only when Authorization is absent) |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
-| `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss`) |
+| `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss,mqtt`) |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | No                | Resource/performance profile (`small`/`public`); never changes the database driver selected by `--db-url` |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | No                | Observability matrix profile (`prod_min`/`ops`/`incident`/`debug`) |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | No                | Native tracing log level (`off`/`error`/`warn`/`info`/`debug`/`trace`) |
@@ -77,14 +83,18 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--private-quic-port`       | `PUSHGO_PRIVATE_QUIC_PORT`  | `5223`           | No       | QUIC port advertised to app clients      |
 | `--private-tcp-bind`        | `PUSHGO_PRIVATE_TCP_BIND`   | `127.0.0.1:5223` | No       | Local Raw TCP listener bind address      |
 | `--private-tcp-port`        | `PUSHGO_PRIVATE_TCP_PORT`   | `5223`           | No       | TCP port advertised to app clients       |
+| `--mqtt-bind`               | `PUSHGO_MQTT_BIND`          | `127.0.0.1:1883` | No       | Local MQTT 5 listener bind address       |
+| `--mqtt-port`               | `PUSHGO_MQTT_PORT`          | `1883`           | No       | MQTT port advertised to app clients      |
+| `--mqtt-tls-enabled`        | `PUSHGO_MQTT_TLS_ENABLED`   | `false`          | No       | Terminate MQTT/TLS in gateway instead of accepting plain MQTT |
+| `--mqtt-max-packet-bytes`   | `PUSHGO_MQTT_MAX_PACKET_BYTES` | `32768`       | No       | Maximum MQTT packet size accepted by gateway |
 
-### Private TLS / Edge Offload
+### Private TLS
 
 | CLI Flag                    | Env                              | Default | Required          | Description                                         |
 | --------------------------- | -------------------------------- | ------- | ----------------- | --------------------------------------------------- |
-| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | None    | Conditional       | TLS cert PEM required by `quic`, and by `tcp` when `private-tcp-tls-offload=false` |
-| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | None    | Conditional       | TLS key PEM required by `quic`, and by `tcp` when `private-tcp-tls-offload=false`  |
-| `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | No                | Whether Raw TCP TLS is offloaded at the edge proxy (offload=true means gateway Raw TCP is plain) |
+| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | None    | Conditional       | TLS cert PEM required by `quic`, by `tcp` when `private-tcp-tls-enabled=true`, and by `mqtt` when `mqtt-tls-enabled=true` |
+| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | None    | Conditional       | TLS key PEM required by `quic`, by `tcp` when `private-tcp-tls-enabled=true`, and by `mqtt` when `mqtt-tls-enabled=true`  |
+| `--private-tcp-tls-enabled` | `PUSHGO_PRIVATE_TCP_TLS_ENABLED` | `false` | No                | Terminate Raw TCP TLS in gateway instead of accepting plain TCP |
 | `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | No            | Expect PROXY protocol v1 on Raw TCP ingress          |
 
 ### Runtime Profiles
@@ -216,17 +226,17 @@ server {
 
 ### B) Raw TCP (`stream`)
 
-Gateway-terminated TLS (`--private-tcp-tls-offload=false`):
+Default plain Raw TCP:
 
 ```nginx
 stream {
-    upstream pushgo_private_tcp_tls {
+    upstream pushgo_private_tcp_plain {
         server 127.0.0.1:5223;
     }
 
     server {
         listen 5223;
-        proxy_pass pushgo_private_tcp_tls;
+        proxy_pass pushgo_private_tcp_plain;
         proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
@@ -234,19 +244,17 @@ stream {
 }
 ```
 
-Edge-terminated TLS (`--private-tcp-tls-offload=true`):
+Gateway-terminated TLS (`--private-tcp-tls-enabled=true`):
 
 ```nginx
 stream {
-    upstream pushgo_private_tcp_plain {
+    upstream pushgo_private_tcp_tls {
         server 127.0.0.1:55223;
     }
 
     server {
-        listen 5223 ssl;
-        ssl_certificate     /etc/nginx/certs/fullchain.pem;
-        ssl_certificate_key /etc/nginx/certs/privkey.pem;
-        proxy_pass pushgo_private_tcp_plain;
+        listen 5223;
+        proxy_pass pushgo_private_tcp_tls;
         proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
@@ -270,7 +278,30 @@ stream {
 }
 ```
 
-### D) Critical note on `443/udp` conflicts
+### D) MQTT 5 (`stream`)
+
+Default plain MQTT:
+
+```nginx
+stream {
+    upstream pushgo_mqtt_plain {
+        server 127.0.0.1:1883;
+    }
+
+    server {
+        listen 8883 ssl;
+        ssl_certificate     /etc/nginx/certs/fullchain.pem;
+        ssl_certificate_key /etc/nginx/certs/privkey.pem;
+        proxy_pass pushgo_mqtt_plain;
+        proxy_connect_timeout 3s;
+        proxy_timeout 600s;
+    }
+}
+```
+
+MQTT clients must use MQTT 5 and QoS 1. CONNECT must include User Property `device_type=publish` for temporary publish-only devices, or `device_type=subscribe` for persistent devices that may SUBSCRIBE and receive messages. Publish-only client ids are ignored and never persisted. Subscribe devices may pass `client_id=<device_key>`; an empty `client_id` is accepted and the assigned device key is returned in CONNACK. SUBSCRIBE/PUBLISH use topic `pushgo/{channel_id}/messages` and MQTT 5 User Property `pushgo-password=<channel password>`. Each SUBSCRIBE packet may contain only one topic filter. MQTT downlink receives channel-level messages only; event, thing, thing-scoped message, and thing-scoped event payloads are skipped before MQTT outbox enqueue. Gateway advertises no MQTT broker session persistence, retained messages, topic aliases, subscription identifiers, wildcard subscriptions, or shared subscriptions; PushGo channel subscriptions are the persisted subscription state. If `--mqtt-tls-enabled=false`, clients connect with plain MQTT to gateway; if `true`, clients connect with MQTT/TLS directly to gateway.
+
+### E) Critical note on `443/udp` conflicts
 
 PushGo QUIC uses a custom ALPN (`pushgo-quic`), not HTTP/3.  
 If the same Nginx instance already serves HTTP/3 on `443/udp`, private QUIC cannot share that same UDP socket.
@@ -357,6 +388,7 @@ Image ports:
 - `6666/tcp`: HTTP API + WSS
 - `5223/tcp`: Raw TCP
 - `5223/udp`: QUIC
+- `1883/tcp` or edge `8883/tcp`: MQTT 5
 
 MCP/OAuth routes (`/mcp`, `/oauth/*`, `/.well-known/*`) also use `6666/tcp`; no extra container port is required.
 
@@ -399,7 +431,7 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 `pushgo-gateway` 是 PushGo 的网关服务，主要包含三类能力：
 
 - 公共 API：设备、频道、消息、事件等 HTTP 接口
-- 私有传输层：基于 QUIC / Raw TCP / WSS 的实时收发
+- 私有传输层：基于 QUIC / Raw TCP / WSS / MQTT 5 的实时收发
 - MCP 网关：面向 MCP 客户端的 MCP HTTP 入口、OAuth 流程与频道绑定页面
 
 ## 项目链接
@@ -426,17 +458,23 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 - QUIC：独立 UDP 监听（`--private-quic-bind`）
 - Raw TCP：独立 TCP 监听（`--private-tcp-bind`）
 - WSS：复用 HTTP 入口，通过 `/private/ws` 升级，要求 subprotocol 为 `pushgo-private.v1`
+- MQTT 5：独立 TCP 监听（`--mqtt-bind`），仅支持 QoS 1
 
 ### 2) 参数依赖关系
 
-- `--private-transports` 是私有传输总开关，支持 `true/false` 与显式集合（例如 `quic,tcp,wss`）。
+- `--private-transports` 是私有传输总开关，支持 `true/false` 与显式集合（例如 `quic,tcp,wss,mqtt`）。
 - 私有传输不做隐式回退：只有 `--private-transports` 显式列出的传输会启用。
 - `--private-*-bind` 一律表示 gateway 本机监听地址。
 - `--private-*-port` 一律表示通过 `/gateway/profile`（`transport` 提示）对 app 下发的对外端口。
 - 启用 `quic` 时，必须配置 `--private-tls-cert` + `--private-tls-key`。
-- 启用 `tcp` 且 `--private-tcp-tls-offload=false` 时，也必须配置 `--private-tls-cert` + `--private-tls-key`。
-- `--private-tcp-tls-offload=true` 仅表示 Raw TCP 由边缘层卸载 TLS，gateway 侧按明文处理。
+- Raw TCP 默认明文监听。只有需要 gateway 自己终止 TLS 时，才设置 `--private-tcp-tls-enabled=true`。
 - WSS 没有单独 bind 参数，始终复用 `--http-addr` 对应的 HTTP 入口。
+- MQTT 默认明文监听。只有需要 gateway 自己终止 MQTT/TLS 时，才设置 `--mqtt-tls-enabled=true`。
+- MQTT 仅接受 MQTT 5 和 QoS 1。CONNECT 必须携带 MQTT 5 User Property `device_type=publish` 或 `device_type=subscribe`。
+- `device_type=publish` 是连接级临时发送设备，不注册入库且不能订阅；publish-only 连接即使传入 client id 也会被忽略。`device_type=subscribe` 是持久 MQTT 设备，可使用已有 `client_id=<device_key>`，也可以留空 `client_id` 并从 CONNACK Assigned Client Identifier 保存服务端分配的新 device key。
+- MQTT 不提供 broker 风格的 session 持久化：CONNACK 会声明 `session_expiry_interval=0`，不支持 retained message、topic alias、subscription identifier、通配符订阅或 shared subscription。PushGo 频道订阅由 gateway 持久化，独立于当前 TCP 连接生命周期。
+- MQTT 消息 topic 为 `pushgo/{channel_id}/messages`。频道密码通过 MQTT 5 User Property `pushgo-password` 传递；配置了 gateway token 时，token 通过 MQTT username 传递。每个 SUBSCRIBE packet 只允许包含一个 topic filter。
+- MQTT 下行只投递频道级 message。event、thing、thing 下的二级 message 和 thing 下的二级 event 都不会进入 MQTT 设备 outbox。
 
 ## MCP 运行模型
 
@@ -458,7 +496,7 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--token`                         | `PUSHGO_TOKEN`                         | 无                         | 否       | 公共 API 鉴权 token（优先 `Authorization: Bearer <token>`；仅当 Authorization 缺失时回退 `?token=<token>`） |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
-| `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss`）      |
+| `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss,mqtt`） |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | 否       | 资源/性能档位（`small`/`public`）；不会改变 `--db-url` 选择的数据库驱动 |
 | `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | 否       | 可观测矩阵档位（`prod_min`/`ops`/`incident`/`debug`） |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | 否       | 原生 tracing 日志级别（`off`/`error`/`warn`/`info`/`debug`/`trace`） |
@@ -473,14 +511,18 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--private-quic-port`       | `PUSHGO_PRIVATE_QUIC_PORT`  | `5223`           | 否   | 对 app 下发的 QUIC 端口          |
 | `--private-tcp-bind`        | `PUSHGO_PRIVATE_TCP_BIND`   | `127.0.0.1:5223` | 否   | Raw TCP 本机监听地址             |
 | `--private-tcp-port`        | `PUSHGO_PRIVATE_TCP_PORT`   | `5223`           | 否   | 对 app 下发的 TCP 端口           |
+| `--mqtt-bind`               | `PUSHGO_MQTT_BIND`          | `127.0.0.1:1883` | 否   | MQTT 5 本机监听地址              |
+| `--mqtt-port`               | `PUSHGO_MQTT_PORT`          | `1883`           | 否   | 对 app 下发的 MQTT 端口          |
+| `--mqtt-tls-enabled`        | `PUSHGO_MQTT_TLS_ENABLED`   | `false`          | 否   | gateway 终止 MQTT/TLS，而不是接收明文 MQTT |
+| `--mqtt-max-packet-bytes`   | `PUSHGO_MQTT_MAX_PACKET_BYTES` | `32768`       | 否   | gateway 接受的最大 MQTT packet 大小 |
 
-### Private TLS / Offload
+### Private TLS
 
 | CLI Flag                    | Env                              | 默认值 | 必填     | 说明                                       |
 | --------------------------- | -------------------------------- | ------ | -------- | ------------------------------------------ |
-| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | 无     | 条件必填 | `quic` 必需；`tcp` 在 `private-tcp-tls-offload=false` 时必需 |
-| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | 无     | 条件必填 | `quic` 必需；`tcp` 在 `private-tcp-tls-offload=false` 时必需 |
-| `--private-tcp-tls-offload` | `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD` | `false` | 否       | Raw TCP 是否由边缘代理卸载 TLS（offload=true 时 gateway 侧明文） |
+| `--private-tls-cert`        | `PUSHGO_PRIVATE_TLS_CERT`        | 无     | 条件必填 | `quic` 必需；`tcp` 在 `private-tcp-tls-enabled=true` 时必需；`mqtt` 在 `mqtt-tls-enabled=true` 时必需 |
+| `--private-tls-key`         | `PUSHGO_PRIVATE_TLS_KEY`         | 无     | 条件必填 | `quic` 必需；`tcp` 在 `private-tcp-tls-enabled=true` 时必需；`mqtt` 在 `mqtt-tls-enabled=true` 时必需 |
+| `--private-tcp-tls-enabled` | `PUSHGO_PRIVATE_TCP_TLS_ENABLED` | `false` | 否       | gateway 终止 Raw TCP TLS，而不是接收明文 TCP |
 | `--private-tcp-proxy-protocol` | `PUSHGO_PRIVATE_TCP_PROXY_PROTOCOL` | `false` | 否   | Raw TCP 入站是否要求 PROXY protocol v1    |
 
 ### Runtime Profiles
@@ -554,17 +596,17 @@ server {
 
 ### B) Raw TCP（stream）
 
-网关终止 TLS（`--private-tcp-tls-offload=false`）：
+默认明文 Raw TCP：
 
 ```nginx
 stream {
-    upstream pushgo_private_tcp_tls {
+    upstream pushgo_private_tcp_plain {
         server 127.0.0.1:5223;
     }
 
     server {
         listen 5223;
-        proxy_pass pushgo_private_tcp_tls;
+        proxy_pass pushgo_private_tcp_plain;
         proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
@@ -572,19 +614,17 @@ stream {
 }
 ```
 
-边缘代理终止 TLS（`--private-tcp-tls-offload=true`）：
+网关终止 TLS（`--private-tcp-tls-enabled=true`）：
 
 ```nginx
 stream {
-    upstream pushgo_private_tcp_plain {
+    upstream pushgo_private_tcp_tls {
         server 127.0.0.1:55223;
     }
 
     server {
-        listen 5223 ssl;
-        ssl_certificate     /etc/nginx/certs/fullchain.pem;
-        ssl_certificate_key /etc/nginx/certs/privkey.pem;
-        proxy_pass pushgo_private_tcp_plain;
+        listen 5223;
+        proxy_pass pushgo_private_tcp_tls;
         proxy_protocol on;
         proxy_connect_timeout 3s;
         proxy_timeout 600s;
@@ -608,7 +648,30 @@ stream {
 }
 ```
 
-### D) `443/udp` 冲突说明（关键）
+### D) MQTT 5（stream）
+
+默认明文 MQTT：
+
+```nginx
+stream {
+    upstream pushgo_mqtt_plain {
+        server 127.0.0.1:1883;
+    }
+
+    server {
+        listen 8883 ssl;
+        ssl_certificate     /etc/nginx/certs/fullchain.pem;
+        ssl_certificate_key /etc/nginx/certs/privkey.pem;
+        proxy_pass pushgo_mqtt_plain;
+        proxy_connect_timeout 3s;
+        proxy_timeout 600s;
+    }
+}
+```
+
+MQTT 客户端必须使用 MQTT 5 和 QoS 1。CONNECT 必须携带 User Property `device_type=publish` 表示临时只发送设备，或 `device_type=subscribe` 表示可订阅接收的持久设备。Publish-only 连接的 client id 会被忽略且不会持久化。Subscribe 设备可传 `client_id=<device_key>`；空 `client_id` 会由服务端分配 device key，并通过 CONNACK Assigned Client Identifier 返回。SUBSCRIBE/PUBLISH 使用 topic `pushgo/{channel_id}/messages`，并通过 MQTT 5 User Property `pushgo-password=<channel password>` 传递频道密码。每个 SUBSCRIBE packet 只允许包含一个 topic filter。MQTT 下行只接收频道级 message；event、thing、thing 下的二级 message 和 thing 下的二级 event 会在进入 MQTT outbox 前被跳过。Gateway 不提供 MQTT broker session 持久化、retained message、topic alias、subscription identifier、通配符订阅或 shared subscription；PushGo 频道订阅才是持久订阅状态。`--mqtt-tls-enabled=false` 时客户端以明文 MQTT 连接 gateway；设置为 `true` 时客户端直接以 MQTT/TLS 连接 gateway。
+
+### E) `443/udp` 冲突说明（关键）
 
 PushGo QUIC 使用自定义 ALPN（`pushgo-quic`），不是 HTTP/3。  
 如果同一 Nginx 实例已经在 `443/udp` 提供 HTTP/3，则私有 QUIC 不能复用同一个 UDP socket。
@@ -695,6 +758,7 @@ docker build -f Dockerfile.local -t pushgo-gateway:local .
 - `6666/tcp`：HTTP API + WSS
 - `5223/tcp`：Raw TCP
 - `5223/udp`：QUIC
+- `1883/tcp` 或边缘 `8883/tcp`：MQTT 5
 
 MCP/OAuth 路由（`/mcp`、`/oauth/*`、`/.well-known/*`）同样复用 `6666/tcp`，不需要额外容器端口。
 

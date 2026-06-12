@@ -55,8 +55,11 @@ impl InMemoryCache {
         });
 
         let mut channel_info_alias_bytes = 0usize;
+        let mut channel_info_password_hash_bytes = 0usize;
         self.channel_info_cache.iter_sync(|_, value| {
             channel_info_alias_bytes = channel_info_alias_bytes.saturating_add(value.alias.len());
+            channel_info_password_hash_bytes =
+                channel_info_password_hash_bytes.saturating_add(value.password_hash.len());
             true
         });
 
@@ -92,6 +95,7 @@ impl InMemoryCache {
             device_cache_token_bytes,
             channel_info_cache_entries: self.channel_info_cache.len(),
             channel_info_alias_bytes,
+            channel_info_password_hash_bytes,
             channel_devices_cache_entries: self.channel_devices_cache.len(),
             channel_devices_device_entries,
             channel_devices_token_bytes,

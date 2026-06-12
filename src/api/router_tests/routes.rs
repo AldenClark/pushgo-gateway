@@ -1,4 +1,8 @@
 use super::*;
+use crate::{
+    routing::{DeviceChannelType, derive_private_device_id},
+    storage::DeviceRouteRecordRow,
+};
 
 #[tokio::test]
 async fn thing_scoped_event_route_returns_not_found() {
@@ -46,6 +50,129 @@ async fn thing_scoped_message_route_returns_not_found() {
         .await
         .expect("router should handle request");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn mqtt_private_device_outbox_only_receives_channel_messages() {
+    let state = build_private_test_state().await;
+    let device_key = "mqtt-router-outbox-device";
+    let password = "mqtt-router-password";
+    let route = DeviceRouteRecord {
+        platform: Platform::MQTT,
+        channel_type: DeviceChannelType::Private,
+        provider_token: None,
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    state
+        .device_registry
+        .restore_route(device_key, route.clone())
+        .expect("mqtt route restore should succeed");
+    state
+        .store
+        .upsert_device_route(&DeviceRouteRecordRow::from_registry_record(
+            device_key, &route,
+        ))
+        .await
+        .expect("mqtt route should persist");
+    let outcome = state
+        .store
+        .upsert_private_channel(None, Some("mqtt-router-outbox"), password)
+        .await
+        .expect("channel should be created");
+    let channel_id = crate::api::format_channel_id(&outcome.channel_id);
+    let device_id = derive_private_device_id(device_key);
+    state
+        .store
+        .private_subscribe_channel(outcome.channel_id, device_id)
+        .await
+        .expect("mqtt private subscription should persist");
+
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (status, _) = post_json(
+        app.clone(),
+        "/message",
+        json!({
+            "channel_id": channel_id,
+            "password": password,
+            "title": "channel message"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        state
+            .store
+            .list_private_outbox(device_id, 16)
+            .await
+            .expect("outbox should list")
+            .len(),
+        1
+    );
+
+    for (path, payload) in [
+        (
+            "/message",
+            json!({
+                "channel_id": channel_id,
+                "password": password,
+                "thing_id": "thing-1",
+                "occurred_at": 1_700_000_000_000i64,
+                "title": "thing scoped message"
+            }),
+        ),
+        (
+            "/event/create",
+            json!({
+                "channel_id": channel_id,
+                "password": password,
+                "title": "event",
+                "status": "open",
+                "message": "event body",
+                "severity": "normal",
+                "event_time": 1_700_000_000_001i64
+            }),
+        ),
+        (
+            "/event/create",
+            json!({
+                "channel_id": channel_id,
+                "password": password,
+                "thing_id": "thing-1",
+                "title": "thing scoped event",
+                "status": "open",
+                "message": "thing scoped event body",
+                "severity": "normal",
+                "event_time": 1_700_000_000_002i64
+            }),
+        ),
+        (
+            "/thing/create",
+            json!({
+                "channel_id": channel_id,
+                "password": password,
+                "title": "thing",
+                "observed_at": 1_700_000_000_003i64
+            }),
+        ),
+    ] {
+        let (status, body) = post_json(app.clone(), path, payload).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{path} should be accepted: {body:?}"
+        );
+    }
+
+    let outbox = state
+        .store
+        .list_private_outbox(device_id, 16)
+        .await
+        .expect("outbox should list after non-message dispatches");
+    assert_eq!(
+        outbox.len(),
+        1,
+        "mqtt outbox should only contain channel-level message deliveries"
+    );
 }
 
 #[tokio::test]

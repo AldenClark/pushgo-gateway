@@ -27,7 +27,7 @@ impl PrivateState {
             return Ok(());
         };
         let proxy_protocol_enabled = self.config.tcp_proxy_protocol;
-        if self.config.tcp_tls_offload {
+        if !self.config.tcp_tls_enabled {
             self.spawn_with_restart_loop("tcp_plain", bind_addr.clone(), move |state| {
                 let bind_addr = bind_addr.clone();
                 async move { tcp::serve_tcp_plain(&bind_addr, state, proxy_protocol_enabled).await }
@@ -36,8 +36,8 @@ impl PrivateState {
         }
 
         let (cert_path, key_path) = self.config.require_tls_identity(
-            "PUSHGO_PRIVATE_TLS_CERT is required when private TCP is enabled",
-            "PUSHGO_PRIVATE_TLS_KEY is required when private TCP is enabled",
+            "PUSHGO_PRIVATE_TLS_CERT is required when private TCP TLS is enabled",
+            "PUSHGO_PRIVATE_TLS_KEY is required when private TCP TLS is enabled",
         )?;
         self.spawn_with_restart_loop("tcp_tls", bind_addr.clone(), move |state| {
             let bind_addr = bind_addr.clone();

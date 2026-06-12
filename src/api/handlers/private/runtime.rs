@@ -27,6 +27,12 @@ pub(super) struct PrivateTransportHints {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) wss_url: Option<String>,
     pub(super) ws_subprotocol: String,
+    pub(super) mqtt_enabled: bool,
+    pub(super) mqtt_port: Option<u16>,
+    pub(super) mqtt_tls_required: bool,
+    pub(super) mqtt_protocol: &'static str,
+    pub(super) mqtt_qos: u8,
+    pub(super) mqtt_topic_template: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +70,12 @@ impl PrivateTransportProfile {
             wss_path: self.wss_path.to_string(),
             wss_url: build_wss_url(public_base_url, self.wss_enabled, self.wss_path.as_ref()),
             ws_subprotocol: self.ws_subprotocol.to_string(),
+            mqtt_enabled: self.mqtt_enabled,
+            mqtt_port: self.mqtt_port,
+            mqtt_tls_required: self.mqtt_tls_required,
+            mqtt_protocol: "mqtt5",
+            mqtt_qos: 1,
+            mqtt_topic_template: "pushgo/{channel_id}/messages",
         }
     }
 }

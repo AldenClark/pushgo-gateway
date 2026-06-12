@@ -88,7 +88,7 @@ PushGo Gateway policy:
 - Switched private transport entry config from legacy boolean `PUSHGO_PRIVATE_CHANNEL_ENABLED` to explicit `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`, with parser support for `true/false/none` and explicit transport sets (`quic,tcp,wss`).
 - Added transport-aware dependency validation in CLI args normalization path:
   - `quic` requires `PUSHGO_PRIVATE_TLS_CERT` + `PUSHGO_PRIVATE_TLS_KEY`
-  - `tcp` requires cert/key only when `PUSHGO_PRIVATE_TCP_TLS_OFFLOAD=false`
+  - `tcp` requires cert/key only when `PUSHGO_PRIVATE_TCP_TLS_ENABLED=true`
   - partial TLS identity is rejected early.
 - Updated app/runtime wiring so private runtime, QUIC bind, TCP bind, and profile transport flags are all driven by the parsed transport set.
 - Tightened private router behavior:

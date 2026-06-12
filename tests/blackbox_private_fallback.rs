@@ -54,7 +54,6 @@ impl GatewayProcess {
             .arg(format!("127.0.0.1:{private_tcp_port}"))
             .arg("--private-tcp-port")
             .arg(private_tcp_port.to_string())
-            .arg("--private-tcp-tls-offload")
             .arg("--private-quic-bind")
             .arg(format!("127.0.0.1:{private_quic_port}"))
             .arg("--private-quic-port")

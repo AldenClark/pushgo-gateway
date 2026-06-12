@@ -1,6 +1,6 @@
 mod ack;
 #[path = "channels/mod.rs"]
-mod channels;
+pub(crate) mod channels;
 mod device_channels;
 mod pull;
 mod shared;

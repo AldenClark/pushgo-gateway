@@ -5,10 +5,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use rustls::{
-    ServerConfig as RustlsServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
-};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -22,6 +18,7 @@ use warp_link::{ServerSessionIo, run_server_session};
 
 use crate::private::{
     PrivateState,
+    tls::ServerTlsIdentity,
     warp_engine::{PushgoServerApp, default_server_config},
 };
 
@@ -44,11 +41,6 @@ struct ProxyProtocolConfig {
 
 struct ProxyProtocolV1;
 
-struct TcpTlsIdentity {
-    certs: Vec<CertificateDer<'static>>,
-    key: PrivateKeyDer<'static>,
-}
-
 pub async fn serve_tcp_tls(
     bind_addr: &str,
     cert_path: &str,
@@ -63,8 +55,8 @@ pub async fn serve_tcp_tls(
     config.tls_key_path = Some(key_path.to_string());
     config.tcp_alpn = "pushgo-tcp".to_string();
     config.tcp_tls_mode = TlsMode::TerminateInWarp;
-    let tls_acceptor =
-        TcpTlsIdentity::load(cert_path, key_path)?.into_acceptor(config.tcp_alpn.as_str())?;
+    let tls_acceptor = ServerTlsIdentity::load(cert_path, key_path)?
+        .into_acceptor(config.tcp_alpn.as_str(), "tcp")?;
     TcpServerRuntime::new(config, app, Some(tls_acceptor), proxy_protocol_enabled)
         .serve()
         .await
@@ -337,39 +329,6 @@ impl ProxyProtocolV1 {
                 "unsupported PROXY protocol family".to_string(),
             )),
         }
-    }
-}
-
-impl TcpTlsIdentity {
-    fn load(cert_path: &str, key_path: &str) -> Result<Self, String> {
-        Ok(Self {
-            certs: Self::load_certs(cert_path)?,
-            key: Self::load_key(key_path)?,
-        })
-    }
-
-    fn into_acceptor(self, alpn: &str) -> Result<TlsAcceptor, String> {
-        let mut tls = RustlsServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(self.certs, self.key)
-            .map_err(|err| format!("invalid tcp tls cert/key: {err}"))?;
-        tls.alpn_protocols = vec![alpn.as_bytes().to_vec()];
-        Ok(TlsAcceptor::from(Arc::new(tls)))
-    }
-
-    fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, String> {
-        let certs = CertificateDer::pem_file_iter(path)
-            .map_err(|err| format!("{path}: {err}"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| format!("read certs failed: {err}"))?;
-        if certs.is_empty() {
-            return Err("empty certificate chain".to_string());
-        }
-        Ok(certs)
-    }
-
-    fn load_key(path: &str) -> Result<PrivateKeyDer<'static>, String> {
-        PrivateKeyDer::from_pem_file(path).map_err(|err| format!("read private key failed: {err}"))
     }
 }
 

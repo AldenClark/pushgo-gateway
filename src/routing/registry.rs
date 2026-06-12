@@ -279,6 +279,7 @@ impl DeviceRegistry {
                 Platform::WATCHOS => stats.watchos_devices += 1,
                 Platform::ANDROID => stats.android_devices += 1,
                 Platform::WINDOWS => stats.windows_devices += 1,
+                Platform::MQTT => stats.mqtt_devices += 1,
             }
         }
 

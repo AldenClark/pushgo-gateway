@@ -45,6 +45,10 @@ impl PrivateHub {
                 presence_active_conn_count = presence_active_conn_count.saturating_add(1);
                 push_sender(&active.sender);
             }
+            if let Some(active) = presence.mqtt_active.as_ref() {
+                presence_active_conn_count = presence_active_conn_count.saturating_add(1);
+                push_sender(&active.sender);
+            }
             presence_draining_conn_count =
                 presence_draining_conn_count.saturating_add(presence.draining.len());
             for draining in &presence.draining {

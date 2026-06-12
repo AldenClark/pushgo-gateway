@@ -13,6 +13,20 @@ pub struct PrivateMetrics {
     tcp_connect_attempts: AtomicU64,
     tcp_connect_success: AtomicU64,
     tcp_connect_failures: AtomicU64,
+    mqtt_connect_attempts: AtomicU64,
+    mqtt_connect_success: AtomicU64,
+    mqtt_connect_failures: AtomicU64,
+    mqtt_protocol_errors: AtomicU64,
+    mqtt_publish_success: AtomicU64,
+    mqtt_publish_failures: AtomicU64,
+    mqtt_subscribe_success: AtomicU64,
+    mqtt_subscribe_failures: AtomicU64,
+    mqtt_unsubscribe_success: AtomicU64,
+    mqtt_unsubscribe_failures: AtomicU64,
+    mqtt_downlink_sent: AtomicU64,
+    mqtt_downlink_failures: AtomicU64,
+    mqtt_downlink_dropped: AtomicU64,
+    mqtt_bootstrap_dropped: AtomicU64,
     hello_timeouts: AtomicU64,
     auth_failures: AtomicU64,
     auth_expired_sessions: AtomicU64,
@@ -48,6 +62,20 @@ pub struct PrivateMetricsSnapshot {
     pub tcp_connect_attempts: u64,
     pub tcp_connect_success: u64,
     pub tcp_connect_failures: u64,
+    pub mqtt_connect_attempts: u64,
+    pub mqtt_connect_success: u64,
+    pub mqtt_connect_failures: u64,
+    pub mqtt_protocol_errors: u64,
+    pub mqtt_publish_success: u64,
+    pub mqtt_publish_failures: u64,
+    pub mqtt_subscribe_success: u64,
+    pub mqtt_subscribe_failures: u64,
+    pub mqtt_unsubscribe_success: u64,
+    pub mqtt_unsubscribe_failures: u64,
+    pub mqtt_downlink_sent: u64,
+    pub mqtt_downlink_failures: u64,
+    pub mqtt_downlink_dropped: u64,
+    pub mqtt_bootstrap_dropped: u64,
     pub hello_timeouts: u64,
     pub auth_failures: u64,
     pub auth_expired_sessions: u64,
@@ -109,6 +137,20 @@ impl PrivateMetrics {
         self.tcp_connect_attempts.store(0, Ordering::Relaxed);
         self.tcp_connect_success.store(0, Ordering::Relaxed);
         self.tcp_connect_failures.store(0, Ordering::Relaxed);
+        self.mqtt_connect_attempts.store(0, Ordering::Relaxed);
+        self.mqtt_connect_success.store(0, Ordering::Relaxed);
+        self.mqtt_connect_failures.store(0, Ordering::Relaxed);
+        self.mqtt_protocol_errors.store(0, Ordering::Relaxed);
+        self.mqtt_publish_success.store(0, Ordering::Relaxed);
+        self.mqtt_publish_failures.store(0, Ordering::Relaxed);
+        self.mqtt_subscribe_success.store(0, Ordering::Relaxed);
+        self.mqtt_subscribe_failures.store(0, Ordering::Relaxed);
+        self.mqtt_unsubscribe_success.store(0, Ordering::Relaxed);
+        self.mqtt_unsubscribe_failures.store(0, Ordering::Relaxed);
+        self.mqtt_downlink_sent.store(0, Ordering::Relaxed);
+        self.mqtt_downlink_failures.store(0, Ordering::Relaxed);
+        self.mqtt_downlink_dropped.store(0, Ordering::Relaxed);
+        self.mqtt_bootstrap_dropped.store(0, Ordering::Relaxed);
         self.hello_timeouts.store(0, Ordering::Relaxed);
         self.auth_failures.store(0, Ordering::Relaxed);
         self.auth_expired_sessions.store(0, Ordering::Relaxed);
@@ -175,6 +217,74 @@ impl PrivateMetrics {
 
     pub fn mark_tcp_connect_failure(&self) {
         self.tcp_connect_failures.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_connect_attempt(&self) {
+        self.mqtt_connect_attempts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_mqtt_connect_success(&self) {
+        self.mqtt_connect_success.fetch_add(1, Ordering::Relaxed);
+        self.mark_accept();
+    }
+
+    pub fn mark_mqtt_connect_failure(&self) {
+        self.mqtt_connect_failures.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_protocol_error(&self) {
+        self.mqtt_protocol_errors.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_publish_success(&self) {
+        self.mqtt_publish_success.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_mqtt_publish_failure(&self) {
+        self.mqtt_publish_failures.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_subscribe_success(&self) {
+        self.mqtt_subscribe_success.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_mqtt_subscribe_failure(&self) {
+        self.mqtt_subscribe_failures.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_unsubscribe_success(&self) {
+        self.mqtt_unsubscribe_success
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_mqtt_unsubscribe_failure(&self) {
+        self.mqtt_unsubscribe_failures
+            .fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_downlink_sent(&self) {
+        self.mqtt_downlink_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_mqtt_downlink_failure(&self) {
+        self.mqtt_downlink_failures.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_downlink_dropped(&self) {
+        self.mqtt_downlink_dropped.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_bootstrap_dropped(&self, count: usize) {
+        self.mqtt_bootstrap_dropped
+            .fetch_add(count as u64, Ordering::Relaxed);
         self.mark_error();
     }
 
@@ -280,6 +390,20 @@ impl PrivateMetrics {
             tcp_connect_attempts: self.tcp_connect_attempts.load(Ordering::Relaxed),
             tcp_connect_success: self.tcp_connect_success.load(Ordering::Relaxed),
             tcp_connect_failures: self.tcp_connect_failures.load(Ordering::Relaxed),
+            mqtt_connect_attempts: self.mqtt_connect_attempts.load(Ordering::Relaxed),
+            mqtt_connect_success: self.mqtt_connect_success.load(Ordering::Relaxed),
+            mqtt_connect_failures: self.mqtt_connect_failures.load(Ordering::Relaxed),
+            mqtt_protocol_errors: self.mqtt_protocol_errors.load(Ordering::Relaxed),
+            mqtt_publish_success: self.mqtt_publish_success.load(Ordering::Relaxed),
+            mqtt_publish_failures: self.mqtt_publish_failures.load(Ordering::Relaxed),
+            mqtt_subscribe_success: self.mqtt_subscribe_success.load(Ordering::Relaxed),
+            mqtt_subscribe_failures: self.mqtt_subscribe_failures.load(Ordering::Relaxed),
+            mqtt_unsubscribe_success: self.mqtt_unsubscribe_success.load(Ordering::Relaxed),
+            mqtt_unsubscribe_failures: self.mqtt_unsubscribe_failures.load(Ordering::Relaxed),
+            mqtt_downlink_sent: self.mqtt_downlink_sent.load(Ordering::Relaxed),
+            mqtt_downlink_failures: self.mqtt_downlink_failures.load(Ordering::Relaxed),
+            mqtt_downlink_dropped: self.mqtt_downlink_dropped.load(Ordering::Relaxed),
+            mqtt_bootstrap_dropped: self.mqtt_bootstrap_dropped.load(Ordering::Relaxed),
             hello_timeouts: self.hello_timeouts.load(Ordering::Relaxed),
             auth_failures: self.auth_failures.load(Ordering::Relaxed),
             auth_expired_sessions: self.auth_expired_sessions.load(Ordering::Relaxed),
@@ -315,10 +439,12 @@ impl PrivateMetrics {
         if mode.is_enabled() {
             let connect_failures = metrics.quic_connect_failures
                 + metrics.tcp_connect_failures
-                + metrics.wss_connect_failures;
+                + metrics.wss_connect_failures
+                + metrics.mqtt_connect_failures;
             let connect_success = metrics.quic_connect_success
                 + metrics.tcp_connect_success
-                + metrics.wss_connect_success;
+                + metrics.wss_connect_success
+                + metrics.mqtt_connect_success;
             if connect_failures >= 5 && connect_success == 0 {
                 alerts.push(PrivateAlert {
                     code: "transport_unavailable".to_string(),

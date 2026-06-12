@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     api::{ApiJson, Error, HttpResult, deserialize_empty_as_none},
     app::AppState,
-    routing::{
-        DeviceChannelType, DeviceRouteRecord, default_route_for_platform, derive_private_device_id,
-    },
+    routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
+    services::{DeviceRegisterCommand, ensure_device_registered},
     storage::{DeviceRouteAuditWrite, DeviceRouteRecordRow, Platform},
     value::{DeviceKeyRef, ProviderTokenRef},
 };
@@ -101,6 +100,12 @@ impl DeviceChannelUpsertRequest {
                 Ok(None)
             }
             _ => {
+                if !platform.supports_provider_push() {
+                    return Err(Error::validation_code(
+                        "mqtt platform requires private channel",
+                        "mqtt_platform_requires_private_channel",
+                    ));
+                }
                 let token = ProviderTokenRef::optional(self.provider_token.as_deref()).ok_or_else(
                     || {
                         Error::validation_code(
@@ -450,9 +455,7 @@ pub(crate) async fn device_channel_upsert(
     };
     let next_type = payload.requested_channel_type()?;
     let requested_platform = payload.requested_platform()?;
-    let previous =
-        DeviceKeyResolution::resolve_existing_for_route(&state, device_key, requested_platform)
-            .await?;
+    let previous = resolve_existing_for_route(&state, device_key, requested_platform).await?;
     let next_provider_token = payload.normalized_provider_token(previous.platform, next_type)?;
     let next_provider_token_ref =
         ProviderTokenRef::optional(next_provider_token.as_deref()).map(ProviderTokenRef::as_str);
@@ -515,14 +518,16 @@ pub(crate) async fn device_register(
     } else {
         None
     };
-    let resolved = DeviceKeyResolution::ensure_registered(
+    let resolved = ensure_device_registered(
         &state,
-        payload.device_key.as_deref(),
-        payload.requested_platform()?,
+        DeviceRegisterCommand {
+            device_key: payload.device_key.as_deref(),
+            platform: payload.requested_platform()?,
+        },
     )
     .await?;
     Ok(crate::api::ok(DeviceRegisterResponse {
-        device_key: resolved.resolved_device_key,
+        device_key: resolved.device_key,
         issued_new_key: resolved.issued_new_key,
         issue_reason: resolved.issue_reason.map(ToString::to_string),
     }))
@@ -605,158 +610,24 @@ pub(crate) async fn provider_token_retire(
     })))
 }
 
-struct DeviceKeyResolution {
-    resolved_device_key: String,
-    issued_new_key: bool,
-    issue_reason: Option<&'static str>,
-}
-
-impl DeviceKeyResolution {
-    async fn ensure_registered(
-        state: &AppState,
-        requested_device_key: Option<&str>,
-        requested_platform: Platform,
-    ) -> Result<Self, Error> {
-        let requested_device_key = requested_device_key
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if let Some(device_key) = requested_device_key
-            && let Some(route) = state.device_registry.get(device_key)
-        {
-            if route.platform != requested_platform {
-                return Self::issue_new(
-                    state,
-                    requested_platform,
-                    Some(device_key),
-                    Some(&route),
-                    "platform_mismatch",
-                )
-                .await;
-            }
-            return Ok(Self {
-                resolved_device_key: device_key.to_string(),
-                issued_new_key: false,
-                issue_reason: None,
-            });
-        }
-
-        if let Some(device_key) = requested_device_key
-            && let Some(replacement_device_key) = state
-                .device_registry
-                .resolve_replaced_device_key(device_key, requested_platform)
-        {
-            return Ok(Self {
-                resolved_device_key: replacement_device_key,
-                issued_new_key: true,
-                issue_reason: Some("platform_mismatch"),
-            });
-        }
-
-        Self::issue_new(
-            state,
-            requested_platform,
-            requested_device_key,
-            None,
-            if requested_device_key.is_some() {
-                "device_key_not_found"
-            } else {
-                "device_key_missing"
-            },
-        )
-        .await
+async fn resolve_existing_for_route(
+    state: &AppState,
+    requested_device_key: &str,
+    requested_platform: Option<Platform>,
+) -> Result<DeviceRouteRecord, Error> {
+    let route = state
+        .device_registry
+        .get(requested_device_key)
+        .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
+    if let Some(platform) = requested_platform
+        && route.platform != platform
+    {
+        return Err(Error::validation_code(
+            "platform does not match device identity",
+            "platform_mismatch",
+        ));
     }
-
-    async fn resolve_existing_for_route(
-        state: &AppState,
-        requested_device_key: &str,
-        requested_platform: Option<Platform>,
-    ) -> Result<DeviceRouteRecord, Error> {
-        let route = state
-            .device_registry
-            .get(requested_device_key)
-            .ok_or_else(|| {
-                Error::validation_code("device_key not found", "device_key_not_found")
-            })?;
-        if let Some(platform) = requested_platform
-            && route.platform != platform
-        {
-            return Err(Error::validation_code(
-                "platform does not match device identity",
-                "platform_mismatch",
-            ));
-        }
-        Ok(route)
-    }
-
-    async fn issue_new(
-        state: &AppState,
-        requested_platform: Platform,
-        requested_device_key: Option<&str>,
-        previous_route: Option<&DeviceRouteRecord>,
-        issue_reason: &'static str,
-    ) -> Result<Self, Error> {
-        let resolved_device_key = state.device_registry.allocate_device_key();
-        let route =
-            default_route_for_platform(requested_platform, chrono::Utc::now().timestamp_millis());
-        let audit = route
-            .persisted_change(
-                resolved_device_key.as_str(),
-                previous_route,
-                Some(issue_reason),
-            )
-            .audit_entry("route_issue_new_key", chrono::Utc::now().timestamp_millis());
-        let old_device_key = if issue_reason == "platform_mismatch" {
-            requested_device_key
-        } else {
-            None
-        };
-        state
-            .store
-            .replace_device_identity(
-                &route.as_route_row(resolved_device_key.as_str()),
-                old_device_key,
-                &audit,
-            )
-            .await
-            .map_err(|err| Error::Internal(format!("failed to replace device identity: {err}")))?;
-        state
-            .device_registry
-            .restore_route(resolved_device_key.as_str(), route)
-            .map_err(Error::Internal)?;
-        if let Some(old_device_key) = old_device_key
-            && old_device_key != resolved_device_key
-        {
-            state.device_registry.remove_device(old_device_key);
-            state.device_registry.remember_replaced_device_key(
-                old_device_key,
-                resolved_device_key.as_str(),
-                requested_platform,
-            );
-        }
-
-        if issue_reason == "platform_mismatch" && tracing::enabled!(tracing::Level::WARN) {
-            let old_key = requested_device_key.unwrap_or("");
-            let old_platform = previous_route
-                .map(|route| route.platform.name())
-                .unwrap_or("");
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::INFO,
-                event = "device.route_reissued",
-                reason = %(issue_reason),
-                old_device_key = %(crate::util::redact_text(old_key)),
-                old_platform = %(old_platform),
-                requested_platform = %(requested_platform.name()),
-                new_device_key = %(crate::util::redact_text(resolved_device_key.as_str()))
-            );
-        }
-
-        Ok(Self {
-            resolved_device_key,
-            issued_new_key: true,
-            issue_reason: Some(issue_reason),
-        })
-    }
+    Ok(route)
 }
 
 #[cfg(test)]
@@ -827,6 +698,21 @@ mod tests {
     }
 
     #[test]
+    fn device_register_accepts_mqtt_platform() {
+        let raw = r#"{
+            "platform":"mqtt"
+        }"#;
+        let parsed = serde_json::from_str::<DeviceRegisterRequest>(raw)
+            .expect("register request should accept mqtt platform");
+        assert_eq!(
+            parsed
+                .requested_platform()
+                .expect("mqtt platform should parse"),
+            Platform::MQTT
+        );
+    }
+
+    #[test]
     fn device_channel_delete_requires_non_empty_device_key() {
         let payload = DeviceChannelDeleteRequest {
             device_key: "   ".to_string(),
@@ -868,6 +754,30 @@ mod tests {
             .expect_err("private route should reject provider token");
         match err {
             Error::Validation { .. } => {}
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn device_channel_upsert_rejects_mqtt_provider_channel() {
+        let payload = DeviceChannelUpsertRequest {
+            device_key: "dev-1".to_string(),
+            channel_type: "apns".to_string(),
+            platform: Some("mqtt".to_string()),
+            provider_token: Some(
+                "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_string(),
+            ),
+        };
+        let err = payload
+            .normalized_provider_token(Platform::MQTT, DeviceChannelType::Apns)
+            .expect_err("mqtt device should not accept provider channels");
+        match err {
+            Error::Validation { code, .. } => {
+                assert_eq!(
+                    code.as_deref(),
+                    Some("mqtt_platform_requires_private_channel")
+                );
+            }
             other => panic!("unexpected error variant: {other:?}"),
         }
     }

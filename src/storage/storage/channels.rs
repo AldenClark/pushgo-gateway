@@ -19,13 +19,17 @@ impl Storage {
         let device_id = device_info.device_id();
 
         let password_hash = if let Some(id) = channel_id {
-            let (_, hash) = self
-                .db
-                .channel_info_with_password(id)
+            let info = self
+                .load_channel_info_for_password(id)
                 .await?
                 .ok_or(StoreError::ChannelNotFound)?;
-            self.verify_channel_password_and_maybe_upgrade(id, &hash, password)
-                .await?
+            self.verify_channel_password_and_maybe_upgrade(
+                id,
+                &info.password_hash,
+                password,
+                Some(&info.alias),
+            )
+            .await?
         } else {
             hash_channel_password(password)?
         };
@@ -48,6 +52,7 @@ impl Storage {
             outcome.channel_id,
             &ChannelInfo {
                 alias: outcome.alias.clone(),
+                password_hash,
             },
         );
 
@@ -138,12 +143,32 @@ impl Storage {
         channel_id: [u8; 16],
         password: &str,
     ) -> StoreResult<Option<ChannelInfo>> {
-        let loaded = self.db.channel_info_with_password(channel_id).await?;
-        let Some((info, hash)) = loaded else {
+        if let Some(info) = self.cache.get_channel_info(channel_id) {
+            self.verify_channel_password_and_maybe_upgrade(
+                channel_id,
+                &info.password_hash,
+                password,
+                Some(&info.alias),
+            )
+            .await?;
+            return Ok(Some(info));
+        }
+        let Some(info) = self.load_channel_info_for_password(channel_id).await? else {
             return Ok(None);
         };
-        self.verify_channel_password_and_maybe_upgrade(channel_id, &hash, password)
+        let password_hash = self
+            .verify_channel_password_and_maybe_upgrade(
+                channel_id,
+                &info.password_hash,
+                password,
+                Some(&info.alias),
+            )
             .await?;
+        let info = ChannelInfo {
+            alias: info.alias,
+            password_hash,
+        };
+        self.cache.put_channel_info(channel_id, &info);
         Ok(Some(info))
     }
 
@@ -154,17 +179,23 @@ impl Storage {
         alias: &str,
     ) -> StoreResult<()> {
         let loaded = self
-            .db
-            .channel_info_with_password(channel_id)
+            .load_channel_info_for_password(channel_id)
             .await?
             .ok_or(StoreError::ChannelNotFound)?;
-        self.verify_channel_password_and_maybe_upgrade(channel_id, &loaded.1, password)
+        let password_hash = self
+            .verify_channel_password_and_maybe_upgrade(
+                channel_id,
+                &loaded.password_hash,
+                password,
+                Some(&loaded.alias),
+            )
             .await?;
         self.db.rename_channel(channel_id, alias).await?;
         self.cache.put_channel_info(
             channel_id,
             &ChannelInfo {
                 alias: alias.to_string(),
+                password_hash,
             },
         );
         Ok(())
@@ -177,13 +208,17 @@ impl Storage {
         password: &str,
     ) -> StoreResult<SubscribeOutcome> {
         let password_hash = if let Some(id) = channel_id {
-            let (_, hash) = self
-                .db
-                .channel_info_with_password(id)
+            let info = self
+                .load_channel_info_for_password(id)
                 .await?
                 .ok_or(StoreError::ChannelNotFound)?;
-            self.verify_channel_password_and_maybe_upgrade(id, &hash, password)
-                .await?
+            self.verify_channel_password_and_maybe_upgrade(
+                id,
+                &info.password_hash,
+                password,
+                Some(&info.alias),
+            )
+            .await?
         } else {
             hash_channel_password(password)?
         };
@@ -196,6 +231,7 @@ impl Storage {
             outcome.channel_id,
             &ChannelInfo {
                 alias: outcome.alias.clone(),
+                password_hash,
             },
         );
         Ok(outcome)
@@ -240,6 +276,7 @@ impl Storage {
         channel_id: [u8; 16],
         password_hash: &str,
         password: &str,
+        alias: Option<&str>,
     ) -> StoreResult<String> {
         let verify_outcome = verify_channel_password(password_hash, password)?;
         if verify_outcome.needs_upgrade() {
@@ -247,8 +284,38 @@ impl Storage {
             self.db
                 .update_channel_password_hash(channel_id, upgraded_hash.as_str())
                 .await?;
+            if let Some(alias) = alias {
+                self.cache.put_channel_info(
+                    channel_id,
+                    &ChannelInfo {
+                        alias: alias.to_string(),
+                        password_hash: upgraded_hash.clone(),
+                    },
+                );
+            } else {
+                self.cache.invalidate_channel_info(channel_id);
+            }
             return Ok(upgraded_hash);
         }
         Ok(password_hash.to_string())
+    }
+
+    async fn load_channel_info_for_password(
+        &self,
+        channel_id: [u8; 16],
+    ) -> StoreResult<Option<ChannelInfo>> {
+        if let Some(info) = self.cache.get_channel_info(channel_id) {
+            return Ok(Some(info));
+        }
+        let loaded = self.db.channel_info_with_password(channel_id).await?;
+        let Some((info, hash)) = loaded else {
+            return Ok(None);
+        };
+        let info = ChannelInfo {
+            alias: info.alias,
+            password_hash: hash,
+        };
+        self.cache.put_channel_info(channel_id, &info);
+        Ok(Some(info))
     }
 }

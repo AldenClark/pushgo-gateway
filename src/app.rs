@@ -3,6 +3,7 @@ use crate::{
     args::Args,
     dispatch::{DispatchChannels, DispatchWorkerDeps},
     mcp::{McpConfig, McpPredefinedClientConfig, McpState},
+    mqtt::MqttConfig,
     private::{PrivateConfig, PrivateState},
     providers::{ApnsClient, FcmClient, WnsClient},
     routing::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord, derive_private_device_id},
@@ -29,6 +30,9 @@ pub(crate) struct PrivateTransportProfile {
     pub wss_port: u16,
     pub wss_path: Arc<str>,
     pub ws_subprotocol: Arc<str>,
+    pub mqtt_enabled: bool,
+    pub mqtt_port: Option<u16>,
+    pub mqtt_tls_required: bool,
 }
 
 #[derive(Clone)]
@@ -198,7 +202,15 @@ pub async fn build_app(
         private_tcp_bind: private_transports
             .tcp
             .then(|| args.private_tcp_bind.clone()),
-        tcp_tls_offload: args.private_tcp_tls_offload,
+        mqtt: private_transports.mqtt.then(|| MqttConfig {
+            bind_addr: args.mqtt_bind.clone(),
+            advertised_port: args.mqtt_port,
+            max_packet_bytes: args.mqtt_max_packet_bytes,
+            tls_enabled: args.mqtt_tls_enabled,
+            tls_cert_path: args.private_tls_cert_path.clone(),
+            tls_key_path: args.private_tls_key_path.clone(),
+        }),
+        tcp_tls_enabled: args.private_tcp_tls_enabled,
         tcp_proxy_protocol: args.private_tcp_proxy_protocol,
         private_tls_cert_path: args.private_tls_cert_path.clone(),
         private_tls_key_path: args.private_tls_key_path.clone(),
@@ -287,6 +299,9 @@ pub async fn build_app(
         wss_port: derive_wss_advertised_port(public_base_url.as_deref()),
         wss_path: Arc::from("/private/ws"),
         ws_subprotocol: Arc::from("pushgo-private.v1"),
+        mqtt_enabled: private_transports.mqtt,
+        mqtt_port: private_transports.mqtt.then_some(args.mqtt_port),
+        mqtt_tls_required: private_transports.mqtt && args.mqtt_tls_enabled,
     };
 
     let mcp_state = if args.mcp_enabled {
@@ -327,6 +342,15 @@ pub async fn build_app(
         store,
         mcp: mcp_state,
     };
+    if let Some(private_state) = private.as_ref()
+        && let Some(mqtt_config) = private_state.config.mqtt.clone()
+    {
+        crate::mqtt::spawn_mqtt(
+            Arc::new(state.clone()),
+            Arc::clone(private_state),
+            mqtt_config,
+        );
+    }
 
     let router = build_router(state.clone(), docs_html);
 

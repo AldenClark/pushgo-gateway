@@ -52,7 +52,18 @@ pub(super) async fn dispatch_provider_devices(
         match device.info.platform {
             Platform::ANDROID => android::dispatch(prepared, payloads, &target, progress).await?,
             Platform::WINDOWS => windows::dispatch(prepared, payloads, &target, progress).await?,
-            _ => apple::dispatch(prepared, payloads, &target, progress).await?,
+            Platform::IOS | Platform::MACOS | Platform::WATCHOS => {
+                apple::dispatch(prepared, payloads, &target, progress).await?
+            }
+            Platform::MQTT => {
+                record_provider_path_rejected(
+                    prepared,
+                    &target,
+                    progress,
+                    "mqtt platform is private-transport only",
+                )
+                .await;
+            }
         }
 
         if progress.dispatch_closed {

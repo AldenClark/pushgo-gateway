@@ -14,6 +14,7 @@ use warp_link::warp_link_core::{SessionControl, SessionCoordinator, TransportKin
 use warp_link_coordination::InMemoryCoordinator;
 
 use crate::{
+    mqtt::MqttConfig,
     routing::DeviceRegistry,
     runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
     stats::StatsCollector,
@@ -28,6 +29,7 @@ pub mod metrics;
 pub mod protocol;
 pub mod quic;
 pub mod tcp;
+pub mod tls;
 pub mod warp_engine;
 pub mod ws;
 
@@ -81,7 +83,8 @@ pub struct PrivateConfig {
     pub runtime_profile: GatewayRuntimeProfile,
     pub private_quic_bind: Option<String>,
     pub private_tcp_bind: Option<String>,
-    pub tcp_tls_offload: bool,
+    pub mqtt: Option<MqttConfig>,
+    pub tcp_tls_enabled: bool,
     pub tcp_proxy_protocol: bool,
     pub private_tls_cert_path: Option<String>,
     pub private_tls_key_path: Option<String>,

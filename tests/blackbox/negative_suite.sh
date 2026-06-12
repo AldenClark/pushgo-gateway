@@ -141,7 +141,6 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
   --private-transports quic,tcp,wss \
   --private-tcp-bind "127.0.0.1:${PRIVATE_TCP_PORT}" \
   --private-tcp-port "$PRIVATE_TCP_PORT" \
-  --private-tcp-tls-offload \
   --private-quic-bind "127.0.0.1:${PRIVATE_QUIC_PORT}" \
   --private-quic-port "$PRIVATE_QUIC_PORT" \
   --private-tls-cert "$CERT_FILE" \

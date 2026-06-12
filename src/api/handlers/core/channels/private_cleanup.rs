@@ -6,7 +6,7 @@ use crate::{
     private::{PrivateState, protocol::PrivatePayloadEnvelope as ProviderPullEnvelope},
 };
 
-pub(super) async fn clear_private_pending_for_channel(
+pub(crate) async fn clear_private_pending_for_channel(
     state: &AppState,
     private_state: &PrivateState,
     device_id: [u8; 16],
@@ -17,7 +17,7 @@ pub(super) async fn clear_private_pending_for_channel(
     clear_private_pending_for_channels(state, private_state, device_id, &singleton).await
 }
 
-pub(super) async fn clear_private_pending_for_channels(
+pub(crate) async fn clear_private_pending_for_channels(
     state: &AppState,
     private_state: &PrivateState,
     device_id: [u8; 16],
