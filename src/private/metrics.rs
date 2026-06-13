@@ -27,6 +27,9 @@ pub struct PrivateMetrics {
     mqtt_downlink_failures: AtomicU64,
     mqtt_downlink_dropped: AtomicU64,
     mqtt_bootstrap_dropped: AtomicU64,
+    mqtt_will_sent: AtomicU64,
+    mqtt_will_failures: AtomicU64,
+    mqtt_will_rejected: AtomicU64,
     hello_timeouts: AtomicU64,
     auth_failures: AtomicU64,
     auth_expired_sessions: AtomicU64,
@@ -76,6 +79,9 @@ pub struct PrivateMetricsSnapshot {
     pub mqtt_downlink_failures: u64,
     pub mqtt_downlink_dropped: u64,
     pub mqtt_bootstrap_dropped: u64,
+    pub mqtt_will_sent: u64,
+    pub mqtt_will_failures: u64,
+    pub mqtt_will_rejected: u64,
     pub hello_timeouts: u64,
     pub auth_failures: u64,
     pub auth_expired_sessions: u64,
@@ -151,6 +157,9 @@ impl PrivateMetrics {
         self.mqtt_downlink_failures.store(0, Ordering::Relaxed);
         self.mqtt_downlink_dropped.store(0, Ordering::Relaxed);
         self.mqtt_bootstrap_dropped.store(0, Ordering::Relaxed);
+        self.mqtt_will_sent.store(0, Ordering::Relaxed);
+        self.mqtt_will_failures.store(0, Ordering::Relaxed);
+        self.mqtt_will_rejected.store(0, Ordering::Relaxed);
         self.hello_timeouts.store(0, Ordering::Relaxed);
         self.auth_failures.store(0, Ordering::Relaxed);
         self.auth_expired_sessions.store(0, Ordering::Relaxed);
@@ -288,6 +297,20 @@ impl PrivateMetrics {
         self.mark_error();
     }
 
+    pub fn mark_mqtt_will_sent(&self) {
+        self.mqtt_will_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_mqtt_will_failure(&self) {
+        self.mqtt_will_failures.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
+    pub fn mark_mqtt_will_rejected(&self) {
+        self.mqtt_will_rejected.fetch_add(1, Ordering::Relaxed);
+        self.mark_error();
+    }
+
     pub fn mark_hello_timeout(&self) {
         self.hello_timeouts.fetch_add(1, Ordering::Relaxed);
         self.mark_error();
@@ -404,6 +427,9 @@ impl PrivateMetrics {
             mqtt_downlink_failures: self.mqtt_downlink_failures.load(Ordering::Relaxed),
             mqtt_downlink_dropped: self.mqtt_downlink_dropped.load(Ordering::Relaxed),
             mqtt_bootstrap_dropped: self.mqtt_bootstrap_dropped.load(Ordering::Relaxed),
+            mqtt_will_sent: self.mqtt_will_sent.load(Ordering::Relaxed),
+            mqtt_will_failures: self.mqtt_will_failures.load(Ordering::Relaxed),
+            mqtt_will_rejected: self.mqtt_will_rejected.load(Ordering::Relaxed),
             hello_timeouts: self.hello_timeouts.load(Ordering::Relaxed),
             auth_failures: self.auth_failures.load(Ordering::Relaxed),
             auth_expired_sessions: self.auth_expired_sessions.load(Ordering::Relaxed),

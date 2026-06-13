@@ -282,7 +282,14 @@
           当前只支持 <code>message</code>，publish envelope 为
           <code>{"type":"message","data":{...}}</code>。MQTT publish 的
           <code>data</code> 可以携带 <code>thing_id</code>，但 MQTT
-          下行只投递频道级 message。
+          下行只投递频道级 message。MQTT 遗嘱消息只允许
+          <code>device_type=subscribe</code> 设备设置；Will Topic 为原始
+          <code>{channel_id}</code>，可发送到任意频道，Will QoS 必须为
+          1，Will Retain 必须为 false，Will Properties 必须包含 User
+          Property <code>pushgo-password</code>，Will payload 使用同一套
+          publish envelope。Gateway 会在异常断开或 MQTT 5
+          <code>DisconnectWithWillMessage</code> 时发送遗嘱，正常
+          DISCONNECT 不发送。
           <br />
           Private runtime configuration (QUIC/TCP/WSS/MQTT) is not covered on this
           page. See gateway README sections “Private Transport Model / CLI
@@ -299,7 +306,13 @@
           <code>message</code> only, with publish envelope
           <code>{"type":"message","data":{...}}</code>. MQTT publish
           <code>data</code> may include <code>thing_id</code>, but MQTT downlink
-          delivers channel-level message payloads only.
+          delivers channel-level message payloads only. MQTT Will Message is
+          accepted only from <code>device_type=subscribe</code>; Will Topic is raw
+          <code>{channel_id}</code> and may target any channel, Will QoS must be
+          1, Will Retain must be false, Will Properties must include User
+          Property <code>pushgo-password</code>, and Will payload uses the same
+          publish envelope. Gateway publishes the Will on abnormal close or MQTT
+          5 <code>DisconnectWithWillMessage</code>, but not on normal DISCONNECT.
         </p>
         <div class="quick-nav">
           <a href="#global">全局格式 / Global</a>

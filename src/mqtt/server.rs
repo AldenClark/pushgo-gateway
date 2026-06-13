@@ -6,8 +6,8 @@ use mqttbytes::{
     Protocol, QoS,
     v5::{
         self, ConnAck, ConnAckProperties, Connect, ConnectReturnCode, Disconnect,
-        DisconnectProperties, DisconnectReasonCode, Packet, PubAck, PubAckProperties, Publish,
-        PublishProperties, RetainForwardRule, SubAck, SubAckProperties, Subscribe,
+        DisconnectProperties, DisconnectReasonCode, LastWill, Packet, PubAck, PubAckProperties,
+        Publish, PublishProperties, RetainForwardRule, SubAck, SubAckProperties, Subscribe,
         SubscribeReasonCode, UnsubAck, UnsubAckReason, Unsubscribe,
     },
 };
@@ -29,7 +29,10 @@ use error::{
 
 use crate::{
     app::AuthMode,
-    mqtt::{MqttDeliveryEnvelope, MqttMessageTopic, MqttPublishEnvelope, MqttRuntime},
+    mqtt::{
+        MqttDeliveryEnvelope, MqttMessagePublish, MqttMessageTopic, MqttPublishEnvelope,
+        MqttRuntime,
+    },
     private::protocol::DeliverEnvelope,
     routing::{DeviceChannelType, derive_private_device_id},
     services::{
@@ -39,7 +42,7 @@ use crate::{
     storage::DeviceId,
     storage::Platform,
     util::constant_time_eq,
-    value::DeviceKeyRef,
+    value::{ChannelId, DeviceKeyRef},
 };
 
 const MQTT_PASSWORD_PROPERTY: &str = "pushgo-password";
@@ -65,12 +68,26 @@ struct AuthenticatedMqttClient {
     conn_id: Option<u64>,
     device_type: MqttDeviceType,
     rx: Option<Receiver<DeliverEnvelope>>,
+    will: Option<MqttWillMessage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MqttDeviceType {
     Publish,
     Subscribe,
+}
+
+#[derive(Debug, Clone)]
+struct MqttWillMessage {
+    channel_id: String,
+    password: String,
+    payload: MqttMessagePublish,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MqttCloseKind {
+    Normal,
+    WithWill,
 }
 
 struct MqttAuthSuccess {
@@ -160,12 +177,6 @@ impl MqttSession {
                 "mqtt5_required",
             ));
         }
-        if connect.last_will.is_some() {
-            return Err((
-                ConnectReturnCode::ImplementationSpecificError,
-                "will_not_supported",
-            ));
-        }
         let keep_alive = resolve_keep_alive(connect.keep_alive);
         if let AuthMode::SharedToken(required) = &self.runtime.state.auth {
             let provided = connect
@@ -186,6 +197,7 @@ impl MqttSession {
             .map(|props| props.user_properties.as_slice())
             .unwrap_or(&[]);
         let device_type = parse_device_type(user_property(properties, MQTT_DEVICE_TYPE_PROPERTY))?;
+        let will = self.validate_will(connect.last_will, device_type).await?;
         if device_type == MqttDeviceType::Publish {
             return Ok(MqttAuthSuccess {
                 client: AuthenticatedMqttClient {
@@ -194,6 +206,7 @@ impl MqttSession {
                     conn_id: None,
                     device_type,
                     rx: None,
+                    will,
                 },
                 assigned_client_id: None,
                 server_keep_alive: keep_alive.server_property,
@@ -312,11 +325,99 @@ impl MqttSession {
                 conn_id: Some(conn_id),
                 device_type,
                 rx: Some(rx),
+                will,
             },
         })
     }
 
+    async fn validate_will(
+        &self,
+        will: Option<LastWill>,
+        device_type: MqttDeviceType,
+    ) -> Result<Option<MqttWillMessage>, (ConnectReturnCode, &'static str)> {
+        let Some(will) = will else {
+            return Ok(None);
+        };
+        if device_type != MqttDeviceType::Subscribe {
+            self.runtime.private.metrics.mark_mqtt_will_rejected();
+            return Err((
+                ConnectReturnCode::ImplementationSpecificError,
+                "mqtt_will_publish_only_not_supported",
+            ));
+        }
+        if will.qos != QoS::AtLeastOnce {
+            self.runtime.private.metrics.mark_mqtt_will_rejected();
+            return Err((ConnectReturnCode::QoSNotSupported, "mqtt_will_qos_required"));
+        }
+        if will.retain {
+            self.runtime.private.metrics.mark_mqtt_will_rejected();
+            return Err((
+                ConnectReturnCode::RetainNotSupported,
+                "mqtt_will_retain_not_supported",
+            ));
+        }
+        let topic = MqttMessageTopic::parse(will.topic.as_str()).map_err(|_| {
+            self.runtime.private.metrics.mark_mqtt_will_rejected();
+            (
+                ConnectReturnCode::TopicNameInvalid,
+                "mqtt_will_topic_invalid",
+            )
+        })?;
+        let password = will
+            .properties
+            .as_ref()
+            .and_then(|props| user_property(&props.user_properties, MQTT_PASSWORD_PROPERTY))
+            .ok_or_else(|| {
+                self.runtime.private.metrics.mark_mqtt_will_rejected();
+                (
+                    ConnectReturnCode::BadUserNamePassword,
+                    "mqtt_will_password_required",
+                )
+            })?
+            .to_string();
+        let payload = MqttPublishEnvelope::decode(&will.message).map_err(|_| {
+            self.runtime.private.metrics.mark_mqtt_will_rejected();
+            (
+                ConnectReturnCode::PayloadFormatInvalid,
+                "mqtt_will_payload_invalid",
+            )
+        })?;
+        let channel_id = topic.channel_id.to_string();
+        let parsed_channel_id = ChannelId::parse(channel_id.as_str()).map_err(|_| {
+            self.runtime.private.metrics.mark_mqtt_will_rejected();
+            (
+                ConnectReturnCode::TopicNameInvalid,
+                "mqtt_will_topic_invalid",
+            )
+        })?;
+        self.runtime
+            .state
+            .store
+            .channel_info_with_password(parsed_channel_id.into_inner(), password.as_str())
+            .await
+            .map_err(|_| {
+                self.runtime.private.metrics.mark_mqtt_will_rejected();
+                (
+                    ConnectReturnCode::BadUserNamePassword,
+                    "mqtt_will_channel_not_authorized",
+                )
+            })?
+            .ok_or_else(|| {
+                self.runtime.private.metrics.mark_mqtt_will_rejected();
+                (
+                    ConnectReturnCode::BadUserNamePassword,
+                    "mqtt_will_channel_not_authorized",
+                )
+            })?;
+        Ok(Some(MqttWillMessage {
+            channel_id,
+            password,
+            payload,
+        }))
+    }
+
     async fn run_authenticated(&mut self, client: AuthenticatedMqttClient) {
+        let mut close_kind = MqttCloseKind::WithWill;
         loop {
             tokio::select! {
                 packet = self.read_packet() => {
@@ -328,7 +429,14 @@ impl MqttSession {
                         Ok(Packet::PingReq) => {
                             let _ = self.write_packet(Packet::PingResp).await;
                         }
-                        Ok(Packet::Disconnect(_)) => break,
+                        Ok(Packet::Disconnect(disconnect)) => {
+                            close_kind = if disconnect.reason_code == DisconnectReasonCode::DisconnectWithWillMessage {
+                                MqttCloseKind::WithWill
+                            } else {
+                                MqttCloseKind::Normal
+                            };
+                            break;
+                        },
                         Ok(_) => {
                             self.runtime.private.metrics.mark_mqtt_protocol_error();
                             self.log_failure("mqtt.unsupported_packet", "packet_not_supported");
@@ -368,6 +476,9 @@ impl MqttSession {
                 .hub
                 .unregister_mqtt_connection(device_id, conn_id);
         }
+        if close_kind == MqttCloseKind::WithWill {
+            self.send_will(&client).await;
+        }
         self.event(
             "mqtt.connection_closed",
             client
@@ -376,6 +487,27 @@ impl MqttSession {
                 .unwrap_or("temporary-publisher"),
             None,
         );
+    }
+
+    async fn send_will(&self, client: &AuthenticatedMqttClient) {
+        let Some(will) = client.will.as_ref() else {
+            return;
+        };
+        match self
+            .send_message_payload(
+                will.channel_id.as_str(),
+                will.password.as_str(),
+                will.payload.clone(),
+                "mqtt_will",
+            )
+            .await
+        {
+            Ok(()) => self.runtime.private.metrics.mark_mqtt_will_sent(),
+            Err(err) => {
+                self.runtime.private.metrics.mark_mqtt_will_failure();
+                self.log_failure("mqtt.will_send_failed", err.message);
+            }
+        }
     }
 
     async fn handle_subscribe(&mut self, client: &AuthenticatedMqttClient, subscribe: Subscribe) {
@@ -695,10 +827,22 @@ impl MqttSession {
                 )
             })?;
         let payload = MqttPublishEnvelope::decode(&publish.payload).map_err(mqtt_error_from_api)?;
+        let channel_id = topic.channel_id.to_string();
+        self.send_message_payload(channel_id.as_str(), password, payload, "mqtt")
+            .await
+    }
+
+    async fn send_message_payload(
+        &self,
+        channel_id: &str,
+        password: &str,
+        payload: MqttMessagePublish,
+        source: &'static str,
+    ) -> Result<(), MqttError> {
         let _outcome = crate::services::send_message(
             &self.runtime.state,
             MessageSendCommand {
-                channel_id: topic.channel_id.to_string(),
+                channel_id: channel_id.to_string(),
                 password: password.to_string(),
                 op_id: payload.op_id,
                 thing_id: payload.thing_id,
@@ -712,7 +856,7 @@ impl MqttSession {
                 ciphertext: payload.ciphertext,
                 tags: payload.tags,
                 metadata: payload.metadata,
-                source: "mqtt",
+                source,
             },
         )
         .await
@@ -800,6 +944,13 @@ impl MqttSession {
 
     async fn read_packet(&mut self) -> Result<Packet, String> {
         loop {
+            if self.buffer.len() >= 2 && self.buffer[0] == 0xE0 && self.buffer[1] == 0x00 {
+                let _ = self.buffer.split_to(2);
+                return Ok(Packet::Disconnect(Disconnect {
+                    reason_code: DisconnectReasonCode::NormalDisconnection,
+                    properties: None,
+                }));
+            }
             match v5::read(&mut self.buffer, self.runtime.config.max_packet_bytes) {
                 Ok(packet) => return Ok(packet),
                 Err(mqttbytes::Error::InsufficientBytes(_)) => {

@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::BytesMut;
 use mqttbytes::v5::{
-    ConnectProperties, PubAckReason, SubscribeFilter, SubscribeProperties, UnsubscribeProperties,
+    ConnectProperties, LastWill, PubAckReason, SubscribeFilter, SubscribeProperties,
+    UnsubscribeProperties, WillProperties,
 };
 use tempfile::{TempDir, tempdir};
 use tokio::{
@@ -222,6 +223,32 @@ fn connect_with_device_type(client_id: &str, device_type: &str) -> Connect {
     connect
 }
 
+fn connect_with_will(
+    client_id: &str,
+    device_type: &str,
+    topic: String,
+    password: Option<&str>,
+    payload: Vec<u8>,
+    qos: QoS,
+    retain: bool,
+) -> Connect {
+    let mut connect = connect_with_device_type(client_id, device_type);
+    let mut will = LastWill::new(topic, payload, qos, retain);
+    will.properties = Some(WillProperties {
+        delay_interval: None,
+        payload_format_indicator: Some(1),
+        message_expiry_interval: None,
+        content_type: Some("application/json".to_string()),
+        response_topic: None,
+        correlation_data: None,
+        user_properties: password
+            .map(|password| vec![(MQTT_PASSWORD_PROPERTY.to_string(), password.to_string())])
+            .unwrap_or_default(),
+    });
+    connect.last_will = Some(will);
+    connect
+}
+
 fn publish_properties(password: Option<&str>) -> PublishProperties {
     PublishProperties {
         payload_format_indicator: Some(1),
@@ -329,6 +356,56 @@ async fn setup_connected_channel() -> (MqttFlowTestContext, TcpStream, String, S
         channel_id,
         channel_password.to_string(),
     )
+}
+
+async fn subscribe_stream_to_channel(
+    stream: &mut TcpStream,
+    channel_id: &str,
+    channel_password: &str,
+    pkid: u16,
+) {
+    let mut subscribe = Subscribe::new(MqttMessageTopic::format(channel_id), QoS::AtLeastOnce);
+    subscribe.pkid = pkid;
+    subscribe.properties = Some(SubscribeProperties {
+        id: None,
+        user_properties: vec![(
+            MQTT_PASSWORD_PROPERTY.to_string(),
+            channel_password.to_string(),
+        )],
+    });
+    write_client_packet(stream, ClientPacket::Subscribe(subscribe)).await;
+    loop {
+        match read_server_packet_labeled(stream, "SUBACK").await {
+            Packet::SubAck(suback) => {
+                assert_eq!(suback.pkid, pkid);
+                assert_eq!(suback.return_codes, vec![SubscribeReasonCode::QoS1]);
+                break;
+            }
+            Packet::Publish(publish) => {
+                write_client_packet(stream, ClientPacket::PubAck(PubAck::new(publish.pkid))).await;
+            }
+            packet => panic!("expected SUBACK, got {packet:?}"),
+        }
+    }
+}
+
+async fn read_publish_with_title(stream: &mut TcpStream, expected_title: &str) -> Publish {
+    loop {
+        let publish = match read_server_packet_labeled(stream, "downlink PUBLISH").await {
+            Packet::Publish(publish) => publish,
+            packet => panic!("expected downlink PUBLISH, got {packet:?}"),
+        };
+        let payload: serde_json::Value =
+            serde_json::from_slice(&publish.payload).expect("downlink should be JSON");
+        let title = payload
+            .get("data")
+            .and_then(|data| data.get("title"))
+            .and_then(|v| v.as_str());
+        if title == Some(expected_title) {
+            return publish;
+        }
+        write_client_packet(stream, ClientPacket::PubAck(PubAck::new(publish.pkid))).await;
+    }
 }
 
 #[tokio::test]
@@ -833,6 +910,378 @@ async fn mqtt_publish_connect_ignores_client_id_and_can_publish_without_route() 
         packet => panic!("expected PUBACK success, got {packet:?}"),
     }
     assert_eq!(ctx.private.metrics.snapshot().mqtt_publish_success, 1);
+}
+
+#[tokio::test]
+async fn mqtt_subscribe_device_will_is_sent_on_abnormal_disconnect_to_any_channel() {
+    let ctx = MqttFlowTestContext::new().await;
+    let receiver_key = "mqtt-will-receiver";
+    let will_owner_key = "mqtt-will-owner";
+    let channel_password = "mqtt-will-pass";
+    ctx.restore_private_route(receiver_key).await;
+    ctx.restore_private_route(will_owner_key).await;
+    let channel_id = ctx.create_channel(receiver_key, channel_password).await;
+    let mut receiver = connect_client(ctx.addr, receiver_key).await;
+    subscribe_stream_to_channel(&mut receiver, channel_id.as_str(), channel_password, 91).await;
+
+    let mut will_owner = TcpStream::connect(ctx.addr)
+        .await
+        .expect("MQTT stream should connect");
+    write_client_packet(
+        &mut will_owner,
+        ClientPacket::Connect(connect_with_will(
+            will_owner_key,
+            "subscribe",
+            MqttMessageTopic::format(channel_id.as_str()),
+            Some(channel_password),
+            message_publish_payload(serde_json::json!({
+                "title": "will abnormal",
+                "body": "sent on socket close"
+            })),
+            QoS::AtLeastOnce,
+            false,
+        )),
+    )
+    .await;
+    match read_server_packet_labeled(&mut will_owner, "will owner CONNACK").await {
+        Packet::ConnAck(connack) => assert_eq!(connack.code, ConnectReturnCode::Success),
+        packet => panic!("expected CONNACK success, got {packet:?}"),
+    }
+    drop(will_owner);
+
+    let publish = read_publish_with_title(&mut receiver, "will abnormal").await;
+    assert_eq!(publish.topic, MqttMessageTopic::format(channel_id.as_str()));
+    assert_eq!(publish.qos, QoS::AtLeastOnce);
+    write_client_packet(
+        &mut receiver,
+        ClientPacket::PubAck(PubAck::new(publish.pkid)),
+    )
+    .await;
+
+    wait_until(Duration::from_secs(2), || {
+        let private = Arc::clone(&ctx.private);
+        async move { private.metrics.snapshot().mqtt_will_sent == 1 }
+    })
+    .await;
+    let metrics = ctx.private.metrics.snapshot();
+    assert_eq!(metrics.mqtt_will_sent, 1);
+    assert_eq!(metrics.mqtt_will_failures, 0);
+    assert_eq!(metrics.mqtt_will_rejected, 0);
+}
+
+#[tokio::test]
+async fn mqtt_will_is_not_sent_on_normal_disconnect() {
+    let ctx = MqttFlowTestContext::new().await;
+    let receiver_key = "mqtt-will-normal-receiver";
+    let will_owner_key = "mqtt-will-normal-owner";
+    let channel_password = "mqtt-will-normal-pass";
+    ctx.restore_private_route(receiver_key).await;
+    ctx.restore_private_route(will_owner_key).await;
+    let channel_id = ctx.create_channel(receiver_key, channel_password).await;
+    let mut receiver = connect_client(ctx.addr, receiver_key).await;
+    subscribe_stream_to_channel(&mut receiver, channel_id.as_str(), channel_password, 92).await;
+
+    let mut will_owner = TcpStream::connect(ctx.addr)
+        .await
+        .expect("MQTT stream should connect");
+    write_client_packet(
+        &mut will_owner,
+        ClientPacket::Connect(connect_with_will(
+            will_owner_key,
+            "subscribe",
+            MqttMessageTopic::format(channel_id.as_str()),
+            Some(channel_password),
+            message_publish_payload(serde_json::json!({"title": "will normal"})),
+            QoS::AtLeastOnce,
+            false,
+        )),
+    )
+    .await;
+    match read_server_packet_labeled(&mut will_owner, "will owner CONNACK").await {
+        Packet::ConnAck(connack) => assert_eq!(connack.code, ConnectReturnCode::Success),
+        packet => panic!("expected CONNACK success, got {packet:?}"),
+    }
+    write_client_packet(
+        &mut will_owner,
+        ClientPacket::Disconnect(Disconnect {
+            reason_code: DisconnectReasonCode::NormalDisconnection,
+            properties: None,
+        }),
+    )
+    .await;
+
+    while let Some(packet) =
+        read_server_packet_with_timeout(&mut receiver, Duration::from_millis(250)).await
+    {
+        let Packet::Publish(publish) = packet else {
+            panic!("expected optional PUBLISH, got {packet:?}");
+        };
+        let payload: serde_json::Value =
+            serde_json::from_slice(&publish.payload).expect("downlink should be JSON");
+        assert_ne!(
+            payload
+                .get("data")
+                .and_then(|data| data.get("title"))
+                .and_then(|v| v.as_str()),
+            Some("will normal"),
+            "normal DISCONNECT must not publish the will"
+        );
+        write_client_packet(
+            &mut receiver,
+            ClientPacket::PubAck(PubAck::new(publish.pkid)),
+        )
+        .await;
+    }
+    assert_eq!(ctx.private.metrics.snapshot().mqtt_will_sent, 0);
+}
+
+#[tokio::test]
+async fn mqtt_disconnect_with_will_reason_sends_will() {
+    let ctx = MqttFlowTestContext::new().await;
+    let receiver_key = "mqtt-will-reason-receiver";
+    let will_owner_key = "mqtt-will-reason-owner";
+    let channel_password = "mqtt-will-reason-pass";
+    ctx.restore_private_route(receiver_key).await;
+    ctx.restore_private_route(will_owner_key).await;
+    let channel_id = ctx.create_channel(receiver_key, channel_password).await;
+    let mut receiver = connect_client(ctx.addr, receiver_key).await;
+    subscribe_stream_to_channel(&mut receiver, channel_id.as_str(), channel_password, 93).await;
+
+    let mut will_owner = TcpStream::connect(ctx.addr)
+        .await
+        .expect("MQTT stream should connect");
+    write_client_packet(
+        &mut will_owner,
+        ClientPacket::Connect(connect_with_will(
+            will_owner_key,
+            "subscribe",
+            MqttMessageTopic::format(channel_id.as_str()),
+            Some(channel_password),
+            message_publish_payload(serde_json::json!({"title": "will by disconnect reason"})),
+            QoS::AtLeastOnce,
+            false,
+        )),
+    )
+    .await;
+    match read_server_packet_labeled(&mut will_owner, "will owner CONNACK").await {
+        Packet::ConnAck(connack) => assert_eq!(connack.code, ConnectReturnCode::Success),
+        packet => panic!("expected CONNACK success, got {packet:?}"),
+    }
+    will_owner
+        .write_all(&[0xE0, 0x02, 0x04, 0x00])
+        .await
+        .expect("DisconnectWithWillMessage should write");
+
+    wait_until(Duration::from_secs(2), || {
+        let private = Arc::clone(&ctx.private);
+        async move {
+            let metrics = private.metrics.snapshot();
+            metrics.mqtt_will_sent + metrics.mqtt_will_failures > 0
+        }
+    })
+    .await;
+    assert_eq!(ctx.private.metrics.snapshot().mqtt_will_failures, 0);
+    let publish = read_publish_with_title(&mut receiver, "will by disconnect reason").await;
+    write_client_packet(
+        &mut receiver,
+        ClientPacket::PubAck(PubAck::new(publish.pkid)),
+    )
+    .await;
+    wait_until(Duration::from_secs(2), || {
+        let private = Arc::clone(&ctx.private);
+        async move { private.metrics.snapshot().mqtt_will_sent == 1 }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn mqtt_will_connect_rejects_publish_only_and_invalid_will_contract() {
+    let ctx = MqttFlowTestContext::new().await;
+    let owner_key = "mqtt-will-validation-owner";
+    let channel_password = "mqtt-will-validation-pass";
+    ctx.restore_private_route(owner_key).await;
+    let channel_id = ctx.create_channel(owner_key, channel_password).await;
+    let valid_payload = message_publish_payload(serde_json::json!({"title": "will validation"}));
+    let unsupported_payload = serde_json::to_vec(&serde_json::json!({
+        "type": "event",
+        "data": {"title": "unsupported"}
+    }))
+    .expect("unsupported payload should encode");
+
+    let cases = vec![
+        (
+            connect_with_will(
+                "",
+                "publish",
+                MqttMessageTopic::format(channel_id.as_str()),
+                Some(channel_password),
+                valid_payload.clone(),
+                QoS::AtLeastOnce,
+                false,
+            ),
+            ConnectReturnCode::ImplementationSpecificError,
+            "mqtt_will_publish_only_not_supported",
+        ),
+        (
+            connect_with_will(
+                owner_key,
+                "subscribe",
+                MqttMessageTopic::format(channel_id.as_str()),
+                Some(channel_password),
+                valid_payload.clone(),
+                QoS::AtMostOnce,
+                false,
+            ),
+            ConnectReturnCode::QoSNotSupported,
+            "mqtt_will_qos_required",
+        ),
+        (
+            connect_with_will(
+                owner_key,
+                "subscribe",
+                MqttMessageTopic::format(channel_id.as_str()),
+                Some(channel_password),
+                valid_payload.clone(),
+                QoS::AtLeastOnce,
+                true,
+            ),
+            ConnectReturnCode::RetainNotSupported,
+            "mqtt_will_retain_not_supported",
+        ),
+        (
+            connect_with_will(
+                owner_key,
+                "subscribe",
+                format!("pushgo/{channel_id}/messages"),
+                Some(channel_password),
+                valid_payload.clone(),
+                QoS::AtLeastOnce,
+                false,
+            ),
+            ConnectReturnCode::TopicNameInvalid,
+            "mqtt_will_topic_invalid",
+        ),
+        (
+            connect_with_will(
+                owner_key,
+                "subscribe",
+                MqttMessageTopic::format(channel_id.as_str()),
+                None,
+                valid_payload.clone(),
+                QoS::AtLeastOnce,
+                false,
+            ),
+            ConnectReturnCode::BadUserNamePassword,
+            "mqtt_will_password_required",
+        ),
+        (
+            connect_with_will(
+                owner_key,
+                "subscribe",
+                MqttMessageTopic::format(channel_id.as_str()),
+                Some("wrong-will-pass"),
+                valid_payload,
+                QoS::AtLeastOnce,
+                false,
+            ),
+            ConnectReturnCode::BadUserNamePassword,
+            "mqtt_will_channel_not_authorized",
+        ),
+        (
+            connect_with_will(
+                owner_key,
+                "subscribe",
+                MqttMessageTopic::format(channel_id.as_str()),
+                Some(channel_password),
+                unsupported_payload,
+                QoS::AtLeastOnce,
+                false,
+            ),
+            ConnectReturnCode::PayloadFormatInvalid,
+            "mqtt_will_payload_invalid",
+        ),
+    ];
+
+    for (connect, expected_code, expected_reason) in cases {
+        let mut stream = TcpStream::connect(ctx.addr)
+            .await
+            .expect("MQTT stream should connect");
+        write_client_packet(&mut stream, ClientPacket::Connect(connect)).await;
+        match read_server_packet_labeled(&mut stream, "will rejection CONNACK").await {
+            Packet::ConnAck(connack) => {
+                assert_eq!(connack.code, expected_code);
+                assert_eq!(
+                    connack
+                        .properties
+                        .and_then(|props| props.reason_string)
+                        .as_deref(),
+                    Some(expected_reason)
+                );
+            }
+            packet => panic!("expected CONNACK rejection, got {packet:?}"),
+        }
+    }
+    assert_eq!(ctx.private.metrics.snapshot().mqtt_will_rejected, 7);
+}
+
+#[tokio::test]
+async fn mqtt_will_accepts_thing_scoped_message_without_mqtt_downlink_enqueue() {
+    let ctx = MqttFlowTestContext::new().await;
+    let owner_key = "mqtt-will-thing-owner";
+    let channel_password = "mqtt-will-thing-pass";
+    ctx.restore_private_route(owner_key).await;
+    let channel_id = ctx.create_channel(owner_key, channel_password).await;
+    let device_id = derive_private_device_id(owner_key);
+    let outbox_before = ctx
+        .state
+        .store
+        .list_private_outbox(device_id, 16)
+        .await
+        .expect("outbox should list")
+        .len();
+
+    let mut will_owner = TcpStream::connect(ctx.addr)
+        .await
+        .expect("MQTT stream should connect");
+    write_client_packet(
+        &mut will_owner,
+        ClientPacket::Connect(connect_with_will(
+            owner_key,
+            "subscribe",
+            MqttMessageTopic::format(channel_id.as_str()),
+            Some(channel_password),
+            message_publish_payload(serde_json::json!({
+                "title": "thing scoped will",
+                "thing_id": "thing_1",
+                "occurred_at": 1_700_000_000_000i64
+            })),
+            QoS::AtLeastOnce,
+            false,
+        )),
+    )
+    .await;
+    match read_server_packet_labeled(&mut will_owner, "thing will CONNACK").await {
+        Packet::ConnAck(connack) => assert_eq!(connack.code, ConnectReturnCode::Success),
+        packet => panic!("expected CONNACK success, got {packet:?}"),
+    }
+    drop(will_owner);
+
+    wait_until(Duration::from_secs(2), || {
+        let private = Arc::clone(&ctx.private);
+        async move { private.metrics.snapshot().mqtt_will_sent == 1 }
+    })
+    .await;
+    let outbox_after = ctx
+        .state
+        .store
+        .list_private_outbox(device_id, 16)
+        .await
+        .expect("outbox should list")
+        .len();
+    assert_eq!(
+        outbox_after, outbox_before,
+        "thing-scoped MQTT will messages must not enqueue MQTT downlink payloads"
+    );
 }
 
 #[tokio::test]

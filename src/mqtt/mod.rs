@@ -6,7 +6,7 @@ mod payload;
 mod server;
 mod topics;
 
-pub(crate) use payload::{MqttDeliveryEnvelope, MqttPublishEnvelope};
+pub(crate) use payload::{MqttDeliveryEnvelope, MqttMessagePublish, MqttPublishEnvelope};
 pub use server::{serve_mqtt, serve_mqtt_tls};
 pub(crate) use topics::MqttMessageTopic;
 
