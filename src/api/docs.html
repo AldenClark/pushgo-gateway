@@ -272,10 +272,34 @@
           <code>PUSHGO_PRIVATE_TRANSPORTS</code>（或
           <code>--private-transports</code>）做显式启停配置。
           <br />
+          MQTT 客户端必须使用 MQTT 5 和 QoS 1。CONNECT 使用 User Property
+          <code>device_type=publish</code> 表示临时只发送连接，或
+          <code>device_type=subscribe</code> 表示持久接收设备。Subscribe
+          设备的 client id 为空、未知，或因属于其他 platform
+          而被替换时，gateway 会通过 CONNACK Assigned Client Identifier
+          返回分配后的 device key。MQTT topic 直接使用
+          <code>{channel_id}</code>；payload 使用 <code>type</code> 区分业务模型。
+          当前只支持 <code>message</code>，publish envelope 为
+          <code>{"type":"message","data":{...}}</code>。MQTT publish 的
+          <code>data</code> 可以携带 <code>thing_id</code>，但 MQTT
+          下行只投递频道级 message。
+          <br />
           Private runtime configuration (QUIC/TCP/WSS/MQTT) is not covered on this
           page. See gateway README sections “Private Transport Model / CLI
           Reference” and use <code>PUSHGO_PRIVATE_TRANSPORTS</code> (or
           <code>--private-transports</code>) for explicit transport enablement.
+          <br />
+          MQTT clients must use MQTT 5 and QoS 1. CONNECT uses User Property
+          <code>device_type=publish</code> for temporary publish-only connections,
+          or <code>device_type=subscribe</code> for persistent receiver devices.
+          For subscribe devices, an empty, unknown, or replaced client id causes
+          gateway to return the assigned device key in CONNACK Assigned Client
+          Identifier. MQTT topic is the raw <code>{channel_id}</code>; payload
+          <code>type</code> identifies the business model. Current MQTT support is
+          <code>message</code> only, with publish envelope
+          <code>{"type":"message","data":{...}}</code>. MQTT publish
+          <code>data</code> may include <code>thing_id</code>, but MQTT downlink
+          delivers channel-level message payloads only.
         </p>
         <div class="quick-nav">
           <a href="#global">全局格式 / Global</a>

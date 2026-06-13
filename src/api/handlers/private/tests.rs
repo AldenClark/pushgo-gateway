@@ -45,7 +45,7 @@ fn transport_hints_returns_profile_capabilities() {
     assert!(hints.mqtt_tls_required);
     assert_eq!(hints.mqtt_protocol, "mqtt5");
     assert_eq!(hints.mqtt_qos, 1);
-    assert_eq!(hints.mqtt_topic_template, "pushgo/{channel_id}/messages");
+    assert_eq!(hints.mqtt_topic_template, "{channel_id}");
 }
 
 #[test]

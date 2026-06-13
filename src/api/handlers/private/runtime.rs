@@ -75,7 +75,7 @@ impl PrivateTransportProfile {
             mqtt_tls_required: self.mqtt_tls_required,
             mqtt_protocol: "mqtt5",
             mqtt_qos: 1,
-            mqtt_topic_template: "pushgo/{channel_id}/messages",
+            mqtt_topic_template: "{channel_id}",
         }
     }
 }
