@@ -10,15 +10,28 @@ use crate::{
             DispatchRequest, DispatchThingInput,
         },
         response::DeliverySummary,
-        store::idempotency::IdempotencyStore,
+        store::{idempotency::IdempotencyStore, sender_status::SenderStatusStore},
         submit::{AuthorizedSubmitChannel, SubmitRuntime},
     },
+    storage::MaintenanceCleanupConfig,
 };
 
 #[async_trait]
 impl SubmitRuntime for AppState {
     fn idempotency_store(&self) -> &(dyn IdempotencyStore + Send + Sync) {
         &self.store
+    }
+
+    fn sender_status_store(&self) -> &(dyn SenderStatusStore + Send + Sync) {
+        &self.store
+    }
+
+    fn sender_status_retention_millis(&self) -> i64 {
+        self.private
+            .as_ref()
+            .map(|private| private.config.maintenance_cleanup.dedupe_retention_secs)
+            .unwrap_or_else(|| MaintenanceCleanupConfig::default().dedupe_retention_secs)
+            .saturating_mul(1000)
     }
 
     async fn authorize_channel_by_password(
@@ -131,6 +144,7 @@ fn stable_error_code(code: &str) -> Option<&'static str> {
         "submit_auth_channel_mismatch" => Some("submit_auth_channel_mismatch"),
         "authentication_failed" => Some("authentication_failed"),
         "channel_not_authorized" => Some("channel_not_authorized"),
+        "op_id_not_allowed" => Some("op_id_not_allowed"),
         _ => None,
     }
 }

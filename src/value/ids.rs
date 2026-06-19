@@ -49,11 +49,9 @@ impl OpId {
         Ok(Self(trimmed.to_string()))
     }
 
-    pub(crate) fn resolve(raw: Option<&str>) -> ValueResult<Self> {
-        match raw {
-            Some(value) => Self::parse(value),
-            None => Ok(Self(generate_hex_id_128())),
-        }
+    pub(crate) fn generate(now_millis: i64) -> Self {
+        let now = now_millis.max(0);
+        Self(format!("{now:013x}-{}", generate_hex_id_128()))
     }
 
     pub(crate) fn as_str(&self) -> &str {

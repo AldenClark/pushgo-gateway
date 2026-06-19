@@ -1842,6 +1842,66 @@ async fn maintenance_cleanup_keeps_recent_pending_op_dedupe_for_full_stale_windo
 }
 
 #[tokio::test]
+async fn maintenance_cleanup_prunes_expired_sender_submit_status() {
+    let ctx = setup_sqlite_storage("maintenance-sender-status").await;
+    let now = 1_700_000_000_000_i64;
+    let expired = SenderSubmitStatusRecord {
+        op_id: "0018bcfe56800-expiredsenderstatus000000000001".to_string(),
+        channel_id: [1; 16],
+        model: "message".to_string(),
+        entity_id: "message-expired".to_string(),
+        status: SenderSubmitStatusKind::Sent,
+        dispatch_status: Some("attempted_accepted".to_string()),
+        accepted_at: now - 90_000,
+        updated_at: now - 80_000,
+        expires_at: now - 1,
+    };
+    let live = SenderSubmitStatusRecord {
+        op_id: "0018bcfe56800-livesenderstatus00000000000001".to_string(),
+        channel_id: [2; 16],
+        model: "message".to_string(),
+        entity_id: "message-live".to_string(),
+        status: SenderSubmitStatusKind::Processing,
+        dispatch_status: None,
+        accepted_at: now,
+        updated_at: now,
+        expires_at: now + 60_000,
+    };
+    ctx.storage
+        .upsert_sender_submit_status(&expired)
+        .await
+        .expect("expired sender status should insert");
+    ctx.storage
+        .upsert_sender_submit_status(&live)
+        .await
+        .expect("live sender status should insert");
+
+    let stats = ctx
+        .storage
+        .run_maintenance_cleanup(now, MaintenanceCleanupConfig::default())
+        .await
+        .expect("maintenance cleanup should succeed");
+
+    assert_eq!(stats.sender_status_pruned, 1);
+    assert!(
+        ctx.storage
+            .load_sender_submit_status(&expired.op_id)
+            .await
+            .expect("expired sender status lookup should succeed")
+            .is_none()
+    );
+    assert_eq!(
+        ctx.storage
+            .load_sender_submit_status(&live.op_id)
+            .await
+            .expect("live sender status lookup should succeed")
+            .expect("live sender status should remain")
+            .status,
+        SenderSubmitStatusKind::Processing
+    );
+}
+
+#[tokio::test]
 async fn maintenance_cleanup_keeps_orphan_candidates_with_live_private_references() {
     let ctx = setup_sqlite_storage("maintenance-cleanup-live-references").await;
     let now = chrono::Utc::now().timestamp_millis();

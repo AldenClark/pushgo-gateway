@@ -140,7 +140,7 @@ impl MqttSession {
             )
             .await
         {
-            Ok(()) => self.runtime.private.metrics.mark_mqtt_will_sent(),
+            Ok(_) => self.runtime.private.metrics.mark_mqtt_will_sent(),
             Err(err) => {
                 self.runtime.private.metrics.mark_mqtt_will_failure();
                 self.log_failure("mqtt.will_send_failed", err.message);
@@ -167,25 +167,32 @@ impl MqttSession {
                 .await;
             return;
         }
-        let reason = self.process_publish(client, publish.clone()).await;
+        let outcome = self.process_publish(client, publish.clone()).await;
         let mut ack = PubAck::new(publish.pkid);
-        if let Err(err) = reason {
-            self.runtime.private.metrics.mark_mqtt_publish_failure();
-            if let Some(code) = publish_disconnect_reason(&err) {
-                let _ = self.write_disconnect(code, err.message).await;
-                return;
+        match outcome {
+            Err(err) => {
+                self.runtime.private.metrics.mark_mqtt_publish_failure();
+                if let Some(code) = publish_disconnect_reason(&err) {
+                    let _ = self.write_disconnect(code, err.message).await;
+                    return;
+                }
+                ack.reason = puback_reason_for_error(&err);
+                ack.properties = Some(PubAckProperties {
+                    reason_string: Some(err.message.to_string()),
+                    user_properties: vec![("pushgo-error-code".to_string(), err.code.to_string())],
+                });
             }
-            ack.reason = puback_reason_for_error(&err);
-            ack.properties = Some(PubAckProperties {
-                reason_string: Some(err.message.to_string()),
-                user_properties: vec![("pushgo-error-code".to_string(), err.code.to_string())],
-            });
-        } else {
-            self.runtime.private.metrics.mark_mqtt_publish_success();
-            ack.properties = Some(PubAckProperties {
-                reason_string: None,
-                user_properties: vec![("pushgo-qos".to_string(), "1".to_string())],
-            });
+            Ok(op_id) => {
+                self.runtime.private.metrics.mark_mqtt_publish_success();
+                let mut user_properties = vec![("pushgo-qos".to_string(), "1".to_string())];
+                if let Some(op_id) = op_id {
+                    user_properties.push(("pushgo-op-id".to_string(), op_id));
+                }
+                ack.properties = Some(PubAckProperties {
+                    reason_string: None,
+                    user_properties,
+                });
+            }
         }
         let _ = self.write_packet(Packet::PubAck(ack)).await;
     }
@@ -194,7 +201,7 @@ impl MqttSession {
         &self,
         client: &AuthenticatedMqttClient,
         publish: Publish,
-    ) -> Result<(), MqttError> {
+    ) -> Result<Option<String>, MqttError> {
         if publish.qos != QoS::AtLeastOnce {
             return Err(MqttError::new(
                 "only QoS 1 is supported",
@@ -247,7 +254,7 @@ impl MqttSession {
                 topic = %(crate::util::redact_text(publish.topic.as_str())),
                 packet_id = (publish.pkid as u64)
             );
-            return Ok(());
+            return Ok(None);
         }
         let channel_id = topic.channel_id.to_string();
         let result = self
@@ -291,7 +298,7 @@ impl MqttSession {
         password: &str,
         payload: MqttPublishCommand,
         source: IngressSource,
-    ) -> Result<(), MqttError> {
+    ) -> Result<Option<String>, MqttError> {
         let command = match payload {
             MqttPublishCommand::Message(payload) => {
                 DomainCommandInput::Message(Box::new(MessageInput {
@@ -316,7 +323,7 @@ impl MqttSession {
                 DomainCommandInput::Thing(Box::new(ThingInput { command }))
             }
         };
-        let _outcome = submit_command(
+        let outcome = submit_command(
             SubmitContext {
                 runtime: self.runtime.state.as_ref(),
                 now_millis: chrono::Utc::now().timestamp_millis(),
@@ -334,7 +341,7 @@ impl MqttSession {
         .await
         .map_err(core_error_to_api_error)
         .map_err(mqtt_error_from_api)?;
-        Ok(())
+        Ok(Some(outcome.summary.op_id))
     }
 }
 

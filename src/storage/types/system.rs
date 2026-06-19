@@ -1,5 +1,50 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SenderSubmitStatusKind {
+    Accepted,
+    Processing,
+    Sent,
+    PartiallyFailed,
+    Failed,
+}
+
+impl SenderSubmitStatusKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Processing => "processing",
+            Self::Sent => "sent",
+            Self::PartiallyFailed => "partially_failed",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "accepted" => Some(Self::Accepted),
+            "processing" => Some(Self::Processing),
+            "sent" => Some(Self::Sent),
+            "partially_failed" => Some(Self::PartiallyFailed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SenderSubmitStatusRecord {
+    pub op_id: String,
+    pub channel_id: [u8; 16],
+    pub model: String,
+    pub entity_id: String,
+    pub status: SenderSubmitStatusKind,
+    pub dispatch_status: Option<String>,
+    pub accepted_at: i64,
+    pub updated_at: i64,
+    pub expires_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ChannelRuntimeCounterBucket {
     pub channel_id: [u8; 16],
@@ -50,6 +95,7 @@ pub struct MaintenanceCleanupStats {
     pub private_sessions_pruned: usize,
     pub private_outbox_pruned: usize,
     pub provider_pull_pruned: usize,
+    pub sender_status_pruned: usize,
     pub orphan_devices_pruned: usize,
     pub stale_subscriptions_pruned: usize,
     pub frozen_subscriptions_pruned: usize,

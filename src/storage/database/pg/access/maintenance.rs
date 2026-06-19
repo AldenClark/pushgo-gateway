@@ -4,6 +4,97 @@ use crate::storage::{
 };
 
 impl PostgresDb {
+    pub(super) async fn upsert_sender_submit_status(
+        &self,
+        record: &SenderSubmitStatusRecord,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO sender_submit_status \
+             (op_id, channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT(op_id) DO UPDATE SET \
+               channel_id = EXCLUDED.channel_id, \
+               model = EXCLUDED.model, \
+               entity_id = EXCLUDED.entity_id, \
+               status = EXCLUDED.status, \
+               dispatch_status = EXCLUDED.dispatch_status, \
+               accepted_at = EXCLUDED.accepted_at, \
+               updated_at = EXCLUDED.updated_at, \
+               expires_at = EXCLUDED.expires_at",
+        )
+        .bind(record.op_id.as_str())
+        .bind(record.channel_id.as_slice())
+        .bind(record.model.as_str())
+        .bind(record.entity_id.as_str())
+        .bind(record.status.as_str())
+        .bind(record.dispatch_status.as_deref())
+        .bind(record.accepted_at)
+        .bind(record.updated_at)
+        .bind(record.expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(super) async fn update_sender_submit_status(
+        &self,
+        op_id: &str,
+        status: SenderSubmitStatusKind,
+        dispatch_status: Option<&str>,
+        updated_at: i64,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "UPDATE sender_submit_status \
+             SET status = $1, dispatch_status = $2, updated_at = $3 \
+             WHERE op_id = $4",
+        )
+        .bind(status.as_str())
+        .bind(dispatch_status)
+        .bind(updated_at)
+        .bind(op_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(super) async fn load_sender_submit_status(
+        &self,
+        op_id: &str,
+    ) -> StoreResult<Option<SenderSubmitStatusRecord>> {
+        let Some(row) = sqlx::query(
+            "SELECT op_id, channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at \
+             FROM sender_submit_status WHERE op_id = $1",
+        )
+        .bind(op_id)
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(decode_sender_submit_status(row)?))
+    }
+
+    pub(super) async fn cleanup_sender_submit_status(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let result = sqlx::query(
+            "DELETE FROM sender_submit_status \
+             WHERE op_id IN ( \
+               SELECT op_id FROM sender_submit_status \
+               WHERE expires_at <= $1 \
+               ORDER BY expires_at ASC, accepted_at ASC, op_id ASC \
+               LIMIT $2 \
+             )",
+        )
+        .bind(now)
+        .bind(limit as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() as usize)
+    }
+
     pub(super) async fn cleanup_expired_provider_pull_queue(
         &self,
         before_ts: i64,
@@ -490,6 +581,36 @@ impl PostgresDb {
         .await?;
         Ok(())
     }
+}
+
+fn decode_sender_submit_status(
+    row: sqlx::postgres::PgRow,
+) -> StoreResult<SenderSubmitStatusRecord> {
+    let channel_bytes: Vec<u8> = row.get("channel_id");
+    let channel_id: [u8; 16] = channel_bytes
+        .try_into()
+        .map_err(|_| invalid_sender_status_data("invalid sender status channel_id length"))?;
+    let status_text: String = row.get("status");
+    let status = SenderSubmitStatusKind::parse(status_text.as_str())
+        .ok_or_else(|| invalid_sender_status_data("invalid sender status kind"))?;
+    Ok(SenderSubmitStatusRecord {
+        op_id: row.get("op_id"),
+        channel_id,
+        model: row.get("model"),
+        entity_id: row.get("entity_id"),
+        status,
+        dispatch_status: row.get("dispatch_status"),
+        accepted_at: row.get("accepted_at"),
+        updated_at: row.get("updated_at"),
+        expires_at: row.get("expires_at"),
+    })
+}
+
+fn invalid_sender_status_data(message: &'static str) -> StoreError {
+    StoreError::Serde(serde_json::Error::io(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    )))
 }
 
 pub(super) async fn delete_orphan_private_payload_in_pg_tx(

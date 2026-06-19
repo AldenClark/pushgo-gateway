@@ -9,6 +9,7 @@ pub(crate) mod health;
 pub(crate) mod message;
 pub(crate) mod private;
 pub(crate) mod send_ack;
+pub(crate) mod send_status;
 pub(crate) mod thing;
 
 use axum::{
@@ -30,6 +31,7 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
             "/message",
             post(message::message_to_channel).get(message::message_to_channel_get),
         )
+        .route("/send_status/{op_id}", get(send_status::send_status))
         .route(
             "/ntfy/{topic}",
             post(message::compat_ntfy_post).put(message::compat_ntfy_put),

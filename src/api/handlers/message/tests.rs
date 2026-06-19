@@ -74,17 +74,24 @@ fn add_standard_fields_keeps_markdown_link_body() {
 }
 
 #[test]
-fn resolve_op_id_uses_provided_value() {
-    let resolved = OpId::resolve(Some("provided-op-id")).expect("op_id should be accepted");
-    assert_eq!(resolved.into_inner(), "provided-op-id");
+fn parse_op_id_accepts_gateway_generated_format() {
+    let resolved = OpId::parse("00191f23cc000-0123456789abcdef0123456789abcdef")
+        .expect("gateway generated op_id should parse");
+    assert_eq!(
+        resolved.into_inner(),
+        "00191f23cc000-0123456789abcdef0123456789abcdef"
+    );
 }
 
 #[test]
-fn resolve_op_id_generates_when_absent() {
-    let resolved = OpId::resolve(None).expect("op_id should be generated");
+fn generate_op_id_uses_time_prefix_and_random_suffix() {
+    let resolved = OpId::generate(1_725_000_123_456);
     let resolved = resolved.into_inner();
-    assert_eq!(resolved.len(), 32);
-    assert!(resolved.chars().all(|ch| ch.is_ascii_hexdigit()));
+    assert!(resolved.starts_with("00191a2050440-"));
+    assert_eq!(resolved.len(), 46);
+    assert!(resolved.split_once('-').is_some_and(
+        |(_, suffix)| suffix.len() == 32 && suffix.chars().all(|ch| ch.is_ascii_hexdigit())
+    ));
 }
 
 #[test]

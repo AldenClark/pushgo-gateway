@@ -225,15 +225,14 @@ async fn subscribe_channel(client: &Client, gateway: &GatewayProcess, device_key
         .to_string()
 }
 
-async fn send_message(client: &Client, gateway: &GatewayProcess, channel_id: &str, op_id: &str) {
+async fn send_message(client: &Client, gateway: &GatewayProcess, channel_id: &str, label: &str) {
     let response = client
         .post(format!("{}/message", gateway.base_url()))
         .bearer_auth(&gateway.token)
         .json(&serde_json::json!({
             "channel_id": channel_id,
             "password": "benchmark-123",
-            "op_id": op_id,
-            "title": format!("title-{op_id}"),
+            "title": format!("title-{label}"),
             "body": "provider ingress blackbox"
         }))
         .send()

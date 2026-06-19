@@ -23,6 +23,32 @@ impl Storage {
         self.db.automation_reset().await
     }
 
+    pub async fn upsert_sender_submit_status(
+        &self,
+        record: &SenderSubmitStatusRecord,
+    ) -> StoreResult<()> {
+        self.db.upsert_sender_submit_status(record).await
+    }
+
+    pub async fn update_sender_submit_status(
+        &self,
+        op_id: &str,
+        status: SenderSubmitStatusKind,
+        dispatch_status: Option<&str>,
+        updated_at: i64,
+    ) -> StoreResult<()> {
+        self.db
+            .update_sender_submit_status(op_id, status, dispatch_status, updated_at)
+            .await
+    }
+
+    pub async fn load_sender_submit_status(
+        &self,
+        op_id: &str,
+    ) -> StoreResult<Option<SenderSubmitStatusRecord>> {
+        self.db.load_sender_submit_status(op_id).await
+    }
+
     pub async fn delete_private_device_state(&self, device_id: DeviceId) -> StoreResult<()> {
         self.db.delete_private_device_state(device_id).await?;
         self.cache.invalidate_all_channel_devices();
@@ -141,6 +167,7 @@ impl Storage {
                 private_sessions_pruned = 0_u64,
                 private_outbox_pruned = 0_u64,
                 provider_pull_pruned = 0_u64,
+                sender_status_pruned = 0_u64,
                 orphan_devices_pruned = 0_u64,
                 stale_subscriptions_pruned = 0_u64,
                 frozen_subscriptions_pruned = 0_u64,
@@ -187,6 +214,12 @@ impl Storage {
             .cleanup_delivery_dedupe(dedupe_before, config.delete_batch)
             .await?;
         let dedupe_elapsed_ms = phase_started.elapsed().as_millis() as u64;
+        phase_started = Instant::now();
+        let sender_status_pruned = self
+            .db
+            .cleanup_sender_submit_status(now, config.delete_batch)
+            .await?;
+        let sender_status_elapsed_ms = phase_started.elapsed().as_millis() as u64;
 
         phase_started = Instant::now();
         let orphan_devices_pruned = self
@@ -259,6 +292,7 @@ impl Storage {
             private_sessions_pruned = (private_sessions_pruned as u64),
             private_outbox_pruned = (private_outbox_pruned as u64),
             provider_pull_pruned = (provider_pull_pruned as u64),
+            sender_status_pruned = (sender_status_pruned as u64),
             orphan_devices_pruned = (orphan_devices_pruned as u64),
             stale_subscriptions_pruned = (stale_subscriptions_pruned as u64),
             frozen_subscriptions_pruned = (frozen_subscriptions_pruned as u64),
@@ -271,6 +305,7 @@ impl Storage {
             provider_pull_elapsed_ms = (provider_pull_elapsed_ms),
             pending_dedupe_elapsed_ms = (pending_dedupe_elapsed_ms),
             dedupe_elapsed_ms = (dedupe_elapsed_ms),
+            sender_status_elapsed_ms = (sender_status_elapsed_ms),
             orphan_devices_elapsed_ms = (orphan_devices_elapsed_ms),
             stale_subscriptions_elapsed_ms = (stale_subscriptions_elapsed_ms),
             frozen_subscriptions_elapsed_ms = (frozen_subscriptions_elapsed_ms),
@@ -281,6 +316,7 @@ impl Storage {
             private_sessions_pruned,
             private_outbox_pruned,
             provider_pull_pruned,
+            sender_status_pruned,
             orphan_devices_pruned,
             stale_subscriptions_pruned,
             frozen_subscriptions_pruned,
@@ -302,6 +338,7 @@ fn emit_maintenance_cleanup_dry_run(now: i64, config: MaintenanceCleanupConfig) 
         private_stale_outbox_before = (config.private_stale_outbox_before(now)),
         pending_op_dedupe_before = (now - OP_DEDUPE_PENDING_STALE_MILLIS),
         dedupe_before = (config.dedupe_before(now)),
+        sender_status_expired_before = (now),
         orphan_device_before = (config.orphan_device_before(now)),
         stale_subscription_before = (config.stale_subscription_before(now)),
         frozen_subscription_before = (config.frozen_subscription_before(now)),

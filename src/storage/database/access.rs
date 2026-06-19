@@ -282,6 +282,22 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
     async fn automation_counts(&self) -> StoreResult<AutomationCounts>;
     async fn load_mcp_state_json(&self) -> StoreResult<Option<String>>;
     async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()>;
+    async fn upsert_sender_submit_status(
+        &self,
+        record: &SenderSubmitStatusRecord,
+    ) -> StoreResult<()>;
+    async fn update_sender_submit_status(
+        &self,
+        op_id: &str,
+        status: SenderSubmitStatusKind,
+        dispatch_status: Option<&str>,
+        updated_at: i64,
+    ) -> StoreResult<()>;
+    async fn load_sender_submit_status(
+        &self,
+        op_id: &str,
+    ) -> StoreResult<Option<SenderSubmitStatusRecord>>;
+    async fn cleanup_sender_submit_status(&self, now: i64, limit: usize) -> StoreResult<usize>;
     async fn cleanup_expired_provider_pull_queue(
         &self,
         before_ts: i64,

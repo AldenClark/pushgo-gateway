@@ -413,16 +413,14 @@
             </tr>
             <tr>
               <td><code>op_id</code></td>
-              <td>否<br />No</td>
+              <td>否，且禁止传入<br />No, forbidden</td>
               <td>string | null</td>
               <td>
-                调用方幂等键（可选）。若传入则按传入值使用（1-128
-                字符，仅允许字母数字和
-                <code>_:-</code
-                >）；若缺失则由网关自动生成并在响应中回传。<br />Caller
-                idempotency key (optional). If provided, gateway uses it as-is
-                (1-128 chars; letters, digits, and <code>_:-</code> only); if
-                omitted, gateway generates one and echoes it in response.
+                <code>op_id</code> 是 Gateway 生成的发送流水号，发送端请求不得传入。
+                若传入，Gateway 返回 <code>400 op_id_not_allowed</code>。<br />
+                <code>op_id</code> is a gateway-generated send operation id.
+                Sender requests must not provide it; if provided, gateway
+                returns <code>400 op_id_not_allowed</code>.
               </td>
             </tr>
           </tbody>
@@ -469,7 +467,7 @@
 {
   "success": true,
   "data": {
-    "op_id": "op-message-20260219-0001",
+    "op_id": "00191a2050440-0123456789abcdef0123456789abcdef",
     "message_id": "8a1fc4b3d9f04fd2857f92f66f7cc5d1"
   }
 }</pre
@@ -788,14 +786,9 @@
           </thead>
           <tbody>
             <tr>
-              <td><code>channel_id</code></td>
-              <td>string</td>
-              <td>规范化频道 ID。<br />Normalized channel ID.</td>
-            </tr>
-            <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
             <tr>
               <td><code>message_id</code></td>
@@ -807,6 +800,67 @@
             </tr>
           </tbody>
         </table>
+      </section>
+
+      <section id="send-status">
+        <h2>发送状态查询<br />Send Status Query</h2>
+        <p>
+          <strong>GET</strong> <code>/send_status/{op_id}</code>
+          查询单次发送的粗粒度状态。该接口只接受 Gateway 返回的
+          <code>op_id</code>，不支持按频道、设备、payload 或 provider 信息查询。
+          <br />
+          Query a coarse sender-facing status for one send operation. The only
+          lookup key is the gateway-returned <code>op_id</code>; channel,
+          device, payload, and provider details are intentionally not exposed.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>响应字段<br />Response field</th>
+              <th>类型<br />Type</th>
+              <th>说明<br />Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>op_id</code></td>
+              <td>string</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
+            </tr>
+            <tr>
+              <td><code>status</code></td>
+              <td>string</td>
+              <td>
+                <code>accepted</code>, <code>processing</code>, <code>sent</code>,
+                <code>partially_failed</code>, 或 <code>failed</code>。<br />
+                One of <code>accepted</code>, <code>processing</code>,
+                <code>sent</code>, <code>partially_failed</code>, or
+                <code>failed</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>model</code></td>
+              <td>string</td>
+              <td><code>message</code>, <code>event</code>, 或 <code>thing</code>。</td>
+            </tr>
+            <tr>
+              <td><code>entity_id</code></td>
+              <td>string</td>
+              <td>本次发送对应的技术实体 ID。<br />Technical entity id for this send.</td>
+            </tr>
+            <tr>
+              <td><code>accepted_at/updated_at/expires_at</code></td>
+              <td>integer</td>
+              <td>毫秒时间戳。<br />Millisecond timestamps.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          状态记录会按维护清理策略自动过期；过期或不存在时返回
+          <code>404 send_status_not_found</code>。<br />
+          Status records expire through maintenance cleanup; expired or missing
+          records return <code>404 send_status_not_found</code>.
+        </p>
       </section>
 
       <section id="event">
@@ -972,7 +1026,7 @@
             <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
           </tbody>
         </table>
@@ -1118,7 +1172,7 @@
             <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
           </tbody>
         </table>
@@ -1244,7 +1298,7 @@
             <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
           </tbody>
         </table>
@@ -1396,7 +1450,7 @@
             <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
           </tbody>
         </table>
@@ -1528,7 +1582,7 @@
             <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
           </tbody>
         </table>
@@ -1660,7 +1714,7 @@
             <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
           </tbody>
         </table>
@@ -1798,7 +1852,7 @@
             <tr>
               <td><code>op_id</code></td>
               <td>string</td>
-              <td>回传幂等键。<br />Echoed idempotency key.</td>
+              <td>Gateway 生成的发送流水号。<br />Gateway-generated send operation id.</td>
             </tr>
           </tbody>
         </table>

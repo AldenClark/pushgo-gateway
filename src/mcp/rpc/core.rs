@@ -337,7 +337,7 @@ impl McpRpcService<'_> {
                 "properties": {
                   "channel_id": {"type":"string","description":"目标频道 ID"},
                   "password": {"type":"string","description":"legacy 模式必填，OAuth2 模式禁止"},
-                  "op_id": {"type":"string","description":"可选幂等键，不传由 gateway 生成"},
+                  "op_id": {"type":"string","description":"禁止传入；op_id 由 gateway 生成并在响应中返回"},
                   "thing_id": {"type":"string","description":"可选 thing 作用域"},
                   "occurred_at": {"type":"integer","description":"可选，支持 Unix 秒/毫秒时间戳，网关归一化为毫秒"},
                   "title": {"type":"string","description":"标题"},

@@ -547,7 +547,7 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         MessageSendCommand {
             channel_id: channel_id.clone(),
             password: channel_password.to_string(),
-            op_id: Some("mqtt-flow-downlink".to_string()),
+            op_id: None,
             thing_id: None,
             occurred_at: None,
             title: "MQTT downlink".to_string(),
@@ -903,6 +903,11 @@ async fn mqtt_publish_connect_ignores_client_id_and_can_publish_without_route() 
         Packet::PubAck(puback) => {
             assert_eq!(puback.pkid, 41);
             assert_eq!(puback.reason, PubAckReason::Success);
+            let props = puback.properties.expect("puback should include props");
+            assert!(
+                user_property(&props.user_properties, "pushgo-op-id").is_some(),
+                "successful mqtt publish should return gateway op_id"
+            );
         }
         packet => panic!("expected PUBACK success, got {packet:?}"),
     }
@@ -925,7 +930,6 @@ async fn mqtt_publish_accepts_event_and_thing_payloads() {
                 "event",
                 "create",
                 serde_json::json!({
-                    "op_id": "mqtt-event-op",
                     "event_time": 1_710_000_000,
                     "title": "event over mqtt"
                 }),
@@ -937,7 +941,6 @@ async fn mqtt_publish_accepts_event_and_thing_payloads() {
                 "thing",
                 "update",
                 serde_json::json!({
-                    "op_id": "mqtt-thing-op",
                     "thing_id": "thing-1",
                     "observed_at": 1_710_000_001,
                     "title": "thing over mqtt"

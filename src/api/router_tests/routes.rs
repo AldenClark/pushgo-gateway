@@ -182,7 +182,7 @@ async fn mqtt_private_device_without_active_receiver_is_accepted_without_private
 }
 
 #[tokio::test]
-async fn message_route_reuses_entity_for_duplicate_finalized_op() {
+async fn message_route_generates_new_op_and_entity_for_repeated_submit() {
     let state = build_test_state().await;
     let channel_id = seed_provider_channel_for_router_test(
         &state,
@@ -198,7 +198,6 @@ async fn message_route_reuses_entity_for_duplicate_finalized_op() {
     let payload = json!({
         "channel_id": channel_id,
         "password": "password-1234",
-        "op_id": "router-duplicate-message-op",
         "title": "deduped"
     });
 
@@ -209,7 +208,7 @@ async fn message_route_reuses_entity_for_duplicate_finalized_op() {
     assert_eq!(
         second_status,
         StatusCode::OK,
-        "duplicate submit: {second_body:?}"
+        "repeated submit: {second_body:?}"
     );
     let first_data = first_body
         .get("data")
@@ -231,16 +230,98 @@ async fn message_route_reuses_entity_for_duplicate_finalized_op() {
         first_data.get("channel_id").is_none(),
         "send response should not echo channel_id"
     );
-    assert_eq!(
-        first_data.get("message_id"),
-        second_data.get("message_id"),
-        "duplicate completed submit should reuse the original semantic message id"
+    assert!(
+        first_data.get("message_id") != second_data.get("message_id"),
+        "repeated submit should create a new semantic message id"
     );
-    assert_eq!(
-        first_data.get("op_id"),
-        second_data.get("op_id"),
-        "duplicate completed submit should preserve the external op_id"
+    assert!(
+        first_data.get("op_id") != second_data.get("op_id"),
+        "repeated submit should create a new gateway op_id"
     );
+}
+
+#[tokio::test]
+async fn message_route_rejects_sender_provided_op_id() {
+    let state = build_test_state().await;
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "router-op-id-rejected-device",
+        "router-op-id-rejected",
+        "password-1234",
+        "router-op-id-rejected-provider-token",
+        Platform::ANDROID,
+    )
+    .await
+    .to_string();
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let payload = json!({
+        "channel_id": channel_id,
+        "password": "password-1234",
+        "op_id": "sender-provided-op",
+        "title": "must reject"
+    });
+
+    let (status, body) = post_json(app, "/message", payload).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body:?}");
+    assert_eq!(
+        body.get("error_code").and_then(Value::as_str),
+        Some("op_id_not_allowed")
+    );
+}
+
+#[tokio::test]
+async fn send_status_route_returns_sender_facing_status_by_op_id() {
+    let state = build_test_state().await;
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "router-send-status-device",
+        "router-send-status",
+        "password-1234",
+        "router-send-status-provider-token",
+        Platform::ANDROID,
+    )
+    .await
+    .to_string();
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let payload = json!({
+        "channel_id": channel_id,
+        "password": "password-1234",
+        "title": "status query"
+    });
+
+    let (submit_status, submit_body) = post_json(app.clone(), "/message", payload).await;
+    assert_eq!(
+        submit_status,
+        StatusCode::OK,
+        "submit response: {submit_body:?}"
+    );
+    let op_id = submit_body
+        .get("data")
+        .and_then(|data| data.get("op_id"))
+        .and_then(Value::as_str)
+        .expect("submit should return op_id");
+
+    let (status, body) = get_json(app, format!("/send_status/{op_id}").as_str()).await;
+
+    assert_eq!(status, StatusCode::OK, "status response: {body:?}");
+    let data = body
+        .get("data")
+        .and_then(Value::as_object)
+        .expect("status response should include data");
+    assert_eq!(data.get("op_id").and_then(Value::as_str), Some(op_id));
+    let status = data
+        .get("status")
+        .and_then(Value::as_str)
+        .expect("status should be present");
+    assert!(
+        matches!(status, "sent" | "partially_failed" | "failed"),
+        "unexpected sender-facing status: {status}"
+    );
+    assert_eq!(data.get("model").and_then(Value::as_str), Some("message"));
+    assert!(data.get("entity_id").and_then(Value::as_str).is_some());
+    assert!(data.get("channel_id").is_none());
+    assert!(data.get("dispatch_status").is_none());
 }
 
 #[tokio::test]

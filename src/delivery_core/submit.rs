@@ -10,10 +10,11 @@ use super::{
     },
     error::CoreError,
     execution::request::{DispatchEventInput, DispatchMessageInput, DispatchThingInput},
-    response::{DeliverySummary, EntityRef, SubmitResult},
+    response::{DeliveryDispatchStatus, DeliverySummary, EntityRef, SubmitResult},
     source::IngressSource,
-    store::idempotency::IdempotencyStore,
+    store::{idempotency::IdempotencyStore, sender_status::SenderStatusStore},
 };
+use crate::storage::{SenderSubmitStatusKind, SenderSubmitStatusRecord};
 
 pub(crate) struct SubmitContext<'a> {
     pub(crate) runtime: &'a dyn SubmitRuntime,
@@ -48,6 +49,10 @@ pub(crate) struct AuthorizedSubmitChannel {
 #[async_trait]
 pub(crate) trait SubmitRuntime: Send + Sync {
     fn idempotency_store(&self) -> &(dyn IdempotencyStore + Send + Sync);
+
+    fn sender_status_store(&self) -> &(dyn SenderStatusStore + Send + Sync);
+
+    fn sender_status_retention_millis(&self) -> i64;
 
     async fn authorize_channel_by_password(
         &self,
@@ -111,10 +116,24 @@ pub(crate) async fn submit_command(
             .await
         }
         DomainCommandInput::Event(event) => {
-            submit_event(ctx.runtime, command.channel, command.auth, *event).await
+            submit_event(
+                ctx.runtime,
+                ctx.now_millis,
+                command.channel,
+                command.auth,
+                *event,
+            )
+            .await
         }
         DomainCommandInput::Thing(thing) => {
-            submit_thing(ctx.runtime, command.channel, command.auth, *thing).await
+            submit_thing(
+                ctx.runtime,
+                ctx.now_millis,
+                command.channel,
+                command.auth,
+                *thing,
+            )
+            .await
         }
     }
 }
@@ -180,10 +199,22 @@ async fn submit_message(
     };
     let alert = projection.alert;
     let delivery_policy = projection.delivery_policy;
-    let output = runtime
+    let op_id = normalized.op_id.clone();
+    let entity_id = message_id.clone();
+    record_sender_status_accepted(
+        runtime,
+        now_millis,
+        &op_id,
+        authorized_channel.channel_id,
+        "message",
+        &entity_id,
+    )
+    .await?;
+    record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    let output = match runtime
         .dispatch_message(DispatchMessageInput {
             authorized_channel: authorized_channel.clone(),
-            op_id: Some(normalized.op_id),
+            op_id: Some(op_id.clone()),
             thing_id: scoped_thing_id.clone(),
             occurred_at: Some(normalized.occurred_at),
             title: alert.title.unwrap_or_default(),
@@ -195,8 +226,16 @@ async fn submit_message(
             delivery_policy,
             message_id: message_id.clone(),
         })
-        .await?;
+        .await
+    {
+        Ok(delivery) => delivery,
+        Err(err) => {
+            record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            return Err(err);
+        }
+    };
     let delivery = output;
+    record_sender_status_finished(runtime, now_millis, &delivery).await?;
     let delivery_id = delivery.delivery_id.clone();
     let acceptance = delivery.submit_acceptance();
     let result = SubmitResult {
@@ -215,6 +254,7 @@ async fn submit_message(
 
 async fn submit_event(
     runtime: &dyn SubmitRuntime,
+    now_millis: i64,
     channel: ChannelSelector,
     auth: SubmitAuth,
     input: EventInput,
@@ -226,6 +266,7 @@ async fn submit_event(
             runtime.idempotency_store(),
             authorized_channel.channel_id,
             authorized_channel.channel_id_text.clone(),
+            now_millis,
         )
         .await?;
     let projection = normalized.command.projection;
@@ -236,10 +277,22 @@ async fn submit_event(
     };
     let alert = projection.alert;
     let delivery_policy = projection.delivery_policy;
-    let delivery = runtime
+    let op_id = normalized.op_id.clone();
+    let entity_id = event_id.clone();
+    record_sender_status_accepted(
+        runtime,
+        now_millis,
+        &op_id,
+        authorized_channel.channel_id,
+        "event",
+        &entity_id,
+    )
+    .await?;
+    record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    let delivery = match runtime
         .dispatch_event(DispatchEventInput {
             authorized_channel: authorized_channel.clone(),
-            op_id: normalized.op_id.clone(),
+            op_id: op_id.clone(),
             occurred_at: normalized.occurred_at,
             title: alert.title,
             body: alert.body,
@@ -248,7 +301,15 @@ async fn submit_event(
             delivery_policy,
             event_id: event_id.clone(),
         })
-        .await?;
+        .await
+    {
+        Ok(delivery) => delivery,
+        Err(err) => {
+            record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            return Err(err);
+        }
+    };
+    record_sender_status_finished(runtime, now_millis, &delivery).await?;
     let delivery_id = delivery.delivery_id.clone();
     let acceptance = delivery.submit_acceptance();
     Ok(SubmitResult {
@@ -263,6 +324,7 @@ async fn submit_event(
 
 async fn submit_thing(
     runtime: &dyn SubmitRuntime,
+    now_millis: i64,
     channel: ChannelSelector,
     auth: SubmitAuth,
     input: ThingInput,
@@ -274,6 +336,7 @@ async fn submit_thing(
             runtime.idempotency_store(),
             authorized_channel.channel_id,
             authorized_channel.channel_id_text.clone(),
+            now_millis,
         )
         .await?;
     let projection = normalized.command.projection;
@@ -284,10 +347,22 @@ async fn submit_thing(
     };
     let alert = projection.alert;
     let delivery_policy = projection.delivery_policy;
-    let delivery = runtime
+    let op_id = normalized.op_id.clone();
+    let entity_id = thing_id.clone();
+    record_sender_status_accepted(
+        runtime,
+        now_millis,
+        &op_id,
+        authorized_channel.channel_id,
+        "thing",
+        &entity_id,
+    )
+    .await?;
+    record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    let delivery = match runtime
         .dispatch_thing(DispatchThingInput {
             authorized_channel: authorized_channel.clone(),
-            op_id: normalized.op_id.clone(),
+            op_id: op_id.clone(),
             occurred_at: normalized.occurred_at,
             title: alert.title,
             body: alert.body,
@@ -296,7 +371,15 @@ async fn submit_thing(
             delivery_policy,
             thing_id: thing_id.clone(),
         })
-        .await?;
+        .await
+    {
+        Ok(delivery) => delivery,
+        Err(err) => {
+            record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            return Err(err);
+        }
+    };
+    record_sender_status_finished(runtime, now_millis, &delivery).await?;
     let delivery_id = delivery.delivery_id.clone();
     let acceptance = delivery.submit_acceptance();
     Ok(SubmitResult {
@@ -307,6 +390,85 @@ async fn submit_thing(
         acceptance,
         summary: delivery,
     })
+}
+
+async fn record_sender_status_accepted(
+    runtime: &dyn SubmitRuntime,
+    now_millis: i64,
+    op_id: &str,
+    channel_id: [u8; 16],
+    model: &'static str,
+    entity_id: &str,
+) -> Result<(), CoreError> {
+    let retention = runtime.sender_status_retention_millis().max(1);
+    let record = SenderSubmitStatusRecord {
+        op_id: op_id.to_string(),
+        channel_id,
+        model: model.to_string(),
+        entity_id: entity_id.to_string(),
+        status: SenderSubmitStatusKind::Accepted,
+        dispatch_status: None,
+        accepted_at: now_millis,
+        updated_at: now_millis,
+        expires_at: now_millis.saturating_add(retention),
+    };
+    runtime
+        .sender_status_store()
+        .upsert_sender_submit_status(&record)
+        .await
+        .map_err(|err| CoreError::Store(err.to_string()))
+}
+
+async fn record_sender_status_processing(
+    runtime: &dyn SubmitRuntime,
+    now_millis: i64,
+    op_id: &str,
+) -> Result<(), CoreError> {
+    runtime
+        .sender_status_store()
+        .update_sender_submit_status(op_id, SenderSubmitStatusKind::Processing, None, now_millis)
+        .await
+        .map_err(|err| CoreError::Store(err.to_string()))
+}
+
+async fn record_sender_status_finished(
+    runtime: &dyn SubmitRuntime,
+    now_millis: i64,
+    delivery: &DeliverySummary,
+) -> Result<(), CoreError> {
+    let status = sender_status_from_dispatch(delivery.dispatch_status);
+    runtime
+        .sender_status_store()
+        .update_sender_submit_status(
+            delivery.op_id.as_str(),
+            status,
+            Some(delivery.dispatch_status.as_str()),
+            now_millis,
+        )
+        .await
+        .map_err(|err| CoreError::Store(err.to_string()))
+}
+
+async fn record_sender_status_failed(
+    runtime: &dyn SubmitRuntime,
+    now_millis: i64,
+    op_id: &str,
+) -> Result<(), CoreError> {
+    runtime
+        .sender_status_store()
+        .update_sender_submit_status(op_id, SenderSubmitStatusKind::Failed, None, now_millis)
+        .await
+        .map_err(|err| CoreError::Store(err.to_string()))
+}
+
+fn sender_status_from_dispatch(status: DeliveryDispatchStatus) -> SenderSubmitStatusKind {
+    match status {
+        DeliveryDispatchStatus::AttemptedAccepted => SenderSubmitStatusKind::Sent,
+        DeliveryDispatchStatus::AttemptedPartialFailure => SenderSubmitStatusKind::PartiallyFailed,
+        DeliveryDispatchStatus::NotAttempted | DeliveryDispatchStatus::PrivateQueueTooBusy => {
+            SenderSubmitStatusKind::Failed
+        }
+    }
 }
 
 async fn resolve_authorized_channel(
@@ -354,8 +516,12 @@ mod tests {
         delivery_core::{
             execution::request::{DispatchEventInput, DispatchMessageInput, DispatchThingInput},
             response::{DeliveryDedupeStatus, DeliveryDispatchStatus, SubmitAcceptance},
+            store::sender_status::SenderStatusStore,
         },
-        storage::{OpDedupeReservation, SemanticIdReservation, StoreResult},
+        storage::{
+            OpDedupeReservation, SemanticIdReservation, SenderSubmitStatusKind,
+            SenderSubmitStatusRecord, StoreResult,
+        },
     };
 
     struct FakeIdempotencyStore;
@@ -397,6 +563,14 @@ mod tests {
     impl SubmitRuntime for PendingDuplicateRuntime {
         fn idempotency_store(&self) -> &(dyn IdempotencyStore + Send + Sync) {
             &FakeIdempotencyStore
+        }
+
+        fn sender_status_store(&self) -> &(dyn SenderStatusStore + Send + Sync) {
+            &FakeSenderStatusStore
+        }
+
+        fn sender_status_retention_millis(&self) -> i64 {
+            30_000
         }
 
         async fn authorize_channel_by_password(
@@ -489,7 +663,7 @@ mod tests {
                 },
                 channel: ChannelSelector::ChannelId("channel".to_string()),
                 command: DomainCommandInput::Message(Box::new(MessageInput {
-                    op_id: Some("pending-op".to_string()),
+                    op_id: None,
                     thing_id: None,
                     occurred_at: None,
                     title: "pending title".to_string(),
@@ -513,5 +687,27 @@ mod tests {
             result.summary.failure_error_message(),
             Some("notification dispatch is already pending")
         );
+    }
+
+    struct FakeSenderStatusStore;
+
+    #[async_trait]
+    impl SenderStatusStore for FakeSenderStatusStore {
+        async fn upsert_sender_submit_status(
+            &self,
+            _record: &SenderSubmitStatusRecord,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+
+        async fn update_sender_submit_status(
+            &self,
+            _op_id: &str,
+            _status: SenderSubmitStatusKind,
+            _dispatch_status: Option<&str>,
+            _updated_at: i64,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
     }
 }

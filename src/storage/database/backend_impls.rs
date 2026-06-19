@@ -553,6 +553,45 @@ macro_rules! impl_backend_system_state_access {
                 <$backend>::save_mcp_state_json(self, state_json).await
             }
 
+            async fn upsert_sender_submit_status(
+                &self,
+                record: &SenderSubmitStatusRecord,
+            ) -> StoreResult<()> {
+                <$backend>::upsert_sender_submit_status(self, record).await
+            }
+
+            async fn update_sender_submit_status(
+                &self,
+                op_id: &str,
+                status: SenderSubmitStatusKind,
+                dispatch_status: Option<&str>,
+                updated_at: i64,
+            ) -> StoreResult<()> {
+                <$backend>::update_sender_submit_status(
+                    self,
+                    op_id,
+                    status,
+                    dispatch_status,
+                    updated_at,
+                )
+                .await
+            }
+
+            async fn load_sender_submit_status(
+                &self,
+                op_id: &str,
+            ) -> StoreResult<Option<SenderSubmitStatusRecord>> {
+                <$backend>::load_sender_submit_status(self, op_id).await
+            }
+
+            async fn cleanup_sender_submit_status(
+                &self,
+                now: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_sender_submit_status(self, now, limit).await
+            }
+
             async fn cleanup_expired_provider_pull_queue(
                 &self,
                 before_ts: i64,

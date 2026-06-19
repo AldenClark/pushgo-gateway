@@ -19,6 +19,37 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, save_mcp_state_json(state_json))
     }
 
+    async fn upsert_sender_submit_status(
+        &self,
+        record: &SenderSubmitStatusRecord,
+    ) -> StoreResult<()> {
+        delegate_db_async!(self, upsert_sender_submit_status(record))
+    }
+
+    async fn update_sender_submit_status(
+        &self,
+        op_id: &str,
+        status: SenderSubmitStatusKind,
+        dispatch_status: Option<&str>,
+        updated_at: i64,
+    ) -> StoreResult<()> {
+        delegate_db_async!(
+            self,
+            update_sender_submit_status(op_id, status, dispatch_status, updated_at)
+        )
+    }
+
+    async fn load_sender_submit_status(
+        &self,
+        op_id: &str,
+    ) -> StoreResult<Option<SenderSubmitStatusRecord>> {
+        delegate_db_async!(self, load_sender_submit_status(op_id))
+    }
+
+    async fn cleanup_sender_submit_status(&self, now: i64, limit: usize) -> StoreResult<usize> {
+        delegate_db_async!(self, cleanup_sender_submit_status(now, limit))
+    }
+
     async fn cleanup_expired_provider_pull_queue(
         &self,
         before_ts: i64,
