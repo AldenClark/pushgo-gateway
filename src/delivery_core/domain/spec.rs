@@ -17,9 +17,9 @@ pub(crate) enum DomainActionKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EntityIdKind {
-    MessageId,
-    EventId,
-    ThingId,
+    Message,
+    Event,
+    Thing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +47,7 @@ mod tests {
         assert_eq!(message.action, DomainActionKind::Send);
         assert_contains(message.required_fields, "title");
         assert_contains(message.forbidden_fields, "message_id");
-        assert_eq!(message.generated_id, Some(EntityIdKind::MessageId));
+        assert_eq!(message.generated_id, Some(EntityIdKind::Message));
         assert_eq!(message.required_existing_id, None);
 
         let event_specs = [
@@ -56,14 +56,14 @@ mod tests {
             EventCommandKind::Close.spec(),
         ];
         assert_eq!(event_specs.len(), 3);
-        assert_eq!(event_specs[0].generated_id, Some(EntityIdKind::EventId));
+        assert_eq!(event_specs[0].generated_id, Some(EntityIdKind::Event));
         assert_contains(event_specs[0].forbidden_fields, "event_id");
         for spec in event_specs {
             assert_eq!(spec.model, DomainModelKind::Event);
             assert_eq!(spec.required_time_field, Some("event_time"));
             assert_contains(spec.required_fields, "event_time");
             if spec.action != DomainActionKind::Create {
-                assert_eq!(spec.required_existing_id, Some(EntityIdKind::EventId));
+                assert_eq!(spec.required_existing_id, Some(EntityIdKind::Event));
                 assert_contains(spec.required_fields, "event_id");
             }
         }
@@ -75,14 +75,14 @@ mod tests {
             ThingCommandKind::Delete.spec(),
         ];
         assert_eq!(thing_specs.len(), 4);
-        assert_eq!(thing_specs[0].generated_id, Some(EntityIdKind::ThingId));
+        assert_eq!(thing_specs[0].generated_id, Some(EntityIdKind::Thing));
         assert_contains(thing_specs[0].forbidden_fields, "thing_id");
         for spec in thing_specs {
             assert_eq!(spec.model, DomainModelKind::Thing);
             assert_eq!(spec.required_time_field, Some("observed_at"));
             assert_contains(spec.required_fields, "observed_at");
             if spec.action != DomainActionKind::Create {
-                assert_eq!(spec.required_existing_id, Some(EntityIdKind::ThingId));
+                assert_eq!(spec.required_existing_id, Some(EntityIdKind::Thing));
                 assert_contains(spec.required_fields, "thing_id");
             }
         }

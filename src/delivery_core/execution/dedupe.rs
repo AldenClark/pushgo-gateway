@@ -117,7 +117,7 @@ impl DispatchOpGuard {
                 created_at,
             )
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::ERROR,
@@ -126,7 +126,6 @@ impl DispatchOpGuard {
                     reserved_delivery_id = %(crate::util::redact_text(reserved_delivery_id.as_str())),
                     error = %(err.message.as_str())
                 );
-                err
             })?;
 
         let decision = match reservation {
@@ -215,7 +214,7 @@ impl DispatchOpGuard {
                 let marked = store
                     .mark_op_finalized(self.dedupe_key.as_str(), delivery_id, dispatch_status)
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         ::tracing::event!(
                             target: "gateway.trace_event",
                             ::tracing::Level::ERROR,
@@ -225,7 +224,6 @@ impl DispatchOpGuard {
                             finalized_delivery_id = %(crate::util::redact_text(delivery_id)),
                             error = %(err.message.as_str())
                         );
-                        err
                     })?;
                 if !marked {
                     ::tracing::event!(
@@ -254,7 +252,7 @@ impl DispatchOpGuard {
                 store
                     .clear_op_pending(self.dedupe_key.as_str(), self.reserved_delivery_id.as_str())
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         ::tracing::event!(
                             target: "gateway.trace_event",
                             ::tracing::Level::ERROR,
@@ -263,7 +261,6 @@ impl DispatchOpGuard {
                             reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
                             error = %(err.message.as_str())
                         );
-                        err
                     })?;
                 ::tracing::event!(
                     target: "gateway.trace_event",

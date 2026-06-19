@@ -173,7 +173,7 @@ pub(crate) fn prepare_dispatch_core(
                     continue;
                 }
                 let info =
-                    DeviceInfo::from_token(platform, provider_token.as_str()).map_err(|err| {
+                    DeviceInfo::from_token(platform, provider_token.as_str()).inspect_err(|err| {
                         ::tracing::event!(
                             target: "gateway.trace_event",
                             ::tracing::Level::WARN,
@@ -186,7 +186,6 @@ pub(crate) fn prepare_dispatch_core(
                             platform = %(platform.name()),
                             error = %(err.to_string())
                         );
-                        err
                     });
                 let Ok(info) = info else {
                     provider_preparation_failed = provider_preparation_failed.saturating_add(1);

@@ -70,7 +70,7 @@ impl MessageSend {
         action: DomainActionKind::Send,
         required_fields: &["title"],
         forbidden_fields: &["message_id"],
-        generated_id: Some(EntityIdKind::MessageId),
+        generated_id: Some(EntityIdKind::Message),
         required_existing_id: None,
         required_time_field: None,
     };

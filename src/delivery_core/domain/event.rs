@@ -334,7 +334,7 @@ impl EventCommandKind {
         action: DomainActionKind::Create,
         required_fields: &["event_time"],
         forbidden_fields: &["event_id"],
-        generated_id: Some(EntityIdKind::EventId),
+        generated_id: Some(EntityIdKind::Event),
         required_existing_id: None,
         required_time_field: Some("event_time"),
     };
@@ -345,7 +345,7 @@ impl EventCommandKind {
         required_fields: &["event_id", "event_time"],
         forbidden_fields: &[],
         generated_id: None,
-        required_existing_id: Some(EntityIdKind::EventId),
+        required_existing_id: Some(EntityIdKind::Event),
         required_time_field: Some("event_time"),
     };
 
@@ -355,7 +355,7 @@ impl EventCommandKind {
         required_fields: &["event_id", "event_time"],
         forbidden_fields: &[],
         generated_id: None,
-        required_existing_id: Some(EntityIdKind::EventId),
+        required_existing_id: Some(EntityIdKind::Event),
         required_time_field: Some("event_time"),
     };
 

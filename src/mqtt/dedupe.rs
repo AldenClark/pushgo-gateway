@@ -28,10 +28,10 @@ impl MqttPublishDedupe {
         let expires_at = now_millis + MQTT_QOS1_FALLBACK_DEDUPE_TTL_MILLIS;
         self.prune_expired(now_millis);
         let key = key.to_key();
-        if let Some(existing) = self.entries.get(key.as_str()) {
-            if *existing > now_millis {
-                return MqttPublishDedupeDecision::Duplicate;
-            }
+        if let Some(existing) = self.entries.get(key.as_str())
+            && *existing > now_millis
+        {
+            return MqttPublishDedupeDecision::Duplicate;
         }
         self.entries.insert(key, expires_at);
         MqttPublishDedupeDecision::Proceed

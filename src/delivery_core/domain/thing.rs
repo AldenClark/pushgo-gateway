@@ -309,7 +309,7 @@ impl ThingCommandKind {
         action: DomainActionKind::Create,
         required_fields: &["observed_at"],
         forbidden_fields: &["thing_id"],
-        generated_id: Some(EntityIdKind::ThingId),
+        generated_id: Some(EntityIdKind::Thing),
         required_existing_id: None,
         required_time_field: Some("observed_at"),
     };
@@ -320,7 +320,7 @@ impl ThingCommandKind {
         required_fields: &["thing_id", "observed_at"],
         forbidden_fields: &[],
         generated_id: None,
-        required_existing_id: Some(EntityIdKind::ThingId),
+        required_existing_id: Some(EntityIdKind::Thing),
         required_time_field: Some("observed_at"),
     };
 
@@ -330,7 +330,7 @@ impl ThingCommandKind {
         required_fields: &["thing_id", "observed_at"],
         forbidden_fields: &[],
         generated_id: None,
-        required_existing_id: Some(EntityIdKind::ThingId),
+        required_existing_id: Some(EntityIdKind::Thing),
         required_time_field: Some("observed_at"),
     };
 
@@ -340,7 +340,7 @@ impl ThingCommandKind {
         required_fields: &["thing_id", "observed_at"],
         forbidden_fields: &[],
         generated_id: None,
-        required_existing_id: Some(EntityIdKind::ThingId),
+        required_existing_id: Some(EntityIdKind::Thing),
         required_time_field: Some("observed_at"),
     };
 
