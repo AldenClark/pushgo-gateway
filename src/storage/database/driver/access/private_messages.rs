@@ -158,10 +158,11 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         delegate_db_async!(
             self,
-            claim_private_outbox_due(before_ts, limit, claim_until_ts)
+            claim_private_outbox_due(before_ts, limit, claim_until_ts, worker_id)
         )
     }
 
@@ -171,10 +172,17 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         delegate_db_async!(
             self,
-            claim_private_outbox_due_for_device(device_id, before_ts, limit, claim_until_ts)
+            claim_private_outbox_due_for_device(
+                device_id,
+                before_ts,
+                limit,
+                claim_until_ts,
+                worker_id
+            )
         )
     }
 

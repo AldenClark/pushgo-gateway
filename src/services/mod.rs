@@ -3,7 +3,8 @@ mod device;
 mod message;
 
 pub(crate) use channel::{
-    ChannelSubscribeCommand, ChannelUnsubscribeCommand, subscribe_private_device_to_channel,
+    ChannelCommandSource, ChannelSubscribeCommand, ChannelUnsubscribeCommand,
+    record_route_activity_for_device_key, subscribe_private_device_to_channel,
     unsubscribe_private_device_from_channel,
 };
 pub(crate) use device::{DeviceRegisterCommand, ensure_device_registered};

@@ -1,11 +1,10 @@
 use crate::{
-    api::handlers::core::channels::{
-        audit::append_subscription_audit, private_cleanup::clear_private_pending_for_channel,
-    },
+    api::handlers::core::channels::private_cleanup::clear_private_pending_for_channel,
     api::{ChannelAlias, ChannelId, ChannelPassword, Error},
     app::AppState,
     routing::{DeviceChannelType, derive_private_device_id},
     storage::DeviceRouteRecordRow,
+    storage::PrivateDeviceId,
     value::DeviceKeyRef,
 };
 
@@ -15,7 +14,7 @@ pub(crate) struct ChannelSubscribeCommand {
     pub channel_id: Option<String>,
     pub channel_name: Option<String>,
     pub password: String,
-    pub source: &'static str,
+    pub source: ChannelCommandSource,
     pub allow_create_channel: bool,
 }
 
@@ -31,13 +30,28 @@ pub(crate) struct ChannelSubscribeOutcome {
 pub(crate) struct ChannelUnsubscribeCommand {
     pub device_key: String,
     pub channel_id: String,
-    pub source: &'static str,
+    pub source: ChannelCommandSource,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelUnsubscribeOutcome {
     pub channel_id: String,
     pub removed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChannelCommandSource {
+    Http,
+    Mqtt,
+}
+
+impl ChannelCommandSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Mqtt => "mqtt",
+        }
+    }
 }
 
 pub(crate) async fn subscribe_private_device_to_channel(
@@ -103,14 +117,14 @@ pub(crate) async fn subscribe_private_device_to_channel(
         .store
         .private_subscribe_channel(outcome.channel_id, device_id)
         .await?;
-    append_subscription_audit(
-        state,
-        outcome.channel_id,
-        device_key.as_str(),
-        subscription_action("subscribe", command.source),
-        &route,
-    )
-    .await?;
+    state
+        .store
+        .record_device_activity_best_effort(
+            device_id,
+            chrono::Utc::now().timestamp_millis(),
+            "private_channel_subscribe",
+        )
+        .await;
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
@@ -119,7 +133,7 @@ pub(crate) async fn subscribe_private_device_to_channel(
         channel_id = %(crate::util::redact_text(ChannelId::from(outcome.channel_id).to_string())),
         created = (outcome.created),
         channel_type = %(route.channel_type.as_str()),
-        source = %(command.source)
+        source = %(command.source.as_str())
     );
     Ok(ChannelSubscribeOutcome {
         channel_id: ChannelId::from(outcome.channel_id).to_string(),
@@ -127,6 +141,23 @@ pub(crate) async fn subscribe_private_device_to_channel(
         created: outcome.created,
         subscribed: true,
     })
+}
+
+pub(crate) async fn record_route_activity_for_device_key(
+    state: &AppState,
+    device_key: &str,
+    reason: &'static str,
+) {
+    if let Some(device_key) = DeviceKeyRef::optional(Some(device_key)) {
+        state
+            .store
+            .record_device_activity_best_effort(
+                PrivateDeviceId::derive(device_key.as_str()).into(),
+                chrono::Utc::now().timestamp_millis(),
+                reason,
+            )
+            .await;
+    }
 }
 
 pub(crate) async fn unsubscribe_private_device_from_channel(
@@ -160,14 +191,6 @@ pub(crate) async fn unsubscribe_private_device_from_channel(
         .await?;
     let _cleared =
         clear_private_pending_for_channel(state, private_state, device_id, channel_id_raw).await?;
-    append_subscription_audit(
-        state,
-        channel_id_raw,
-        device_key.as_str(),
-        subscription_action("unsubscribe", command.source),
-        &route,
-    )
-    .await?;
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
@@ -176,23 +199,12 @@ pub(crate) async fn unsubscribe_private_device_from_channel(
         channel_id = %(crate::util::redact_text(ChannelId::from(channel_id_raw).to_string())),
         removed = true,
         channel_type = %(route.channel_type.as_str()),
-        source = %(command.source)
+        source = %(command.source.as_str())
     );
     Ok(ChannelUnsubscribeOutcome {
         channel_id: ChannelId::from(channel_id_raw).to_string(),
         removed: true,
     })
-}
-
-fn subscription_action(action: &'static str, source: &'static str) -> &'static str {
-    match (action, source) {
-        ("subscribe", "mqtt") => "mqtt_subscribe",
-        ("unsubscribe", "mqtt") => "mqtt_unsubscribe",
-        ("subscribe", _) => "subscribe",
-        ("unsubscribe", _) => "unsubscribe",
-        ("sync_subscribe", _) => "sync_subscribe",
-        _ => "unknown",
-    }
 }
 
 #[cfg(test)]
@@ -208,7 +220,7 @@ mod tests {
         private::{PrivateConfig, PrivateState, protocol::PrivatePayloadEnvelope},
         routing::{DeviceRegistry, DeviceRouteRecord},
         runtime_config::GatewayRuntimeProfile,
-        stats::StatsCollector,
+        runtime_counters::RuntimeCounterCollector,
         storage::{
             MaintenanceCleanupConfig, OUTBOX_STATUS_PENDING, Platform, PrivateMessage,
             PrivateOutboxEntry, Storage,
@@ -228,24 +240,23 @@ mod tests {
             let store = Storage::new(Some(db_url.as_str()))
                 .await
                 .expect("storage should initialize");
-            let stats = StatsCollector::spawn(store.clone());
+            let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
             let registry = Arc::new(DeviceRegistry::new());
             let private = Arc::new(PrivateState::new(
                 store.clone(),
                 test_private_config(),
                 Arc::clone(&registry),
-                Arc::clone(&stats),
+                Arc::clone(&runtime_counters),
             ));
             let (dispatch, _receivers) = DispatchChannels::new();
             let state = AppState {
                 dispatch,
                 auth: AuthMode::Disabled,
                 private_channel_enabled: true,
-                diagnostics_api_enabled: false,
                 public_base_url: None,
                 device_registry: registry,
                 device_operation_guards: Arc::new(DeviceOperationGuards::default()),
-                stats,
+                runtime_counters,
                 private_transport_profile: PrivateTransportProfile {
                     quic_enabled: false,
                     quic_port: None,
@@ -319,7 +330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_subscribe_service_reuses_route_persistence_and_audit() {
+    async fn private_subscribe_service_reuses_route_persistence() {
         let ctx = TestContext::new().await;
         let device_key = "mqtt-service-subscribe-device";
         ctx.restore_private_route(device_key).await;
@@ -331,7 +342,7 @@ mod tests {
                 channel_id: None,
                 channel_name: Some("mqtt-service-channel".to_string()),
                 password: "mqtt-pass-123".to_string(),
-                source: "mqtt",
+                source: ChannelCommandSource::Mqtt,
                 allow_create_channel: true,
             },
         )
@@ -366,7 +377,7 @@ mod tests {
                 channel_id: None,
                 channel_name: Some("mqtt-unsubscribe-channel".to_string()),
                 password: "mqtt-pass-456".to_string(),
-                source: "mqtt",
+                source: ChannelCommandSource::Mqtt,
                 allow_create_channel: true,
             },
         )
@@ -411,6 +422,7 @@ mod tests {
                     occurred_at: now,
                     created_at: now,
                     claimed_at: None,
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,
@@ -429,7 +441,7 @@ mod tests {
             ChannelUnsubscribeCommand {
                 device_key: device_key.to_string(),
                 channel_id: outcome.channel_id,
-                source: "mqtt",
+                source: ChannelCommandSource::Mqtt,
             },
         )
         .await

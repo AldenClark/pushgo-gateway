@@ -11,9 +11,6 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
-    "CREATE TABLE IF NOT EXISTS channel_stats_daily (channel_id BLOB NOT NULL, bucket_date TEXT NOT NULL, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_enqueued INTEGER NOT NULL DEFAULT 0, provider_attempted INTEGER NOT NULL DEFAULT 0, provider_failed INTEGER NOT NULL DEFAULT 0, provider_success INTEGER NOT NULL DEFAULT 0, private_realtime_delivered INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (channel_id, bucket_date))",
-    "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour TEXT PRIMARY KEY, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_outbox_depth_max INTEGER NOT NULL DEFAULT 0, dedupe_pending_max INTEGER NOT NULL DEFAULT 0, active_private_sessions_max INTEGER NOT NULL DEFAULT 0)",
-    "CREATE TABLE IF NOT EXISTS ops_stats_hourly (bucket_hour TEXT NOT NULL, metric_key TEXT NOT NULL, metric_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bucket_hour, metric_key))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
 ];
@@ -22,13 +19,10 @@ const SQLITE_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BLOB NOT NULL, key_id INTEGER NOT NULL, key_hash BLOB NOT NULL, issued_at INTEGER NOT NULL, valid_until INTEGER, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id TEXT PRIMARY KEY, device_id BLOB NOT NULL, expires_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
     "CREATE TABLE IF NOT EXISTS private_bindings (platform INTEGER NOT NULL, token_hash BLOB NOT NULL, device_id BLOB NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (platform, token_hash))",
     "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BLOB NOT NULL, device_id BLOB NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (channel_id, device_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
-    "CREATE TABLE IF NOT EXISTS device_route_audit (device_key TEXT NOT NULL, action TEXT NOT NULL, old_platform TEXT, new_platform TEXT, old_channel_type TEXT, new_channel_type TEXT, old_provider_token TEXT, new_provider_token TEXT, issue_reason TEXT, created_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS subscription_audit (channel_id BLOB NOT NULL, device_key TEXT NOT NULL, action TEXT NOT NULL, platform TEXT NOT NULL, channel_type TEXT NOT NULL, created_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS device_stats_daily (device_key TEXT NOT NULL, bucket_date TEXT NOT NULL, messages_received INTEGER NOT NULL DEFAULT 0, messages_acked INTEGER NOT NULL DEFAULT 0, private_connected_count INTEGER NOT NULL DEFAULT 0, private_pull_count INTEGER NOT NULL DEFAULT 0, provider_success_count INTEGER NOT NULL DEFAULT 0, provider_failure_count INTEGER NOT NULL DEFAULT 0, private_outbox_enqueued_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (device_key, bucket_date))",
 ];
 
 const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
@@ -58,7 +52,7 @@ const SQLITE_DISPATCH_INDEX_STATEMENTS: &[&str] = &[
 
 const SQLITE_DELIVERY_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
 ];
 
@@ -89,9 +83,6 @@ const SQLITE_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
     "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)",
     "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)",
-    "CREATE INDEX IF NOT EXISTS device_route_audit_device_created_idx ON device_route_audit (device_key, created_at)",
-    "CREATE INDEX IF NOT EXISTS subscription_audit_channel_created_idx ON subscription_audit (channel_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS subscription_audit_device_created_idx ON subscription_audit (device_key, created_at)",
 ];
 
 const SQLITE_RUNTIME_DROP_STATEMENTS: &[&str] = &[
@@ -106,18 +97,20 @@ const SQLITE_RUNTIME_DROP_STATEMENTS: &[&str] = &[
     "DROP TABLE IF EXISTS device_route_audit",
     "DROP TABLE IF EXISTS device_stats_daily",
 ];
-const SQLITE_TELEMETRY_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS channel_stats_daily (channel_id BLOB NOT NULL, bucket_date TEXT NOT NULL, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_enqueued INTEGER NOT NULL DEFAULT 0, provider_attempted INTEGER NOT NULL DEFAULT 0, provider_failed INTEGER NOT NULL DEFAULT 0, provider_success INTEGER NOT NULL DEFAULT 0, private_realtime_delivered INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (channel_id, bucket_date))",
-    "CREATE TABLE IF NOT EXISTS device_stats_daily (device_key TEXT NOT NULL, bucket_date TEXT NOT NULL, messages_received INTEGER NOT NULL DEFAULT 0, messages_acked INTEGER NOT NULL DEFAULT 0, private_connected_count INTEGER NOT NULL DEFAULT 0, private_pull_count INTEGER NOT NULL DEFAULT 0, provider_success_count INTEGER NOT NULL DEFAULT 0, provider_failure_count INTEGER NOT NULL DEFAULT 0, private_outbox_enqueued_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (device_key, bucket_date))",
-    "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour TEXT PRIMARY KEY, messages_routed INTEGER NOT NULL DEFAULT 0, deliveries_attempted INTEGER NOT NULL DEFAULT 0, deliveries_acked INTEGER NOT NULL DEFAULT 0, private_outbox_depth_max INTEGER NOT NULL DEFAULT 0, dedupe_pending_max INTEGER NOT NULL DEFAULT 0, active_private_sessions_max INTEGER NOT NULL DEFAULT 0)",
-    "CREATE TABLE IF NOT EXISTS ops_stats_hourly (bucket_hour TEXT NOT NULL, metric_key TEXT NOT NULL, metric_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bucket_hour, metric_key))",
+const SQLITE_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS: &[&str] = &[
+    "DROP TABLE IF EXISTS delivery_audit",
+    "DROP TABLE IF EXISTS subscription_audit",
+    "DROP TABLE IF EXISTS device_route_audit",
+    "DROP TABLE IF EXISTS channel_stats_daily",
+    "DROP TABLE IF EXISTS device_stats_daily",
+    "DROP TABLE IF EXISTS gateway_stats_hourly",
+    "DROP TABLE IF EXISTS ops_stats_hourly",
 ];
 const SQLITE_RUNTIME_SIDECAR_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
 ];
 const SQLITE_SIDECAR_META_TABLE: &str = "CREATE TABLE IF NOT EXISTS pushgo_sidecar_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)";
 const SQLITE_DISPATCH_MIGRATION_META_KEY: &str = "dispatch_migrated_from_core_v1";
-const SQLITE_TELEMETRY_MIGRATION_META_KEY: &str = "telemetry_migrated_from_core_v1";
 const SQLITE_RUNTIME_MIGRATION_META_KEY: &str = "runtime_migrated_from_core_v1";
 const SQLITE_DELIVERY_MIGRATION_META_KEY: &str = "runtime_delivery_migrated_from_core_v1";
 const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
@@ -125,13 +118,12 @@ const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
 
 impl SqliteDb {
     pub async fn new(db_url: &str) -> StoreResult<Self> {
-        Self::new_with_config(db_url, GatewayRuntimeProfile::Small, true, true).await
+        Self::new_with_config(db_url, GatewayRuntimeProfile::Small, true).await
     }
 
     pub async fn new_with_config(
         db_url: &str,
         runtime_profile: GatewayRuntimeProfile,
-        stats_enabled: bool,
         mcp_enabled: bool,
     ) -> StoreResult<Self> {
         let tuning = RuntimeTuning::for_profile(runtime_profile).sqlite;
@@ -147,7 +139,6 @@ impl SqliteDb {
             connect_sqlite_pool(db_url, 1, tuning.core_write_acquire_timeout, tuning).await?;
         let delivery_url = derive_sqlite_sidecar_url(db_url, "delivery");
         let dispatch_url = derive_sqlite_sidecar_url(db_url, "dispatch");
-        let telemetry_url = stats_enabled.then(|| derive_sqlite_sidecar_url(db_url, "telemetry"));
         let runtime_url = mcp_enabled.then(|| derive_sqlite_sidecar_url(db_url, "runtime"));
         ensure_sqlite_parent_dir(delivery_url.as_str())?;
         let delivery_pool = connect_sqlite_pool(
@@ -165,13 +156,6 @@ impl SqliteDb {
             tuning,
         )
         .await?;
-        let telemetry_pool = if let Some(url) = telemetry_url.as_deref() {
-            ensure_sqlite_parent_dir(url)?;
-            let pool = connect_sqlite_pool(url, 1, tuning.sidecar_acquire_timeout, tuning).await?;
-            Some(pool)
-        } else {
-            None
-        };
         let runtime_pool = if let Some(url) = runtime_url.as_deref() {
             ensure_sqlite_parent_dir(url)?;
             let pool = connect_sqlite_pool(url, 1, tuning.sidecar_acquire_timeout, tuning).await?;
@@ -183,7 +167,6 @@ impl SqliteDb {
             core_read_pool,
             delivery_pool,
             dispatch_pool,
-            telemetry_pool,
             runtime_pool,
             pool,
         };
@@ -192,9 +175,6 @@ impl SqliteDb {
             .await?;
         this.init_dispatch_sidecar(db_url, dispatch_url.as_str())
             .await?;
-        if let Some(url) = telemetry_url.as_deref() {
-            this.init_telemetry_sidecar(db_url, url).await?;
-        }
         if let Some(url) = runtime_url.as_deref() {
             this.init_runtime_sidecar(db_url, url).await?;
         }
@@ -370,6 +350,12 @@ impl SqliteDb {
         .await?;
         self.ensure_sqlite_column(
             "private_outbox",
+            "claimed_by",
+            "ALTER TABLE private_outbox ADD COLUMN claimed_by TEXT",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "private_outbox",
             "first_sent_at",
             "ALTER TABLE private_outbox ADD COLUMN first_sent_at INTEGER",
         )
@@ -464,9 +450,9 @@ impl SqliteDb {
         {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
-        sqlx::query("DROP TABLE IF EXISTS delivery_audit")
-            .execute(&self.pool)
-            .await?;
+        for stmt in SQLITE_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
+            sqlx::query(stmt).execute(&self.pool).await?;
+        }
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
             .await?;
@@ -554,6 +540,13 @@ impl SqliteDb {
         {
             sqlx::query(stmt).execute(&self.delivery_pool).await?;
         }
+        ensure_sqlite_column_in_pool(
+            &self.delivery_pool,
+            "private_outbox",
+            "claimed_by",
+            "ALTER TABLE private_outbox ADD COLUMN claimed_by TEXT",
+        )
+        .await?;
         if sqlite_url_without_query(core_db_url) != sqlite_url_without_query(sidecar_db_url) {
             self.sync_delivery_sidecar_from_core(core_db_url).await?;
             sqlx::query(
@@ -602,10 +595,22 @@ impl SqliteDb {
             .await?;
         }
         if sqlite_attached_table_exists(&mut tx, "pushgo_core", "private_outbox").await? {
-            sqlx::query(
+            let claimed_by_projection = if sqlite_attached_column_exists(
+                &mut tx,
+                "pushgo_core",
+                "private_outbox",
+                "claimed_by",
+            )
+            .await?
+            {
+                "claimed_by"
+            } else {
+                "NULL AS claimed_by"
+            };
+            let sql = format!(
                 "INSERT INTO private_outbox \
-                 (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
-                 SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+                 (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
+                 SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, {claimed_by_projection}, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
                  FROM pushgo_core.private_outbox WHERE true \
                  ON CONFLICT(device_id, delivery_id) DO UPDATE SET \
                    status = excluded.status, \
@@ -613,6 +618,7 @@ impl SqliteDb {
                    occurred_at = excluded.occurred_at, \
                    created_at = excluded.created_at, \
                    claimed_at = excluded.claimed_at, \
+                   claimed_by = excluded.claimed_by, \
                    first_sent_at = excluded.first_sent_at, \
                    last_attempt_at = excluded.last_attempt_at, \
                    acked_at = excluded.acked_at, \
@@ -621,10 +627,9 @@ impl SqliteDb {
                    last_error_code = excluded.last_error_code, \
                    last_error_detail = excluded.last_error_detail, \
                    updated_at = excluded.updated_at \
-                 WHERE excluded.updated_at >= private_outbox.updated_at",
-            )
-            .execute(&mut *tx)
-            .await?;
+                 WHERE excluded.updated_at >= private_outbox.updated_at"
+            );
+            sqlx::query(sql.as_str()).execute(&mut *tx).await?;
         }
         if sqlite_attached_table_exists(&mut tx, "pushgo_core", "provider_pull_queue").await? {
             sqlx::query(
@@ -652,33 +657,6 @@ impl SqliteDb {
             .execute(&mut *conn)
             .await?;
         Ok(())
-    }
-
-    async fn init_telemetry_sidecar(
-        &self,
-        core_db_url: &str,
-        sidecar_db_url: &str,
-    ) -> StoreResult<()> {
-        let Some(pool) = &self.telemetry_pool else {
-            return Ok(());
-        };
-        sqlx::query(SQLITE_SIDECAR_META_TABLE).execute(pool).await?;
-        for stmt in SQLITE_TELEMETRY_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(pool).await?;
-        }
-        migrate_sidecar_tables_once(
-            pool,
-            core_db_url,
-            sidecar_db_url,
-            SQLITE_TELEMETRY_MIGRATION_META_KEY,
-            &[
-                "channel_stats_daily",
-                "device_stats_daily",
-                "gateway_stats_hourly",
-                "ops_stats_hourly",
-            ],
-        )
-        .await
     }
 
     async fn init_runtime_sidecar(
@@ -774,8 +752,6 @@ impl SqliteDb {
                 "provider_pull_queue",
                 &["sent_at", "expires_at", "created_at", "updated_at"],
             ),
-            ("device_route_audit", &["created_at"]),
-            ("subscription_audit", &["created_at"]),
         ];
 
         let mut tx = self.pool.begin().await?;
@@ -902,16 +878,7 @@ impl SqliteDb {
     }
 
     async fn ensure_sqlite_column(&self, table: &str, column: &str, ddl: &str) -> StoreResult<()> {
-        let rows = sqlx::query(format!("PRAGMA table_info({table})").as_str())
-            .fetch_all(&self.pool)
-            .await?;
-        let exists = rows
-            .into_iter()
-            .any(|r| r.get::<String, _>("name") == column);
-        if !exists {
-            sqlx::query(ddl).execute(&self.pool).await?;
-        }
-        Ok(())
+        ensure_sqlite_column_in_pool(&self.pool, table, column, ddl).await
     }
 
     async fn ensure_sqlite_provider_pull_queue_primary_key(&self) -> StoreResult<()> {
@@ -1121,6 +1088,37 @@ async fn sqlite_attached_table_exists(
         .fetch_optional(&mut **tx)
         .await?;
     Ok(exists.is_some())
+}
+
+async fn ensure_sqlite_column_in_pool(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    ddl: &str,
+) -> StoreResult<()> {
+    let rows = sqlx::query(format!("PRAGMA table_info({table})").as_str())
+        .fetch_all(pool)
+        .await?;
+    let exists = rows
+        .into_iter()
+        .any(|r| r.get::<String, _>("name") == column);
+    if !exists {
+        sqlx::query(ddl).execute(pool).await?;
+    }
+    Ok(())
+}
+
+async fn sqlite_attached_column_exists(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    schema: &str,
+    table: &str,
+    column: &str,
+) -> StoreResult<bool> {
+    let sql = format!("PRAGMA {schema}.table_info({table})");
+    let rows = sqlx::query(sql.as_str()).fetch_all(&mut **tx).await?;
+    Ok(rows
+        .into_iter()
+        .any(|row| row.get::<String, _>("name") == column))
 }
 
 fn derive_sqlite_sidecar_url(db_url: &str, suffix: &str) -> String {

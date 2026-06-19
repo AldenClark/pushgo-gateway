@@ -264,7 +264,7 @@ impl PostgresDb {
         let mut tx = self.pool.begin().await?;
         let now = Utc::now().timestamp_millis();
         let already_active: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM channel_subscriptions \
+            "SELECT 1::BIGINT FROM channel_subscriptions \
              WHERE channel_id = $1 AND device_id = $2 AND status = 'active' \
              LIMIT 1",
         )

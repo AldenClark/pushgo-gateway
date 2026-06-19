@@ -626,7 +626,20 @@ async fn provider_pull_lifecycle_works() {
     let ctx = setup_sqlite_storage("provider-pull-lifecycle").await;
 
     let now = chrono::Utc::now().timestamp_millis();
-    let device_id: DeviceId = [3; 16];
+    let device_key = "provider-pull-activity-device";
+    let provider_token = "android-token-provider-pull-activity-000000000000000001";
+    let device_id = derive_private_device_id(device_key);
+    let stale_activity = now - 120_000;
+    ctx.storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: device_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some(provider_token.to_string()),
+            updated_at: stale_activity,
+        })
+        .await
+        .expect("device route should be inserted");
     let delivery_id = "delivery-provider-lifecycle-001";
     let message = PrivateMessage {
         payload: vec![1, 2, 3, 4].into(),
@@ -640,7 +653,7 @@ async fn provider_pull_lifecycle_works() {
             delivery_id,
             &message,
             Platform::ANDROID,
-            "fcm-token-001",
+            provider_token,
         )
         .await
         .expect("enqueue should succeed");
@@ -655,6 +668,16 @@ async fn provider_pull_lifecycle_works() {
         pulled.expect("item should exist").delivery_id,
         delivery_id.to_string()
     );
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let refreshed_at: i64 =
+        sqlx::query_scalar("SELECT route_updated_at FROM devices WHERE device_id = ?")
+            .bind(&device_id[..])
+            .fetch_one(&mut conn)
+            .await
+            .expect("route activity should be queryable");
+    assert_eq!(refreshed_at, now + 1);
 
     let pulled_again = ctx
         .storage
@@ -825,6 +848,7 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
                 occurred_at: now,
                 created_at: now,
                 claimed_at: None,
+                claimed_by: None,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -957,6 +981,7 @@ async fn migrate_private_pending_to_provider_queue_batches_payloads_and_clears_o
                     occurred_at: now + index as i64,
                     created_at: now + index as i64,
                     claimed_at: None,
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,
@@ -1063,6 +1088,7 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
         occurred_at: now,
         created_at: now,
         claimed_at: None,
+        claimed_by: None,
         first_sent_at: None,
         last_attempt_at: None,
         acked_at: None,
@@ -1105,6 +1131,98 @@ async fn private_payload_cleanup_keeps_referenced_and_drops_orphan() {
 }
 
 #[tokio::test]
+async fn private_outbox_claim_lease_blocks_duplicate_active_claims() {
+    let ctx = setup_sqlite_storage("private-outbox-claim-lease").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [42; 16];
+    let delivery_id = "delivery-claim-lease-001";
+    let message = PrivateMessage {
+        payload: vec![1, 2, 3].into(),
+        size: 3,
+        sent_at: now,
+        expires_at: now + 60_000,
+    };
+    ctx.storage
+        .insert_private_message(delivery_id, &message)
+        .await
+        .expect("private message should be inserted");
+    ctx.storage
+        .enqueue_private_outbox(
+            device_id,
+            &PrivateOutboxEntry {
+                delivery_id: delivery_id.to_string(),
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                attempts: 0,
+                occurred_at: now,
+                created_at: now,
+                claimed_at: None,
+                claimed_by: None,
+                first_sent_at: None,
+                last_attempt_at: None,
+                acked_at: None,
+                fallback_sent_at: None,
+                next_attempt_at: now,
+                last_error_code: None,
+                last_error_detail: None,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("private outbox should be inserted");
+
+    let first_claim = ctx
+        .storage
+        .claim_private_outbox_due_for_device(
+            device_id,
+            crate::delivery_core::store::delivery_queue::QueueClaimRequest::new(
+                now,
+                16,
+                now + 30_000,
+                crate::delivery_core::store::delivery_queue::QueueWorkerId::new("worker-a"),
+            ),
+        )
+        .await
+        .expect("first claim should succeed");
+    assert_eq!(first_claim.len(), 1);
+    assert_eq!(first_claim[0].claimed_by.as_deref(), Some("worker-a"));
+
+    let duplicate_claim = ctx
+        .storage
+        .claim_private_outbox_due_for_device(
+            device_id,
+            crate::delivery_core::store::delivery_queue::QueueClaimRequest::new(
+                now + 1_000,
+                16,
+                now + 40_000,
+                crate::delivery_core::store::delivery_queue::QueueWorkerId::new("worker-b"),
+            ),
+        )
+        .await
+        .expect("duplicate active claim should not fail");
+    assert!(
+        duplicate_claim.is_empty(),
+        "active lease must prevent duplicate claim by another worker"
+    );
+
+    let expired_claim = ctx
+        .storage
+        .claim_private_outbox_due_for_device(
+            device_id,
+            crate::delivery_core::store::delivery_queue::QueueClaimRequest::new(
+                now + 31_000,
+                16,
+                now + 60_000,
+                crate::delivery_core::store::delivery_queue::QueueWorkerId::new("worker-b"),
+            ),
+        )
+        .await
+        .expect("expired lease claim should succeed");
+    assert_eq!(expired_claim.len(), 1);
+    assert_eq!(expired_claim[0].claimed_by.as_deref(), Some("worker-b"));
+    assert_eq!(expired_claim[0].claimed_at, Some(now + 60_000));
+}
+
+#[tokio::test]
 async fn private_expired_cleanup_removes_expired_payloads_and_dangling_outbox() {
     let ctx = setup_sqlite_storage("private-expired-cleanup-batch").await;
     let now = chrono::Utc::now().timestamp_millis();
@@ -1134,6 +1252,7 @@ async fn private_expired_cleanup_removes_expired_payloads_and_dangling_outbox() 
                 occurred_at: now - 10_000,
                 created_at: now - 10_000,
                 claimed_at: None,
+                claimed_by: None,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -1195,19 +1314,19 @@ async fn private_expired_cleanup_removes_expired_payloads_and_dangling_outbox() 
 }
 
 #[tokio::test]
-async fn orphan_channel_cleanup_respects_telemetry_sidecar_stats() {
-    let ctx = setup_sqlite_storage("orphan-channel-telemetry-sidecar").await;
+async fn orphan_channel_cleanup_ignores_historical_stats_rows() {
+    let ctx = setup_sqlite_storage("orphan-channel-cleanup-ignores-stats").await;
     let now = chrono::Utc::now().timestamp_millis();
     let old = now - 10 * 60 * 1000;
-    let protected_channel_id = [8u8; 16];
+    let stats_channel_id = [8u8; 16];
     let removable_channel_id = [9u8; 16];
 
     let mut conn = SqliteConnection::connect(&ctx.db_url)
         .await
         .expect("sqlite test connection should succeed");
     for (channel_id, alias) in [
-        (protected_channel_id, "orphan-protected-by-telemetry"),
-        (removable_channel_id, "orphan-removable-without-telemetry"),
+        (stats_channel_id, "orphan-with-historical-stats"),
+        (removable_channel_id, "orphan-removable-without-stats"),
     ] {
         sqlx::query(
             "INSERT INTO channels (channel_id, password_hash, alias, created_at, updated_at) \
@@ -1221,20 +1340,16 @@ async fn orphan_channel_cleanup_respects_telemetry_sidecar_stats() {
         .await
         .expect("test channel should be inserted");
     }
-    drop(conn);
-
-    ctx.storage
-        .apply_stats_batch(&StatsBatchWrite {
-            channels: vec![ChannelStatsDailyDelta {
-                channel_id: protected_channel_id,
-                bucket_date: "2026-05-25".to_string(),
-                messages_routed: 1,
-                ..ChannelStatsDailyDelta::default()
-            }],
-            ..StatsBatchWrite::default()
-        })
+    sqlx::query("CREATE TABLE IF NOT EXISTS channel_stats_daily (channel_id BLOB NOT NULL, bucket_date TEXT NOT NULL, messages_routed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (channel_id, bucket_date))")
+        .execute(&mut conn)
         .await
-        .expect("telemetry stats should be written");
+        .expect("legacy stats table should be created");
+    sqlx::query("INSERT INTO channel_stats_daily (channel_id, bucket_date, messages_routed) VALUES (?, '2026-05-25', 1)")
+        .bind(&stats_channel_id[..])
+        .execute(&mut conn)
+        .await
+        .expect("legacy stats row should be inserted");
+    drop(conn);
 
     let cleanup = ctx
         .storage
@@ -1248,25 +1363,87 @@ async fn orphan_channel_cleanup_respects_telemetry_sidecar_stats() {
         )
         .await
         .expect("maintenance cleanup should succeed");
-    assert_eq!(cleanup.orphan_channels_pruned, 1);
+    assert_eq!(cleanup.orphan_channels_pruned, 2);
 
     let mut conn = SqliteConnection::connect(&ctx.db_url)
         .await
         .expect("sqlite test connection should succeed");
-    let protected_exists: i64 =
+    let stats_channel_exists: i64 =
         sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE channel_id = ?")
-            .bind(&protected_channel_id[..])
+            .bind(&stats_channel_id[..])
             .fetch_one(&mut conn)
             .await
-            .expect("protected channel count should be queryable");
+            .expect("stats channel count should be queryable");
     let removable_exists: i64 =
         sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE channel_id = ?")
             .bind(&removable_channel_id[..])
             .fetch_one(&mut conn)
             .await
             .expect("removable channel count should be queryable");
-    assert_eq!(protected_exists, 1);
+    assert_eq!(stats_channel_exists, 0);
     assert_eq!(removable_exists, 0);
+}
+
+#[tokio::test]
+async fn maintenance_cleanup_dry_run_does_not_remove_orphan_channels() {
+    let ctx = setup_sqlite_storage("maintenance-cleanup-dry-run-orphan-channel").await;
+    let now = 1_700_000_000_000_i64;
+    let removable_channel_id = [0x73; 16];
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "INSERT INTO channels (channel_id, password_hash, alias, created_at, updated_at) \
+         VALUES (?, 'hash', 'dry-run-orphan-channel', ?, ?)",
+    )
+    .bind(&removable_channel_id[..])
+    .bind(now - 600_000)
+    .bind(now - 600_000)
+    .execute(&mut conn)
+    .await
+    .expect("orphan channel should be inserted");
+    drop(conn);
+
+    let dry_run = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now,
+            MaintenanceCleanupConfig {
+                orphan_channel_ttl_secs: 60,
+                orphan_channel_cleanup_enabled: true,
+                dry_run: true,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("dry-run cleanup should succeed");
+    assert_eq!(dry_run.orphan_channels_pruned, 0);
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let still_exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE channel_id = ?")
+            .bind(&removable_channel_id[..])
+            .fetch_one(&mut conn)
+            .await
+            .expect("orphan channel should be queryable after dry-run");
+    assert_eq!(still_exists, 1);
+    drop(conn);
+
+    let cleanup = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now,
+            MaintenanceCleanupConfig {
+                orphan_channel_ttl_secs: 60,
+                orphan_channel_cleanup_enabled: true,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("real cleanup should succeed");
+    assert_eq!(cleanup.orphan_channels_pruned, 1);
 }
 
 #[tokio::test]
@@ -1297,6 +1474,7 @@ async fn private_outbox_batch_prunes_device_overflow_and_orphan_payloads() {
                 occurred_at: now + index,
                 created_at: now + index,
                 claimed_at: None,
+                claimed_by: None,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -1366,6 +1544,7 @@ async fn private_outbox_batch_protects_current_delivery_when_pruning() {
                     occurred_at: now + index,
                     created_at: now + index,
                     claimed_at: None,
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,
@@ -1403,6 +1582,7 @@ async fn private_outbox_batch_protects_current_delivery_when_pruning() {
                     occurred_at: now + 3,
                     created_at: now + 3,
                     claimed_at: None,
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,
@@ -1476,6 +1656,7 @@ async fn maintenance_cleanup_prunes_expired_runtime_rows_and_orphan_devices() {
                 occurred_at: stale_before,
                 created_at: stale_before,
                 claimed_at: None,
+                claimed_by: None,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -1691,6 +1872,7 @@ async fn maintenance_cleanup_does_not_delete_shared_delivery_for_other_devices()
                     occurred_at: updated_at,
                     created_at: updated_at,
                     claimed_at: None,
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,
@@ -1870,6 +2052,297 @@ async fn maintenance_cleanup_keeps_active_subscriptions_until_switch_is_enabled(
 }
 
 #[tokio::test]
+async fn maintenance_cleanup_keeps_subscription_after_recent_device_activity() {
+    let ctx = setup_sqlite_storage("maintenance-cleanup-recent-device-activity").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let old = now - 120_000;
+    let device_key = "maintenance-recent-activity-device-key";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        "android-token-maintenance-recent-activity-0001",
+        "maintenance-recent-activity",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let device_id = derive_private_device_id(device_key);
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query("UPDATE devices SET route_updated_at = ? WHERE device_id = ?")
+        .bind(old)
+        .bind(&device_id[..])
+        .execute(&mut conn)
+        .await
+        .expect("route timestamp should be aged");
+    sqlx::query(
+        "UPDATE channel_subscriptions SET updated_at = ? WHERE channel_id = ? AND device_id = ?",
+    )
+    .bind(old)
+    .bind(&subscribe.channel_id[..])
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("subscription timestamp should be aged");
+    drop(conn);
+
+    ctx.storage
+        .touch_device_activity(device_id, now)
+        .await
+        .expect("device activity touch should succeed");
+
+    let cleanup = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now,
+            MaintenanceCleanupConfig {
+                stale_subscription_ttl_secs: 60,
+                stale_subscription_cleanup_enabled: true,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("maintenance cleanup should succeed");
+    assert_eq!(cleanup.stale_subscriptions_pruned, 0);
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM channel_subscriptions WHERE channel_id = ? AND device_id = ?",
+    )
+    .bind(&subscribe.channel_id[..])
+    .bind(&device_id[..])
+    .fetch_one(&mut conn)
+    .await
+    .expect("subscription status should be queryable");
+    assert_eq!(status, "active");
+}
+
+#[tokio::test]
+async fn maintenance_cleanup_freezes_inactive_subscriptions_before_hard_delete() {
+    let ctx = setup_sqlite_storage("maintenance-cleanup-subscription-lifecycle").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let old = now - 240_000;
+    let device_key = "maintenance-subscription-lifecycle-device-key";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        "android-token-maintenance-subscription-lifecycle-0001",
+        "maintenance-subscription-lifecycle",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let device_id = derive_private_device_id(device_key);
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query("UPDATE devices SET route_updated_at = ? WHERE device_id = ?")
+        .bind(old)
+        .bind(&device_id[..])
+        .execute(&mut conn)
+        .await
+        .expect("route timestamp should be aged");
+    sqlx::query(
+        "UPDATE channel_subscriptions SET status = 'inactive', updated_at = ? WHERE channel_id = ? AND device_id = ?",
+    )
+    .bind(old)
+    .bind(&subscribe.channel_id[..])
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("subscription should be marked inactive");
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(subscribe.channel_id, now)
+        .await
+        .expect("dispatch targets should be queryable");
+    assert!(
+        targets.is_empty(),
+        "inactive subscriptions must not receive dispatch targets"
+    );
+
+    let frozen = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now,
+            MaintenanceCleanupConfig {
+                stale_subscription_cleanup_enabled: true,
+                frozen_subscription_ttl_secs: 60,
+                soft_deleted_device_cleanup_enabled: false,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("maintenance cleanup should freeze inactive subscription");
+    assert_eq!(frozen.stale_subscriptions_pruned, 0);
+    assert_eq!(frozen.frozen_subscriptions_pruned, 1);
+    assert_eq!(frozen.soft_deleted_devices_pruned, 0);
+
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM channel_subscriptions WHERE channel_id = ? AND device_id = ?",
+    )
+    .bind(&subscribe.channel_id[..])
+    .bind(&device_id[..])
+    .fetch_one(&mut conn)
+    .await
+    .expect("subscription status should be queryable");
+    assert_eq!(status, crate::storage::SUBSCRIPTION_STATUS_FROZEN);
+
+    let hard_deleted = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now + 120_000,
+            MaintenanceCleanupConfig {
+                stale_subscription_cleanup_enabled: true,
+                frozen_subscription_ttl_secs: 60,
+                soft_deleted_device_cleanup_enabled: true,
+                soft_deleted_device_ttl_secs: 60,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("maintenance cleanup should delete removable frozen route");
+    assert_eq!(hard_deleted.soft_deleted_devices_pruned, 1);
+
+    let device_exists: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM devices WHERE device_id = ?")
+        .bind(&device_id[..])
+        .fetch_one(&mut conn)
+        .await
+        .expect("device count should be queryable");
+    assert_eq!(device_exists, 0);
+}
+
+#[tokio::test]
+async fn maintenance_cleanup_blocks_freeze_and_delete_with_pending_private_outbox() {
+    let ctx = setup_sqlite_storage("maintenance-cleanup-private-outbox-gate").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let old = now - 240_000;
+    let device_key = "maintenance-private-outbox-gate-device-key";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        "android-token-maintenance-private-outbox-gate-0001",
+        "maintenance-private-outbox-gate",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let device_id = derive_private_device_id(device_key);
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query("UPDATE devices SET route_updated_at = ? WHERE device_id = ?")
+        .bind(old)
+        .bind(&device_id[..])
+        .execute(&mut conn)
+        .await
+        .expect("route timestamp should be aged");
+    sqlx::query(
+        "UPDATE channel_subscriptions SET status = 'inactive', updated_at = ? WHERE channel_id = ? AND device_id = ?",
+    )
+    .bind(old)
+    .bind(&subscribe.channel_id[..])
+    .bind(&device_id[..])
+    .execute(&mut conn)
+    .await
+    .expect("subscription should be marked inactive");
+    drop(conn);
+
+    let delivery_id = "maintenance-private-outbox-gate-delivery";
+    ctx.storage
+        .insert_private_message(
+            delivery_id,
+            &PrivateMessage {
+                payload: vec![4, 5, 6].into(),
+                size: 3,
+                sent_at: now,
+                expires_at: now + 300_000,
+            },
+        )
+        .await
+        .expect("pending private payload should be inserted");
+    ctx.storage
+        .enqueue_private_outbox(
+            device_id,
+            &PrivateOutboxEntry {
+                delivery_id: delivery_id.to_string(),
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                attempts: 0,
+                occurred_at: old,
+                created_at: old,
+                claimed_at: None,
+                claimed_by: None,
+                first_sent_at: None,
+                last_attempt_at: None,
+                acked_at: None,
+                fallback_sent_at: None,
+                next_attempt_at: now + 300_000,
+                last_error_code: None,
+                last_error_detail: None,
+                updated_at: old,
+            },
+        )
+        .await
+        .expect("pending private outbox should be inserted");
+
+    let blocked = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now,
+            MaintenanceCleanupConfig {
+                stale_subscription_cleanup_enabled: true,
+                frozen_subscription_ttl_secs: 60,
+                soft_deleted_device_cleanup_enabled: true,
+                soft_deleted_device_ttl_secs: 60,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("maintenance cleanup should run with pending outbox");
+    assert_eq!(blocked.frozen_subscriptions_pruned, 0);
+    assert_eq!(blocked.soft_deleted_devices_pruned, 0);
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM channel_subscriptions WHERE channel_id = ? AND device_id = ?",
+    )
+    .bind(&subscribe.channel_id[..])
+    .bind(&device_id[..])
+    .fetch_one(&mut conn)
+    .await
+    .expect("subscription status should be queryable");
+    assert_eq!(status, crate::storage::SUBSCRIPTION_STATUS_INACTIVE);
+    drop(conn);
+
+    ctx.storage
+        .ack_private_delivery(device_id, delivery_id)
+        .await
+        .expect("pending private outbox should be cleared");
+
+    let advanced = ctx
+        .storage
+        .run_maintenance_cleanup(
+            now + 120_000,
+            MaintenanceCleanupConfig {
+                stale_subscription_cleanup_enabled: true,
+                frozen_subscription_ttl_secs: 60,
+                soft_deleted_device_cleanup_enabled: true,
+                soft_deleted_device_ttl_secs: 60,
+                ..MaintenanceCleanupConfig::default()
+            },
+        )
+        .await
+        .expect("maintenance cleanup should advance after outbox clears");
+    assert_eq!(advanced.frozen_subscriptions_pruned, 1);
+}
+
+#[tokio::test]
 async fn provider_pull_clears_original_private_outbox_delivery() {
     let ctx = setup_sqlite_storage("provider-pull-original-outbox-cleanup").await;
 
@@ -1906,6 +2379,7 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
         occurred_at: now,
         created_at: now,
         claimed_at: None,
+        claimed_by: None,
         first_sent_at: None,
         last_attempt_at: None,
         acked_at: None,
@@ -1950,6 +2424,110 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
         .await
         .expect("load original payload after pull should succeed");
     assert!(original_payload_after_pull.is_none());
+}
+
+#[tokio::test]
+async fn provider_invalid_token_cleanup_unsubscribes_and_clears_private_outbox() {
+    let ctx = setup_sqlite_storage("provider-invalid-token-cleanup").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_key = "provider-invalid-token-cleanup-device";
+    let provider_token = "android-provider-token-invalid-cleanup-0000000001";
+    let private_device_id = derive_private_device_id(device_key);
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        provider_token,
+        "invalid-token-cleanup",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    ctx.storage
+        .bind_private_token(private_device_id, Platform::ANDROID, provider_token)
+        .await
+        .expect("private token binding should succeed");
+
+    let delivery_id = "provider-invalid-token-cleanup-delivery";
+    let mut data = hashbrown::HashMap::new();
+    data.insert("delivery_id", delivery_id);
+    let envelope = postcard::to_allocvec(&TestPrivatePayloadEnvelope {
+        payload_version: 1,
+        data,
+    })
+    .expect("private envelope should encode");
+    let message = PrivateMessage {
+        payload: envelope.clone().into(),
+        size: envelope.len(),
+        sent_at: now,
+        expires_at: now + 300_000,
+    };
+    ctx.storage
+        .insert_private_message(delivery_id, &message)
+        .await
+        .expect("private message should insert");
+    ctx.storage
+        .enqueue_private_outbox(
+            private_device_id,
+            &PrivateOutboxEntry {
+                delivery_id: delivery_id.to_string(),
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                attempts: 0,
+                occurred_at: now,
+                created_at: now,
+                claimed_at: None,
+                claimed_by: None,
+                first_sent_at: None,
+                last_attempt_at: None,
+                acked_at: None,
+                fallback_sent_at: None,
+                next_attempt_at: now,
+                last_error_code: None,
+                last_error_detail: None,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("private outbox should enqueue");
+
+    let runtime_counters = crate::runtime_counters::RuntimeCounterCollector::spawn_with_mode(
+        ctx.storage.clone(),
+        false,
+        crate::runtime_config::GatewayRuntimeProfile::Small,
+    );
+    crate::delivery_core::execution::provider::cleanup_invalid_provider_token(
+        crate::delivery_core::execution::provider::ProviderInvalidTokenCleanup {
+            store: &ctx.storage,
+            private: None,
+            runtime_counters: runtime_counters.as_ref(),
+            channel_id: subscribe.channel_id,
+            channel_id_text: &crate::value::ChannelId::from(subscribe.channel_id).to_string(),
+            device_key,
+            platform: Platform::ANDROID,
+            device_token: provider_token,
+            provider: "FCM",
+            correlation_id: "provider-invalid-token-cleanup-test",
+        },
+    )
+    .await;
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(subscribe.channel_id, now + 1)
+        .await
+        .expect("dispatch targets should load");
+    assert!(
+        targets.is_empty(),
+        "invalid provider token cleanup must unsubscribe the provider route from the channel"
+    );
+    let outbox = ctx
+        .storage
+        .list_private_outbox(private_device_id, 16)
+        .await
+        .expect("private outbox should load");
+    assert!(
+        outbox.is_empty(),
+        "invalid provider token cleanup must clear linked private outbox rows"
+    );
 }
 
 #[tokio::test]

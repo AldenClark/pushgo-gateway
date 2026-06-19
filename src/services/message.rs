@@ -1,12 +1,18 @@
+use chrono::Utc;
+
 use crate::{
-    api::{
-        Error,
-        handlers::{
-            channel_auth::authorize_channel_by_password,
-            message::{MessageDispatchIntent, OpId, dispatch_message_authorized_summary},
+    api::{Error, handlers::delivery_core_adapter::core_error_to_api_error},
+    app::AppState,
+    delivery_core::{
+        auth::SubmitAuth,
+        domain::message::MessageInput,
+        response::{DeliverySummary, EntityRef},
+        source::IngressSource,
+        submit::{
+            ChannelSelector, DomainCommandInput, ResponseMode, SubmitCommand, SubmitContext,
+            submit_command,
         },
     },
-    app::AppState,
 };
 
 #[derive(Debug, Clone)]
@@ -25,11 +31,11 @@ pub(crate) struct MessageSendCommand {
     pub ciphertext: Option<String>,
     pub tags: Vec<String>,
     pub metadata: serde_json::Map<String, serde_json::Value>,
-    pub source: &'static str,
+    pub source: IngressSource,
 }
 
 pub(crate) struct MessageSendOutcome {
-    pub summary: crate::api::handlers::dispatch_lifecycle::NotificationDispatchSummary,
+    pub summary: DeliverySummary,
     pub message_id: String,
 }
 
@@ -38,37 +44,47 @@ pub(crate) async fn send_message(
     command: MessageSendCommand,
 ) -> Result<MessageSendOutcome, Error> {
     validate_message_command(&command)?;
-    let scoped_thing_id = command
-        .thing_id
-        .as_deref()
-        .map(|raw| {
-            crate::api::handlers::entity_input::EntityId::parse(raw, "thing_id")
-                .map(crate::api::handlers::entity_input::EntityId::into_inner)
-        })
-        .transpose()?;
-    let authorized =
-        authorize_channel_by_password(state, &command.channel_id, &command.password).await?;
-    let (summary, message_id) = dispatch_message_authorized_summary(
-        state,
-        authorized,
-        MessageDispatchIntent {
-            op_id: command.op_id,
-            occurred_at: command.occurred_at,
-            title: command.title,
-            body: command.body,
-            severity: command.severity,
-            ttl: command.ttl,
-            url: command.url,
-            images: command.images,
-            ciphertext: command.ciphertext,
-            tags: command.tags,
-            metadata: command.metadata,
+    let response_mode = match command.source {
+        IngressSource::MqttPublish | IngressSource::MqttWill => ResponseMode::MqttAck,
+        _ => ResponseMode::HttpJson,
+    };
+    let result = submit_command(
+        SubmitContext {
+            runtime: state,
+            now_millis: Utc::now().timestamp_millis(),
         },
-        scoped_thing_id,
+        SubmitCommand {
+            source: command.source,
+            auth: SubmitAuth::ChannelPassword {
+                password: command.password,
+            },
+            channel: ChannelSelector::ChannelId(command.channel_id),
+            command: DomainCommandInput::Message(Box::new(MessageInput {
+                op_id: command.op_id,
+                thing_id: command.thing_id,
+                occurred_at: command.occurred_at,
+                title: command.title,
+                body: command.body,
+                severity: command.severity,
+                ttl: command.ttl,
+                url: command.url,
+                images: command.images,
+                ciphertext: command.ciphertext,
+                tags: command.tags,
+                metadata: command.metadata,
+            })),
+            response_mode,
+        },
     )
-    .await?;
+    .await
+    .map_err(core_error_to_api_error)?;
+    let EntityRef::Message { message_id, .. } = result.entity else {
+        return Err(Error::Internal(
+            "message submit returned non-message entity".into(),
+        ));
+    };
     Ok(MessageSendOutcome {
-        summary,
+        summary: result.summary,
         message_id,
     })
 }
@@ -81,9 +97,6 @@ fn validate_message_command(command: &MessageSendCommand) -> Result<(), Error> {
         ));
     }
     crate::api::validate_channel_password(&command.password)?;
-    if let Some(op_id) = command.op_id.as_deref() {
-        OpId::parse(op_id)?;
-    }
     if command.title.trim().is_empty() {
         return Err(Error::validation_code(
             "title must not be empty",
@@ -91,6 +104,5 @@ fn validate_message_command(command: &MessageSendCommand) -> Result<(), Error> {
         ));
     }
     crate::api::handlers::entity_input::MetadataEntries::new(&command.metadata).validate()?;
-    let _source = command.source;
     Ok(())
 }

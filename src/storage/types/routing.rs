@@ -5,6 +5,10 @@ use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
 use super::{DeviceId, DeviceInfo, Platform, PrivateDeviceId, StoreError, StoreResult};
 
+pub const SUBSCRIPTION_STATUS_ACTIVE: &str = "active";
+pub const SUBSCRIPTION_STATUS_INACTIVE: &str = "inactive";
+pub const SUBSCRIPTION_STATUS_FROZEN: &str = "frozen";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteChannelType {
     Private,

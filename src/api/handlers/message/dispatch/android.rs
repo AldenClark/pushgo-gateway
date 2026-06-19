@@ -1,103 +1,51 @@
 use super::*;
-use crate::dispatch::FcmJob;
+use crate::delivery_core::execution::provider::{
+    ProviderDispatchContext, ProviderDispatchPayload, enqueue_provider_dispatch,
+};
 
 pub(super) async fn dispatch(
     prepared: &PreparedDispatch<'_>,
-    payloads: &ProviderPayloads,
-    target: &ResolvedProviderTarget<'_>,
+    target: &ResolvedProviderTarget,
+    provider_payload: PreparedProviderPayload,
     progress: &mut DispatchProgress,
 ) -> Result<(), Error> {
-    let direct_payload = payloads
-        .fcm_payload
-        .clone()
-        .ok_or(Error::Internal("missing FCM payload".to_string()))?;
-    let wakeup_payload = Arc::new(FcmPayload::new(
-        SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
-        "HIGH",
-        prepared.ttl_seconds,
-    ));
-    let direct_body = direct_payload
-        .encoded_body(target.device.token_str())
-        .map_err(|err| {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::ERROR,
-                event = "dispatch.fcm_direct_payload_encode_failed",
-                correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
-                delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
-                channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-                op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
-                device_key = %(crate::util::redact_text(target.device_key.as_ref())),
-                device_token = %(crate::util::redact_text(target.device.token_str())),
-                platform = %(target.device.platform.name()),
-                error = %(err.to_string())
-            );
-            Error::Internal(err.to_string())
-        })?;
-    let mut wakeup_body = None;
-    let selection = if let Some(selection) =
-        ProviderDeliverySelection::direct(target.device.platform, direct_body.len())
-    {
-        selection
-    } else {
-        let encoded_wakeup = wakeup_payload
-            .encoded_body(target.device.token_str())
-            .map_err(|err| {
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::ERROR,
-                    event = "dispatch.fcm_wakeup_payload_encode_failed",
-                    correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
-                    delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
-                    channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-                    op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
-                    device_key = %(crate::util::redact_text(target.device_key.as_ref())),
-                    device_token = %(crate::util::redact_text(target.device.token_str())),
-                    platform = %(target.device.platform.name()),
-                    error = %(err.to_string())
-                );
-                Error::Internal(err.to_string())
-            })?;
-        let selection = match ProviderDeliverySelection::wakeup_pull(
-            target.device.platform,
-            encoded_wakeup.len(),
-            target.provider_pull_delivery.is_some(),
-        ) {
-            Ok(selection) => selection,
-            Err(err) => {
-                record_provider_path_rejected(prepared, target, progress, err.to_string()).await;
-                return Ok(());
-            }
-        };
-        wakeup_body = Some(encoded_wakeup);
-        selection
+    let PreparedProviderPayload::Fcm {
+        direct_payload,
+        direct_body,
+        wakeup_payload,
+        wakeup_body,
+        selection,
+    } = provider_payload
+    else {
+        return Err(Error::Internal(
+            "prepared provider payload did not match FCM target".to_string(),
+        ));
     };
 
-    match prepared.state.dispatch.try_send_fcm(FcmJob {
-        channel_id: prepared.channel_id,
-        correlation_id: Arc::clone(&prepared.correlation_id),
-        delivery_id: Arc::clone(&prepared.delivery_id_ref),
-        device_key: Arc::clone(&target.device_key),
-        device_token: Arc::from(target.device.token_str()),
-        direct_payload: Arc::clone(&direct_payload),
-        direct_body,
-        wakeup_payload: Some(Arc::clone(&wakeup_payload)),
-        wakeup_body,
-        initial_path: selection.initial_path,
-        wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
-    }) {
+    let path = selection.initial_path.into();
+    match enqueue_provider_dispatch(
+        ProviderDispatchContext {
+            dispatch: prepared.runtime.dispatch_channels(),
+            channel_id: prepared.channel_id,
+            correlation_id: Arc::clone(&prepared.correlation_id),
+            delivery_id: Arc::clone(&prepared.delivery_id_ref),
+            device_key: Arc::clone(&target.device_key),
+            device_token: Arc::from(target.device.token_str()),
+        },
+        ProviderDispatchPayload::Fcm {
+            direct_payload: Arc::clone(&direct_payload),
+            direct_body,
+            wakeup_payload: Arc::clone(&wakeup_payload),
+            wakeup_body,
+            initial_path: path,
+            wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
+        },
+    ) {
         Ok(()) => {
-            record_provider_enqueued(prepared, target, progress, selection.initial_path).await;
+            record_provider_enqueued(prepared, target, progress, path).await;
         }
         Err(err) => {
-            record_provider_enqueue_failed(
-                prepared,
-                target,
-                progress,
-                selection.initial_path,
-                &err,
-            )
-            .await;
+            record_provider_enqueue_failed(prepared, target, progress, path, &err).await;
         }
     }
 

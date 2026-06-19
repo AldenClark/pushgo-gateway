@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::BytesMut;
 use mqttbytes::v5::{
-    ConnectProperties, LastWill, PubAckReason, SubscribeFilter, SubscribeProperties,
-    UnsubscribeProperties, WillProperties,
+    ConnectProperties, LastWill, PubAck, PubAckReason, Publish, PublishProperties, SubscribeFilter,
+    SubscribeProperties, UnsubscribeProperties, WillProperties,
 };
 use tempfile::{TempDir, tempdir};
 use tokio::{
@@ -18,12 +18,12 @@ use crate::{
     api::ChannelId,
     app::{AppState, AuthMode, DeviceOperationGuards, PrivateTransportProfile},
     dispatch::DispatchChannels,
-    mqtt::MqttConfig,
+    mqtt::{MqttConfig, MqttPublishDedupe},
     private::{PrivateConfig, PrivateState},
     routing::{DeviceRegistry, DeviceRouteRecord},
     runtime_config::GatewayRuntimeProfile,
-    services::{MessageSendCommand, send_message},
-    stats::StatsCollector,
+    runtime_counters::RuntimeCounterCollector,
+    services::{ChannelCommandSource, MessageSendCommand, send_message},
     storage::{DeviceRouteRecordRow, MaintenanceCleanupConfig, Platform, Storage},
 };
 
@@ -43,24 +43,23 @@ impl MqttFlowTestContext {
         let store = Storage::new(Some(db_url.as_str()))
             .await
             .expect("storage should initialize");
-        let stats = StatsCollector::spawn(store.clone());
+        let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
         let registry = Arc::new(DeviceRegistry::new());
         let private = Arc::new(PrivateState::new(
             store.clone(),
             test_private_config(),
             Arc::clone(&registry),
-            Arc::clone(&stats),
+            Arc::clone(&runtime_counters),
         ));
         let (dispatch, _receivers) = DispatchChannels::new();
         let state = Arc::new(AppState {
             dispatch,
             auth: AuthMode::Disabled,
             private_channel_enabled: true,
-            diagnostics_api_enabled: false,
             public_base_url: None,
             device_registry: registry,
             device_operation_guards: Arc::new(DeviceOperationGuards::default()),
-            stats,
+            runtime_counters,
             private_transport_profile: PrivateTransportProfile {
                 quic_enabled: false,
                 quic_port: None,
@@ -93,6 +92,7 @@ impl MqttFlowTestContext {
                 tls_cert_path: None,
                 tls_key_path: None,
             },
+            publish_dedupe: MqttPublishDedupe::new(),
         };
         let server = tokio::spawn(async move {
             let _ = listener::serve_mqtt_listener(runtime, listener, addr, None).await;
@@ -134,7 +134,7 @@ impl MqttFlowTestContext {
                 channel_id: None,
                 channel_name: Some(format!("mqtt-flow-{device_key}")),
                 password: password.to_string(),
-                source: "test",
+                source: ChannelCommandSource::Mqtt,
                 allow_create_channel: true,
             },
         )
@@ -270,6 +270,15 @@ fn message_publish_payload(data: serde_json::Value) -> Vec<u8> {
         "data": data,
     }))
     .expect("message publish envelope should encode")
+}
+
+fn entity_publish_payload(model_type: &str, action: &str, data: serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "type": model_type,
+        "action": action,
+        "data": data,
+    }))
+    .expect("entity publish envelope should encode")
 }
 
 fn connect_with_device_type_and_keep_alive(
@@ -479,24 +488,16 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         }
         packet => panic!("expected PUBACK, got {packet:?}"),
     }
-    wait_until(Duration::from_secs(2), || {
-        let state = Arc::clone(&ctx.state);
-        async move {
-            state
-                .store
-                .list_private_outbox(device_id, 16)
-                .await
-                .expect("outbox should list")
-                .len()
-                > outbox_before_publish
-        }
-    })
-    .await;
-    while let Some(Packet::Publish(extra)) =
-        read_server_packet_with_timeout(&mut stream, Duration::from_millis(100)).await
-    {
-        write_client_packet(&mut stream, ClientPacket::PubAck(PubAck::new(extra.pkid))).await;
-    }
+    assert_eq!(
+        ctx.state
+            .store
+            .list_private_outbox(device_id, 16)
+            .await
+            .expect("outbox should list")
+            .len(),
+        outbox_before_publish,
+        "MQTT realtime downlink should not create private outbox entries"
+    );
     write_client_packet(
         &mut stream,
         ClientPacket::Disconnect(Disconnect {
@@ -558,7 +559,7 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
             ciphertext: None,
             tags: vec!["downlink".to_string()],
             metadata: serde_json::Map::new(),
-            source: "test",
+            source: crate::delivery_core::source::IngressSource::HttpMessage,
         },
     )
     .await
@@ -617,8 +618,8 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
             .load_private_outbox_entry(device_id, delivery_id.as_str())
             .await
             .expect("outbox should load")
-            .is_some(),
-        "downlink should stay pending before PUBACK"
+            .is_none(),
+        "MQTT realtime downlink should not be backed by private outbox"
     );
 
     write_client_packet(
@@ -633,19 +634,15 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         write_client_packet(&mut stream, ClientPacket::PubAck(PubAck::new(extra.pkid))).await;
         acknowledged_downlinks = acknowledged_downlinks.saturating_add(1);
     }
-    wait_until(Duration::from_secs(2), || {
-        let state = Arc::clone(&ctx.state);
-        let delivery_id = delivery_id.clone();
-        async move {
-            state
-                .store
-                .load_private_outbox_entry(device_id, delivery_id.as_str())
-                .await
-                .expect("outbox should load")
-                .is_none()
-        }
-    })
-    .await;
+    assert!(
+        ctx.state
+            .store
+            .load_private_outbox_entry(device_id, delivery_id.as_str())
+            .await
+            .expect("outbox should load")
+            .is_none(),
+        "PUBACK should not create private outbox state for MQTT realtime downlink"
+    );
 
     let mut unsubscribe = Unsubscribe::new(MqttMessageTopic::format(channel_id.as_str()));
     unsubscribe.pkid = 9;
@@ -910,6 +907,182 @@ async fn mqtt_publish_connect_ignores_client_id_and_can_publish_without_route() 
         packet => panic!("expected PUBACK success, got {packet:?}"),
     }
     assert_eq!(ctx.private.metrics.snapshot().mqtt_publish_success, 1);
+}
+
+#[tokio::test]
+async fn mqtt_publish_accepts_event_and_thing_payloads() {
+    let ctx = MqttFlowTestContext::new().await;
+    let owner_key = "mqtt-entity-publish-channel-owner";
+    let channel_password = "mqtt-entity-pass";
+    ctx.restore_private_route(owner_key).await;
+    let channel_id = ctx.create_channel(owner_key, channel_password).await;
+    let mut stream = connect_publish_client(ctx.addr, "entity-publisher").await;
+
+    let cases = [
+        (
+            42,
+            entity_publish_payload(
+                "event",
+                "create",
+                serde_json::json!({
+                    "op_id": "mqtt-event-op",
+                    "event_time": 1_710_000_000,
+                    "title": "event over mqtt"
+                }),
+            ),
+        ),
+        (
+            43,
+            entity_publish_payload(
+                "thing",
+                "update",
+                serde_json::json!({
+                    "op_id": "mqtt-thing-op",
+                    "thing_id": "thing-1",
+                    "observed_at": 1_710_000_001,
+                    "title": "thing over mqtt"
+                }),
+            ),
+        ),
+    ];
+
+    for (pkid, payload) in cases {
+        let mut publish = Publish::new(
+            MqttMessageTopic::format(channel_id.as_str()),
+            QoS::AtLeastOnce,
+            payload,
+        );
+        publish.pkid = pkid;
+        publish.properties = Some(publish_properties(Some(channel_password)));
+        write_client_packet(&mut stream, ClientPacket::Publish(publish)).await;
+
+        match read_server_packet_labeled(&mut stream, "entity publish PUBACK").await {
+            Packet::PubAck(puback) => {
+                assert_eq!(puback.pkid, pkid);
+                assert_eq!(puback.reason, PubAckReason::Success);
+            }
+            packet => panic!("expected PUBACK success, got {packet:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn mqtt_qos1_publish_without_op_id_uses_short_window_fallback_dedupe() {
+    let ctx = MqttFlowTestContext::new().await;
+    let receiver_key = "mqtt-fallback-dedupe-receiver";
+    let channel_password = "mqtt-fallback-dedupe-pass";
+    ctx.restore_private_route(receiver_key).await;
+    let channel_id = ctx.create_channel(receiver_key, channel_password).await;
+    let mut receiver = connect_client(ctx.addr, receiver_key).await;
+    subscribe_stream_to_channel(&mut receiver, channel_id.as_str(), channel_password, 92).await;
+
+    let mut publisher = connect_publish_client(ctx.addr, "mqtt-fallback-dedupe-publisher").await;
+    let payload = message_publish_payload(serde_json::json!({
+        "title": "fallback dedupe title",
+        "body": "same MQTT QoS1 publish body"
+    }));
+    for _ in 0..2 {
+        let mut publish = Publish::new(
+            MqttMessageTopic::format(channel_id.as_str()),
+            QoS::AtLeastOnce,
+            payload.clone(),
+        );
+        publish.pkid = 42;
+        publish.properties = Some(publish_properties(Some(channel_password)));
+        write_client_packet(&mut publisher, ClientPacket::Publish(publish)).await;
+        match read_server_packet_labeled(&mut publisher, "fallback dedupe PUBACK").await {
+            Packet::PubAck(puback) => {
+                assert_eq!(puback.pkid, 42);
+                assert_eq!(puback.reason, PubAckReason::Success);
+            }
+            packet => panic!("expected PUBACK success, got {packet:?}"),
+        }
+    }
+
+    let first = read_publish_with_title(&mut receiver, "fallback dedupe title").await;
+    write_client_packet(&mut receiver, ClientPacket::PubAck(PubAck::new(first.pkid))).await;
+    assert!(
+        read_server_packet_with_timeout(&mut receiver, Duration::from_millis(250))
+            .await
+            .is_none(),
+        "duplicate QoS1 publish without op_id should not enqueue a second message"
+    );
+
+    let mut changed_packet = Publish::new(
+        MqttMessageTopic::format(channel_id.as_str()),
+        QoS::AtLeastOnce,
+        payload,
+    );
+    changed_packet.pkid = 43;
+    changed_packet.properties = Some(publish_properties(Some(channel_password)));
+    write_client_packet(&mut publisher, ClientPacket::Publish(changed_packet)).await;
+    match read_server_packet_labeled(&mut publisher, "changed packet PUBACK").await {
+        Packet::PubAck(puback) => {
+            assert_eq!(puback.pkid, 43);
+            assert_eq!(puback.reason, PubAckReason::Success);
+        }
+        packet => panic!("expected PUBACK success, got {packet:?}"),
+    }
+    let second = read_publish_with_title(&mut receiver, "fallback dedupe title").await;
+    write_client_packet(
+        &mut receiver,
+        ClientPacket::PubAck(PubAck::new(second.pkid)),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn mqtt_qos1_fallback_dedupe_clears_failed_publish_for_retry() {
+    let ctx = MqttFlowTestContext::new().await;
+    let receiver_key = "mqtt-fallback-dedupe-retry-receiver";
+    let channel_password = "mqtt-fallback-dedupe-retry-pass";
+    ctx.restore_private_route(receiver_key).await;
+    let channel_id = ctx.create_channel(receiver_key, channel_password).await;
+    let mut receiver = connect_client(ctx.addr, receiver_key).await;
+    subscribe_stream_to_channel(&mut receiver, channel_id.as_str(), channel_password, 93).await;
+
+    let mut publisher =
+        connect_publish_client(ctx.addr, "mqtt-fallback-dedupe-retry-publisher").await;
+    let payload = message_publish_payload(serde_json::json!({
+        "title": "fallback retry title"
+    }));
+    let mut failed = Publish::new(
+        MqttMessageTopic::format(channel_id.as_str()),
+        QoS::AtLeastOnce,
+        payload.clone(),
+    );
+    failed.pkid = 44;
+    failed.properties = Some(publish_properties(Some("wrong-password")));
+    write_client_packet(&mut publisher, ClientPacket::Publish(failed)).await;
+    match read_server_packet_labeled(&mut publisher, "failed fallback PUBACK").await {
+        Packet::PubAck(puback) => {
+            assert_eq!(puback.pkid, 44);
+            assert_eq!(puback.reason, PubAckReason::NotAuthorized);
+        }
+        packet => panic!("expected PUBACK auth failure, got {packet:?}"),
+    }
+
+    let mut retried = Publish::new(
+        MqttMessageTopic::format(channel_id.as_str()),
+        QoS::AtLeastOnce,
+        payload,
+    );
+    retried.pkid = 44;
+    retried.properties = Some(publish_properties(Some(channel_password)));
+    write_client_packet(&mut publisher, ClientPacket::Publish(retried)).await;
+    match read_server_packet_labeled(&mut publisher, "retried fallback PUBACK").await {
+        Packet::PubAck(puback) => {
+            assert_eq!(puback.pkid, 44);
+            assert_eq!(puback.reason, PubAckReason::Success);
+        }
+        packet => panic!("expected PUBACK retry success, got {packet:?}"),
+    }
+    let publish = read_publish_with_title(&mut receiver, "fallback retry title").await;
+    write_client_packet(
+        &mut receiver,
+        ClientPacket::PubAck(PubAck::new(publish.pkid)),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1515,7 +1688,18 @@ async fn mqtt_publish_errors_map_to_mqtt5_reason_codes_and_properties() {
             Some(channel_password.as_str()),
             serde_json::to_vec(&serde_json::json!({
                 "type": "event",
-                "data": {"title": "unsupported event"}
+                "data": {"title": "missing action"}
+            }))
+            .expect("missing action payload should encode"),
+            PubAckReason::PayloadFormatInvalid,
+            "mqtt_action_required",
+        ),
+        (
+            MqttMessageTopic::format(channel_id.as_str()),
+            Some(channel_password.as_str()),
+            serde_json::to_vec(&serde_json::json!({
+                "type": "unknown",
+                "data": {"title": "unsupported model"}
             }))
             .expect("unsupported model payload should encode"),
             PubAckReason::PayloadFormatInvalid,

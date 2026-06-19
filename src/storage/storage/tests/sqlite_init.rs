@@ -67,7 +67,6 @@ async fn sqlite_sidecars_are_not_created_when_features_are_disabled() {
 
     let _storage = Storage::new_with_config(StorageInitConfig {
         db_url: Some(db_url),
-        stats_enabled: false,
         mcp_enabled: false,
         ..StorageInitConfig::default()
     })
@@ -83,6 +82,26 @@ async fn sqlite_sidecars_are_not_created_when_features_are_disabled() {
     assert!(
         dir.path().join("pushgo.delivery.sqlite").exists(),
         "delivery sidecar is always initialized because private/provider delivery is on the message path"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_new_does_not_create_stats_sidecar_by_default() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("pushgo.sqlite");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+
+    let _storage = Storage::new(Some(db_url.as_str()))
+        .await
+        .expect("sqlite storage should initialize with default sidecars");
+
+    assert!(
+        !dir.path().join("pushgo.telemetry.sqlite").exists(),
+        "DB-backed telemetry is disabled by default"
+    );
+    assert!(
+        dir.path().join("pushgo.runtime.sqlite").exists(),
+        "MCP runtime state remains enabled for Storage::new compatibility"
     );
 }
 
@@ -140,7 +159,6 @@ async fn sqlite_delivery_sidecar_migrates_legacy_delivery_rows_and_handles_new_w
 
     let storage = Storage::new_with_config(StorageInitConfig {
         db_url: Some(db_url.clone()),
-        stats_enabled: false,
         mcp_enabled: false,
         ..StorageInitConfig::default()
     })
@@ -161,6 +179,20 @@ async fn sqlite_delivery_sidecar_migrates_legacy_delivery_rows_and_handles_new_w
     .await
     .expect("legacy outbox should be migrated");
     assert_eq!(migrated_count, 1);
+    let sidecar_claimed_by_columns: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM pragma_table_info('private_outbox') WHERE name = 'claimed_by'",
+    )
+    .fetch_one(&mut delivery_conn)
+    .await
+    .expect("sidecar private_outbox schema should be inspectable");
+    assert_eq!(sidecar_claimed_by_columns, 1);
+    let migrated_claimed_by: Option<String> = sqlx::query_scalar(
+        "SELECT claimed_by FROM private_outbox WHERE delivery_id = 'legacy-delivery'",
+    )
+    .fetch_one(&mut delivery_conn)
+    .await
+    .expect("legacy outbox claimed_by should be readable after migration");
+    assert!(migrated_claimed_by.is_none());
 
     let new_delivery = "new-delivery-sidecar-only";
     let message = PrivateMessage {
@@ -226,7 +258,6 @@ async fn sqlite_delivery_sidecar_migrates_legacy_delivery_rows_and_handles_new_w
 
     let _storage = Storage::new_with_config(StorageInitConfig {
         db_url: Some(db_url.clone()),
-        stats_enabled: false,
         mcp_enabled: false,
         ..StorageInitConfig::default()
     })
@@ -264,7 +295,7 @@ async fn sqlite_delivery_sidecar_migrates_legacy_delivery_rows_and_handles_new_w
 }
 
 #[tokio::test]
-async fn sqlite_sidecars_migrate_legacy_stats_and_mcp_state() {
+async fn sqlite_init_drops_legacy_stats_and_migrates_mcp_state() {
     let dir = tempdir().expect("tempdir should be created");
     let db_path = dir.path().join("pushgo.sqlite");
     std::fs::File::create(&db_path).expect("sqlite db file should be created");
@@ -292,33 +323,32 @@ async fn sqlite_sidecars_migrate_legacy_stats_and_mcp_state() {
     drop(conn);
 
     let storage = Storage::new_with_config(StorageInitConfig {
-        db_url: Some(db_url),
-        stats_enabled: true,
+        db_url: Some(db_url.clone()),
         mcp_enabled: true,
         ..StorageInitConfig::default()
     })
     .await
     .expect("sqlite storage should initialize with sidecars");
 
-    let telemetry_url = format!(
-        "sqlite://{}?mode=rwc",
-        dir.path().join("pushgo.telemetry.sqlite").to_string_lossy()
-    );
     let runtime_url = format!(
         "sqlite://{}?mode=rwc",
         dir.path().join("pushgo.runtime.sqlite").to_string_lossy()
     );
 
-    let mut telemetry_conn = SqliteConnection::connect(&telemetry_url)
+    assert!(
+        !dir.path().join("pushgo.telemetry.sqlite").exists(),
+        "legacy DB stats are no longer migrated into a telemetry sidecar"
+    );
+    let mut core_conn = SqliteConnection::connect(&db_url)
         .await
-        .expect("telemetry sidecar should open");
-    let migrated_count: i64 = sqlx::query_scalar(
-        "SELECT messages_routed FROM gateway_stats_hourly WHERE bucket_hour = '2026-05-25T10'",
+        .expect("core sqlite db should reopen");
+    let legacy_stats_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'gateway_stats_hourly'",
     )
-    .fetch_one(&mut telemetry_conn)
+    .fetch_one(&mut core_conn)
     .await
-    .expect("migrated telemetry row should exist");
-    assert_eq!(migrated_count, 7);
+    .expect("legacy stats table existence should be queryable");
+    assert_eq!(legacy_stats_exists, 0);
 
     storage
         .save_mcp_state_json("{\"current\":true}")
@@ -357,7 +387,6 @@ async fn sqlite_dispatch_sidecar_migrates_legacy_dedupe_and_handles_new_writes()
 
     let storage = Storage::new_with_config(StorageInitConfig {
         db_url: Some(db_url.clone()),
-        stats_enabled: false,
         mcp_enabled: false,
         ..StorageInitConfig::default()
     })
@@ -808,6 +837,7 @@ async fn sqlite_init_heals_missing_private_outbox_columns() {
         occurred_at: now - 1,
         created_at: now - 1,
         claimed_at: None,
+        claimed_by: None,
         first_sent_at: None,
         last_attempt_at: None,
         acked_at: None,

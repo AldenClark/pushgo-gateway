@@ -8,8 +8,6 @@ pub(crate) struct NormalizedImageUrls(Vec<String>);
 
 pub(crate) struct OptionalText;
 
-pub(crate) struct OptionalUrl;
-
 impl NormalizedTags {
     pub(crate) fn parse(values: &[String], field: &'static str) -> ValueResult<Self> {
         Ok(Self(normalize_text_list(values, field, 32, 64, "tag")?))
@@ -27,23 +25,6 @@ impl NormalizedImageUrls {
 
     pub(crate) fn into_inner(self) -> Vec<String> {
         self.0
-    }
-}
-
-impl OptionalUrl {
-    pub(crate) fn normalize(raw: Option<&str>, field: &'static str) -> ValueResult<Option<String>> {
-        const MAX_URL_LEN: usize = 2048;
-        let Some(raw) = raw else {
-            return Ok(None);
-        };
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        if trimmed.len() > MAX_URL_LEN {
-            return Err(ValueError::new(format!("{field} contains oversized url")));
-        }
-        Ok(Some(trimmed.to_string()))
     }
 }
 

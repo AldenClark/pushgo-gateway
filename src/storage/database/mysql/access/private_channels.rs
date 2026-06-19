@@ -65,8 +65,8 @@ impl MySqlDb {
         entry: &PrivateOutboxEntry,
     ) -> StoreResult<()> {
         sqlx::query(
-            "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON DUPLICATE KEY UPDATE \
                  status = VALUES(status), attempts = VALUES(attempts), updated_at = VALUES(updated_at), next_attempt_at = VALUES(next_attempt_at)",
         )
@@ -77,6 +77,7 @@ impl MySqlDb {
         .bind(entry.occurred_at)
         .bind(entry.created_at)
         .bind(entry.claimed_at)
+        .bind(entry.claimed_by.as_deref())
         .bind(entry.first_sent_at)
         .bind(entry.last_attempt_at)
         .bind(entry.acked_at)
@@ -103,7 +104,7 @@ impl MySqlDb {
         let mut tx = self.pool.begin().await?;
         for chunk in entries.chunks(50) {
             let mut query = sqlx::QueryBuilder::<sqlx::MySql>::new(
-                "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) ",
+                "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) ",
             );
             query.push_values(chunk, |mut row, item| {
                 row.push_bind(&item.device_id[..])
@@ -113,6 +114,7 @@ impl MySqlDb {
                     .push_bind(item.entry.occurred_at)
                     .push_bind(item.entry.created_at)
                     .push_bind(item.entry.claimed_at)
+                    .push_bind(item.entry.claimed_by.as_deref())
                     .push_bind(item.entry.first_sent_at)
                     .push_bind(item.entry.last_attempt_at)
                     .push_bind(item.entry.acked_at)
@@ -155,7 +157,7 @@ impl MySqlDb {
         limit: usize,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         let rows = sqlx::query(
-            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE device_id = ? AND status IN (?, ?, ?) \
              ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC LIMIT ?",
         )
@@ -176,6 +178,7 @@ impl MySqlDb {
                 occurred_at: r.get("occurred_at"),
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),
+                claimed_by: r.get("claimed_by"),
                 first_sent_at: r.get("first_sent_at"),
                 last_attempt_at: r.get("last_attempt_at"),
                 acked_at: r.get("acked_at"),

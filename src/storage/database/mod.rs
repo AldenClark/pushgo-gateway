@@ -18,6 +18,6 @@ pub use access::DatabaseAccess;
 pub(crate) use access::{
     ChannelQueryDatabaseAccess, DedupeDatabaseAccess, DeviceRouteDatabaseAccess,
     PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderPullDatabaseAccess,
-    ProviderSubscriptionDatabaseAccess, StatsDatabaseAccess, SystemStateDatabaseAccess,
+    ProviderSubscriptionDatabaseAccess, SystemStateDatabaseAccess,
 };
 pub use driver::DatabaseDriver;

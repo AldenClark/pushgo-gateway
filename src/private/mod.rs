@@ -17,7 +17,7 @@ use crate::{
     mqtt::MqttConfig,
     routing::DeviceRegistry,
     runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
-    stats::StatsCollector,
+    runtime_counters::RuntimeCounterCollector,
     storage::{
         DeviceId, MaintenanceCleanupConfig, MaintenanceCleanupStats, Platform, PrivateMessage,
         PrivateOutboxBatchEntry, PrivateOutboxEntry, Storage,

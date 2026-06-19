@@ -1,4 +1,7 @@
 use super::*;
+use crate::storage::{
+    SUBSCRIPTION_STATUS_ACTIVE, SUBSCRIPTION_STATUS_FROZEN, SUBSCRIPTION_STATUS_INACTIVE,
+};
 
 impl MySqlDb {
     pub(super) async fn cleanup_expired_provider_pull_queue(
@@ -129,11 +132,43 @@ impl MySqlDb {
              ) victim ON victim.channel_id = s.channel_id AND victim.device_id = s.device_id \
              SET s.status = ?, s.updated_at = ?",
         )
-        .bind("active")
+        .bind(SUBSCRIPTION_STATUS_ACTIVE)
         .bind(before_ts)
         .bind(before_ts)
         .bind(limit as i64)
-        .bind("inactive")
+        .bind(SUBSCRIPTION_STATUS_INACTIVE)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    pub(super) async fn cleanup_inactive_subscriptions(
+        &self,
+        before_ts: i64,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let result = sqlx::query(
+            "UPDATE channel_subscriptions s \
+             JOIN ( \
+               SELECT channel_id, device_id FROM ( \
+                 SELECT s.channel_id, s.device_id FROM channel_subscriptions s \
+                 JOIN devices d ON d.device_id = s.device_id \
+                 WHERE s.status = ? AND s.updated_at <= ? \
+                   AND d.route_updated_at IS NOT NULL \
+                   AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(s.device_id, 1, 16)) \
+                   AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = SUBSTRING(s.device_id, 1, 16)) \
+                   AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = SUBSTRING(s.device_id, 1, 16)) \
+                 ORDER BY s.updated_at ASC LIMIT ? \
+               ) selected_subscriptions \
+             ) victim ON victim.channel_id = s.channel_id AND victim.device_id = s.device_id \
+             SET s.status = ?, s.updated_at = ?",
+        )
+        .bind(SUBSCRIPTION_STATUS_INACTIVE)
+        .bind(before_ts)
+        .bind(limit as i64)
+        .bind(SUBSCRIPTION_STATUS_FROZEN)
         .bind(now)
         .execute(&self.pool)
         .await?;
@@ -147,8 +182,8 @@ impl MySqlDb {
     ) -> StoreResult<usize> {
         self.cleanup_devices_by_query(
             "SELECT device_id, device_key FROM devices d \
-             WHERE NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status = 'active') \
-               AND EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status <> 'active' AND s.updated_at <= ?) \
+             WHERE NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status <> 'frozen') \
+               AND EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status = 'frozen' AND s.updated_at <= ?) \
                AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(d.device_id, 1, 16)) \
                AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = SUBSTRING(d.device_id, 1, 16)) \
                AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = SUBSTRING(d.device_id, 1, 16)) \
@@ -168,91 +203,18 @@ impl MySqlDb {
             "DELETE c FROM channels c \
              JOIN ( \
                SELECT channel_id FROM ( \
-                 SELECT c.channel_id FROM channels c \
-                 WHERE c.updated_at <= ? \
-                   AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = c.channel_id) \
-                   AND NOT EXISTS (SELECT 1 FROM channel_stats_daily st WHERE st.channel_id = c.channel_id AND st.messages_routed > 0) \
-                 ORDER BY c.updated_at ASC LIMIT ? \
-               ) selected_channels \
-             ) victim ON victim.channel_id = c.channel_id",
+                   SELECT c.channel_id FROM channels c \
+                   WHERE c.updated_at <= ? \
+                     AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = c.channel_id) \
+                   ORDER BY c.updated_at ASC LIMIT ? \
+                 ) selected_channels \
+               ) victim ON victim.channel_id = c.channel_id",
         )
         .bind(before_ts)
         .bind(limit as i64)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() as usize)
-    }
-
-    pub(super) async fn cleanup_audit_rows(
-        &self,
-        before_ts: i64,
-        limit: usize,
-    ) -> StoreResult<usize> {
-        let route_rows = delete_limited_mysql(
-            &self.pool,
-            "device_route_audit",
-            "created_at",
-            before_ts,
-            limit,
-        )
-        .await?;
-        let subscription_rows = delete_limited_mysql(
-            &self.pool,
-            "subscription_audit",
-            "created_at",
-            before_ts,
-            limit,
-        )
-        .await?;
-        Ok(route_rows.saturating_add(subscription_rows))
-    }
-
-    pub(super) async fn cleanup_hourly_stats(
-        &self,
-        before_bucket: &str,
-        limit: usize,
-    ) -> StoreResult<usize> {
-        let gateway_rows = delete_limited_bucket_mysql(
-            &self.pool,
-            "gateway_stats_hourly",
-            "bucket_hour",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        let ops_rows = delete_limited_bucket_mysql(
-            &self.pool,
-            "ops_stats_hourly",
-            "bucket_hour",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        Ok(gateway_rows.saturating_add(ops_rows))
-    }
-
-    pub(super) async fn cleanup_daily_stats(
-        &self,
-        before_bucket: &str,
-        limit: usize,
-    ) -> StoreResult<usize> {
-        let channel_rows = delete_limited_bucket_mysql(
-            &self.pool,
-            "channel_stats_daily",
-            "bucket_date",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        let device_rows = delete_limited_bucket_mysql(
-            &self.pool,
-            "device_stats_daily",
-            "bucket_date",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        Ok(channel_rows.saturating_add(device_rows))
     }
 
     async fn cleanup_devices_by_query(
@@ -273,7 +235,6 @@ impl MySqlDb {
             let private_device_id = PrivateDeviceId::parse_compat(route_device_id.as_slice())
                 .ok_or(StoreError::InvalidDeviceToken)?
                 .to_vec();
-            let device_key: Option<String> = row.try_get("device_key").ok();
             let delivery_ids = sqlx::query(
                 "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
                  UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
@@ -298,12 +259,6 @@ impl MySqlDb {
             ] {
                 sqlx::query(statement)
                     .bind(private_device_id.as_slice())
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            if let Some(device_key) = device_key.as_deref() {
-                sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
-                    .bind(device_key)
                     .execute(&mut *tx)
                     .await?;
             }
@@ -415,6 +370,9 @@ impl MySqlDb {
                     DedupeState::Sent => OpDedupeReservation::Sent {
                         delivery_id: existing_delivery_id,
                     },
+                    DedupeState::PartialFailure => OpDedupeReservation::PartialFailure {
+                        delivery_id: existing_delivery_id,
+                    },
                 }
             } else {
                 OpDedupeReservation::Pending {
@@ -430,6 +388,7 @@ impl MySqlDb {
         &self,
         dedupe_key: &str,
         delivery_id: &str,
+        state: DedupeState,
     ) -> StoreResult<bool> {
         let now = Utc::now().timestamp_millis();
         let result = sqlx::query(
@@ -437,7 +396,7 @@ impl MySqlDb {
              SET state = ?, sent_at = ?, updated_at = ? \
              WHERE dedupe_key = ? AND delivery_id = ? AND state = ?",
         )
-        .bind(DedupeState::Sent.as_str())
+        .bind(state.as_str())
         .bind(now)
         .bind(now)
         .bind(dedupe_key)
@@ -482,12 +441,6 @@ impl MySqlDb {
 
     pub(super) async fn automation_reset(&self) -> StoreResult<()> {
         let tables = vec![
-            "subscription_audit",
-            "device_route_audit",
-            "channel_stats_daily",
-            "device_stats_daily",
-            "gateway_stats_hourly",
-            "ops_stats_hourly",
             "dispatch_op_dedupe",
             "dispatch_delivery_dedupe",
             "semantic_id_registry",
@@ -575,36 +528,4 @@ async fn delete_orphan_private_payload_in_mysql_tx(
     .execute(&mut **tx)
     .await?;
     Ok(())
-}
-
-async fn delete_limited_mysql(
-    pool: &sqlx::MySqlPool,
-    table: &str,
-    column: &str,
-    before_ts: i64,
-    limit: usize,
-) -> StoreResult<usize> {
-    let sql = format!("DELETE FROM {table} WHERE {column} <= ? ORDER BY {column} ASC LIMIT ?");
-    let result = sqlx::query(sql.as_str())
-        .bind(before_ts)
-        .bind(limit as i64)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() as usize)
-}
-
-async fn delete_limited_bucket_mysql(
-    pool: &sqlx::MySqlPool,
-    table: &str,
-    column: &str,
-    before_bucket: &str,
-    limit: usize,
-) -> StoreResult<usize> {
-    let sql = format!("DELETE FROM {table} WHERE {column} < ? ORDER BY {column} ASC LIMIT ?");
-    let result = sqlx::query(sql.as_str())
-        .bind(before_bucket)
-        .bind(limit as i64)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() as usize)
 }

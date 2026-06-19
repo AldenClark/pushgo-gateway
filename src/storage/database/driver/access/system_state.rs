@@ -48,6 +48,15 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, cleanup_stale_subscriptions(before_ts, now, limit))
     }
 
+    async fn cleanup_inactive_subscriptions(
+        &self,
+        before_ts: i64,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        delegate_db_async!(self, cleanup_inactive_subscriptions(before_ts, now, limit))
+    }
+
     async fn cleanup_soft_deleted_devices(
         &self,
         before_ts: i64,
@@ -58,17 +67,5 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
 
     async fn cleanup_orphan_channels(&self, before_ts: i64, limit: usize) -> StoreResult<usize> {
         delegate_db_async!(self, cleanup_orphan_channels(before_ts, limit))
-    }
-
-    async fn cleanup_audit_rows(&self, before_ts: i64, limit: usize) -> StoreResult<usize> {
-        delegate_db_async!(self, cleanup_audit_rows(before_ts, limit))
-    }
-
-    async fn cleanup_hourly_stats(&self, before_bucket: &str, limit: usize) -> StoreResult<usize> {
-        delegate_db_async!(self, cleanup_hourly_stats(before_bucket, limit))
-    }
-
-    async fn cleanup_daily_stats(&self, before_bucket: &str, limit: usize) -> StoreResult<usize> {
-        delegate_db_async!(self, cleanup_daily_stats(before_bucket, limit))
     }
 }

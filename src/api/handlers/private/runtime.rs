@@ -1,19 +1,6 @@
 use serde::Serialize;
 
-use crate::{
-    app::{AppState, PrivateTransportProfile},
-    private::{
-        PrivateStateMemorySnapshot,
-        metrics::{PrivateHealthMode, PrivateHealthSnapshot, PrivateMetricsSnapshot},
-    },
-    storage::cache::CacheMemorySnapshot,
-};
-
-#[derive(Debug, Serialize)]
-pub(super) struct PrivateMetricsResponse {
-    pub(super) private_enabled: bool,
-    pub(super) metrics: PrivateMetricsSnapshot,
-}
+use crate::app::{AppState, PrivateTransportProfile};
 
 #[derive(Debug, Serialize)]
 pub(super) struct PrivateTransportHints {
@@ -43,17 +30,6 @@ pub(super) struct GatewayProfileResponse {
     pub(super) transport: Option<PrivateTransportHints>,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct PrivateMemoryResponse {
-    pub(super) private_channel_enabled: bool,
-    pub(super) private_runtime_enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) private_runtime: Option<PrivateStateMemorySnapshot>,
-    pub(super) cache: CacheMemorySnapshot,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) private_outbox_total: Option<usize>,
-}
-
 pub(super) struct PrivateRuntimeView<'a> {
     state: &'a AppState,
 }
@@ -76,21 +52,6 @@ impl PrivateTransportProfile {
             mqtt_protocol: "mqtt5",
             mqtt_qos: 1,
             mqtt_topic_template: "{channel_id}",
-        }
-    }
-}
-
-impl PrivateMetricsResponse {
-    fn from_view(view: &PrivateRuntimeView<'_>) -> Self {
-        let metrics = view
-            .state
-            .private
-            .as_ref()
-            .map(|private| private.metrics.snapshot())
-            .unwrap_or_else(|| crate::private::metrics::PrivateMetrics::default().snapshot());
-        Self {
-            private_enabled: view.state.private_channel_enabled,
-            metrics,
         }
     }
 }
@@ -118,35 +79,12 @@ impl<'a> PrivateRuntimeView<'a> {
         Self { state }
     }
 
-    fn health_mode(&self) -> PrivateHealthMode {
-        if self.state.private_channel_enabled {
-            PrivateHealthMode::Enabled
-        } else {
-            PrivateHealthMode::Disabled
-        }
-    }
-
     pub(super) fn transport_profile(&self) -> &'a PrivateTransportProfile {
         &self.state.private_transport_profile
     }
 
     pub(super) fn public_base_url(&self) -> Option<&str> {
         self.state.public_base_url.as_deref()
-    }
-
-    pub(super) fn metrics_response(&self) -> PrivateMetricsResponse {
-        PrivateMetricsResponse::from_view(self)
-    }
-
-    pub(super) fn health_snapshot(&self) -> PrivateHealthSnapshot {
-        self.state
-            .private
-            .as_ref()
-            .map(|private| private.metrics.health_snapshot(self.health_mode()))
-            .unwrap_or_else(|| {
-                crate::private::metrics::PrivateMetrics::default()
-                    .health_snapshot(self.health_mode())
-            })
     }
 
     pub(super) fn gateway_profile_response(&self) -> GatewayProfileResponse {
@@ -157,24 +95,6 @@ impl<'a> PrivateRuntimeView<'a> {
                 self.transport_profile(),
                 self.public_base_url(),
             )
-        }
-    }
-
-    pub(super) fn memory_response(
-        &self,
-        private_outbox_total: Option<usize>,
-    ) -> PrivateMemoryResponse {
-        let private_runtime = self
-            .state
-            .private
-            .as_ref()
-            .map(|private| private.memory_snapshot());
-        PrivateMemoryResponse {
-            private_channel_enabled: self.state.private_channel_enabled,
-            private_runtime_enabled: self.state.private.is_some(),
-            private_runtime,
-            cache: self.state.store.cache_memory_snapshot(),
-            private_outbox_total,
         }
     }
 }

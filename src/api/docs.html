@@ -279,10 +279,12 @@
           而被替换时，gateway 会通过 CONNACK Assigned Client Identifier
           返回分配后的 device key。MQTT topic 直接使用
           <code>{channel_id}</code>；payload 使用 <code>type</code> 区分业务模型。
-          当前只支持 <code>message</code>，publish envelope 为
-          <code>{"type":"message","data":{...}}</code>。MQTT publish 的
-          <code>data</code> 可以携带 <code>thing_id</code>，但 MQTT
-          下行只投递频道级 message。MQTT 遗嘱消息只允许
+          publish envelope 为
+          <code>{"type":"message","data":{...}}</code>，或
+          <code>{"type":"event|thing","action":"create|update|close|archive|delete","data":{...}}</code>。
+          MQTT 上行和下行都支持 message/event/thing；topic/password 是可信通道身份，
+          payload 不携带 <code>channel_id</code> 或 <code>password</code>。
+          MQTT 遗嘱消息只允许
           <code>device_type=subscribe</code> 设备设置；Will Topic 为原始
           <code>{channel_id}</code>，可发送到任意频道，Will QoS 必须为
           1，Will Retain 必须为 false，Will Properties 必须包含 User
@@ -302,11 +304,13 @@
           For subscribe devices, an empty, unknown, or replaced client id causes
           gateway to return the assigned device key in CONNACK Assigned Client
           Identifier. MQTT topic is the raw <code>{channel_id}</code>; payload
-          <code>type</code> identifies the business model. Current MQTT support is
-          <code>message</code> only, with publish envelope
-          <code>{"type":"message","data":{...}}</code>. MQTT publish
-          <code>data</code> may include <code>thing_id</code>, but MQTT downlink
-          delivers channel-level message payloads only. MQTT Will Message is
+          <code>type</code> identifies the business model. MQTT publish accepts
+          <code>{"type":"message","data":{...}}</code> for messages and
+          <code>{"type":"event|thing","action":"create|update|close|archive|delete","data":{...}}</code>
+          for entity actions. MQTT downlink uses
+          <code>{"schema":"pushgo.mqtt.delivery.v1","type":"message|event|thing","delivery_id":"...","channel_id":"...","data":{...}}</code>
+          as a realtime outlet and does not persist offline MQTT receiver
+          deliveries through private outbox. MQTT Will Message is
           accepted only from <code>device_type=subscribe</code>; Will Topic is raw
           <code>{channel_id}</code> and may target any channel, Will QoS must be
           1, Will Retain must be false, Will Properties must include User
@@ -465,10 +469,8 @@
 {
   "success": true,
   "data": {
-    "channel_id": "01HZX9G7G7JPRV4M3H5T9B3C6A",
     "op_id": "op-message-20260219-0001",
-    "message_id": "8a1fc4b3d9f04fd2857f92f66f7cc5d1",
-    "accepted": true
+    "message_id": "8a1fc4b3d9f04fd2857f92f66f7cc5d1"
   }
 }</pre
         >
@@ -803,20 +805,6 @@
                 currently 32-char lowercase hex.
               </td>
             </tr>
-            <tr>
-              <td><code>thing_id</code></td>
-              <td>string | null</td>
-              <td>
-                关联对象 ID（若存在，格式同网关返回的
-                <code>thing_id</code>）。<br />Linked thing ID if present (same
-                format as gateway-generated <code>thing_id</code>).
-              </td>
-            </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
-            </tr>
           </tbody>
         </table>
       </section>
@@ -986,20 +974,6 @@
               <td>string</td>
               <td>回传幂等键。<br />Echoed idempotency key.</td>
             </tr>
-            <tr>
-              <td><code>thing_id</code></td>
-              <td>string | null</td>
-              <td>
-                关联对象 ID（若存在，格式同网关返回的
-                <code>thing_id</code>）。<br />Linked thing ID if present (same
-                format as gateway-generated <code>thing_id</code>).
-              </td>
-            </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
-            </tr>
           </tbody>
         </table>
 
@@ -1146,16 +1120,6 @@
               <td>string</td>
               <td>回传幂等键。<br />Echoed idempotency key.</td>
             </tr>
-            <tr>
-              <td><code>thing_id</code></td>
-              <td>string | null</td>
-              <td>关联对象 ID（若存在）。<br />Linked thing ID if present.</td>
-            </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
-            </tr>
           </tbody>
         </table>
 
@@ -1281,16 +1245,6 @@
               <td><code>op_id</code></td>
               <td>string</td>
               <td>回传幂等键。<br />Echoed idempotency key.</td>
-            </tr>
-            <tr>
-              <td><code>thing_id</code></td>
-              <td>string | null</td>
-              <td>关联对象 ID（若存在）。<br />Linked thing ID if present.</td>
-            </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
             </tr>
           </tbody>
         </table>
@@ -1444,11 +1398,6 @@
               <td>string</td>
               <td>回传幂等键。<br />Echoed idempotency key.</td>
             </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
-            </tr>
           </tbody>
         </table>
 
@@ -1581,11 +1530,6 @@
               <td>string</td>
               <td>回传幂等键。<br />Echoed idempotency key.</td>
             </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
-            </tr>
           </tbody>
         </table>
 
@@ -1717,11 +1661,6 @@
               <td><code>op_id</code></td>
               <td>string</td>
               <td>回传幂等键。<br />Echoed idempotency key.</td>
-            </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
             </tr>
           </tbody>
         </table>
@@ -1861,11 +1800,6 @@
               <td>string</td>
               <td>回传幂等键。<br />Echoed idempotency key.</td>
             </tr>
-            <tr>
-              <td><code>accepted</code></td>
-              <td>boolean</td>
-              <td>是否被网关受理。<br />Whether request is accepted.</td>
-            </tr>
           </tbody>
         </table>
       </section>
@@ -1973,9 +1907,9 @@
           <li>认证失败返回 401。<br />Authentication failures return 401.</li>
           <li>频道不存在返回 404。<br />Missing channels return 404.</li>
           <li>
-            分发部分失败时返回 503，且响应体
-            <code>data.accepted=false</code>。<br />Partial dispatch failures
-            return 503 with <code>data.accepted=false</code>.
+            发送端成功响应只表示 gateway 已受理；下游部分投递失败不改变发送端回执。<br />
+            Sender success responses only mean gateway accepted the request;
+            downstream partial delivery failures do not change the sender ack.
           </li>
         </ul>
       </section>

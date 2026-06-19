@@ -32,29 +32,6 @@ async fn upsert_device_route_in_tx(
     Ok(())
 }
 
-async fn insert_device_route_audit_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
-    audit: &DeviceRouteAuditWrite,
-) -> StoreResult<()> {
-    sqlx::query(
-        "INSERT INTO device_route_audit (device_key, action, old_platform, new_platform, old_channel_type, new_channel_type, old_provider_token, new_provider_token, issue_reason, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&audit.device_key)
-    .bind(&audit.action)
-    .bind(&audit.old_platform)
-    .bind(&audit.new_platform)
-    .bind(&audit.old_channel_type)
-    .bind(&audit.new_channel_type)
-    .bind(&audit.old_provider_token)
-    .bind(&audit.new_provider_token)
-    .bind(&audit.issue_reason)
-    .bind(audit.created_at)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 #[derive(Debug)]
 struct DuplicateProviderRouteRow {
     device_id: Vec<u8>,
@@ -204,12 +181,6 @@ async fn coalesce_duplicate_provider_routes_in_tx(
             .bind(duplicate.device_id.as_slice())
             .execute(&mut **tx)
             .await?;
-        if let Some(device_key) = duplicate.device_key.as_deref() {
-            sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
-                .bind(device_key)
-                .execute(&mut **tx)
-                .await?;
-        }
 
         cleanup_orphan_private_payloads_in_tx(tx, &delivery_ids).await?;
     }
@@ -254,16 +225,35 @@ impl MySqlDb {
         Ok(())
     }
 
+    pub(super) async fn touch_device_activity(
+        &self,
+        device_id: DeviceId,
+        at_ts: i64,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "UPDATE devices \
+             SET route_updated_at = CASE \
+               WHEN route_updated_at IS NULL OR route_updated_at < ? THEN ? \
+               ELSE route_updated_at \
+             END \
+             WHERE device_id = ?",
+        )
+        .bind(at_ts)
+        .bind(at_ts)
+        .bind(device_id.as_slice())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub(super) async fn persist_device_route_change(
         &self,
         route: &DeviceRouteRecordRow,
-        audit: &DeviceRouteAuditWrite,
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
         let values = route.persistence_values()?;
         upsert_device_route_in_tx(&mut tx, route).await?;
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
-        insert_device_route_audit_in_tx(&mut tx, audit).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -272,7 +262,6 @@ impl MySqlDb {
         &self,
         route: &DeviceRouteRecordRow,
         old_device_key: Option<&str>,
-        audit: &DeviceRouteAuditWrite,
     ) -> StoreResult<()> {
         let values = route.persistence_values()?;
         let old_key = old_device_key
@@ -299,7 +288,6 @@ impl MySqlDb {
 
         upsert_device_route_in_tx(&mut tx, route).await?;
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
-        insert_device_route_audit_in_tx(&mut tx, audit).await?;
 
         if let (Some(old_key), Some(device_id)) = (old_key, old_device_id.as_deref()) {
             for statement in [
@@ -318,10 +306,6 @@ impl MySqlDb {
             sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
                 .bind(old_key.as_str())
                 .bind(device_id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
-                .bind(old_key.as_str())
                 .execute(&mut *tx)
                 .await?;
             cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
@@ -366,10 +350,6 @@ impl MySqlDb {
         sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
             .bind(normalized_key.as_str())
             .bind(device_id.as_slice())
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
-            .bind(normalized_key.as_str())
             .execute(&mut *tx)
             .await?;
 
@@ -428,136 +408,6 @@ impl MySqlDb {
 
         cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
 
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub(super) async fn append_device_route_audit(
-        &self,
-        entry: &DeviceRouteAuditWrite,
-    ) -> StoreResult<()> {
-        let mut tx = self.pool.begin().await?;
-        insert_device_route_audit_in_tx(&mut tx, entry).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub(super) async fn append_subscription_audit(
-        &self,
-        entry: &SubscriptionAuditWrite,
-    ) -> StoreResult<()> {
-        sqlx::query(
-            "INSERT INTO subscription_audit (channel_id, device_key, action, platform, channel_type, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&entry.channel_id[..])
-        .bind(&entry.device_key)
-        .bind(&entry.action)
-        .bind(&entry.platform)
-        .bind(&entry.channel_type)
-        .bind(entry.created_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub(super) async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()> {
-        let mut tx = self.pool.begin().await?;
-        for row in &batch.channels {
-            sqlx::query(
-                "INSERT INTO channel_stats_daily \
-                 (channel_id, bucket_date, messages_routed, deliveries_attempted, deliveries_acked, private_enqueued, provider_attempted, provider_failed, provider_success, private_realtime_delivered) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 ON DUPLICATE KEY UPDATE \
-                   messages_routed = messages_routed + VALUES(messages_routed), \
-                   deliveries_attempted = deliveries_attempted + VALUES(deliveries_attempted), \
-                   deliveries_acked = deliveries_acked + VALUES(deliveries_acked), \
-                   private_enqueued = private_enqueued + VALUES(private_enqueued), \
-                   provider_attempted = provider_attempted + VALUES(provider_attempted), \
-                   provider_failed = provider_failed + VALUES(provider_failed), \
-                   provider_success = provider_success + VALUES(provider_success), \
-                   private_realtime_delivered = private_realtime_delivered + VALUES(private_realtime_delivered)",
-            )
-            .bind(&row.channel_id[..])
-            .bind(row.bucket_date.as_str())
-            .bind(row.messages_routed)
-            .bind(row.deliveries_attempted)
-            .bind(row.deliveries_acked)
-            .bind(row.private_enqueued)
-            .bind(row.provider_attempted)
-            .bind(row.provider_failed)
-            .bind(row.provider_success)
-            .bind(row.private_realtime_delivered)
-            .execute(&mut *tx)
-            .await?;
-        }
-        for row in &batch.devices {
-            sqlx::query(
-                "INSERT INTO device_stats_daily \
-                 (device_key, bucket_date, messages_received, messages_acked, private_connected_count, private_pull_count, provider_success_count, provider_failure_count, private_outbox_enqueued_count) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 ON DUPLICATE KEY UPDATE \
-                   messages_received = messages_received + VALUES(messages_received), \
-                   messages_acked = messages_acked + VALUES(messages_acked), \
-                   private_connected_count = private_connected_count + VALUES(private_connected_count), \
-                   private_pull_count = private_pull_count + VALUES(private_pull_count), \
-                   provider_success_count = provider_success_count + VALUES(provider_success_count), \
-                   provider_failure_count = provider_failure_count + VALUES(provider_failure_count), \
-                   private_outbox_enqueued_count = private_outbox_enqueued_count + VALUES(private_outbox_enqueued_count)",
-            )
-            .bind(
-                DeviceKeyRef::parse(row.device_key.as_str())
-                    .map(DeviceKeyRef::as_str)
-                    .unwrap_or(""),
-            )
-            .bind(row.bucket_date.as_str())
-            .bind(row.messages_received)
-            .bind(row.messages_acked)
-            .bind(row.private_connected_count)
-            .bind(row.private_pull_count)
-            .bind(row.provider_success_count)
-            .bind(row.provider_failure_count)
-            .bind(row.private_outbox_enqueued_count)
-            .execute(&mut *tx)
-            .await?;
-        }
-        for row in &batch.gateway {
-            sqlx::query(
-                "INSERT INTO gateway_stats_hourly \
-                 (bucket_hour, messages_routed, deliveries_attempted, deliveries_acked, private_outbox_depth_max, dedupe_pending_max, active_private_sessions_max) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?) \
-                 ON DUPLICATE KEY UPDATE \
-                   messages_routed = messages_routed + VALUES(messages_routed), \
-                   deliveries_attempted = deliveries_attempted + VALUES(deliveries_attempted), \
-                   deliveries_acked = deliveries_acked + VALUES(deliveries_acked), \
-                   private_outbox_depth_max = GREATEST(private_outbox_depth_max, VALUES(private_outbox_depth_max)), \
-                   dedupe_pending_max = GREATEST(dedupe_pending_max, VALUES(dedupe_pending_max)), \
-                   active_private_sessions_max = GREATEST(active_private_sessions_max, VALUES(active_private_sessions_max))",
-            )
-            .bind(row.bucket_hour.as_str())
-            .bind(row.messages_routed)
-            .bind(row.deliveries_attempted)
-            .bind(row.deliveries_acked)
-            .bind(row.private_outbox_depth_max)
-            .bind(row.dedupe_pending_max)
-            .bind(row.active_private_sessions_max)
-            .execute(&mut *tx)
-            .await?;
-        }
-        for row in &batch.ops {
-            sqlx::query(
-                "INSERT INTO ops_stats_hourly \
-                 (bucket_hour, metric_key, metric_value) \
-                 VALUES (?, ?, ?) \
-                 ON DUPLICATE KEY UPDATE \
-                   metric_value = metric_value + VALUES(metric_value)",
-            )
-            .bind(row.bucket_hour.as_str())
-            .bind(row.metric_key.trim())
-            .bind(row.metric_value)
-            .execute(&mut *tx)
-            .await?;
-        }
         tx.commit().await?;
         Ok(())
     }

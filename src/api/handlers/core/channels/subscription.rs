@@ -5,19 +5,17 @@ use crate::{
     app::AppState,
     routing::DeviceChannelType,
     services::{
-        ChannelSubscribeCommand, ChannelUnsubscribeCommand, subscribe_private_device_to_channel,
+        ChannelCommandSource, ChannelSubscribeCommand, ChannelUnsubscribeCommand,
+        record_route_activity_for_device_key, subscribe_private_device_to_channel,
         unsubscribe_private_device_from_channel,
     },
     storage::DeviceRouteRecordRow,
     value::DeviceKeyRef,
 };
 
-use super::{
-    audit::append_subscription_audit,
-    types::{
-        ChannelSubscribeRequest, ChannelSubscribeResponse, ChannelUnsubscribeRequest,
-        ChannelUnsubscribeResponse,
-    },
+use super::types::{
+    ChannelSubscribeRequest, ChannelSubscribeResponse, ChannelUnsubscribeRequest,
+    ChannelUnsubscribeResponse,
 };
 
 pub(crate) async fn channel_subscribe(
@@ -95,7 +93,7 @@ pub(crate) async fn channel_subscribe(
                             .as_ref()
                             .map(|alias| alias.as_str().to_string()),
                         password: password.as_str().to_string(),
-                        source: "http",
+                        source: ChannelCommandSource::Http,
                         allow_create_channel: true,
                     },
                 )
@@ -139,15 +137,13 @@ pub(crate) async fn channel_subscribe(
                     .await?
             }
         };
-
-        append_subscription_audit(
+        record_route_activity_for_device_key(
             &state,
-            outcome.channel_id,
             device_key.as_str(),
-            "subscribe",
-            &route,
+            "provider_channel_subscribe",
         )
-        .await?;
+        .await;
+
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
@@ -219,7 +215,7 @@ pub(crate) async fn channel_unsubscribe(
                     ChannelUnsubscribeCommand {
                         device_key: device_key.as_str().to_string(),
                         channel_id: channel_id.to_string(),
-                        source: "http",
+                        source: ChannelCommandSource::Http,
                     },
                 )
                 .await?;
@@ -239,16 +235,6 @@ pub(crate) async fn channel_unsubscribe(
             }
         };
 
-        if removed {
-            append_subscription_audit(
-                &state,
-                channel_id.into_inner(),
-                device_key.as_str(),
-                "unsubscribe",
-                &route,
-            )
-            .await?;
-        }
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,

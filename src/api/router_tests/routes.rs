@@ -53,7 +53,7 @@ async fn thing_scoped_message_route_returns_not_found() {
 }
 
 #[tokio::test]
-async fn mqtt_private_device_outbox_only_receives_channel_messages() {
+async fn mqtt_private_device_without_active_receiver_is_accepted_without_private_outbox() {
     let state = build_private_test_state().await;
     let device_key = "mqtt-router-outbox-device";
     let password = "mqtt-router-password";
@@ -106,7 +106,7 @@ async fn mqtt_private_device_outbox_only_receives_channel_messages() {
             .await
             .expect("outbox should list")
             .len(),
-        1
+        0
     );
 
     for (path, payload) in [
@@ -159,7 +159,13 @@ async fn mqtt_private_device_outbox_only_receives_channel_messages() {
         assert_eq!(
             status,
             StatusCode::OK,
-            "{path} should be accepted: {body:?}"
+            "{path} should be accepted by gateway without an active MQTT receiver: {body:?}"
+        );
+        assert!(
+            body.get("data")
+                .and_then(Value::as_object)
+                .is_some_and(|data| data.get("op_id").is_some()),
+            "{path} should return minimal send ack: {body:?}"
         );
     }
 
@@ -170,8 +176,70 @@ async fn mqtt_private_device_outbox_only_receives_channel_messages() {
         .expect("outbox should list after non-message dispatches");
     assert_eq!(
         outbox.len(),
-        1,
-        "mqtt outbox should only contain channel-level message deliveries"
+        0,
+        "mqtt receiver deliveries must not be persisted through private outbox"
+    );
+}
+
+#[tokio::test]
+async fn message_route_reuses_entity_for_duplicate_finalized_op() {
+    let state = build_test_state().await;
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "router-duplicate-message-device",
+        "router-duplicate-message",
+        "password-1234",
+        "router-duplicate-message-provider-token",
+        Platform::ANDROID,
+    )
+    .await
+    .to_string();
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let payload = json!({
+        "channel_id": channel_id,
+        "password": "password-1234",
+        "op_id": "router-duplicate-message-op",
+        "title": "deduped"
+    });
+
+    let (first_status, first_body) = post_json(app.clone(), "/message", payload.clone()).await;
+    let (second_status, second_body) = post_json(app, "/message", payload).await;
+
+    assert_eq!(first_status, StatusCode::OK, "first submit: {first_body:?}");
+    assert_eq!(
+        second_status,
+        StatusCode::OK,
+        "duplicate submit: {second_body:?}"
+    );
+    let first_data = first_body
+        .get("data")
+        .and_then(Value::as_object)
+        .expect("first response should include data");
+    let second_data = second_body
+        .get("data")
+        .and_then(Value::as_object)
+        .expect("duplicate response should include data");
+    assert!(
+        first_data.get("accepted").is_none(),
+        "send response should not expose accepted flag"
+    );
+    assert!(
+        second_data.get("accepted").is_none(),
+        "send response should not expose accepted flag"
+    );
+    assert!(
+        first_data.get("channel_id").is_none(),
+        "send response should not echo channel_id"
+    );
+    assert_eq!(
+        first_data.get("message_id"),
+        second_data.get("message_id"),
+        "duplicate completed submit should reuse the original semantic message id"
+    );
+    assert_eq!(
+        first_data.get("op_id"),
+        second_data.get("op_id"),
+        "duplicate completed submit should preserve the external op_id"
     );
 }
 
@@ -304,7 +372,7 @@ async fn gateway_profile_route_reports_private_transport_when_enabled() {
 }
 
 #[tokio::test]
-async fn diagnostics_private_metrics_route_is_locked_when_disabled() {
+async fn diagnostics_private_metrics_route_is_absent() {
     let state = build_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let response = app
@@ -321,7 +389,7 @@ async fn diagnostics_private_metrics_route_is_locked_when_disabled() {
 }
 
 #[tokio::test]
-async fn diagnostics_private_memory_route_is_locked_when_disabled() {
+async fn diagnostics_private_memory_route_is_absent() {
     let state = build_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");
     let response = app
@@ -335,40 +403,6 @@ async fn diagnostics_private_memory_route_is_locked_when_disabled() {
         .await
         .expect("router should handle request");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn diagnostics_private_metrics_route_is_available_when_enabled() {
-    let state = build_diagnostics_test_state().await;
-    let app = super::super::build_router(state, "<html>docs</html>");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/diagnostics/private/metrics")
-                .body(Body::empty())
-                .expect("request should build"),
-        )
-        .await
-        .expect("router should handle request");
-    assert_eq!(response.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn diagnostics_private_memory_route_is_available_when_enabled() {
-    let state = build_diagnostics_test_state().await;
-    let app = super::super::build_router(state, "<html>docs</html>");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/diagnostics/private/memory")
-                .body(Body::empty())
-                .expect("request should build"),
-        )
-        .await
-        .expect("router should handle request");
-    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

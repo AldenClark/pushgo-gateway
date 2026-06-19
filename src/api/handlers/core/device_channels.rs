@@ -6,7 +6,7 @@ use crate::{
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
     services::{DeviceRegisterCommand, ensure_device_registered},
-    storage::{DeviceRouteAuditWrite, DeviceRouteRecordRow, Platform},
+    storage::{DeviceRouteRecordRow, Platform},
     value::{DeviceKeyRef, ProviderTokenRef},
 };
 
@@ -199,14 +199,12 @@ impl DeviceRouteRecord {
     fn persisted_change<'a>(
         &'a self,
         device_key: &'a str,
-        previous: Option<&'a DeviceRouteRecord>,
-        issue_reason: Option<&'a str>,
+        _previous: Option<&'a DeviceRouteRecord>,
+        _issue_reason: Option<&'a str>,
     ) -> DeviceRouteChange<'a> {
         DeviceRouteChange {
             device_key,
-            previous,
             next: self,
-            issue_reason,
         }
     }
 }
@@ -389,37 +387,21 @@ impl DeviceRouteCleanup<'_> {
 
 struct DeviceRouteChange<'a> {
     device_key: &'a str,
-    previous: Option<&'a DeviceRouteRecord>,
     next: &'a DeviceRouteRecord,
-    issue_reason: Option<&'a str>,
 }
 
 impl DeviceRouteChange<'_> {
-    fn audit_entry(&self, action: &str, created_at: i64) -> DeviceRouteAuditWrite {
-        DeviceRouteAuditWrite {
-            device_key: self.device_key.to_string(),
-            action: action.to_string(),
-            old_platform: self.previous.map(|value| value.platform.name().to_string()),
-            new_platform: Some(self.next.platform.name().to_string()),
-            old_channel_type: self
-                .previous
-                .map(|value| value.channel_type.as_str().to_string()),
-            new_channel_type: Some(self.next.channel_type.as_str().to_string()),
-            old_provider_token: self.previous.and_then(|value| value.provider_token.clone()),
-            new_provider_token: self.next.provider_token.clone(),
-            issue_reason: self.issue_reason.map(ToString::to_string),
-            created_at,
-        }
-    }
-
     async fn persist(self, state: &AppState, action: &str) -> Result<(), Error> {
-        let now = chrono::Utc::now().timestamp_millis();
         let route = self.next.as_route_row(self.device_key);
-        let audit = self.audit_entry(action, now);
-        state
-            .store
-            .persist_device_route_change(&route, &audit)
-            .await?;
+        state.store.persist_device_route_change(&route).await?;
+        tracing::debug!(
+            target: "gateway.trace_event",
+            event = "device_route.persisted",
+            action = action,
+            device_key = %(crate::util::redact_text(self.device_key)),
+            platform = %(self.next.platform.name()),
+            channel_type = %(self.next.channel_type.as_str()),
+        );
         Ok(())
     }
 

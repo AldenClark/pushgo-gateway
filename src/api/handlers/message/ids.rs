@@ -1,11 +1,4 @@
-use chrono::Utc;
-
-use crate::{
-    api::Error,
-    app::AppState,
-    storage::{SemanticIdReservation, StoreError},
-    util::generate_hex_id_128,
-};
+use crate::{api::Error, app::AppState, storage::StoreError, util::generate_hex_id_128};
 
 pub(crate) use crate::value::OpId;
 
@@ -66,88 +59,9 @@ impl SemanticScope {
         ))
     }
 
-    pub(crate) fn semantic_create_key(
-        channel_id: &str,
-        entity_type: &str,
-        scope_id: Option<&str>,
-        op_id: &OpId,
-    ) -> String {
-        let scope = scope_id
-            .map(normalize_scope_component)
-            .unwrap_or_else(|| "-".to_string());
-        format!(
-            "semantic:{}:{}:{}:{}",
-            normalize_scope_component(channel_id),
-            normalize_scope_component(entity_type),
-            scope,
-            normalize_scope_component(op_id.as_str())
-        )
-    }
-
     pub(crate) fn op_dedupe_key(&self, op_id: &OpId) -> String {
         format!("op:{}:{}", self.0, op_id.as_str())
     }
-}
-
-pub(crate) struct ResolvedSemanticId {
-    pub semantic_id: String,
-}
-
-impl ResolvedSemanticId {
-    pub(crate) async fn resolve_create(state: &AppState, dedupe_key: &str) -> Result<Self, Error> {
-        const MAX_ATTEMPTS: usize = 8;
-        let created_at = Utc::now().timestamp_millis();
-        let mut collisions = 0usize;
-        for _ in 0..MAX_ATTEMPTS {
-            let semantic_id = generate_hex_id_128();
-            match state
-                .store
-                .reserve_semantic_id(dedupe_key, &semantic_id, created_at)
-                .await
-                .map_err(internal_store_error)?
-            {
-                SemanticIdReservation::Reserved => {
-                    if collisions > 0 {
-                        ::tracing::event!(
-                            target: "gateway.trace_event",
-                            ::tracing::Level::INFO,
-                            event = "dispatch.semantic_id_reserved_after_collision",
-                            dedupe_key = %(crate::util::redact_text(dedupe_key)),
-                            collisions = (collisions as u64)
-                        );
-                    }
-                    return Ok(Self { semantic_id });
-                }
-                SemanticIdReservation::Existing { semantic_id } => {
-                    return Ok(Self { semantic_id });
-                }
-                SemanticIdReservation::Collision => {
-                    collisions = collisions.saturating_add(1);
-                    continue;
-                }
-            }
-        }
-        ::tracing::event!(
-            target: "gateway.trace_event",
-            ::tracing::Level::ERROR,
-            event = "dispatch.semantic_id_reserve_exhausted",
-            dedupe_key = %(crate::util::redact_text(dedupe_key)),
-            max_attempts = (MAX_ATTEMPTS as u64),
-            collisions = (collisions as u64)
-        );
-        Err(Error::Internal(
-            "unable to reserve unique semantic id".to_string(),
-        ))
-    }
-}
-
-pub(crate) fn wakeup_data_with_delivery_id(
-    wakeup_template: &hashbrown::HashMap<String, String>,
-    delivery_id: &str,
-) -> hashbrown::HashMap<String, String> {
-    let mut data = wakeup_template.clone();
-    data.insert("delivery_id".to_string(), delivery_id.to_string());
-    data
 }
 
 fn normalize_scope_component(value: &str) -> String {

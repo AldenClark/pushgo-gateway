@@ -1,4 +1,5 @@
 use super::*;
+use crate::api::handlers::send_ack::SendAck;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10,14 +11,14 @@ struct MessageArgs {
     op_id: Option<String>,
     #[serde(default)]
     thing_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
     occurred_at: Option<i64>,
     title: String,
     #[serde(default)]
     body: Option<String>,
     #[serde(default)]
     severity: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
     ttl: Option<i64>,
     #[serde(default)]
     url: Option<String>,
@@ -43,45 +44,55 @@ impl McpRpcService<'_> {
             .authorize_channel(&channel_id, parsed.password.clone())
             .await?;
 
-        let scoped_thing_id = parsed
-            .thing_id
-            .as_deref()
-            .map(|raw| {
-                crate::api::handlers::entity_input::EntityId::parse(raw, "thing_id")
-                    .map(crate::api::handlers::entity_input::EntityId::into_inner)
-            })
-            .transpose()
-            .map_err(|err| {
-                self.emit_rpc_failed("message_send_parse_thing_id", &err.to_string());
-                err.to_string()
-            })?;
-
-        let intent = crate::api::handlers::message::MessageDispatchIntent {
-            op_id: parsed.op_id,
-            occurred_at: parsed.occurred_at,
-            title: parsed.title,
-            body: parsed.body,
-            severity: parsed.severity,
-            ttl: parsed.ttl,
-            url: parsed.url,
-            images: parsed.images,
-            ciphertext: parsed.ciphertext,
-            tags: parsed.tags,
-            metadata: parsed.metadata,
-        };
-
-        let response = crate::api::handlers::message::dispatch_message_authorized_intent(
-            self.state,
-            authorized_channel,
-            intent,
-            scoped_thing_id,
+        let authorized_context =
+            crate::api::handlers::delivery_core_adapter::authorized_channel_context(
+                authorized_channel,
+            );
+        let result = crate::delivery_core::submit::submit_command(
+            crate::delivery_core::submit::SubmitContext {
+                runtime: self.state,
+                now_millis: chrono::Utc::now().timestamp_millis(),
+            },
+            crate::delivery_core::submit::SubmitCommand {
+                source: crate::delivery_core::source::IngressSource::McpTool,
+                auth: crate::delivery_core::auth::SubmitAuth::AuthorizedChannel(
+                    authorized_context.clone(),
+                ),
+                channel: crate::delivery_core::submit::ChannelSelector::Authorized(
+                    authorized_context,
+                ),
+                command: crate::delivery_core::submit::DomainCommandInput::Message(Box::new(
+                    crate::delivery_core::domain::message::MessageInput {
+                        op_id: parsed.op_id,
+                        thing_id: parsed.thing_id,
+                        occurred_at: parsed.occurred_at,
+                        title: parsed.title,
+                        body: parsed.body,
+                        severity: parsed.severity,
+                        ttl: parsed.ttl,
+                        url: parsed.url,
+                        images: parsed.images,
+                        ciphertext: parsed.ciphertext,
+                        tags: parsed.tags,
+                        metadata: parsed.metadata,
+                    },
+                )),
+                response_mode: crate::delivery_core::submit::ResponseMode::McpJson,
+            },
         )
-        .await;
+        .await
+        .map_err(crate::api::handlers::delivery_core_adapter::core_error_to_api_error)
+        .map_err(|err| err.to_string())?;
 
-        let mut value = self.http_result_to_value(response).await?;
-        value["auth_mode"] = Value::String(self.auth_mode_name().to_string());
-        self.attach_channel_context(&mut value, &channel_id).await;
+        let value = mcp_send_ack_value(result)?;
         self.emit_rpc_completed("message_send");
         Ok(value)
     }
+}
+
+pub(super) fn mcp_send_ack_value(
+    result: crate::delivery_core::response::SubmitResult,
+) -> Result<Value, String> {
+    let ack = SendAck::from_submit_result(result).map_err(|err| err.to_string())?;
+    serde_json::to_value(ack).map_err(|err| err.to_string())
 }

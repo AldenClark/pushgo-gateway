@@ -193,36 +193,15 @@ impl McpRpcService<'_> {
         }
     }
 
-    pub(super) async fn attach_channel_context(&self, value: &mut Value, channel_id: &str) {
-        let channel_name = self.channel_name(channel_id).await;
-        if let Some(map) = value.as_object_mut() {
-            map.insert(
-                "channel_id".to_string(),
-                Value::String(channel_id.to_string()),
-            );
-            map.insert(
-                "channel_name".to_string(),
-                channel_name
-                    .as_ref()
-                    .map(|name| Value::String(name.clone()))
-                    .unwrap_or(Value::Null),
-            );
-            map.insert(
-                "channel_display".to_string(),
-                Value::String(Self::channel_display(channel_id, channel_name.as_deref())),
-            );
-        }
-    }
-
     fn recent_channel_summaries(&self, channel_id: &str) -> Value {
         json!({
             "recent_limit": CHANNEL_RECENT_SUMMARY_LIMIT,
-            "source": "trace_and_stats",
+            "source": "trace_and_runtime_counters",
             "recent_summaries": [],
             "message_summaries": [],
             "event_summaries": [],
             "note": format!(
-                "channel {} recent timeline moved to trace logs and ops stats",
+                "channel {} recent timeline moved to trace logs and runtime counters",
                 channel_id
             )
         })
@@ -495,13 +474,6 @@ impl McpRpcService<'_> {
         )
     }
 
-    pub(super) fn auth_mode_name(&self) -> &'static str {
-        match self.auth {
-            McpAuthContext::OAuth { .. } => "oauth2",
-            McpAuthContext::Legacy => "legacy",
-        }
-    }
-
     pub(super) async fn authorize_channel(
         &self,
         channel_id: &str,
@@ -544,27 +516,6 @@ impl McpRpcService<'_> {
         }
     }
 
-    pub(super) async fn http_result_to_value(&self, result: HttpResult) -> Result<Value, String> {
-        let response = result.map_err(|err| {
-            self.emit_rpc_failed("http_result_to_value_response", &err.to_string());
-            err.to_string()
-        })?;
-        let status = response.status().as_u16();
-        let body = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
-            .await
-            .map_err(|err| {
-                self.emit_rpc_failed("http_result_to_value_read_body", &err.to_string());
-                err.to_string()
-            })?;
-        let payload = parse_status_response(&body).inspect_err(|err| {
-            self.emit_rpc_failed("http_result_to_value_parse_body", err);
-        })?;
-        Ok(json!({"status": status, "payload": payload}))
-    }
-}
-
-fn parse_status_response(body: &[u8]) -> Result<Value, String> {
-    serde_json::from_slice::<Value>(body).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

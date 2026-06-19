@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) async fn record_provider_path_rejected(
     prepared: &PreparedDispatch<'_>,
-    target: &ResolvedProviderTarget<'_>,
+    target: &ResolvedProviderTarget,
     progress: &mut DispatchProgress,
     detail: impl Into<Cow<'static, str>>,
 ) {
@@ -23,7 +23,7 @@ pub(super) async fn record_provider_path_rejected(
 
 pub(super) async fn record_provider_enqueued(
     prepared: &PreparedDispatch<'_>,
-    target: &ResolvedProviderTarget<'_>,
+    target: &ResolvedProviderTarget,
     progress: &mut DispatchProgress,
     path: ProviderDeliveryPath,
 ) {
@@ -44,7 +44,7 @@ pub(super) async fn record_provider_enqueued(
 
 pub(super) async fn record_provider_enqueue_failed(
     prepared: &PreparedDispatch<'_>,
-    target: &ResolvedProviderTarget<'_>,
+    target: &ResolvedProviderTarget,
     progress: &mut DispatchProgress,
     path: ProviderDeliveryPath,
     err: &DispatchError,
@@ -71,7 +71,7 @@ pub(super) async fn record_provider_enqueue_failed(
 
 pub(super) async fn record_provider_cache_enqueue_failed(
     prepared: &PreparedDispatch<'_>,
-    target: &ResolvedProviderTarget<'_>,
+    target: &ResolvedProviderTarget,
     progress: &mut DispatchProgress,
     detail: impl Into<Cow<'static, str>>,
 ) {

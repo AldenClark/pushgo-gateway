@@ -7,12 +7,12 @@ use crate::{
     api::{ApiJson, ApiProblem, ChannelId, ChannelPassword, Error, HttpResult},
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
+    services::record_route_activity_for_device_key,
     storage::{DeviceRouteRecordRow, StoreError},
     value::DeviceKeyRef,
 };
 
 use super::{
-    audit::append_subscription_audit,
     private_cleanup::clear_private_pending_for_channels,
     types::{ChannelSyncRequest, ChannelSyncResponse, ChannelSyncResult},
 };
@@ -391,19 +391,14 @@ async fn sync_single_channel(
                     );
                     map_sync_store_error(err)
                 })?;
-            append_subscription_audit(state, channel_id, device_key, "sync_subscribe", route)
-                .await
-                .map_err(|err| {
-                                        ::tracing::event!(
-                        target: "gateway.trace_event",
-                        ::tracing::Level::WARN,
-                        event = "channel.sync_item_audit_failed",
-                        device_key = %(crate::util::redact_text(device_key)),
-                        channel_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&channel_id))),
-                        error = %(err.to_string())
-                    );
-                    ("audit_error", err.to_string())
-                })?;
+            state
+                .store
+                .record_device_activity_best_effort(
+                    device_id,
+                    chrono::Utc::now().timestamp_millis(),
+                    "private_channel_sync",
+                )
+                .await;
             Ok((outcome.alias, outcome.created))
         }
         _ => {
@@ -449,19 +444,7 @@ async fn sync_single_channel(
                     );
                     map_sync_store_error(err)
                 })?;
-            append_subscription_audit(state, channel_id, device_key, "sync_subscribe", route)
-                .await
-                .map_err(|err| {
-                                        ::tracing::event!(
-                        target: "gateway.trace_event",
-                        ::tracing::Level::WARN,
-                        event = "channel.sync_item_audit_failed",
-                        device_key = %(crate::util::redact_text(device_key)),
-                        channel_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&channel_id))),
-                        error = %(err.to_string())
-                    );
-                    ("audit_error", err.to_string())
-                })?;
+            record_route_activity_for_device_key(state, device_key, "provider_channel_sync").await;
             Ok((outcome.alias, outcome.created))
         }
     }

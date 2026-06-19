@@ -1,35 +1,7 @@
-use std::collections::BTreeMap;
-
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::api::{deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
-
-pub(super) use crate::value::ThingLocation;
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(super) struct ThingProfile {
-    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    pub(super) title: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    pub(super) description: Option<String>,
-    #[serde(default)]
-    pub(super) tags: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    pub(super) primary_image: Option<String>,
-    #[serde(default)]
-    pub(super) images: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
-    pub(super) created_at: Option<i64>,
-    #[serde(default, deserialize_with = "deserialize_empty_as_none")]
-    pub(super) state: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_unix_ts_millis_lenient")]
-    pub(super) deleted_at: Option<i64>,
-    #[serde(default)]
-    pub(super) external_ids: BTreeMap<String, String>,
-    #[serde(default)]
-    pub(super) location: Option<ThingLocation>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,14 +91,6 @@ pub(crate) struct ThingDeleteRequest {
     pub(super) deleted_at: Option<i64>,
     #[serde(flatten)]
     pub(super) patch: ThingPatchFields,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ThingSummary {
-    pub(super) channel_id: String,
-    pub(super) op_id: String,
-    pub(super) thing_id: String,
-    pub(super) accepted: bool,
 }
 
 #[cfg(test)]

@@ -37,3 +37,25 @@ fn mask_middle(value: &str, keep_prefix: usize, keep_suffix: usize) -> String {
         .collect();
     format!("{prefix}...{suffix}")
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn redact_text_masks_sensitive_values_by_default() {
+        crate::util::set_sandbox_mode(false);
+        let raw = "secret-token-value-1234567890";
+        let redacted = super::redact_text(raw);
+
+        assert_ne!(redacted, raw);
+        assert!(redacted.starts_with("secr"));
+        assert!(redacted.ends_with("7890"));
+        assert!(!redacted.contains("token-value-123456"));
+    }
+
+    #[test]
+    fn redact_text_does_not_expose_short_values() {
+        crate::util::set_sandbox_mode(false);
+        assert_eq!(super::redact_text("short"), "<redacted>");
+        assert_eq!(super::redact_text(""), "<empty>");
+    }
+}

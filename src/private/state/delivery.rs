@@ -170,7 +170,7 @@ impl PrivateState {
         if cleared {
             self.cancel_fallback(device_id, resolved_delivery_id.as_str());
             if disposition == TerminalDeliveryDisposition::Acked {
-                self.stats.record_private_ack_with_channel(
+                self.runtime_counters.record_private_ack_with_channel(
                     format!("private:{}", encode_lower_hex_128(&device_id)),
                     channel_id,
                     1,

@@ -97,6 +97,15 @@ impl PushgoServerApp {
             self.state
                 .hub
                 .register_connection(device_id, conn_id, peer.transport, tx);
+        self.state
+            .hub
+            .store()
+            .record_device_activity_best_effort(
+                device_id,
+                chrono::Utc::now().timestamp_millis(),
+                "private_connect",
+            )
+            .await;
         self.state.request_fallback_resync();
         let logical_partition = logical_partition_for_device(device_id);
 

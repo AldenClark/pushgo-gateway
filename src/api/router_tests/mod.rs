@@ -19,7 +19,7 @@ use crate::{
     private::{PrivateConfig, PrivateState},
     routing::{DeviceRegistry, DeviceRouteRecord},
     runtime_config::GatewayRuntimeProfile,
-    stats::StatsCollector,
+    runtime_counters::RuntimeCounterCollector,
     storage::{MaintenanceCleanupConfig, Platform, Storage},
 };
 
@@ -45,16 +45,15 @@ async fn build_test_state() -> AppState {
         .await
         .expect("sqlite test store should initialize");
     let (dispatch, _receivers) = DispatchChannels::new();
-    let stats = StatsCollector::spawn(store.clone());
+    let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
     AppState {
         dispatch,
         auth: AuthMode::Disabled,
         private_channel_enabled: false,
-        diagnostics_api_enabled: false,
         public_base_url: Some(Arc::from("https://sandbox.pushgo.dev")),
         device_registry: Arc::new(DeviceRegistry::new()),
         device_operation_guards: Arc::new(DeviceOperationGuards::default()),
-        stats,
+        runtime_counters,
         private_transport_profile: crate::app::PrivateTransportProfile {
             quic_enabled: true,
             quic_port: Some(443),
@@ -139,12 +138,12 @@ async fn seed_provider_channel_for_router_test(
 async fn build_private_test_state() -> AppState {
     let mut state = build_test_state().await;
     let registry = Arc::clone(&state.device_registry);
-    let stats = Arc::clone(&state.stats);
+    let runtime_counters = Arc::clone(&state.runtime_counters);
     let private = Arc::new(PrivateState::new(
         state.store.clone(),
         test_private_config(),
         registry,
-        stats,
+        runtime_counters,
     ));
     state.private_channel_enabled = true;
     state.private = Some(private);
@@ -154,12 +153,6 @@ async fn build_private_test_state() -> AppState {
 async fn build_private_without_wss_test_state() -> AppState {
     let mut state = build_private_test_state().await;
     state.private_transport_profile.wss_enabled = false;
-    state
-}
-
-async fn build_diagnostics_test_state() -> AppState {
-    let mut state = build_test_state().await;
-    state.diagnostics_api_enabled = true;
     state
 }
 

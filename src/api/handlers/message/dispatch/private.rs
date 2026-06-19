@@ -1,4 +1,7 @@
 use super::*;
+use crate::delivery_core::execution::private::{
+    PrivateDeliveryAttemptOutcome, PrivateDeliveryExecution, execute_private_deliveries,
+};
 
 pub(super) async fn enqueue_private_deliveries(
     prepared: &PreparedDispatch<'_>,
@@ -10,94 +13,34 @@ pub(super) async fn enqueue_private_deliveries(
     let private_expires_at = prepared
         .effective_ttl
         .unwrap_or(prepared.sent_at + prepared.private_default_ttl_secs * 1000);
-    let mut queued_devices = Vec::with_capacity(private_dispatch.subscribers.len());
-    for device_id in private_dispatch.subscribers.iter().copied() {
-        if private_dispatch.state.config.online_fast_path_enabled
-            && private_dispatch.state.hub.is_online(device_id)
-            && !private_dispatch
-                .state
-                .hub
-                .has_active_mqtt_connection(device_id)
-        {
-            let delivered = private_dispatch.state.hub.try_deliver_to_device(
-                device_id,
-                crate::private::protocol::DeliverEnvelope {
-                    delivery_id: prepared.delivery_id.clone(),
-                    payload: prepared.private_payload.clone(),
-                },
-            );
-            if delivered {
-                progress.private_enqueue_stats.record_success();
-                progress.record_private_success(device_id);
-                progress.private_realtime_delivered.insert(device_id);
-                continue;
-            }
-        }
-        queued_devices.push(device_id);
-    }
+    let report = execute_private_deliveries(PrivateDeliveryExecution {
+        private_state: private_dispatch.state,
+        correlation_id: prepared.correlation_id.as_ref(),
+        delivery_id: prepared.delivery_id.as_str(),
+        channel_id: prepared.channel_id_value.as_str(),
+        targets: &private_dispatch.targets,
+        payload: prepared.private_payload.clone(),
+        sent_at: prepared.sent_at,
+        expires_at: private_expires_at,
+    })
+    .await;
 
-    let enqueue_results = private_dispatch
-        .state
-        .enqueue_private_deliveries(
-            &queued_devices,
-            prepared.delivery_id.as_str(),
-            prepared.private_payload.clone(),
-            prepared.sent_at,
-            private_expires_at,
-        )
-        .await;
-
-    for (device_id, result) in enqueue_results {
-        match result {
-            Ok(()) => {
+    for attempt in report.attempts {
+        match attempt.outcome {
+            PrivateDeliveryAttemptOutcome::Enqueued => {
                 progress.private_enqueue_stats.record_success();
-                progress.record_private_success(device_id);
-                if (!private_dispatch.state.config.online_fast_path_enabled
-                    || private_dispatch
-                        .state
-                        .hub
-                        .has_active_mqtt_connection(device_id))
-                    && private_dispatch.state.hub.is_online(device_id)
-                {
-                    let delivered = private_dispatch.state.hub.try_deliver_to_device(
-                        device_id,
-                        crate::private::protocol::DeliverEnvelope {
-                            delivery_id: prepared.delivery_id.clone(),
-                            payload: prepared.private_payload.clone(),
-                        },
-                    );
-                    if delivered {
-                        progress.private_realtime_delivered.insert(device_id);
-                    } else {
-                        private_dispatch.state.metrics.mark_deliver_send_failure();
-                        ::tracing::event!(
-                            target: "gateway.trace_event",
-                            ::tracing::Level::WARN,
-                            event = "dispatch.private_realtime_delivery_failed",
-                            correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
-                            delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
-                            channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-                            device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id)))
-                        );
-                    }
+                progress.record_private_success(attempt.device_id);
+                if attempt.realtime_delivered {
+                    progress
+                        .private_realtime_delivered
+                        .insert(attempt.device_id);
                 }
             }
-            Err(err) => {
+            PrivateDeliveryAttemptOutcome::Failed(err) => {
                 progress.private_enqueue_stats.record_failure(
                     "private_subscriber",
-                    device_id,
+                    attempt.device_id,
                     &err,
-                );
-                private_dispatch.state.metrics.mark_enqueue_failure();
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::WARN,
-                    event = "dispatch.private_enqueue_failed",
-                    correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
-                    delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
-                    channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-                    device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
-                    error = %(err.to_string())
                 );
             }
         }

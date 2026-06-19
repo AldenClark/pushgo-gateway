@@ -179,6 +179,7 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>>;
     async fn claim_private_outbox_due_for_device(
         &self,
@@ -186,6 +187,7 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<PrivateOutboxEntry>>;
     async fn count_private_outbox_total(&self) -> StoreResult<usize>;
 }
@@ -194,16 +196,12 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
 pub trait DeviceRouteDatabaseAccess: Send + Sync {
     async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>>;
     async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()>;
-    async fn persist_device_route_change(
-        &self,
-        route: &DeviceRouteRecordRow,
-        audit: &DeviceRouteAuditWrite,
-    ) -> StoreResult<()>;
+    async fn touch_device_activity(&self, device_id: DeviceId, at_ts: i64) -> StoreResult<()>;
+    async fn persist_device_route_change(&self, route: &DeviceRouteRecordRow) -> StoreResult<()>;
     async fn replace_device_identity(
         &self,
         route: &DeviceRouteRecordRow,
         old_device_key: Option<&str>,
-        audit: &DeviceRouteAuditWrite,
     ) -> StoreResult<()>;
     async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()>;
     async fn retire_provider_token(
@@ -211,13 +209,6 @@ pub trait DeviceRouteDatabaseAccess: Send + Sync {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()>;
-    async fn append_device_route_audit(&self, entry: &DeviceRouteAuditWrite) -> StoreResult<()>;
-    async fn append_subscription_audit(&self, entry: &SubscriptionAuditWrite) -> StoreResult<()>;
-}
-
-#[async_trait]
-pub trait StatsDatabaseAccess: Send + Sync {
-    async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()>;
 }
 
 #[async_trait]
@@ -273,7 +264,12 @@ pub trait DedupeDatabaseAccess: Send + Sync {
         delivery_id: &str,
         created_at: i64,
     ) -> StoreResult<OpDedupeReservation>;
-    async fn mark_op_dedupe_sent(&self, dedupe_key: &str, delivery_id: &str) -> StoreResult<bool>;
+    async fn mark_op_dedupe_sent(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        state: DedupeState,
+    ) -> StoreResult<bool>;
     async fn clear_op_dedupe_pending(&self, dedupe_key: &str, delivery_id: &str)
     -> StoreResult<()>;
     async fn confirm_delivery_dedupe(&self, dedupe_key: &str, delivery_id: &str)
@@ -303,22 +299,24 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
         now: i64,
         limit: usize,
     ) -> StoreResult<usize>;
+    async fn cleanup_inactive_subscriptions(
+        &self,
+        before_ts: i64,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize>;
     async fn cleanup_soft_deleted_devices(
         &self,
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize>;
     async fn cleanup_orphan_channels(&self, before_ts: i64, limit: usize) -> StoreResult<usize>;
-    async fn cleanup_audit_rows(&self, before_ts: i64, limit: usize) -> StoreResult<usize>;
-    async fn cleanup_hourly_stats(&self, before_bucket: &str, limit: usize) -> StoreResult<usize>;
-    async fn cleanup_daily_stats(&self, before_bucket: &str, limit: usize) -> StoreResult<usize>;
 }
 
 pub trait DatabaseAccess:
     ChannelDatabaseAccess
     + PrivateMessageDatabaseAccess
     + DeviceRouteDatabaseAccess
-    + StatsDatabaseAccess
     + ProviderPullDatabaseAccess
     + DedupeDatabaseAccess
     + SystemStateDatabaseAccess
@@ -331,7 +329,6 @@ impl<T> DatabaseAccess for T where
     T: ChannelDatabaseAccess
         + PrivateMessageDatabaseAccess
         + DeviceRouteDatabaseAccess
-        + StatsDatabaseAccess
         + ProviderPullDatabaseAccess
         + DedupeDatabaseAccess
         + SystemStateDatabaseAccess

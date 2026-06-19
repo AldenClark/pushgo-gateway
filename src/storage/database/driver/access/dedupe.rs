@@ -51,8 +51,13 @@ impl DedupeDatabaseAccess for DatabaseDriver {
         )
     }
 
-    async fn mark_op_dedupe_sent(&self, dedupe_key: &str, delivery_id: &str) -> StoreResult<bool> {
-        delegate_db_async!(self, mark_op_dedupe_sent(dedupe_key, delivery_id))
+    async fn mark_op_dedupe_sent(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        state: DedupeState,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(self, mark_op_dedupe_sent(dedupe_key, delivery_id, state))
     }
 
     async fn clear_op_dedupe_pending(

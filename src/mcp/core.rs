@@ -32,6 +32,6 @@ use self::{
 };
 
 use crate::{
-    api::{HttpResult, parse_channel_id, validate_channel_password},
+    api::{parse_channel_id, validate_channel_password},
     app::AppState,
 };

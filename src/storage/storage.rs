@@ -27,7 +27,6 @@ pub struct Storage {
 pub struct StorageInitConfig {
     pub db_url: Option<String>,
     pub runtime_profile: GatewayRuntimeProfile,
-    pub stats_enabled: bool,
     pub mcp_enabled: bool,
 }
 
@@ -36,7 +35,6 @@ impl Default for StorageInitConfig {
         Self {
             db_url: None,
             runtime_profile: GatewayRuntimeProfile::Small,
-            stats_enabled: false,
             mcp_enabled: false,
         }
     }
@@ -46,7 +44,6 @@ impl Storage {
     pub async fn new(db_url: Option<&str>) -> StoreResult<Self> {
         Self::new_with_config(StorageInitConfig {
             db_url: db_url.map(str::to_string),
-            stats_enabled: true,
             mcp_enabled: true,
             ..StorageInitConfig::default()
         })

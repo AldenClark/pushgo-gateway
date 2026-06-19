@@ -46,7 +46,7 @@ In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_UR
 - `device_type=publish` creates a temporary publish-only connection and is not persisted as a device route; any CONNECT client id on publish-only connections is ignored. `device_type=subscribe` is a persistent MQTT device identity; use an existing `client_id=<device_key>` or leave `client_id` empty. If the supplied subscribe client id is missing, unknown, or replaced because it belongs to another platform, gateway issues a new device key and returns it in the MQTT 5 CONNACK Assigned Client Identifier; clients must persist that returned value as the next `client_id`.
 - MQTT does not expose broker-style session persistence: CONNACK advertises `session_expiry_interval=0`, no retained messages, no topic aliases, no subscription identifiers, no wildcard/shared subscriptions. PushGo channel subscriptions are persisted by gateway and outlive the TCP connection.
 - MQTT topic is the raw `{channel_id}`. Channel password is passed as MQTT 5 User Property `pushgo-password`; gateway token, when configured, is passed as MQTT username. Each SUBSCRIBE packet may contain only one topic filter.
-- MQTT payload uses an envelope: publish `{"type":"message","data":{...}}`, downlink `{"schema":"pushgo.mqtt.delivery.v1","type":"message","delivery_id":"...","channel_id":"...","data":{...}}`. Topic identifies the channel; payload `type` identifies the business model. Current MQTT ingress and downlink support `message` only. MQTT publish message data may include `thing_id` to create a thing-scoped message through the shared gateway send path, but MQTT downlink delivers channel-level message payloads only; event, thing, thing-scoped message, and thing-scoped event payloads are not enqueued to MQTT devices.
+- MQTT payload uses an envelope: publish `{"type":"message","data":{...}}`, downlink `{"schema":"pushgo.mqtt.delivery.v1","type":"message|event|thing","delivery_id":"...","channel_id":"...","data":{...}}`. Topic identifies the channel; payload `type` identifies the business model. MQTT ingress currently accepts message publishes, including thing-scoped messages. MQTT downlink is a first-class realtime outlet for message, event, and thing payloads, and does not persist deliveries through the private outbox when the MQTT receiver is offline.
 - MQTT Will Message is accepted only from `device_type=subscribe` devices. Will Topic is raw `{channel_id}` and may target any channel. Will QoS must be 1, Will Retain must be false, Will Properties must include User Property `pushgo-password`, and Will payload uses the same publish envelope. Gateway validates the Will at CONNECT, publishes it on abnormal connection close or MQTT 5 `DisconnectWithWillMessage`, and suppresses it on normal DISCONNECT.
 
 ## MCP Runtime Model
@@ -71,7 +71,6 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss,mqtt`) |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | No                | Resource/performance profile (`small`/`public`); never changes the database driver selected by `--db-url` |
-| `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | No                | Observability matrix profile (`prod_min`/`ops`/`incident`/`debug`) |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | No                | Native tracing log level (`off`/`error`/`warn`/`info`/`debug`/`trace`) |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | None                       | Yes               | Database URL (`sqlite://`, `postgres://`, `postgresql://`, `pg://`, `mysql://`) |
 | `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | None                       | No                | External HTTPS base URL used for MCP/OAuth issuer URLs and advertised WSS URL |
@@ -104,8 +103,8 @@ Fine-grained performance/resource knobs are internal profile defaults, not publi
 
 | Profile | Intended deployment | Key defaults |
 | ------- | ------------------- | ------------ |
-| `small` | Tiny/private SQLite deployment | Lower SQLite/cache/queue footprints, 10s stats flush, no idle gateway metric sampling, 5min maintenance tick, provider in-flight caps 32/32/16 |
-| `public` | Large external-DB gateway, primarily PostgreSQL | Larger dispatch/stats queues, 2s stats flush, gateway metric sampling, external DB pool max 64/min 4, provider in-flight caps 128/256/128 |
+| `small` | Tiny/private SQLite deployment | Lower SQLite/cache/queue footprints, 5min maintenance tick, conservative cleanup defaults, provider in-flight caps 32/32/16 |
+| `public` | Large external-DB gateway, primarily PostgreSQL/MySQL | Larger queue/pool limits, 1min maintenance tick, higher fanout budgets, external DB pool max 64/min 4, provider in-flight caps 128/256/128 |
 
 Database driver selection is always based on `--db-url`; setting `--runtime-profile=public` with a SQLite URL still uses SQLite, and setting `--runtime-profile=small` with a PostgreSQL URL still uses PostgreSQL. If omitted, `small` is used.
 
@@ -133,10 +132,11 @@ Database driver selection is always based on `--db-url`; setting `--runtime-prof
 
 This keeps private deployment CPU cost low while maintaining non-plaintext storage.
 
-### Operations Stats (DB)
+### Troubleshooting
 
-`stats` is persisted for operations reporting (not only business semantics).
-In addition to existing channel/device/gateway aggregates, gateway now writes operational hourly counters into `ops_stats_hourly` (`bucket_hour`, `metric_key`, `metric_value`), e.g. provider send failures, HTTP 5xx responses, and invalid-token cleanup failures.
+Gateway no longer writes audit/statistics tables on the main delivery path. Operational troubleshooting is based on opt-in redacted `tracing` output.
+
+Deprecated observability tables such as `delivery_audit`, `subscription_audit`, `device_route_audit`, `channel_stats_daily`, `device_stats_daily`, `gateway_stats_hourly`, and `ops_stats_hourly` are dropped during schema initialization or migration. Functional state such as MCP OAuth/session state is preserved separately.
 
 ### Trace Event Output
 
@@ -153,7 +153,7 @@ Example:
 
 ## Memory Forensics (Private Runtime)
 
-Use compile-time symbol/stack support + external profilers + runtime diagnostics on the same timeline.
+Use compile-time symbol/stack support, external profilers, and opt-in tracing on the same timeline. The gateway does not expose private runtime memory or metrics diagnostic HTTP endpoints in the default product surface.
 
 ### 1) Build a profiling binary
 
@@ -165,21 +165,7 @@ RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling
 
 ### 2) Run timeline sampling against a live gateway process
 
-```bash
-./scripts/private_memory_observe.sh \
-  --pid <gateway_pid> \
-  --base-url http://127.0.0.1:6666 \
-  --auth-token <token> \
-  --interval-ms 500 \
-  --duration-secs 180
-```
-
-This records:
-- `/proc/<pid>/smaps_rollup` (`Rss`, `Anonymous`, `Private_Dirty`, etc.)
-- `/proc/<pid>/status` (`VmRSS`, `VmData`, `Threads`, etc.)
-- `/diagnostics/private/memory` snapshot file per sample timestamp
-
-Use `samples.jsonl` as the timeline index to align process memory segments and in-process object snapshots.
+Sample OS process data outside the gateway process, for example `/proc/<pid>/smaps_rollup` and `/proc/<pid>/status` on Linux. Enable `tracing` only when you need a gateway event timeline to correlate with profiler output.
 
 ### 3) External allocation call-stack capture (Linux)
 
@@ -198,7 +184,7 @@ valgrind --tool=massif --time-unit=ms --stacks=yes \
   target/profiling/pushgo-gateway <gateway args...>
 ```
 
-Then correlate profiler hotspots with the same test window in `samples.jsonl` and diagnostics snapshots.
+Then correlate profiler hotspots with the same test window in redacted tracing output.
 
 ## Nginx / LB Deployment Reference
 
@@ -300,7 +286,7 @@ stream {
 }
 ```
 
-MQTT clients must use MQTT 5 and QoS 1. CONNECT must include User Property `device_type=publish` for temporary publish-only devices, or `device_type=subscribe` for persistent devices that may SUBSCRIBE and receive messages. Publish-only client ids are ignored and never persisted. Subscribe devices may pass `client_id=<device_key>` or an empty `client_id`; when the supplied client id is empty, unknown, or replaced because it belongs to another platform, gateway returns the newly assigned device key in CONNACK Assigned Client Identifier and clients must use that value as the next client id. SUBSCRIBE/PUBLISH use topic `{channel_id}` and MQTT 5 User Property `pushgo-password=<channel password>`. MQTT publish payload is `{"type":"message","data":{...}}`; `data` may include `thing_id` to create a thing-scoped message, and thing-scoped sends follow the same core validation as HTTP, including `occurred_at` when required. MQTT downlink payload is `{"schema":"pushgo.mqtt.delivery.v1","type":"message","delivery_id":"...","channel_id":"...","data":{...}}` and receives channel-level messages only; event, thing, thing-scoped message, and thing-scoped event payloads are skipped before MQTT outbox enqueue. Each SUBSCRIBE packet may contain only one topic filter. Gateway advertises no MQTT broker session persistence, retained messages, topic aliases, subscription identifiers, wildcard subscriptions, or shared subscriptions; PushGo channel subscriptions are the persisted subscription state. MQTT Will Message is available only to `device_type=subscribe`; Will Topic is `{channel_id}` and may target any channel, Will QoS must be 1, Will Retain must be false, Will Properties must include User Property `pushgo-password`, and Will payload uses the same publish envelope. Gateway publishes the Will on abnormal close or MQTT 5 `DisconnectWithWillMessage`, but not on normal DISCONNECT. If `--mqtt-tls-enabled=false`, clients connect with plain MQTT to gateway; if `true`, clients connect with MQTT/TLS directly to gateway.
+MQTT clients must use MQTT 5 and QoS 1. CONNECT must include User Property `device_type=publish` for temporary publish-only devices, or `device_type=subscribe` for persistent devices that may SUBSCRIBE and receive messages. Publish-only client ids are ignored and never persisted. Subscribe devices may pass `client_id=<device_key>` or an empty `client_id`; when the supplied client id is empty, unknown, or replaced because it belongs to another platform, gateway returns the newly assigned device key in CONNACK Assigned Client Identifier and clients must use that value as the next client id. SUBSCRIBE/PUBLISH use topic `{channel_id}` and MQTT 5 User Property `pushgo-password=<channel password>`. MQTT publish payload is an envelope: `{"type":"message","data":{...}}` for messages, or `{"type":"event|thing","action":"create|update|close|archive|delete","data":{...}}` for entity actions. Topic/password are the trusted channel identity; payloads do not carry `channel_id` or `password`. MQTT downlink payload is `{"schema":"pushgo.mqtt.delivery.v1","type":"message|event|thing","delivery_id":"...","channel_id":"...","data":{...}}`; downlink is realtime and is not persisted through private outbox for offline MQTT receivers. Each SUBSCRIBE packet may contain only one topic filter. Gateway advertises no MQTT broker session persistence, retained messages, topic aliases, subscription identifiers, wildcard subscriptions, or shared subscriptions; PushGo channel subscriptions are the persisted subscription state. MQTT Will Message is available only to `device_type=subscribe`; Will Topic is `{channel_id}` and may target any channel, Will QoS must be 1, Will Retain must be false, Will Properties must include User Property `pushgo-password`, and Will payload uses the same publish envelope. Gateway publishes the Will on abnormal close or MQTT 5 `DisconnectWithWillMessage`, but not on normal DISCONNECT. If `--mqtt-tls-enabled=false`, clients connect with plain MQTT to gateway; if `true`, clients connect with MQTT/TLS directly to gateway.
 
 ### E) Critical note on `443/udp` conflicts
 
@@ -475,7 +461,7 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 - `device_type=publish` 是连接级临时发送设备，不注册入库且不能订阅；publish-only 连接即使传入 client id 也会被忽略。`device_type=subscribe` 是持久 MQTT 设备，可使用已有 `client_id=<device_key>`，也可以留空 `client_id`。如果 subscribe 连接传入的 client id 为空、未知，或者因为属于其他 platform 而被替换，gateway 会分配新的 device key，并通过 MQTT 5 CONNACK Assigned Client Identifier 返回；客户端必须保存这个返回值，并在下次连接时作为 `client_id` 使用。
 - MQTT 不提供 broker 风格的 session 持久化：CONNACK 会声明 `session_expiry_interval=0`，不支持 retained message、topic alias、subscription identifier、通配符订阅或 shared subscription。PushGo 频道订阅由 gateway 持久化，独立于当前 TCP 连接生命周期。
 - MQTT topic 直接使用原始 `{channel_id}`。频道密码通过 MQTT 5 User Property `pushgo-password` 传递；配置了 gateway token 时，token 通过 MQTT username 传递。每个 SUBSCRIBE packet 只允许包含一个 topic filter。
-- MQTT payload 使用 envelope：publish 为 `{"type":"message","data":{...}}`，下行为 `{"schema":"pushgo.mqtt.delivery.v1","type":"message","delivery_id":"...","channel_id":"...","data":{...}}`。Topic 表示频道路由，payload `type` 表示业务模型。当前 MQTT 上行和下行只支持 `message`。MQTT publish 的 message data 允许携带 `thing_id` 通过共享发送路径创建 thing-scoped message，但 MQTT 下行只投递频道级 message；event、thing、thing 下的二级 message 和 thing 下的二级 event 都不会进入 MQTT 设备 outbox。
+- MQTT payload 使用 envelope：message publish 为 `{"type":"message","data":{...}}`，event/thing publish 为 `{"type":"event|thing","action":"create|update|close|archive|delete","data":{...}}`；下行为 `{"schema":"pushgo.mqtt.delivery.v1","type":"message|event|thing","delivery_id":"...","channel_id":"...","data":{...}}`。Topic 表示频道路由，payload `type` 表示业务模型。MQTT 上行和下行都支持 `message`、`event`、`thing`；topic/password 是可信通道身份，payload 不携带 `channel_id` 或 `password`。MQTT 下行是实时出口，离线 MQTT receiver 不进入 private outbox。
 - MQTT 遗嘱消息只允许 `device_type=subscribe` 设备设置。Will Topic 直接使用 `{channel_id}`，可发送到任意频道；Will QoS 必须为 1，Will Retain 必须为 false；Will Properties 必须携带 User Property `pushgo-password`；Will payload 使用同一套 publish envelope。Gateway 在 CONNECT 阶段校验遗嘱，在异常断开或 MQTT 5 `DisconnectWithWillMessage` 时发送，正常 DISCONNECT 不发送。
 
 ## MCP 运行模型
@@ -500,7 +486,6 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss,mqtt`） |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | 否       | 资源/性能档位（`small`/`public`）；不会改变 `--db-url` 选择的数据库驱动 |
-| `--observability-profile`         | `PUSHGO_OBSERVABILITY_PROFILE`         | `prod_min`                 | 否       | 可观测矩阵档位（`prod_min`/`ops`/`incident`/`debug`） |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | 否       | 原生 tracing 日志级别（`off`/`error`/`warn`/`info`/`debug`/`trace`） |
 | `--db-url`                        | `PUSHGO_DB_URL`                        | 无                         | 是       | 数据库 URL（`sqlite://`、`postgres://`、`postgresql://`、`pg://`、`mysql://`） |
 | `--public-base-url`               | `PUSHGO_PUBLIC_BASE_URL`               | 无                         | 否       | MCP/OAuth issuer URL 与 WSS 对外提示使用的外部 HTTPS 基准地址 |
@@ -533,8 +518,8 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 
 | Profile | 适用部署 | 关键默认值 |
 | ------- | -------- | ---------- |
-| `small` | 极小规模私有 SQLite 部署 | 更低 SQLite/cache/队列占用，stats 10 秒刷盘，空闲时不采样 gateway 指标，maintenance 5 分钟 tick，provider 并发 32/32/16 |
-| `public` | 大规模外部 DB 网关，主要是 PostgreSQL | 更大的 dispatch/stats 队列，stats 2 秒刷盘，采样 gateway 指标，外部 DB pool max 64/min 4，provider 并发 128/256/128 |
+| `small` | 极小规模私有 SQLite 部署 | 更低 SQLite/cache/队列占用，maintenance 5 分钟 tick，保守清理默认值，provider 并发 32/32/16 |
+| `public` | 大规模外部 DB 网关，主要是 PostgreSQL/MySQL | 更大的队列/pool 限制，maintenance 1 分钟 tick，更高 fanout 预算，外部 DB pool max 64/min 4，provider 并发 128/256/128 |
 
 数据库驱动始终由 `--db-url` 决定；设置 `--runtime-profile=public` 加 SQLite URL 仍然使用 SQLite，设置 `--runtime-profile=small` 加 PostgreSQL URL 仍然使用 PostgreSQL。不传时默认使用 `small`。
 
@@ -551,12 +536,13 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | Env                                         | 默认值                                 | 说明                                                                      |
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
 | `PUSHGO_OBSERVABILITY_LOG_LEVEL`              | `warn`                             | 可选覆盖原生 tracing 日志级别                                             |
-| `RUST_LOG`                                    | 无                                 | 可选覆盖完整 EnvFilter 指令（优先级高于 profile/level）                   |
+| `RUST_LOG`                                    | 无                                 | 可选覆盖完整 EnvFilter 指令（优先级高于 log level）                       |
 
-### 运营统计（入库）
+### 排错
 
-这里的 `stats` 定位为运营统计支撑（不是纯业务统计）。  
-除现有 channel/device/gateway 聚合外，gateway 还会把运营向小时计数写入 `ops_stats_hourly`（`bucket_hour`、`metric_key`、`metric_value`），例如 provider 发送失败、HTTP 5xx、invalid-token 清理失败等指标。
+gateway 不再在主投递链路写入审计/统计表。运行排错依赖用户主动开启的脱敏 `tracing` 输出。
+
+`delivery_audit`、`subscription_audit`、`device_route_audit`、`channel_stats_daily`、`device_stats_daily`、`gateway_stats_hourly`、`ops_stats_hourly` 等旧观测表会在 schema 初始化或迁移时清理。MCP OAuth/session 等功能状态会独立保留。
 
 ### Trace 事件输出
 
@@ -671,7 +657,7 @@ stream {
 }
 ```
 
-MQTT 客户端必须使用 MQTT 5 和 QoS 1。CONNECT 必须携带 User Property `device_type=publish` 表示临时只发送设备，或 `device_type=subscribe` 表示可订阅接收的持久设备。Publish-only 连接的 client id 会被忽略且不会持久化。Subscribe 设备可传 `client_id=<device_key>`，也可传空 `client_id`；当 client id 为空、未知，或因为属于其他 platform 而被替换时，gateway 会通过 CONNACK Assigned Client Identifier 返回新分配的 device key，客户端必须将其保存为下次连接使用的 client id。SUBSCRIBE/PUBLISH 使用 topic `{channel_id}`，并通过 MQTT 5 User Property `pushgo-password=<channel password>` 传递频道密码。MQTT publish payload 为 `{"type":"message","data":{...}}`，`data` 可携带 `thing_id` 创建 thing-scoped message，且与 HTTP 发送入口复用同一套校验，例如按需要求 `occurred_at`。MQTT 下行 payload 为 `{"schema":"pushgo.mqtt.delivery.v1","type":"message","delivery_id":"...","channel_id":"...","data":{...}}`，且只接收频道级 message；event、thing、thing 下的二级 message 和 thing 下的二级 event 会在进入 MQTT outbox 前被跳过。每个 SUBSCRIBE packet 只允许包含一个 topic filter。Gateway 不提供 MQTT broker session 持久化、retained message、topic alias、subscription identifier、通配符订阅或 shared subscription；PushGo 频道订阅才是持久订阅状态。MQTT 遗嘱消息只允许 `device_type=subscribe` 设备设置；Will Topic 为 `{channel_id}` 且可发送到任意频道，Will QoS 必须为 1，Will Retain 必须为 false，Will Properties 必须携带 User Property `pushgo-password`，Will payload 使用同一套 publish envelope。Gateway 会在异常断开或 MQTT 5 `DisconnectWithWillMessage` 时发送遗嘱，正常 DISCONNECT 不发送。`--mqtt-tls-enabled=false` 时客户端以明文 MQTT 连接 gateway；设置为 `true` 时客户端直接以 MQTT/TLS 连接 gateway。
+MQTT 客户端必须使用 MQTT 5 和 QoS 1。CONNECT 必须携带 User Property `device_type=publish` 表示临时只发送设备，或 `device_type=subscribe` 表示可订阅接收的持久设备。Publish-only 连接的 client id 会被忽略且不会持久化。Subscribe 设备可传 `client_id=<device_key>`，也可传空 `client_id`；当 client id 为空、未知，或因为属于其他 platform 而被替换时，gateway 会通过 CONNACK Assigned Client Identifier 返回新分配的 device key，客户端必须将其保存为下次连接使用的 client id。SUBSCRIBE/PUBLISH 使用 topic `{channel_id}`，并通过 MQTT 5 User Property `pushgo-password=<channel password>` 传递频道密码。MQTT publish payload 使用 envelope：`{"type":"message","data":{...}}` 发送 message；`{"type":"event|thing","action":"create|update|close|archive|delete","data":{...}}` 发送 event/thing 动作。Topic/password 是可信通道身份，payload 不携带 `channel_id` 或 `password`。MQTT 下行 payload 为 `{"schema":"pushgo.mqtt.delivery.v1","type":"message|event|thing","delivery_id":"...","channel_id":"...","data":{...}}`，下行是实时出口，离线 MQTT receiver 不进入 private outbox。每个 SUBSCRIBE packet 只允许包含一个 topic filter。Gateway 不提供 MQTT broker session 持久化、retained message、topic alias、subscription identifier、通配符订阅或 shared subscription；PushGo 频道订阅才是持久订阅状态。MQTT 遗嘱消息只允许 `device_type=subscribe` 设备设置；Will Topic 为 `{channel_id}` 且可发送到任意频道，Will QoS 必须为 1，Will Retain 必须为 false，Will Properties 必须携带 User Property `pushgo-password`，Will payload 使用同一套 publish envelope。Gateway 会在异常断开或 MQTT 5 `DisconnectWithWillMessage` 时发送遗嘱，正常 DISCONNECT 不发送。`--mqtt-tls-enabled=false` 时客户端以明文 MQTT 连接 gateway；设置为 `true` 时客户端直接以 MQTT/TLS 连接 gateway。
 
 ### E) `443/udp` 冲突说明（关键）
 

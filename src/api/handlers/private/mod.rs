@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{State, connect_info::ConnectInfo, ws::WebSocketUpgrade},
+    extract::{State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -14,51 +14,10 @@ mod runtime;
 
 const PRIVATE_WS_SUBPROTOCOL: &str = "pushgo-private.v1";
 
-pub(crate) async fn private_metrics(State(state): State<AppState>) -> HttpResult {
-    Ok(crate::api::ok(
-        runtime::PrivateRuntimeView::new(&state).metrics_response(),
-    ))
-}
-
-pub(crate) async fn private_health(State(state): State<AppState>) -> HttpResult {
-    Ok(crate::api::ok(
-        runtime::PrivateRuntimeView::new(&state).health_snapshot(),
-    ))
-}
-
 pub(crate) async fn gateway_profile(State(state): State<AppState>) -> HttpResult {
     Ok(crate::api::ok(
         runtime::PrivateRuntimeView::new(&state).gateway_profile_response(),
     ))
-}
-
-pub(crate) async fn private_memory(State(state): State<AppState>) -> HttpResult {
-    let private_outbox_total = if state.private_channel_enabled {
-        state.store.count_private_outbox_total().await.ok()
-    } else {
-        None
-    };
-    Ok(crate::api::ok(
-        runtime::PrivateRuntimeView::new(&state).memory_response(private_outbox_total),
-    ))
-}
-
-pub(crate) async fn private_network_diagnostics(
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-    State(state): State<AppState>,
-) -> HttpResult {
-    if !state.private_channel_enabled {
-        return Ok(crate::api::err_with_code(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "private channel is disabled",
-            "private_channel_disabled",
-        ));
-    }
-
-    let runtime_view = runtime::PrivateRuntimeView::new(&state);
-    let request = network::PrivateDiagnosticsRequest::new(peer, &headers);
-    Ok(crate::api::ok(request.diagnostics_response(&runtime_view)))
 }
 
 pub(crate) async fn private_ws(

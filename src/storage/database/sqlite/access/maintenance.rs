@@ -1,5 +1,7 @@
 use super::*;
-use std::collections::HashSet;
+use crate::storage::{
+    SUBSCRIPTION_STATUS_ACTIVE, SUBSCRIPTION_STATUS_FROZEN, SUBSCRIPTION_STATUS_INACTIVE,
+};
 
 impl SqliteDb {
     pub(super) async fn cleanup_expired_provider_pull_queue(
@@ -98,27 +100,40 @@ impl SqliteDb {
         now: i64,
         limit: usize,
     ) -> StoreResult<usize> {
-        let result = sqlx::query(
-            "UPDATE channel_subscriptions \
-             SET status = 'inactive', updated_at = ? \
-             WHERE rowid IN ( \
-               SELECT s.rowid FROM channel_subscriptions s \
-               JOIN devices d ON d.device_id = s.device_id \
-               WHERE s.status = 'active' AND s.updated_at <= ? \
-                 AND d.route_updated_at IS NOT NULL AND d.route_updated_at <= ? \
-                 AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = s.device_id) \
-                 AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = s.device_id) \
-                 AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = s.device_id) \
-               ORDER BY s.updated_at ASC LIMIT ? \
-             )",
+        self.cleanup_subscription_status_with_delivery_gate(
+            "SELECT s.rowid, s.device_id FROM channel_subscriptions s \
+             JOIN devices d ON d.device_id = s.device_id \
+             WHERE s.status = ? AND s.updated_at <= ? \
+               AND d.route_updated_at IS NOT NULL AND d.route_updated_at <= ? \
+               AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = s.device_id) \
+             ORDER BY s.updated_at ASC LIMIT ?",
+            &[SUBSCRIPTION_STATUS_ACTIVE, SUBSCRIPTION_STATUS_INACTIVE],
+            before_ts,
+            now,
+            limit,
         )
-        .bind(now)
-        .bind(before_ts)
-        .bind(before_ts)
-        .bind(limit as i64)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() as usize)
+        .await
+    }
+
+    pub(super) async fn cleanup_inactive_subscriptions(
+        &self,
+        before_ts: i64,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        self.cleanup_subscription_status_with_delivery_gate(
+            "SELECT s.rowid, s.device_id FROM channel_subscriptions s \
+             JOIN devices d ON d.device_id = s.device_id \
+             WHERE s.status = ? AND s.updated_at <= ? \
+               AND d.route_updated_at IS NOT NULL \
+               AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = s.device_id) \
+             ORDER BY s.updated_at ASC LIMIT ?",
+            &[SUBSCRIPTION_STATUS_INACTIVE, SUBSCRIPTION_STATUS_FROZEN],
+            before_ts,
+            now,
+            limit,
+        )
+        .await
     }
 
     pub(super) async fn cleanup_soft_deleted_devices(
@@ -128,8 +143,8 @@ impl SqliteDb {
     ) -> StoreResult<usize> {
         self.cleanup_devices_by_query(
             "SELECT device_id, device_key FROM devices d \
-             WHERE NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status = 'active') \
-               AND EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status <> 'active' AND s.updated_at <= ?) \
+             WHERE NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status <> 'frozen') \
+               AND EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status = 'frozen' AND s.updated_at <= ?) \
                AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = d.device_id) \
                AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = d.device_id) \
                AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = d.device_id) \
@@ -145,18 +160,12 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
-        if self.telemetry_pool.is_some() {
-            return self
-                .cleanup_orphan_channels_with_telemetry(before_ts, limit)
-                .await;
-        }
         let result = sqlx::query(
             "DELETE FROM channels \
              WHERE rowid IN ( \
                SELECT c.rowid FROM channels c \
                WHERE c.updated_at <= ? \
                  AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = c.channel_id) \
-                 AND NOT EXISTS (SELECT 1 FROM channel_stats_daily st WHERE st.channel_id = c.channel_id AND st.messages_routed > 0) \
                ORDER BY c.updated_at ASC LIMIT ? \
              )",
         )
@@ -165,80 +174,6 @@ impl SqliteDb {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() as usize)
-    }
-
-    pub(super) async fn cleanup_audit_rows(
-        &self,
-        before_ts: i64,
-        limit: usize,
-    ) -> StoreResult<usize> {
-        let route_rows = delete_limited_sqlite(
-            &self.pool,
-            "device_route_audit",
-            "created_at <= ?",
-            "created_at ASC",
-            before_ts,
-            limit,
-        )
-        .await?;
-        let subscription_rows = delete_limited_sqlite(
-            &self.pool,
-            "subscription_audit",
-            "created_at <= ?",
-            "created_at ASC",
-            before_ts,
-            limit,
-        )
-        .await?;
-        Ok(route_rows.saturating_add(subscription_rows))
-    }
-
-    pub(super) async fn cleanup_hourly_stats(
-        &self,
-        before_bucket: &str,
-        limit: usize,
-    ) -> StoreResult<usize> {
-        let gateway_rows = delete_limited_by_bucket_sqlite(
-            self.telemetry_pool(),
-            "gateway_stats_hourly",
-            "bucket_hour",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        let ops_rows = delete_limited_by_bucket_sqlite(
-            self.telemetry_pool(),
-            "ops_stats_hourly",
-            "bucket_hour",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        Ok(gateway_rows.saturating_add(ops_rows))
-    }
-
-    pub(super) async fn cleanup_daily_stats(
-        &self,
-        before_bucket: &str,
-        limit: usize,
-    ) -> StoreResult<usize> {
-        let channel_rows = delete_limited_by_bucket_sqlite(
-            self.telemetry_pool(),
-            "channel_stats_daily",
-            "bucket_date",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        let device_rows = delete_limited_by_bucket_sqlite(
-            self.telemetry_pool(),
-            "device_stats_daily",
-            "bucket_date",
-            before_bucket,
-            limit,
-        )
-        .await?;
-        Ok(channel_rows.saturating_add(device_rows))
     }
 
     async fn cleanup_devices_by_query(
@@ -257,7 +192,6 @@ impl SqliteDb {
         let mut deleted = 0usize;
         for row in rows {
             let device_id: Vec<u8> = row.get("device_id");
-            let device_key: Option<String> = row.try_get("device_key").ok();
             if self.delivery_device_has_rows(device_id.as_slice()).await? {
                 continue;
             }
@@ -285,12 +219,6 @@ impl SqliteDb {
                     .execute(&mut *tx)
                     .await?;
             }
-            if let Some(device_key) = device_key.as_deref() {
-                sqlx::query("DELETE FROM device_stats_daily WHERE device_key = ?")
-                    .bind(device_key)
-                    .execute(&mut *tx)
-                    .await?;
-            }
             deleted = deleted.saturating_add(
                 sqlx::query("DELETE FROM devices WHERE device_id = ?")
                     .bind(device_id.as_slice())
@@ -304,6 +232,44 @@ impl SqliteDb {
         }
         tx.commit().await?;
         Ok(deleted)
+    }
+
+    async fn cleanup_subscription_status_with_delivery_gate(
+        &self,
+        select_sql: &str,
+        statuses: &[&str; 2],
+        before_ts: i64,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<usize> {
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let mut query = sqlx::query(select_sql).bind(statuses[0]).bind(before_ts);
+        if statuses[0] == SUBSCRIPTION_STATUS_ACTIVE {
+            query = query.bind(before_ts);
+        }
+        let rows = query.bind(limit as i64).fetch_all(&mut *tx).await?;
+        let mut updated = 0usize;
+        for row in rows {
+            let rowid: i64 = row.get("rowid");
+            let device_id: Vec<u8> = row.get("device_id");
+            if self.delivery_device_has_rows(device_id.as_slice()).await? {
+                continue;
+            }
+            updated = updated.saturating_add(
+                sqlx::query(
+                    "UPDATE channel_subscriptions SET status = ?, updated_at = ? WHERE rowid = ?",
+                )
+                .bind(statuses[1])
+                .bind(now)
+                .bind(rowid)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize,
+            );
+        }
+        tx.commit().await?;
+        Ok(updated)
     }
 
     async fn delivery_device_has_rows(&self, device_id: &[u8]) -> StoreResult<bool> {
@@ -414,6 +380,9 @@ impl SqliteDb {
                     DedupeState::Sent => OpDedupeReservation::Sent {
                         delivery_id: existing_delivery_id,
                     },
+                    DedupeState::PartialFailure => OpDedupeReservation::PartialFailure {
+                        delivery_id: existing_delivery_id,
+                    },
                 }
             } else {
                 OpDedupeReservation::Pending {
@@ -429,6 +398,7 @@ impl SqliteDb {
         &self,
         dedupe_key: &str,
         delivery_id: &str,
+        state: DedupeState,
     ) -> StoreResult<bool> {
         let now = Utc::now().timestamp_millis();
         let result = sqlx::query(
@@ -436,7 +406,7 @@ impl SqliteDb {
              SET state = ?, sent_at = ?, updated_at = ? \
              WHERE dedupe_key = ? AND delivery_id = ? AND state = ?",
         )
-        .bind(DedupeState::Sent.as_str())
+        .bind(state.as_str())
         .bind(now)
         .bind(now)
         .bind(dedupe_key)
@@ -481,12 +451,6 @@ impl SqliteDb {
 
     pub(super) async fn automation_reset(&self) -> StoreResult<()> {
         let tables = vec![
-            "subscription_audit",
-            "device_route_audit",
-            "channel_stats_daily",
-            "device_stats_daily",
-            "gateway_stats_hourly",
-            "ops_stats_hourly",
             "dispatch_op_dedupe",
             "dispatch_delivery_dedupe",
             "semantic_id_registry",
@@ -516,21 +480,6 @@ impl SqliteDb {
                 .await?;
         }
         tx.commit().await?;
-        if let Some(pool) = &self.telemetry_pool {
-            let mut conn = pool.acquire().await?;
-            let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-            for table in [
-                "channel_stats_daily",
-                "device_stats_daily",
-                "gateway_stats_hourly",
-                "ops_stats_hourly",
-            ] {
-                sqlx::query(&format!("DELETE FROM {}", table))
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            tx.commit().await?;
-        }
         if let Some(pool) = &self.runtime_pool {
             sqlx::query("DELETE FROM mcp_state").execute(pool).await?;
         }
@@ -592,61 +541,6 @@ impl SqliteDb {
     }
 }
 
-impl SqliteDb {
-    async fn cleanup_orphan_channels_with_telemetry(
-        &self,
-        before_ts: i64,
-        limit: usize,
-    ) -> StoreResult<usize> {
-        let candidate_rows = sqlx::query(
-            "SELECT c.rowid, c.channel_id \
-             FROM channels c \
-             WHERE c.updated_at <= ? \
-               AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = c.channel_id) \
-             ORDER BY c.updated_at ASC \
-             LIMIT ?",
-        )
-        .bind(before_ts)
-        .bind(limit as i64)
-        .fetch_all(self.core_read_pool())
-        .await?;
-        if candidate_rows.is_empty() {
-            return Ok(0);
-        }
-        let candidate_channels = candidate_rows
-            .iter()
-            .map(|row| row.get::<Vec<u8>, _>("channel_id"))
-            .collect::<Vec<_>>();
-        let channels_with_traffic =
-            load_telemetry_channels_with_traffic(self.telemetry_pool(), &candidate_channels)
-                .await?;
-
-        let mut conn = self.pool.acquire().await?;
-        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-        let mut removed = 0usize;
-        for row in candidate_rows {
-            let rowid: i64 = row.get("rowid");
-            let channel_id: Vec<u8> = row.get("channel_id");
-            if channels_with_traffic.contains(&channel_id) {
-                continue;
-            }
-            removed = removed.saturating_add(
-                sqlx::query(
-                    "DELETE FROM channels \
-                     WHERE rowid = ? \
-                       AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.channel_id = channels.channel_id)",
-                )
-                .bind(rowid)
-                .execute(&mut *tx)
-                .await?
-                .rows_affected() as usize,
-            );
-        }
-        tx.commit().await?;
-        Ok(removed)
-    }
-}
-
 async fn select_delivery_keys(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     sql: &str,
@@ -678,64 +572,4 @@ async fn delete_orphan_private_payload_in_sqlite_tx(
     .execute(&mut **tx)
     .await?;
     Ok(())
-}
-
-async fn delete_limited_sqlite(
-    pool: &sqlx::SqlitePool,
-    table: &str,
-    predicate: &str,
-    order_by: &str,
-    before_ts: i64,
-    limit: usize,
-) -> StoreResult<usize> {
-    let sql = format!(
-        "DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {predicate} ORDER BY {order_by} LIMIT ?)"
-    );
-    let result = sqlx::query(sql.as_str())
-        .bind(before_ts)
-        .bind(limit as i64)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() as usize)
-}
-
-async fn load_telemetry_channels_with_traffic(
-    pool: &sqlx::SqlitePool,
-    channel_ids: &[Vec<u8>],
-) -> StoreResult<HashSet<Vec<u8>>> {
-    if channel_ids.is_empty() {
-        return Ok(HashSet::new());
-    }
-    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-        "SELECT DISTINCT channel_id FROM channel_stats_daily \
-         WHERE messages_routed > 0 AND channel_id IN (",
-    );
-    let mut separated = query.separated(", ");
-    for channel_id in channel_ids {
-        separated.push_bind(channel_id);
-    }
-    separated.push_unseparated(")");
-    let rows = query.build().fetch_all(pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| row.get::<Vec<u8>, _>("channel_id"))
-        .collect())
-}
-
-async fn delete_limited_by_bucket_sqlite(
-    pool: &sqlx::SqlitePool,
-    table: &str,
-    column: &str,
-    before_bucket: &str,
-    limit: usize,
-) -> StoreResult<usize> {
-    let sql = format!(
-        "DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {column} < ? ORDER BY {column} ASC LIMIT ?)"
-    );
-    let result = sqlx::query(sql.as_str())
-        .bind(before_bucket)
-        .bind(limit as i64)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() as usize)
 }

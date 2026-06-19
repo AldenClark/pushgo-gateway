@@ -1120,25 +1120,6 @@ impl StatusResponse {
             data: None,
         }
     }
-
-    pub(crate) fn err_with_data<T: Serialize>(
-        msg: impl Into<Cow<'static, str>>,
-        data: T,
-    ) -> StatusResponse<T> {
-        let error = msg.into();
-        StatusResponse {
-            success: false,
-            error_code: ApiProblem::from_legacy(
-                StatusCode::BAD_REQUEST,
-                Some(error.as_ref()),
-                None,
-            )
-            .and_then(|problem| problem.code.map(Cow::Owned)),
-            problem: ApiProblem::from_legacy(StatusCode::BAD_REQUEST, Some(error.as_ref()), None),
-            error: Some(error),
-            data: Some(data),
-        }
-    }
 }
 
 #[cfg(test)]

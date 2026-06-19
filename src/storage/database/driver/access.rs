@@ -10,7 +10,5 @@ mod device_routes;
 mod private_messages;
 #[path = "access/provider_pull.rs"]
 mod provider_pull;
-#[path = "access/stats.rs"]
-mod stats;
 #[path = "access/system_state.rs"]
 mod system_state;

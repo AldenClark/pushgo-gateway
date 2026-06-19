@@ -5,14 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 BIN="${BIN:-$ROOT_DIR/target/release/pushgo-gateway}"
+BUILD="${BUILD:-1}"
 TOKEN="${TOKEN:-blackbox-token}"
 WRONG_TOKEN="${WRONG_TOKEN:-blackbox-token-wrong}"
 HTTP_PORT="${HTTP_PORT:-17880}"
 DB_URL="${DB_URL:-sqlite:///tmp/pushgo-blackbox-negative.sqlite?mode=rwc}"
 OUT_FILE="${OUT_FILE:-/tmp/pushgo-blackbox-negative-${HTTP_PORT}.txt}"
 LOG_FILE="${LOG_FILE:-/tmp/pushgo-blackbox-negative-${HTTP_PORT}.log}"
-PRIVATE_TCP_PORT="${PRIVATE_TCP_PORT:-57880}"
-PRIVATE_QUIC_PORT="${PRIVATE_QUIC_PORT:-57881}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -21,7 +20,7 @@ need_cmd() {
   fi
 }
 
-for c in curl jq openssl; do
+for c in curl jq; do
   need_cmd "$c"
 done
 
@@ -123,29 +122,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ ! -x "$BIN" ]; then
+if [ "$BUILD" = "1" ] || [ ! -x "$BIN" ]; then
   cargo build --release --locked --bin pushgo-gateway >/dev/null
 fi
-
-CERT_FILE="$(mktemp /tmp/pushgo-blackbox-cert.XXXXXX.pem)"
-KEY_FILE="$(mktemp /tmp/pushgo-blackbox-key.XXXXXX.pem)"
-openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
-  -keyout "$KEY_FILE" \
-  -out "$CERT_FILE" \
-  -subj "/CN=127.0.0.1" >/dev/null 2>&1
 
 "$BIN" \
   --http-addr "127.0.0.1:${HTTP_PORT}" \
   --db-url "$DB_URL" \
   --token "$TOKEN" \
-  --private-transports quic,tcp,wss \
-  --private-tcp-bind "127.0.0.1:${PRIVATE_TCP_PORT}" \
-  --private-tcp-port "$PRIVATE_TCP_PORT" \
-  --private-quic-bind "127.0.0.1:${PRIVATE_QUIC_PORT}" \
-  --private-quic-port "$PRIVATE_QUIC_PORT" \
-  --private-tls-cert "$CERT_FILE" \
-  --private-tls-key "$KEY_FILE" \
-  --observability-profile ops \
+  --private-transports wss \
   >"$LOG_FILE" 2>&1 &
 GW_PID=$!
 
@@ -214,7 +199,8 @@ SYNC_FAILED="$(extract_field "$REQUEST_BODY" '.data.failed')"
 write_case "channel_sync.partial" "$SYNC_STATUS" "success=${SYNC_SUCCESS},failed=${SYNC_FAILED}"
 
 request "GET" "$BASE_URL" "/diagnostics/private/metrics" "valid" "application/json" ""
-write_case "diagnostics_private_metrics.enabled" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
+write_case "diagnostics_private_metrics.absent" "$REQUEST_STATUS" "$(extract_code "$REQUEST_BODY")"
+require_status "404" "$REQUEST_STATUS" "diagnostics_private_metrics.absent" "$REQUEST_BODY"
 
 echo "OUT_FILE=$OUT_FILE"
 echo "LOG_FILE=$LOG_FILE"

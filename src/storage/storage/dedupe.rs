@@ -82,7 +82,19 @@ impl Storage {
         dedupe_key: &str,
         delivery_id: &str,
     ) -> StoreResult<bool> {
-        self.db.mark_op_dedupe_sent(dedupe_key, delivery_id).await
+        self.mark_op_dedupe_finalized(dedupe_key, delivery_id, DedupeState::Sent)
+            .await
+    }
+
+    pub async fn mark_op_dedupe_finalized(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        state: DedupeState,
+    ) -> StoreResult<bool> {
+        self.db
+            .mark_op_dedupe_sent(dedupe_key, delivery_id, state)
+            .await
     }
 
     pub async fn clear_op_dedupe_pending(

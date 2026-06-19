@@ -43,8 +43,6 @@ impl GatewayProcess {
             .arg(db_url.clone())
             .arg("--token")
             .arg(&token)
-            .arg("--observability-profile")
-            .arg("ops")
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
             .spawn()

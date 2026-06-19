@@ -161,7 +161,7 @@ impl PostgresDb {
         limit: usize,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         let rows = sqlx::query(
-            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE next_attempt_at <= $1 AND status IN ($2, $3, $4) LIMIT $5",
         )
         .bind(before_ts)
@@ -186,6 +186,7 @@ impl PostgresDb {
                     occurred_at: r.get("occurred_at"),
                     created_at: r.get("created_at"),
                     claimed_at: r.get("claimed_at"),
+                    claimed_by: r.get("claimed_by"),
                     first_sent_at: r.get("first_sent_at"),
                     last_attempt_at: r.get("last_attempt_at"),
                     acked_at: r.get("acked_at"),
@@ -205,17 +206,20 @@ impl PostgresDb {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         let rows = sqlx::query(
-            "UPDATE private_outbox SET status = $1, claimed_at = $2, last_attempt_at = $2, updated_at = $2 \
+            "UPDATE private_outbox SET status = $1, claimed_at = $2, claimed_by = $3, last_attempt_at = $2, updated_at = $2 \
              WHERE (device_id, delivery_id) IN ( \
                 SELECT device_id, delivery_id FROM private_outbox \
-                WHERE next_attempt_at <= $3 AND status IN ($4, $5, $6) \
-                LIMIT $7 FOR UPDATE SKIP LOCKED \
+                WHERE next_attempt_at <= $4 \
+                  AND (status = $5 OR (status IN ($6, $7) AND (claimed_at IS NULL OR claimed_at <= $4))) \
+                LIMIT $8 FOR UPDATE SKIP LOCKED \
              ) RETURNING *",
         )
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(claim_until_ts)
+        .bind(worker_id)
         .bind(before_ts)
         .bind(OUTBOX_STATUS_PENDING)
         .bind(OUTBOX_STATUS_CLAIMED)
@@ -238,6 +242,7 @@ impl PostgresDb {
                     occurred_at: r.get("occurred_at"),
                     created_at: r.get("created_at"),
                     claimed_at: r.get("claimed_at"),
+                    claimed_by: r.get("claimed_by"),
                     first_sent_at: r.get("first_sent_at"),
                     last_attempt_at: r.get("last_attempt_at"),
                     acked_at: r.get("acked_at"),
@@ -258,17 +263,20 @@ impl PostgresDb {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         let rows = sqlx::query(
-            "UPDATE private_outbox SET status = $1, claimed_at = $2, last_attempt_at = $2, updated_at = $2 \
+            "UPDATE private_outbox SET status = $1, claimed_at = $2, claimed_by = $3, last_attempt_at = $2, updated_at = $2 \
              WHERE (device_id, delivery_id) IN ( \
                 SELECT device_id, delivery_id FROM private_outbox \
-                WHERE device_id = $3 AND next_attempt_at <= $4 AND status IN ($5, $6, $7) \
-                LIMIT $8 FOR UPDATE SKIP LOCKED \
+                WHERE device_id = $4 AND next_attempt_at <= $5 \
+                  AND (status = $6 OR (status IN ($7, $8) AND (claimed_at IS NULL OR claimed_at <= $5))) \
+                LIMIT $9 FOR UPDATE SKIP LOCKED \
              ) RETURNING *",
         )
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(claim_until_ts)
+        .bind(worker_id)
         .bind(&device_id[..])
         .bind(before_ts)
         .bind(OUTBOX_STATUS_PENDING)
@@ -287,6 +295,7 @@ impl PostgresDb {
                 occurred_at: r.get("occurred_at"),
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),
+                claimed_by: r.get("claimed_by"),
                 first_sent_at: r.get("first_sent_at"),
                 last_attempt_at: r.get("last_attempt_at"),
                 acked_at: r.get("acked_at"),

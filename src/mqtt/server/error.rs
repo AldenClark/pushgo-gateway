@@ -55,6 +55,13 @@ pub(super) fn mqtt_error_from_api(err: Error) -> MqttError {
         } if code.contains("topic") || code.as_ref() == "channel_id_invalid" => {
             MqttErrorKind::Topic
         }
+        Error::Validation {
+            code: Some(code), ..
+        } if code.as_ref() == "channel_not_authorized"
+            || code.as_ref() == "authentication_failed" =>
+        {
+            MqttErrorKind::Auth
+        }
         Error::Validation { .. } => MqttErrorKind::Payload,
         _ => MqttErrorKind::Internal,
     };

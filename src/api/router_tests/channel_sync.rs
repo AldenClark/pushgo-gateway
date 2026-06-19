@@ -46,6 +46,7 @@ async fn seed_private_pending_delivery(
                 occurred_at: now,
                 created_at: now,
                 claimed_at: None,
+                claimed_by: None,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -540,7 +541,7 @@ async fn provider_token_retire_removes_only_old_token_state() {
 }
 
 #[tokio::test]
-async fn concurrent_route_upserts_keep_single_route_and_complete_audit_chain() {
+async fn concurrent_route_upserts_keep_single_current_route() {
     let state = build_test_state().await;
     let app = super::super::build_router(state.clone(), "<html>docs</html>");
 

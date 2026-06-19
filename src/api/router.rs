@@ -3,7 +3,7 @@ use crate::{
     api::{Error, HttpResult, err_with_code, with_api_request_scope},
     app::{AppState, AuthMode},
     mcp::{is_mcp_or_oauth_path, mcp_router},
-    stats::OPS_METRIC_HTTP_RESPONSE_5XX,
+    runtime_counters::OPS_METRIC_HTTP_RESPONSE_5XX,
     util::constant_time_eq,
 };
 use axum::extract::DefaultBodyLimit;
@@ -20,10 +20,6 @@ use tracing::Instrument;
 
 pub(crate) fn build_router(state: AppState, docs_html: &'static str) -> Router {
     let mut router = handlers::public_router(docs_html);
-
-    if state.diagnostics_api_enabled {
-        router = router.merge(handlers::diagnostics_router());
-    }
 
     if state.private_transport_profile.wss_enabled {
         router = router.merge(handlers::private_router());
@@ -169,7 +165,7 @@ fn observe_server_error_response(
         return;
     }
     state
-        .stats
+        .runtime_counters
         .record_ops_counter_now(OPS_METRIC_HTTP_RESPONSE_5XX, 1);
 
     static HTTP_5XX_TRACE_COUNT: AtomicU64 = AtomicU64::new(0);

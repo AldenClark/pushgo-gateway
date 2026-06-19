@@ -16,12 +16,12 @@ impl StateTestContext {
         let storage = Storage::new(Some(db_url.as_str()))
             .await
             .expect("storage should initialize");
-        let stats = StatsCollector::spawn(storage.clone());
+        let runtime_counters = RuntimeCounterCollector::spawn(storage.clone());
         let state = PrivateState::new(
             storage,
             test_private_config(),
             Arc::new(DeviceRegistry::new()),
-            stats,
+            runtime_counters,
         );
         Self { _dir: dir, state }
     }
@@ -194,6 +194,7 @@ async fn enqueue_private_delivery_does_not_evict_claimed_entries_for_capacity() 
                     occurred_at: now + index as i64,
                     created_at: now + index as i64,
                     claimed_at: Some(now + index as i64),
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,

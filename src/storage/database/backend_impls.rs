@@ -308,8 +308,16 @@ macro_rules! impl_backend_private_message_access {
                 before_ts: i64,
                 limit: usize,
                 claim_until_ts: i64,
+                worker_id: &str,
             ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
-                <$backend>::claim_private_outbox_due(self, before_ts, limit, claim_until_ts).await
+                <$backend>::claim_private_outbox_due(
+                    self,
+                    before_ts,
+                    limit,
+                    claim_until_ts,
+                    worker_id,
+                )
+                .await
             }
 
             async fn claim_private_outbox_due_for_device(
@@ -318,6 +326,7 @@ macro_rules! impl_backend_private_message_access {
                 before_ts: i64,
                 limit: usize,
                 claim_until_ts: i64,
+                worker_id: &str,
             ) -> StoreResult<Vec<PrivateOutboxEntry>> {
                 <$backend>::claim_private_outbox_due_for_device(
                     self,
@@ -325,6 +334,7 @@ macro_rules! impl_backend_private_message_access {
                     before_ts,
                     limit,
                     claim_until_ts,
+                    worker_id,
                 )
                 .await
             }
@@ -348,21 +358,27 @@ macro_rules! impl_backend_device_route_access {
                 <$backend>::upsert_device_route(self, route).await
             }
 
+            async fn touch_device_activity(
+                &self,
+                device_id: DeviceId,
+                at_ts: i64,
+            ) -> StoreResult<()> {
+                <$backend>::touch_device_activity(self, device_id, at_ts).await
+            }
+
             async fn persist_device_route_change(
                 &self,
                 route: &DeviceRouteRecordRow,
-                audit: &DeviceRouteAuditWrite,
             ) -> StoreResult<()> {
-                <$backend>::persist_device_route_change(self, route, audit).await
+                <$backend>::persist_device_route_change(self, route).await
             }
 
             async fn replace_device_identity(
                 &self,
                 route: &DeviceRouteRecordRow,
                 old_device_key: Option<&str>,
-                audit: &DeviceRouteAuditWrite,
             ) -> StoreResult<()> {
-                <$backend>::replace_device_identity(self, route, old_device_key, audit).await
+                <$backend>::replace_device_identity(self, route, old_device_key).await
             }
 
             async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()> {
@@ -375,31 +391,6 @@ macro_rules! impl_backend_device_route_access {
                 provider_token: &str,
             ) -> StoreResult<()> {
                 <$backend>::retire_provider_token(self, platform, provider_token).await
-            }
-
-            async fn append_device_route_audit(
-                &self,
-                entry: &DeviceRouteAuditWrite,
-            ) -> StoreResult<()> {
-                <$backend>::append_device_route_audit(self, entry).await
-            }
-
-            async fn append_subscription_audit(
-                &self,
-                entry: &SubscriptionAuditWrite,
-            ) -> StoreResult<()> {
-                <$backend>::append_subscription_audit(self, entry).await
-            }
-        }
-    };
-}
-
-macro_rules! impl_backend_stats_access {
-    ($backend:ty) => {
-        #[async_trait]
-        impl crate::storage::database::StatsDatabaseAccess for $backend {
-            async fn apply_stats_batch(&self, batch: &StatsBatchWrite) -> StoreResult<()> {
-                <$backend>::apply_stats_batch(self, batch).await
             }
         }
     };
@@ -518,8 +509,9 @@ macro_rules! impl_backend_dedupe_access {
                 &self,
                 dedupe_key: &str,
                 delivery_id: &str,
+                state: DedupeState,
             ) -> StoreResult<bool> {
-                <$backend>::mark_op_dedupe_sent(self, dedupe_key, delivery_id).await
+                <$backend>::mark_op_dedupe_sent(self, dedupe_key, delivery_id, state).await
             }
 
             async fn clear_op_dedupe_pending(
@@ -594,6 +586,15 @@ macro_rules! impl_backend_system_state_access {
                 <$backend>::cleanup_stale_subscriptions(self, before_ts, now, limit).await
             }
 
+            async fn cleanup_inactive_subscriptions(
+                &self,
+                before_ts: i64,
+                now: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_inactive_subscriptions(self, before_ts, now, limit).await
+            }
+
             async fn cleanup_soft_deleted_devices(
                 &self,
                 before_ts: i64,
@@ -609,26 +610,6 @@ macro_rules! impl_backend_system_state_access {
             ) -> StoreResult<usize> {
                 <$backend>::cleanup_orphan_channels(self, before_ts, limit).await
             }
-
-            async fn cleanup_audit_rows(&self, before_ts: i64, limit: usize) -> StoreResult<usize> {
-                <$backend>::cleanup_audit_rows(self, before_ts, limit).await
-            }
-
-            async fn cleanup_hourly_stats(
-                &self,
-                before_bucket: &str,
-                limit: usize,
-            ) -> StoreResult<usize> {
-                <$backend>::cleanup_hourly_stats(self, before_bucket, limit).await
-            }
-
-            async fn cleanup_daily_stats(
-                &self,
-                before_bucket: &str,
-                limit: usize,
-            ) -> StoreResult<usize> {
-                <$backend>::cleanup_daily_stats(self, before_bucket, limit).await
-            }
         }
     };
 }
@@ -640,7 +621,6 @@ macro_rules! impl_backend_database_access {
         impl_backend_private_channel_access!($backend);
         impl_backend_private_message_access!($backend);
         impl_backend_device_route_access!($backend);
-        impl_backend_stats_access!($backend);
         impl_backend_provider_pull_access!($backend);
         impl_backend_dedupe_access!($backend);
         impl_backend_system_state_access!($backend);

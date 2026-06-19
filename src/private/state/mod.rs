@@ -25,7 +25,7 @@ pub struct PrivateState {
     pub hub: Arc<PrivateHub>,
     pub config: PrivateConfig,
     pub device_registry: Arc<DeviceRegistry>,
-    pub stats: Arc<StatsCollector>,
+    pub runtime_counters: Arc<RuntimeCounterCollector>,
     pub metrics: Arc<metrics::PrivateMetrics>,
     pub(super) fallback_tasks: Option<Arc<FallbackTaskEngine>>,
     session_coordinator: Arc<InMemoryCoordinator>,

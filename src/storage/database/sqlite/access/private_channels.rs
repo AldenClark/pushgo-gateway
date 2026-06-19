@@ -84,8 +84,8 @@ impl SqliteDb {
         entry: &PrivateOutboxEntry,
     ) -> StoreResult<()> {
         sqlx::query(
-            "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
                  status = EXCLUDED.status, attempts = EXCLUDED.attempts, updated_at = EXCLUDED.updated_at, next_attempt_at = EXCLUDED.next_attempt_at",
         )
@@ -96,6 +96,7 @@ impl SqliteDb {
         .bind(entry.occurred_at)
         .bind(entry.created_at)
         .bind(entry.claimed_at)
+        .bind(entry.claimed_by.as_deref())
         .bind(entry.first_sent_at)
         .bind(entry.last_attempt_at)
         .bind(entry.acked_at)
@@ -202,7 +203,7 @@ impl SqliteDb {
         limit: usize,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         let rows = sqlx::query(
-            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE device_id = ? AND status IN (?, ?, ?) \
              ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC LIMIT ?",
         )
@@ -223,6 +224,7 @@ impl SqliteDb {
                 occurred_at: r.get("occurred_at"),
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),
+                claimed_by: r.get("claimed_by"),
                 first_sent_at: r.get("first_sent_at"),
                 last_attempt_at: r.get("last_attempt_at"),
                 acked_at: r.get("acked_at"),
@@ -243,7 +245,7 @@ impl SqliteDb {
     ) -> StoreResult<Vec<PrivateOutboxMessageRow>> {
         let rows = sqlx::query(
             "SELECT o.device_id, o.delivery_id, o.status, o.attempts, o.occurred_at, o.created_at, \
-                    o.claimed_at, o.first_sent_at, o.last_attempt_at, o.acked_at, o.fallback_sent_at, \
+                    o.claimed_at, o.claimed_by, o.first_sent_at, o.last_attempt_at, o.acked_at, o.fallback_sent_at, \
                     o.next_attempt_at, o.last_error_code, o.last_error_detail, o.updated_at, \
                     p.payload_blob, p.payload_size, p.sent_at, p.expires_at \
              FROM private_outbox o \
@@ -592,7 +594,7 @@ async fn insert_private_outbox_sqlite_tx(
 ) -> StoreResult<()> {
     for chunk in entries.chunks(SQLITE_PRIVATE_WRITE_BATCH_ROWS) {
         let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-            "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) ",
+            "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) ",
         );
         query.push_values(chunk, |mut row, item| {
             row.push_bind(&item.device_id[..])
@@ -602,6 +604,7 @@ async fn insert_private_outbox_sqlite_tx(
                 .push_bind(item.entry.occurred_at)
                 .push_bind(item.entry.created_at)
                 .push_bind(item.entry.claimed_at)
+                .push_bind(item.entry.claimed_by.as_deref())
                 .push_bind(item.entry.first_sent_at)
                 .push_bind(item.entry.last_attempt_at)
                 .push_bind(item.entry.acked_at)
@@ -628,6 +631,7 @@ fn private_outbox_entry_from_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> Privat
         occurred_at: row.get("occurred_at"),
         created_at: row.get("created_at"),
         claimed_at: row.get("claimed_at"),
+        claimed_by: row.get("claimed_by"),
         first_sent_at: row.get("first_sent_at"),
         last_attempt_at: row.get("last_attempt_at"),
         acked_at: row.get("acked_at"),

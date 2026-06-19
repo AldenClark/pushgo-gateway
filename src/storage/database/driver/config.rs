@@ -7,7 +7,6 @@ impl DatabaseDriver {
     pub async fn new(db_url: Option<&str>) -> StoreResult<Self> {
         Self::new_with_config(StorageInitConfig {
             db_url: db_url.map(str::to_string),
-            stats_enabled: true,
             mcp_enabled: true,
             ..StorageInitConfig::default()
         })
@@ -28,7 +27,6 @@ impl DatabaseDriver {
                 SqliteDb::new_with_config(
                     normalized_db_url.as_str(),
                     config.runtime_profile,
-                    config.stats_enabled,
                     config.mcp_enabled,
                 )
                 .await?,

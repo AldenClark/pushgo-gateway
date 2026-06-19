@@ -11,9 +11,6 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) PRIMARY KEY, semantic_id VARCHAR(128) NOT NULL UNIQUE, source VARCHAR(64), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT, expires_at BIGINT)",
-    "CREATE TABLE IF NOT EXISTS channel_stats_daily (channel_id BYTEA NOT NULL, bucket_date VARCHAR(10) NOT NULL, messages_routed BIGINT NOT NULL DEFAULT 0, deliveries_attempted BIGINT NOT NULL DEFAULT 0, deliveries_acked BIGINT NOT NULL DEFAULT 0, private_enqueued BIGINT NOT NULL DEFAULT 0, provider_attempted BIGINT NOT NULL DEFAULT 0, provider_failed BIGINT NOT NULL DEFAULT 0, provider_success BIGINT NOT NULL DEFAULT 0, private_realtime_delivered BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (channel_id, bucket_date))",
-    "CREATE TABLE IF NOT EXISTS gateway_stats_hourly (bucket_hour VARCHAR(16) PRIMARY KEY, messages_routed BIGINT NOT NULL DEFAULT 0, deliveries_attempted BIGINT NOT NULL DEFAULT 0, deliveries_acked BIGINT NOT NULL DEFAULT 0, private_outbox_depth_max BIGINT NOT NULL DEFAULT 0, dedupe_pending_max BIGINT NOT NULL DEFAULT 0, active_private_sessions_max BIGINT NOT NULL DEFAULT 0)",
-    "CREATE TABLE IF NOT EXISTS ops_stats_hourly (bucket_hour VARCHAR(16) NOT NULL, metric_key VARCHAR(128) NOT NULL, metric_value BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (bucket_hour, metric_key))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL)",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key VARCHAR(64) PRIMARY KEY, state_json TEXT NOT NULL, updated_at BIGINT NOT NULL)",
 ];
@@ -22,13 +19,10 @@ const PG_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS devices (device_id BYTEA PRIMARY KEY, token_raw BYTEA NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255), platform VARCHAR(32), channel_type VARCHAR(32), provider_token TEXT, route_updated_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BYTEA NOT NULL, key_id INTEGER NOT NULL, key_hash BYTEA NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BYTEA NOT NULL, expires_at BIGINT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT, first_sent_at BIGINT, last_attempt_at BIGINT, acked_at BIGINT, fallback_sent_at BIGINT, next_attempt_at BIGINT NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT, claimed_by TEXT, first_sent_at BIGINT, last_attempt_at BIGINT, acked_at BIGINT, fallback_sent_at BIGINT, next_attempt_at BIGINT NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
     "CREATE TABLE IF NOT EXISTS private_bindings (platform SMALLINT NOT NULL, token_hash BYTEA NOT NULL, device_id BYTEA NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (platform, token_hash))",
     "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BYTEA NOT NULL, device_id BYTEA NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'active', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (channel_id, device_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
-    "CREATE TABLE IF NOT EXISTS device_route_audit (device_key VARCHAR(255) NOT NULL, action VARCHAR(32) NOT NULL, old_platform VARCHAR(32), new_platform VARCHAR(32), old_channel_type VARCHAR(32), new_channel_type VARCHAR(32), old_provider_token TEXT, new_provider_token TEXT, issue_reason VARCHAR(64), created_at BIGINT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS subscription_audit (channel_id BYTEA NOT NULL, device_key VARCHAR(255) NOT NULL, action VARCHAR(32) NOT NULL, platform VARCHAR(32) NOT NULL, channel_type VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS device_stats_daily (device_key VARCHAR(255) NOT NULL, bucket_date VARCHAR(10) NOT NULL, messages_received BIGINT NOT NULL DEFAULT 0, messages_acked BIGINT NOT NULL DEFAULT 0, private_connected_count BIGINT NOT NULL DEFAULT 0, private_pull_count BIGINT NOT NULL DEFAULT 0, provider_success_count BIGINT NOT NULL DEFAULT 0, provider_failure_count BIGINT NOT NULL DEFAULT 0, private_outbox_enqueued_count BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (device_key, bucket_date))",
 ];
 
 const PG_BASE_INDEX_STATEMENTS: &[&str] = &[
@@ -57,9 +51,6 @@ const PG_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
     "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)",
     "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)",
-    "CREATE INDEX IF NOT EXISTS device_route_audit_device_created_idx ON device_route_audit (device_key, created_at)",
-    "CREATE INDEX IF NOT EXISTS subscription_audit_channel_created_idx ON subscription_audit (channel_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS subscription_audit_device_created_idx ON subscription_audit (device_key, created_at)",
 ];
 
 const PG_RUNTIME_DROP_STATEMENTS: &[&str] = &[
@@ -73,6 +64,15 @@ const PG_RUNTIME_DROP_STATEMENTS: &[&str] = &[
     "DROP TABLE IF EXISTS subscription_audit",
     "DROP TABLE IF EXISTS device_route_audit",
     "DROP TABLE IF EXISTS device_stats_daily",
+];
+const PG_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS: &[&str] = &[
+    "DROP TABLE IF EXISTS delivery_audit",
+    "DROP TABLE IF EXISTS subscription_audit",
+    "DROP TABLE IF EXISTS device_route_audit",
+    "DROP TABLE IF EXISTS channel_stats_daily",
+    "DROP TABLE IF EXISTS device_stats_daily",
+    "DROP TABLE IF EXISTS gateway_stats_hourly",
+    "DROP TABLE IF EXISTS ops_stats_hourly",
 ];
 const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
 const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
@@ -233,6 +233,12 @@ impl PostgresDb {
         .await?;
         self.ensure_pg_column(
             "private_outbox",
+            "claimed_by",
+            "ALTER TABLE private_outbox ADD COLUMN claimed_by TEXT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "private_outbox",
             "first_sent_at",
             "ALTER TABLE private_outbox ADD COLUMN first_sent_at BIGINT",
         )
@@ -327,9 +333,9 @@ impl PostgresDb {
         {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
-        sqlx::query("DROP TABLE IF EXISTS delivery_audit")
-            .execute(&self.pool)
-            .await?;
+        for stmt in PG_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
+            sqlx::query(stmt).execute(&self.pool).await?;
+        }
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
             .await?;
@@ -445,8 +451,6 @@ impl PostgresDb {
                 "provider_pull_queue",
                 &["sent_at", "expires_at", "created_at", "updated_at"],
             ),
-            ("device_route_audit", &["created_at"]),
-            ("subscription_audit", &["created_at"]),
         ];
 
         let mut tx = self.pool.begin().await?;

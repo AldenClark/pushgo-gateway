@@ -360,4 +360,39 @@ impl PrivateHub {
         );
         false
     }
+
+    pub(crate) fn try_deliver_to_mqtt_device(
+        &self,
+        device_id: DeviceId,
+        envelope: protocol::DeliverEnvelope,
+    ) -> bool {
+        let delivery_id = envelope.delivery_id.clone();
+        if let Some(presence) = self.presence.get(&device_id) {
+            let sender = presence.mqtt_delivery_sender();
+            drop(presence);
+            if let Some(sender) = sender
+                && sender.try_send(envelope).is_ok()
+            {
+                return true;
+            }
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mqtt.receiver_delivery_failed",
+                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+                delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+                reason = %("mqtt_connection_unavailable_or_backpressured")
+            );
+            return false;
+        }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "mqtt.receiver_delivery_failed",
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
+            delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+            reason = %("device_not_online")
+        );
+        false
+    }
 }

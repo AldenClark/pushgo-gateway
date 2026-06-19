@@ -1,119 +1,76 @@
-use crate::{api::Error, app::AppState, storage::OpDedupeReservation};
+use async_trait::async_trait;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DispatchOpDedupeAction {
-    FinalizeSent,
-    ClearPending,
-}
+use crate::{
+    api::Error,
+    app::AppState,
+    delivery_core::{
+        execution::dedupe::{
+            DispatchDedupeError, DispatchDedupeResult, DispatchDedupeStore,
+            DispatchOpGuard as CoreDispatchOpGuard,
+            DispatchOpGuardStart as CoreDispatchOpGuardStart,
+        },
+        response::{DeliveryDispatchStatus, DeliverySummary},
+    },
+    storage::{DedupeState, OpDedupeReservation},
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DispatchOpGuard {
-    dedupe_key: String,
-    reserved_delivery_id: String,
-}
+pub(crate) type NotificationDispatchSummary = DeliverySummary;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DispatchOpGuardDecision {
-    Proceed(DispatchOpGuard),
-    AlreadySent { delivery_id: String },
-    Pending { delivery_id: String },
-}
+pub(crate) struct DispatchOpGuard(CoreDispatchOpGuard);
 
 pub(crate) enum DispatchOpGuardStart {
     Proceed(DispatchOpGuard),
     Complete(NotificationDispatchSummary),
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct NotificationDispatchSummary {
-    pub channel_id: String,
-    pub op_id: String,
-    pub delivery_id: String,
-    pub partial_failure: bool,
-    pub private_enqueue_too_busy: bool,
-    pub has_dispatch_attempt: bool,
-}
-
-impl NotificationDispatchSummary {
-    pub(crate) fn failure_error_message(&self) -> Option<&'static str> {
-        if !self.partial_failure {
-            return None;
-        }
-        if self.private_enqueue_too_busy {
-            Some("private enqueue failures exceeded safety threshold")
-        } else {
-            Some("notification dispatch completed with partial failure")
-        }
+#[async_trait]
+impl DispatchDedupeStore for AppState {
+    async fn reserve_op_pending(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        created_at: i64,
+    ) -> DispatchDedupeResult<OpDedupeReservation> {
+        self.store
+            .reserve_op_dedupe_pending(dedupe_key, delivery_id, created_at)
+            .await
+            .map_err(DispatchDedupeError::from)
     }
 
-    fn dedupe_action(&self) -> DispatchOpDedupeAction {
-        if !self.has_dispatch_attempt && (self.partial_failure || self.private_enqueue_too_busy) {
-            DispatchOpDedupeAction::ClearPending
-        } else {
-            DispatchOpDedupeAction::FinalizeSent
-        }
+    async fn mark_op_finalized(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        dispatch_status: DeliveryDispatchStatus,
+    ) -> DispatchDedupeResult<bool> {
+        let state = match dispatch_status {
+            DeliveryDispatchStatus::AttemptedAccepted => DedupeState::Sent,
+            DeliveryDispatchStatus::AttemptedPartialFailure => DedupeState::PartialFailure,
+            DeliveryDispatchStatus::NotAttempted | DeliveryDispatchStatus::PrivateQueueTooBusy => {
+                return Err(DispatchDedupeError::new(
+                    "only attempted dispatches can be finalized",
+                ));
+            }
+        };
+        self.store
+            .mark_op_dedupe_finalized(dedupe_key, delivery_id, state)
+            .await
+            .map_err(DispatchDedupeError::from)
+    }
+
+    async fn clear_op_pending(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+    ) -> DispatchDedupeResult<()> {
+        self.store
+            .clear_op_dedupe_pending(dedupe_key, delivery_id)
+            .await
+            .map_err(DispatchDedupeError::from)
     }
 }
 
 impl DispatchOpGuard {
-    fn already_sent_summary(
-        channel_id: String,
-        op_id: String,
-        delivery_id: String,
-    ) -> NotificationDispatchSummary {
-        NotificationDispatchSummary {
-            channel_id,
-            op_id,
-            delivery_id,
-            partial_failure: false,
-            private_enqueue_too_busy: false,
-            has_dispatch_attempt: true,
-        }
-    }
-
-    async fn reserve(
-        state: &AppState,
-        dedupe_key: String,
-        reserved_delivery_id: String,
-        created_at: i64,
-    ) -> Result<DispatchOpGuardDecision, Error> {
-        let reservation = state
-            .store
-            .reserve_op_dedupe_pending(
-                dedupe_key.as_str(),
-                reserved_delivery_id.as_str(),
-                created_at,
-            )
-            .await
-            .map_err(|err| {
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::ERROR,
-                    event = "dispatch.dedupe_reserve_failed",
-                    dedupe_key = %(crate::util::redact_text(dedupe_key.as_str())),
-                    reserved_delivery_id = %(crate::util::redact_text(reserved_delivery_id.as_str())),
-                    error = %(err.to_string())
-                );
-                Error::Internal(err.to_string())
-            })?;
-
-        let decision = match reservation {
-            OpDedupeReservation::Sent { delivery_id } => {
-                DispatchOpGuardDecision::AlreadySent { delivery_id }
-            }
-            OpDedupeReservation::Pending { delivery_id } => {
-                DispatchOpGuardDecision::Pending { delivery_id }
-            }
-            OpDedupeReservation::Reserved => DispatchOpGuardDecision::Proceed(Self {
-                dedupe_key,
-                reserved_delivery_id,
-            }),
-        };
-        emit_dispatch_reservation_trace(&decision);
-
-        Ok(decision)
-    }
-
     pub(crate) async fn begin(
         state: &AppState,
         dedupe_key: String,
@@ -122,116 +79,24 @@ impl DispatchOpGuard {
         channel_id: String,
         op_id: String,
     ) -> Result<DispatchOpGuardStart, Error> {
-        match Self::reserve(state, dedupe_key, reserved_delivery_id, created_at).await? {
-            DispatchOpGuardDecision::AlreadySent { delivery_id } => {
-                Ok(DispatchOpGuardStart::Complete(Self::already_sent_summary(
-                    channel_id,
-                    op_id,
-                    delivery_id,
-                )))
-            }
-            DispatchOpGuardDecision::Pending { .. } => Err(Error::TooBusy),
-            DispatchOpGuardDecision::Proceed(guard) => Ok(DispatchOpGuardStart::Proceed(guard)),
-        }
-    }
-
-    async fn settle_summary(
-        &self,
-        state: &AppState,
-        summary: &NotificationDispatchSummary,
-    ) -> Result<(), Error> {
-        self.settle(
+        match CoreDispatchOpGuard::begin(
             state,
-            summary.dedupe_action(),
-            Some(summary.delivery_id.as_str()),
+            dedupe_key,
+            reserved_delivery_id,
+            created_at,
+            channel_id,
+            op_id,
         )
         .await
-    }
-
-    async fn clear_pending(&self, state: &AppState) -> Result<(), Error> {
-        self.settle(state, DispatchOpDedupeAction::ClearPending, None)
-            .await
-    }
-
-    async fn settle(
-        &self,
-        state: &AppState,
-        action: DispatchOpDedupeAction,
-        finalized_delivery_id: Option<&str>,
-    ) -> Result<(), Error> {
-        match action {
-            DispatchOpDedupeAction::FinalizeSent => {
-                let delivery_id =
-                    finalized_delivery_id.unwrap_or(self.reserved_delivery_id.as_str());
-                let marked = state
-                    .store
-                    .mark_op_dedupe_sent(self.dedupe_key.as_str(), delivery_id)
-                    .await
-                    .map_err(|err| {
-                        ::tracing::event!(
-                            target: "gateway.trace_event",
-                            ::tracing::Level::ERROR,
-                            event = "dispatch.dedupe_finalize_failed",
-                            dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
-                            reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
-                            finalized_delivery_id = %(crate::util::redact_text(delivery_id)),
-                            error = %(err.to_string())
-                        );
-                        Error::Internal(err.to_string())
-                    })?;
-                if !marked {
-                    ::tracing::event!(
-                        target: "gateway.trace_event",
-                        ::tracing::Level::WARN,
-                        event = "dispatch.dedupe_settle_failed",
-                        action = %("finalize_sent"),
-                        dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
-                        reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
-                        finalized_delivery_id = %(crate::util::redact_text(delivery_id)),
-                        reason = %("mark_op_dedupe_sent_returned_false")
-                    );
-                    return Err(Error::Internal("failed to finalize op dedupe".to_string()));
-                }
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::INFO,
-                    event = "dispatch.dedupe_settled",
-                    action = %("finalize_sent"),
-                    dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
-                    reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
-                    finalized_delivery_id = %(crate::util::redact_text(delivery_id))
-                );
+        .map_err(api_error_from_dedupe)?
+        {
+            CoreDispatchOpGuardStart::Proceed(guard) => {
+                Ok(DispatchOpGuardStart::Proceed(Self(guard)))
             }
-            DispatchOpDedupeAction::ClearPending => {
-                state
-                    .store
-                    .clear_op_dedupe_pending(
-                        self.dedupe_key.as_str(),
-                        self.reserved_delivery_id.as_str(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        ::tracing::event!(
-                            target: "gateway.trace_event",
-                            ::tracing::Level::ERROR,
-                            event = "dispatch.dedupe_clear_pending_failed",
-                            dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
-                            reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str())),
-                            error = %(err.to_string())
-                        );
-                        Error::Internal(err.to_string())
-                    })?;
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::INFO,
-                    event = "dispatch.dedupe_settled",
-                    action = %("clear_pending"),
-                    dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
-                    reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str()))
-                );
+            CoreDispatchOpGuardStart::Complete(summary) => {
+                Ok(DispatchOpGuardStart::Complete(summary))
             }
         }
-        Ok(())
     }
 
     pub(crate) async fn finish(
@@ -239,72 +104,48 @@ impl DispatchOpGuard {
         state: &AppState,
         dispatch_result: Result<NotificationDispatchSummary, Error>,
     ) -> Result<NotificationDispatchSummary, Error> {
-        match dispatch_result {
-            Ok(summary) => {
-                self.settle_summary(state, &summary).await?;
-                Ok(summary)
-            }
-            Err(err) => {
-                let _ = self.clear_pending(state).await;
-                Err(err)
-            }
-        }
+        self.0.finish(state, dispatch_result).await
     }
 }
 
-fn emit_dispatch_reservation_trace(decision: &DispatchOpGuardDecision) {
-    match decision {
-        DispatchOpGuardDecision::Proceed(guard) => {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::INFO,
-                event = "dispatch.dedupe_reserved",
-                dedupe_key = %(crate::util::redact_text(guard.dedupe_key.as_str())),
-                reserved_delivery_id = %(crate::util::redact_text(guard.reserved_delivery_id.as_str()))
-            );
-        }
-        DispatchOpGuardDecision::AlreadySent { delivery_id } => {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::INFO,
-                event = "dispatch.dedupe_already_sent",
-                delivery_id = %(crate::util::redact_text(delivery_id.as_str()))
-            );
-        }
-        DispatchOpGuardDecision::Pending { delivery_id } => {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::INFO,
-                event = "dispatch.dedupe_pending",
-                delivery_id = %(crate::util::redact_text(delivery_id.as_str()))
-            );
-        }
+fn api_error_from_dedupe(err: DispatchDedupeError) -> Error {
+    Error::Internal(err.into_message())
+}
+
+impl From<DispatchDedupeError> for Error {
+    fn from(value: DispatchDedupeError) -> Self {
+        api_error_from_dedupe(value)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DispatchOpDedupeAction, NotificationDispatchSummary};
+    use super::NotificationDispatchSummary;
+    use crate::delivery_core::response::{
+        DeliveryDedupeSettleAction, DeliveryDedupeStatus, DeliveryDispatchStatus,
+    };
 
     #[test]
     fn notification_summary_reports_partial_failure_message() {
-        let partial = NotificationDispatchSummary {
-            channel_id: "channel".to_string(),
-            op_id: "op".to_string(),
-            delivery_id: "delivery".to_string(),
-            partial_failure: true,
-            private_enqueue_too_busy: false,
-            has_dispatch_attempt: true,
-        };
+        let partial = NotificationDispatchSummary::new(
+            "channel".to_string(),
+            "op".to_string(),
+            "delivery".to_string(),
+            DeliveryDedupeStatus::New,
+            DeliveryDispatchStatus::AttemptedPartialFailure,
+        );
         assert_eq!(
             partial.failure_error_message(),
             Some("notification dispatch completed with partial failure")
         );
 
-        let busy = NotificationDispatchSummary {
-            private_enqueue_too_busy: true,
-            ..partial
-        };
+        let busy = NotificationDispatchSummary::new(
+            "channel".to_string(),
+            "op".to_string(),
+            "delivery".to_string(),
+            DeliveryDedupeStatus::New,
+            DeliveryDispatchStatus::PrivateQueueTooBusy,
+        );
         assert_eq!(
             busy.failure_error_message(),
             Some("private enqueue failures exceeded safety threshold")
@@ -313,35 +154,40 @@ mod tests {
 
     #[test]
     fn notification_summary_selects_dedupe_action() {
-        let success = NotificationDispatchSummary {
-            channel_id: "channel".to_string(),
-            op_id: "op".to_string(),
-            delivery_id: "delivery".to_string(),
-            partial_failure: false,
-            private_enqueue_too_busy: false,
-            has_dispatch_attempt: true,
-        };
+        let success = NotificationDispatchSummary::new(
+            "channel".to_string(),
+            "op".to_string(),
+            "delivery".to_string(),
+            DeliveryDedupeStatus::New,
+            DeliveryDispatchStatus::AttemptedAccepted,
+        );
         assert_eq!(
-            success.dedupe_action(),
-            DispatchOpDedupeAction::FinalizeSent
+            success.dedupe_settle_action(),
+            DeliveryDedupeSettleAction::FinalizeSent
         );
 
-        let partial = NotificationDispatchSummary {
-            partial_failure: true,
-            ..success
-        };
+        let partial = NotificationDispatchSummary::new(
+            "channel".to_string(),
+            "op".to_string(),
+            "delivery".to_string(),
+            DeliveryDedupeStatus::New,
+            DeliveryDispatchStatus::AttemptedPartialFailure,
+        );
         assert_eq!(
-            partial.dedupe_action(),
-            DispatchOpDedupeAction::FinalizeSent
+            partial.dedupe_settle_action(),
+            DeliveryDedupeSettleAction::FinalizeSent
         );
 
-        let no_attempt_partial = NotificationDispatchSummary {
-            has_dispatch_attempt: false,
-            ..partial
-        };
+        let no_attempt = NotificationDispatchSummary::new(
+            "channel".to_string(),
+            "op".to_string(),
+            "delivery".to_string(),
+            DeliveryDedupeStatus::New,
+            DeliveryDispatchStatus::NotAttempted,
+        );
         assert_eq!(
-            no_attempt_partial.dedupe_action(),
-            DispatchOpDedupeAction::ClearPending
+            no_attempt.dedupe_settle_action(),
+            DeliveryDedupeSettleAction::ClearPending
         );
     }
 }

@@ -118,6 +118,7 @@ impl PrivateHub {
             occurred_at: sent_at,
             created_at: now,
             claimed_at: None,
+                claimed_by: None,
             first_sent_at: None,
             last_attempt_at: None,
             acked_at: None,
@@ -162,6 +163,7 @@ impl PrivateHub {
                 occurred_at: sent_at,
                 created_at: now,
                 claimed_at: None,
+                claimed_by: None,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -320,9 +322,16 @@ impl PrivateHub {
         now: i64,
         limit: usize,
         claim_until: i64,
+        worker_id: &str,
     ) -> Result<Vec<(DeviceId, PrivateOutboxEntry)>, crate::Error> {
+        let request = crate::delivery_core::store::delivery_queue::QueueClaimRequest::new(
+            now,
+            limit,
+            claim_until,
+            crate::delivery_core::store::delivery_queue::QueueWorkerId::new(worker_id),
+        );
         self.store
-            .claim_private_outbox_due(now, limit, claim_until)
+            .claim_private_outbox_due(request)
             .await
             .map_err(|err| crate::Error::Internal(err.to_string()))
     }
@@ -333,9 +342,16 @@ impl PrivateHub {
         now: i64,
         limit: usize,
         claim_until: i64,
+        worker_id: &str,
     ) -> Result<Vec<PrivateOutboxEntry>, crate::Error> {
+        let request = crate::delivery_core::store::delivery_queue::QueueClaimRequest::new(
+            now,
+            limit,
+            claim_until,
+            crate::delivery_core::store::delivery_queue::QueueWorkerId::new(worker_id),
+        );
         self.store
-            .claim_private_outbox_due_for_device(device_id, now, limit, claim_until)
+            .claim_private_outbox_due_for_device(device_id, request)
             .await
             .map_err(|err| crate::Error::Internal(err.to_string()))
     }

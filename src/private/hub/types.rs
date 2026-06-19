@@ -85,6 +85,10 @@ impl Presence {
         senders
     }
 
+    fn mqtt_delivery_sender(&self) -> Option<Sender<protocol::DeliverEnvelope>> {
+        self.mqtt_active.as_ref().map(|active| active.sender.clone())
+    }
+
     fn has_active(&self) -> bool {
         self.quic_active.is_some()
             || self.tcp_active.is_some()

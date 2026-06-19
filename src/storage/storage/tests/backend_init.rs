@@ -653,6 +653,7 @@ async fn seed_cleanup_shared_delivery_scenario(
                     occurred_at: updated_at,
                     created_at: updated_at,
                     claimed_at: None,
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,

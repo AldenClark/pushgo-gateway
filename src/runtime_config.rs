@@ -48,18 +48,15 @@ pub struct MaintenanceRuntimeTuning {
     pub private_stale_outbox_ttl_secs: i64,
     pub orphan_device_ttl_secs: i64,
     pub stale_subscription_ttl_secs: i64,
+    pub frozen_subscription_ttl_secs: i64,
     pub soft_deleted_device_ttl_secs: i64,
     pub orphan_channel_ttl_secs: i64,
     pub dedupe_retention_secs: i64,
-    pub audit_retention_secs: i64,
-    pub hourly_stats_retention_secs: i64,
-    pub daily_stats_retention_secs: i64,
     pub delete_batch: usize,
     pub stale_subscription_cleanup_enabled: bool,
     pub soft_deleted_device_cleanup_enabled: bool,
     pub orphan_channel_cleanup_enabled: bool,
-    pub audit_retention_cleanup_enabled: bool,
-    pub stats_retention_cleanup_enabled: bool,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,7 +66,7 @@ pub struct DispatchRuntimeTuning {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct StatsRuntimeTuning {
+pub struct RuntimeCounterRuntimeTuning {
     pub channel_capacity: usize,
     pub flush_event_threshold: usize,
     pub flush_interval_secs: u64,
@@ -133,7 +130,7 @@ pub struct RuntimeTuning {
     pub private: PrivateRuntimeTuning,
     pub maintenance: MaintenanceRuntimeTuning,
     pub dispatch: DispatchRuntimeTuning,
-    pub stats: StatsRuntimeTuning,
+    pub runtime_counters: RuntimeCounterRuntimeTuning,
     pub sqlite: SqliteRuntimeTuning,
     pub external_db: ExternalDbRuntimeTuning,
     pub cache: CacheRuntimeTuning,
@@ -226,24 +223,21 @@ impl RuntimeTuning {
                 private_stale_outbox_ttl_secs: 7 * DAY_SECS,
                 orphan_device_ttl_secs: 14 * DAY_SECS,
                 stale_subscription_ttl_secs: 120 * DAY_SECS,
+                frozen_subscription_ttl_secs: 30 * DAY_SECS,
                 soft_deleted_device_ttl_secs: 30 * DAY_SECS,
                 orphan_channel_ttl_secs: 180 * DAY_SECS,
                 dedupe_retention_secs: 7 * DAY_SECS,
-                audit_retention_secs: 30 * DAY_SECS,
-                hourly_stats_retention_secs: 14 * DAY_SECS,
-                daily_stats_retention_secs: 90 * DAY_SECS,
                 delete_batch: 128,
                 stale_subscription_cleanup_enabled: false,
                 soft_deleted_device_cleanup_enabled: false,
                 orphan_channel_cleanup_enabled: false,
-                audit_retention_cleanup_enabled: true,
-                stats_retention_cleanup_enabled: true,
+                dry_run: false,
             },
             dispatch: DispatchRuntimeTuning {
                 worker_count: 2,
                 queue_capacity: 256,
             },
-            stats: StatsRuntimeTuning {
+            runtime_counters: RuntimeCounterRuntimeTuning {
                 channel_capacity: 512,
                 flush_event_threshold: 256,
                 flush_interval_secs: 10,
@@ -335,24 +329,21 @@ impl RuntimeTuning {
                 private_stale_outbox_ttl_secs: 30 * DAY_SECS,
                 orphan_device_ttl_secs: 30 * DAY_SECS,
                 stale_subscription_ttl_secs: 120 * DAY_SECS,
+                frozen_subscription_ttl_secs: 30 * DAY_SECS,
                 soft_deleted_device_ttl_secs: 30 * DAY_SECS,
                 orphan_channel_ttl_secs: 180 * DAY_SECS,
                 dedupe_retention_secs: 30 * DAY_SECS,
-                audit_retention_secs: 180 * DAY_SECS,
-                hourly_stats_retention_secs: 90 * DAY_SECS,
-                daily_stats_retention_secs: 400 * DAY_SECS,
                 delete_batch: 1_024,
-                stale_subscription_cleanup_enabled: false,
-                soft_deleted_device_cleanup_enabled: false,
-                orphan_channel_cleanup_enabled: false,
-                audit_retention_cleanup_enabled: true,
-                stats_retention_cleanup_enabled: true,
+                stale_subscription_cleanup_enabled: true,
+                soft_deleted_device_cleanup_enabled: true,
+                orphan_channel_cleanup_enabled: true,
+                dry_run: false,
             },
             dispatch: DispatchRuntimeTuning {
                 worker_count,
                 queue_capacity: (worker_count * 256).clamp(2_048, 16_384),
             },
-            stats: StatsRuntimeTuning {
+            runtime_counters: RuntimeCounterRuntimeTuning {
                 channel_capacity: 8_192,
                 flush_event_threshold: 1_024,
                 flush_interval_secs: 2,
@@ -400,5 +391,29 @@ impl RuntimeTuning {
                 bind_session_ttl_secs: 600,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GatewayRuntimeProfile, RuntimeTuning};
+
+    #[test]
+    fn small_profile_keeps_cleanup_conservative() {
+        let tuning = RuntimeTuning::for_profile(GatewayRuntimeProfile::Small);
+        assert!(!tuning.maintenance.stale_subscription_cleanup_enabled);
+        assert!(!tuning.maintenance.soft_deleted_device_cleanup_enabled);
+        assert!(!tuning.maintenance.orphan_channel_cleanup_enabled);
+        assert!(tuning.maintenance.delete_batch <= 128);
+    }
+
+    #[test]
+    fn public_profile_enables_active_data_cleanup_by_default() {
+        let tuning = RuntimeTuning::for_profile(GatewayRuntimeProfile::Public);
+        assert!(tuning.maintenance.stale_subscription_cleanup_enabled);
+        assert!(tuning.maintenance.soft_deleted_device_cleanup_enabled);
+        assert!(tuning.maintenance.orphan_channel_cleanup_enabled);
+        assert!(tuning.maintenance.delete_batch >= 1_024);
+        assert!(tuning.private.maintenance_interval_secs <= 60);
     }
 }

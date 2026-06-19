@@ -1,5 +1,6 @@
 use super::*;
 use crate::{
+    delivery_core::store::delivery_queue::QueueClaimRequest,
     private::protocol::PrivatePayloadEnvelope,
     storage::database::{
         PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderPullDatabaseAccess,
@@ -89,7 +90,14 @@ impl Storage {
         device_id: DeviceId,
         delivery_id: &str,
     ) -> StoreResult<()> {
-        self.db.ack_private_delivery(device_id, delivery_id).await
+        self.db.ack_private_delivery(device_id, delivery_id).await?;
+        self.record_device_activity_best_effort(
+            device_id,
+            chrono::Utc::now().timestamp_millis(),
+            "private_ack",
+        )
+        .await;
+        Ok(())
     }
 
     pub async fn load_private_message(
@@ -138,6 +146,8 @@ impl Storage {
 
         self.clear_private_outbox_after_provider_delivery(&item)
             .await;
+        self.record_device_activity_best_effort(device_id, now, "provider_pull")
+            .await;
         Ok(Some(item))
     }
 
@@ -150,6 +160,10 @@ impl Storage {
         let items = self.db.pull_provider_items(device_id, now, limit).await?;
         self.clear_private_outbox_after_provider_deliveries(&items)
             .await;
+        if !items.is_empty() {
+            self.record_device_activity_best_effort(device_id, now, "provider_pull")
+                .await;
+        }
         Ok(items)
     }
 
@@ -167,6 +181,8 @@ impl Storage {
             return Ok(None);
         };
         self.clear_private_outbox_after_provider_delivery(&item)
+            .await;
+        self.record_device_activity_best_effort(device_id, now, "provider_ack")
             .await;
         Ok(Some(item))
     }
@@ -208,26 +224,33 @@ impl Storage {
         self.db.list_private_outbox_due(before_ts, limit).await
     }
 
-    pub async fn claim_private_outbox_due(
+    pub(crate) async fn claim_private_outbox_due(
         &self,
-        before_ts: i64,
-        limit: usize,
-        claim_until_ts: i64,
+        request: QueueClaimRequest,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         self.db
-            .claim_private_outbox_due(before_ts, limit, claim_until_ts)
+            .claim_private_outbox_due(
+                request.due_before_ts,
+                request.limit,
+                request.lease.lease_until_ts,
+                request.worker_id.as_str(),
+            )
             .await
     }
 
-    pub async fn claim_private_outbox_due_for_device(
+    pub(crate) async fn claim_private_outbox_due_for_device(
         &self,
         device_id: DeviceId,
-        before_ts: i64,
-        limit: usize,
-        claim_until_ts: i64,
+        request: QueueClaimRequest,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         self.db
-            .claim_private_outbox_due_for_device(device_id, before_ts, limit, claim_until_ts)
+            .claim_private_outbox_due_for_device(
+                device_id,
+                request.due_before_ts,
+                request.limit,
+                request.lease.lease_until_ts,
+                request.worker_id.as_str(),
+            )
             .await
     }
 
@@ -390,6 +413,7 @@ impl Storage {
                     occurred_at: item.sent_at,
                     created_at: now,
                     claimed_at: None,
+                    claimed_by: None,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,

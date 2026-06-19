@@ -167,7 +167,7 @@ impl MySqlDb {
         limit: usize,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         let rows = sqlx::query(
-            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE next_attempt_at <= ? AND status IN (?, ?, ?) LIMIT ?",
         )
         .bind(before_ts)
@@ -192,6 +192,7 @@ impl MySqlDb {
                     occurred_at: r.get("occurred_at"),
                     created_at: r.get("created_at"),
                     claimed_at: r.get("claimed_at"),
+                    claimed_by: r.get("claimed_by"),
                     first_sent_at: r.get("first_sent_at"),
                     last_attempt_at: r.get("last_attempt_at"),
                     acked_at: r.get("acked_at"),
@@ -211,17 +212,20 @@ impl MySqlDb {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         let mut tx = self.pool.begin().await?;
         let rows = sqlx::query(
             "SELECT device_id, delivery_id FROM private_outbox \
-             WHERE next_attempt_at <= ? AND status IN (?, ?, ?) \
+             WHERE next_attempt_at <= ? \
+               AND (status = ? OR (status IN (?, ?) AND (claimed_at IS NULL OR claimed_at <= ?))) \
              LIMIT ? FOR UPDATE",
         )
         .bind(before_ts)
         .bind(OUTBOX_STATUS_PENDING)
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(OUTBOX_STATUS_SENT)
+        .bind(before_ts)
         .bind(limit as i64)
         .fetch_all(&mut *tx)
         .await?;
@@ -232,11 +236,12 @@ impl MySqlDb {
             let delivery_id: String = r.get("delivery_id");
 
             let updated_row = sqlx::query(
-                "UPDATE private_outbox SET status = ?, claimed_at = ?, last_attempt_at = ?, updated_at = ? \
+                "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, last_attempt_at = ?, updated_at = ? \
                  WHERE device_id = ? AND delivery_id = ?",
             )
             .bind(OUTBOX_STATUS_CLAIMED)
             .bind(claim_until_ts)
+            .bind(worker_id)
             .bind(claim_until_ts)
             .bind(claim_until_ts)
             .bind(&device_id_raw)
@@ -264,6 +269,7 @@ impl MySqlDb {
                         occurred_at: r.get("occurred_at"),
                         created_at: r.get("created_at"),
                         claimed_at: r.get("claimed_at"),
+                        claimed_by: r.get("claimed_by"),
                         first_sent_at: r.get("first_sent_at"),
                         last_attempt_at: r.get("last_attempt_at"),
                         acked_at: r.get("acked_at"),
@@ -286,11 +292,13 @@ impl MySqlDb {
         before_ts: i64,
         limit: usize,
         claim_until_ts: i64,
+        worker_id: &str,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         let mut tx = self.pool.begin().await?;
         let rows = sqlx::query(
             "SELECT delivery_id FROM private_outbox \
-             WHERE device_id = ? AND next_attempt_at <= ? AND status IN (?, ?, ?) \
+             WHERE device_id = ? AND next_attempt_at <= ? \
+               AND (status = ? OR (status IN (?, ?) AND (claimed_at IS NULL OR claimed_at <= ?))) \
              LIMIT ? FOR UPDATE",
         )
         .bind(&device_id[..])
@@ -298,6 +306,7 @@ impl MySqlDb {
         .bind(OUTBOX_STATUS_PENDING)
         .bind(OUTBOX_STATUS_CLAIMED)
         .bind(OUTBOX_STATUS_SENT)
+        .bind(before_ts)
         .bind(limit as i64)
         .fetch_all(&mut *tx)
         .await?;
@@ -307,11 +316,12 @@ impl MySqlDb {
             let delivery_id: String = r.get("delivery_id");
 
             sqlx::query(
-                "UPDATE private_outbox SET status = ?, claimed_at = ?, last_attempt_at = ?, updated_at = ? \
+                "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, last_attempt_at = ?, updated_at = ? \
                  WHERE device_id = ? AND delivery_id = ?",
             )
             .bind(OUTBOX_STATUS_CLAIMED)
             .bind(claim_until_ts)
+            .bind(worker_id)
             .bind(claim_until_ts)
             .bind(claim_until_ts)
             .bind(&device_id[..])
@@ -333,6 +343,7 @@ impl MySqlDb {
                 occurred_at: r.get("occurred_at"),
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),
+                claimed_by: r.get("claimed_by"),
                 first_sent_at: r.get("first_sent_at"),
                 last_attempt_at: r.get("last_attempt_at"),
                 acked_at: r.get("acked_at"),

@@ -12,6 +12,4 @@ pub(crate) use channel::{
 pub(crate) use extract::{ApiJson, deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
 pub use response::Error;
 pub(crate) use response::HttpResult;
-pub(crate) use response::{
-    ApiProblem, StatusResponse, err, err_with_code, ok, with_api_request_scope,
-};
+pub(crate) use response::{ApiProblem, err, err_with_code, ok, with_api_request_scope};

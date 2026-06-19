@@ -192,12 +192,24 @@ async fn mcp_oauth_s256_authorize_and_send_success() {
         body.get("error").is_none(),
         "mcp oauth send should succeed: {body}"
     );
-    assert_eq!(
-        body.get("result")
-            .and_then(|v| v.get("structuredContent"))
-            .and_then(|v| v.get("auth_mode"))
-            .and_then(Value::as_str),
-        Some("oauth2")
+    let structured = body
+        .get("result")
+        .and_then(|v| v.get("structuredContent"))
+        .expect("mcp send should return structured content");
+    assert!(
+        structured.get("op_id").and_then(Value::as_str).is_some(),
+        "mcp send should return op_id: {structured}"
+    );
+    assert!(
+        structured
+            .get("message_id")
+            .and_then(Value::as_str)
+            .is_some(),
+        "mcp send should return message_id: {structured}"
+    );
+    assert!(
+        structured.get("auth_mode").is_none(),
+        "mcp send response should not include auth_mode"
     );
 }
 

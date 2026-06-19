@@ -6,9 +6,8 @@ use mqttbytes::{
     Protocol, QoS,
     v5::{
         self, ConnAck, ConnAckProperties, Connect, ConnectReturnCode, Disconnect,
-        DisconnectProperties, DisconnectReasonCode, LastWill, Packet, PubAck, PubAckProperties,
-        Publish, PublishProperties, RetainForwardRule, SubAck, SubAckProperties, Subscribe,
-        SubscribeReasonCode, UnsubAck, UnsubAckReason, Unsubscribe,
+        DisconnectProperties, DisconnectReasonCode, Packet, RetainForwardRule, SubAck,
+        SubAckProperties, Subscribe, SubscribeReasonCode, UnsubAck, UnsubAckReason, Unsubscribe,
     },
 };
 use tokio::{
@@ -17,32 +16,28 @@ use tokio::{
 };
 
 mod error;
+mod ingress_server;
 mod listener;
+mod private_receiver;
 
 use listener::MqttStream;
 pub use listener::{serve_mqtt, serve_mqtt_tls};
 
-use error::{
-    MqttError, MqttErrorKind, mqtt_error_from_api, puback_reason_for_error,
-    publish_disconnect_reason, subscribe_reason_for_error,
-};
+use error::{MqttError, MqttErrorKind, mqtt_error_from_api, subscribe_reason_for_error};
 
 use crate::{
     app::AuthMode,
-    mqtt::{
-        MqttDeliveryEnvelope, MqttMessagePublish, MqttMessageTopic, MqttPublishEnvelope,
-        MqttRuntime,
-    },
+    mqtt::{MqttMessageTopic, MqttPublishCommand, MqttRuntime},
     private::protocol::DeliverEnvelope,
     routing::{DeviceChannelType, derive_private_device_id},
     services::{
-        ChannelSubscribeCommand, ChannelUnsubscribeCommand, DeviceRegisterCommand,
-        MessageSendCommand, ensure_device_registered,
+        ChannelCommandSource, ChannelSubscribeCommand, ChannelUnsubscribeCommand,
+        DeviceRegisterCommand, ensure_device_registered,
     },
     storage::DeviceId,
     storage::Platform,
     util::constant_time_eq,
-    value::{ChannelId, DeviceKeyRef},
+    value::DeviceKeyRef,
 };
 
 const MQTT_PASSWORD_PROPERTY: &str = "pushgo-password";
@@ -63,6 +58,7 @@ struct MqttSession {
 }
 
 struct AuthenticatedMqttClient {
+    dedupe_client_id: String,
     device_key: Option<String>,
     device_id: Option<DeviceId>,
     conn_id: Option<u64>,
@@ -81,7 +77,7 @@ enum MqttDeviceType {
 struct MqttWillMessage {
     channel_id: String,
     password: String,
-    payload: MqttMessagePublish,
+    payload: MqttPublishCommand,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +197,11 @@ impl MqttSession {
         if device_type == MqttDeviceType::Publish {
             return Ok(MqttAuthSuccess {
                 client: AuthenticatedMqttClient {
+                    dedupe_client_id: mqtt_dedupe_client_id(
+                        connect.client_id.as_str(),
+                        None,
+                        self.remote_addr,
+                    ),
                     device_key: None,
                     device_id: None,
                     conn_id: None,
@@ -214,12 +215,11 @@ impl MqttSession {
             });
         }
 
-        let requested_device_key = connect
-            .client_id
-            .trim()
-            .is_empty()
-            .then_some(None)
-            .unwrap_or_else(|| Some(connect.client_id.trim()));
+        let requested_device_key = if connect.client_id.trim().is_empty() {
+            None
+        } else {
+            Some(connect.client_id.trim())
+        };
         if let Some(raw) = requested_device_key {
             DeviceKeyRef::parse(raw).map_err(|_| {
                 (
@@ -293,6 +293,15 @@ impl MqttSession {
             .private
             .hub
             .register_mqtt_connection(device_id, conn_id, tx.clone());
+        self.runtime
+            .state
+            .store
+            .record_device_activity_best_effort(
+                device_id,
+                chrono::Utc::now().timestamp_millis(),
+                "mqtt_connect",
+            )
+            .await;
         self.runtime.private.request_fallback_resync();
         let mut bootstrap_dropped = 0usize;
         for (_, envelope) in prepared.bootstrap.inflight {
@@ -320,6 +329,11 @@ impl MqttSession {
             server_keep_alive: keep_alive.server_property,
             read_timeout: keep_alive.read_timeout,
             client: AuthenticatedMqttClient {
+                dedupe_client_id: mqtt_dedupe_client_id(
+                    connect.client_id.as_str(),
+                    Some(device_key.as_str()),
+                    self.remote_addr,
+                ),
                 device_key: Some(device_key),
                 device_id: Some(device_id),
                 conn_id: Some(conn_id),
@@ -328,92 +342,6 @@ impl MqttSession {
                 will,
             },
         })
-    }
-
-    async fn validate_will(
-        &self,
-        will: Option<LastWill>,
-        device_type: MqttDeviceType,
-    ) -> Result<Option<MqttWillMessage>, (ConnectReturnCode, &'static str)> {
-        let Some(will) = will else {
-            return Ok(None);
-        };
-        if device_type != MqttDeviceType::Subscribe {
-            self.runtime.private.metrics.mark_mqtt_will_rejected();
-            return Err((
-                ConnectReturnCode::ImplementationSpecificError,
-                "mqtt_will_publish_only_not_supported",
-            ));
-        }
-        if will.qos != QoS::AtLeastOnce {
-            self.runtime.private.metrics.mark_mqtt_will_rejected();
-            return Err((ConnectReturnCode::QoSNotSupported, "mqtt_will_qos_required"));
-        }
-        if will.retain {
-            self.runtime.private.metrics.mark_mqtt_will_rejected();
-            return Err((
-                ConnectReturnCode::RetainNotSupported,
-                "mqtt_will_retain_not_supported",
-            ));
-        }
-        let topic = MqttMessageTopic::parse(will.topic.as_str()).map_err(|_| {
-            self.runtime.private.metrics.mark_mqtt_will_rejected();
-            (
-                ConnectReturnCode::TopicNameInvalid,
-                "mqtt_will_topic_invalid",
-            )
-        })?;
-        let password = will
-            .properties
-            .as_ref()
-            .and_then(|props| user_property(&props.user_properties, MQTT_PASSWORD_PROPERTY))
-            .ok_or_else(|| {
-                self.runtime.private.metrics.mark_mqtt_will_rejected();
-                (
-                    ConnectReturnCode::BadUserNamePassword,
-                    "mqtt_will_password_required",
-                )
-            })?
-            .to_string();
-        let payload = MqttPublishEnvelope::decode(&will.message).map_err(|_| {
-            self.runtime.private.metrics.mark_mqtt_will_rejected();
-            (
-                ConnectReturnCode::PayloadFormatInvalid,
-                "mqtt_will_payload_invalid",
-            )
-        })?;
-        let channel_id = topic.channel_id.to_string();
-        let parsed_channel_id = ChannelId::parse(channel_id.as_str()).map_err(|_| {
-            self.runtime.private.metrics.mark_mqtt_will_rejected();
-            (
-                ConnectReturnCode::TopicNameInvalid,
-                "mqtt_will_topic_invalid",
-            )
-        })?;
-        self.runtime
-            .state
-            .store
-            .channel_info_with_password(parsed_channel_id.into_inner(), password.as_str())
-            .await
-            .map_err(|_| {
-                self.runtime.private.metrics.mark_mqtt_will_rejected();
-                (
-                    ConnectReturnCode::BadUserNamePassword,
-                    "mqtt_will_channel_not_authorized",
-                )
-            })?
-            .ok_or_else(|| {
-                self.runtime.private.metrics.mark_mqtt_will_rejected();
-                (
-                    ConnectReturnCode::BadUserNamePassword,
-                    "mqtt_will_channel_not_authorized",
-                )
-            })?;
-        Ok(Some(MqttWillMessage {
-            channel_id,
-            password,
-            payload,
-        }))
     }
 
     async fn run_authenticated(&mut self, client: AuthenticatedMqttClient) {
@@ -487,27 +415,6 @@ impl MqttSession {
                 .unwrap_or("temporary-publisher"),
             None,
         );
-    }
-
-    async fn send_will(&self, client: &AuthenticatedMqttClient) {
-        let Some(will) = client.will.as_ref() else {
-            return;
-        };
-        match self
-            .send_message_payload(
-                will.channel_id.as_str(),
-                will.password.as_str(),
-                will.payload.clone(),
-                "mqtt_will",
-            )
-            .await
-        {
-            Ok(()) => self.runtime.private.metrics.mark_mqtt_will_sent(),
-            Err(err) => {
-                self.runtime.private.metrics.mark_mqtt_will_failure();
-                self.log_failure("mqtt.will_send_failed", err.message);
-            }
-        }
     }
 
     async fn handle_subscribe(&mut self, client: &AuthenticatedMqttClient, subscribe: Subscribe) {
@@ -659,7 +566,7 @@ impl MqttSession {
                 channel_id: Some(topic.channel_id.to_string()),
                 channel_name: None,
                 password: password.to_string(),
-                source: "mqtt",
+                source: ChannelCommandSource::Mqtt,
                 allow_create_channel: false,
             },
         )
@@ -741,198 +648,11 @@ impl MqttSession {
             ChannelUnsubscribeCommand {
                 device_key: device_key.to_string(),
                 channel_id: channel_id.to_string(),
-                source: "mqtt",
+                source: ChannelCommandSource::Mqtt,
             },
         )
         .await
         .map_err(mqtt_error_from_api)?;
-        Ok(())
-    }
-
-    async fn handle_publish(&mut self, _client: &AuthenticatedMqttClient, publish: Publish) {
-        if publish.qos != QoS::AtLeastOnce {
-            self.runtime.private.metrics.mark_mqtt_publish_failure();
-            let _ = self
-                .write_disconnect(DisconnectReasonCode::QoSNotSupported, "mqtt_qos_required")
-                .await;
-            return;
-        }
-        if publish.pkid == 0 {
-            self.runtime.private.metrics.mark_mqtt_protocol_error();
-            let _ = self
-                .write_disconnect(DisconnectReasonCode::ProtocolError, "packet_id_required")
-                .await;
-            return;
-        }
-        let reason = self.process_publish(publish.clone()).await;
-        let mut ack = PubAck::new(publish.pkid);
-        if let Err(err) = reason {
-            self.runtime.private.metrics.mark_mqtt_publish_failure();
-            if let Some(code) = publish_disconnect_reason(&err) {
-                let _ = self.write_disconnect(code, err.message).await;
-                return;
-            }
-            ack.reason = puback_reason_for_error(&err);
-            ack.properties = Some(PubAckProperties {
-                reason_string: Some(err.message.to_string()),
-                user_properties: vec![("pushgo-error-code".to_string(), err.code.to_string())],
-            });
-        } else {
-            self.runtime.private.metrics.mark_mqtt_publish_success();
-            ack.properties = Some(PubAckProperties {
-                reason_string: None,
-                user_properties: vec![("pushgo-qos".to_string(), "1".to_string())],
-            });
-        }
-        let _ = self.write_packet(Packet::PubAck(ack)).await;
-    }
-
-    async fn process_publish(&self, publish: Publish) -> Result<(), MqttError> {
-        if publish.qos != QoS::AtLeastOnce {
-            return Err(MqttError::new(
-                "only QoS 1 is supported",
-                "mqtt_qos_required",
-                MqttErrorKind::Qos,
-            ));
-        }
-        if publish.retain {
-            return Err(MqttError::new(
-                "retained messages are not supported",
-                "mqtt_retain_not_supported",
-                MqttErrorKind::Retain,
-            ));
-        }
-        if publish
-            .properties
-            .as_ref()
-            .and_then(|props| props.topic_alias)
-            .is_some()
-        {
-            return Err(MqttError::new(
-                "topic aliases are not supported",
-                "mqtt_topic_alias_not_supported",
-                MqttErrorKind::TopicAlias,
-            ));
-        }
-        let topic = MqttMessageTopic::parse(publish.topic.as_str()).map_err(mqtt_error_from_api)?;
-        let password = publish
-            .properties
-            .as_ref()
-            .and_then(|props| user_property(&props.user_properties, MQTT_PASSWORD_PROPERTY))
-            .ok_or_else(|| {
-                MqttError::new(
-                    "pushgo-password is required",
-                    "channel_password_required",
-                    MqttErrorKind::Auth,
-                )
-            })?;
-        let payload = MqttPublishEnvelope::decode(&publish.payload).map_err(mqtt_error_from_api)?;
-        let channel_id = topic.channel_id.to_string();
-        self.send_message_payload(channel_id.as_str(), password, payload, "mqtt")
-            .await
-    }
-
-    async fn send_message_payload(
-        &self,
-        channel_id: &str,
-        password: &str,
-        payload: MqttMessagePublish,
-        source: &'static str,
-    ) -> Result<(), MqttError> {
-        let _outcome = crate::services::send_message(
-            &self.runtime.state,
-            MessageSendCommand {
-                channel_id: channel_id.to_string(),
-                password: password.to_string(),
-                op_id: payload.op_id,
-                thing_id: payload.thing_id,
-                occurred_at: payload.occurred_at,
-                title: payload.title,
-                body: payload.body,
-                severity: payload.severity,
-                ttl: payload.ttl,
-                url: payload.url,
-                images: payload.images,
-                ciphertext: payload.ciphertext,
-                tags: payload.tags,
-                metadata: payload.metadata,
-                source,
-            },
-        )
-        .await
-        .map_err(mqtt_error_from_api)?;
-        Ok(())
-    }
-
-    async fn handle_puback(&mut self, client: &AuthenticatedMqttClient, pkid: u16) {
-        let Some(device_id) = client.device_id else {
-            self.runtime.private.metrics.mark_ack_non_ok();
-            return;
-        };
-        if let Some(delivery_id) = self.inflight.remove(&pkid) {
-            match self
-                .runtime
-                .private
-                .complete_terminal_delivery(device_id, delivery_id.as_str(), None)
-                .await
-            {
-                Ok(_) => self.runtime.private.metrics.mark_ack_ok(),
-                Err(_) => self.runtime.private.metrics.mark_ack_non_ok(),
-            }
-        } else {
-            self.runtime.private.metrics.mark_ack_non_ok();
-            self.log_failure("mqtt.puback_unknown_packet_id", "unknown_packet_id");
-        }
-    }
-
-    async fn write_delivery(&mut self, envelope: DeliverEnvelope) -> Result<(), ()> {
-        if self.inflight.len() >= MAX_INFLIGHT {
-            self.runtime.private.metrics.mark_deliver_send_failure();
-            self.runtime.private.metrics.mark_mqtt_downlink_failure();
-            self.log_failure("mqtt.downlink_inflight_full", "receive_maximum_exceeded");
-            return Err(());
-        }
-        let delivery_id = envelope.delivery_id.clone();
-        let delivery =
-            MqttDeliveryEnvelope::from_private_payload(delivery_id.clone(), &envelope.payload)
-                .map_err(|err| {
-                    self.runtime.private.metrics.mark_mqtt_downlink_dropped();
-                    self.log_failure("mqtt.downlink_payload_dropped", err.to_string().as_str());
-                })?;
-        let topic = MqttMessageTopic::format(delivery.channel_id.as_str());
-        let mut publish = Publish::new(
-            topic,
-            QoS::AtLeastOnce,
-            serde_json::to_vec(&delivery).map_err(|_| ())?,
-        );
-        publish.pkid = self.next_packet_id();
-        publish.properties = Some(PublishProperties {
-            payload_format_indicator: Some(1),
-            message_expiry_interval: None,
-            topic_alias: None,
-            response_topic: None,
-            correlation_data: None,
-            user_properties: vec![
-                (
-                    "pushgo-schema".to_string(),
-                    "pushgo.mqtt.message.v1".to_string(),
-                ),
-                ("pushgo-delivery-id".to_string(), delivery_id.clone()),
-                ("pushgo-channel-id".to_string(), delivery.channel_id.clone()),
-            ],
-            subscription_identifiers: Vec::new(),
-            content_type: Some("application/json".to_string()),
-        });
-        self.inflight.insert(publish.pkid, delivery_id);
-        if self.write_packet(Packet::Publish(publish)).await.is_err() {
-            self.inflight
-                .retain(|_, value| value != &delivery.delivery_id);
-            self.runtime.private.metrics.mark_deliver_send_failure();
-            self.runtime.private.metrics.mark_mqtt_downlink_failure();
-            return Err(());
-        }
-        self.runtime.private.metrics.mark_deliver_sent();
-        self.runtime.private.metrics.mark_mqtt_downlink_sent();
         Ok(())
     }
 
@@ -1054,6 +774,22 @@ fn user_property<'a>(properties: &'a [(String, String)], key: &str) -> Option<&'
     properties
         .iter()
         .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
+}
+
+fn mqtt_dedupe_client_id(
+    requested_client_id: &str,
+    assigned_device_key: Option<&str>,
+    remote_addr: SocketAddr,
+) -> String {
+    if let Some(device_key) = assigned_device_key {
+        return device_key.to_string();
+    }
+    let requested = requested_client_id.trim();
+    if requested.is_empty() {
+        format!("anonymous@{remote_addr}")
+    } else {
+        requested.to_string()
+    }
 }
 
 async fn recv_outbound(client: &AuthenticatedMqttClient) -> Option<DeliverEnvelope> {

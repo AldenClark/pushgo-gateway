@@ -1,14 +1,15 @@
 pub(crate) mod channel;
 pub(crate) mod channel_auth;
 pub(crate) mod core;
+pub(crate) mod delivery_core_adapter;
 pub(crate) mod dispatch_lifecycle;
 pub(crate) mod entity_input;
 pub(crate) mod event;
 pub(crate) mod health;
 pub(crate) mod message;
 pub(crate) mod private;
+pub(crate) mod send_ack;
 pub(crate) mod thing;
-pub(crate) mod watch_light;
 
 use axum::{
     Router,
@@ -86,20 +87,6 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route("/gateway/profile", get(private::gateway_profile))
         .route("/channel/exists", get(channel::channel_exists))
         .route("/channel/rename", post(channel::channel_rename))
-}
-
-pub(crate) fn diagnostics_router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/diagnostics/private/metrics",
-            get(private::private_metrics),
-        )
-        .route("/diagnostics/private/memory", get(private::private_memory))
-        .route("/diagnostics/private/health", get(private::private_health))
-        .route(
-            "/diagnostics/private/network",
-            get(private::private_network_diagnostics),
-        )
 }
 
 pub(crate) fn private_router() -> Router<AppState> {

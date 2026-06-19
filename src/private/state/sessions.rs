@@ -15,7 +15,7 @@ impl PrivateState {
             has_resume_token = (client_resume_token.is_some()),
             last_acked_seq = (last_acked_seq)
         );
-        self.stats
+        self.runtime_counters
             .record_private_connected(format!("private:{}", encode_lower_hex_128(&device_id)));
         let resume = self
             .hub

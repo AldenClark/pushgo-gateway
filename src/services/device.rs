@@ -2,7 +2,7 @@ use crate::{
     api::Error,
     app::AppState,
     routing::{DeviceRouteRecord, default_route_for_platform},
-    storage::{DeviceRouteAuditWrite, DeviceRouteRecordRow, Platform},
+    storage::{DeviceRouteRecordRow, Platform},
 };
 
 #[derive(Debug, Clone)]
@@ -82,19 +82,6 @@ async fn issue_new_device_key(
     let resolved_device_key = state.device_registry.allocate_device_key();
     let route =
         default_route_for_platform(requested_platform, chrono::Utc::now().timestamp_millis());
-    let now = chrono::Utc::now().timestamp_millis();
-    let audit = DeviceRouteAuditWrite {
-        device_key: resolved_device_key.clone(),
-        action: "route_issue_new_key".to_string(),
-        old_platform: previous_route.map(|value| value.platform.name().to_string()),
-        new_platform: Some(route.platform.name().to_string()),
-        old_channel_type: previous_route.map(|value| value.channel_type.as_str().to_string()),
-        new_channel_type: Some(route.channel_type.as_str().to_string()),
-        old_provider_token: previous_route.and_then(|value| value.provider_token.clone()),
-        new_provider_token: route.provider_token.clone(),
-        issue_reason: Some(issue_reason.to_string()),
-        created_at: now,
-    };
     let old_device_key = if issue_reason == "platform_mismatch" {
         requested_device_key
     } else {
@@ -105,7 +92,6 @@ async fn issue_new_device_key(
         .replace_device_identity(
             &DeviceRouteRecordRow::from_registry_record(resolved_device_key.as_str(), &route),
             old_device_key,
-            &audit,
         )
         .await
         .map_err(|err| Error::Internal(format!("failed to replace device identity: {err}")))?;

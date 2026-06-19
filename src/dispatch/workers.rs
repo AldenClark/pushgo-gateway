@@ -1,6 +1,9 @@
 use super::runtime::ProviderDispatchFailureLog;
 use super::*;
-use crate::stats::StatsCollector;
+use crate::delivery_core::execution::provider::{
+    ProviderInvalidTokenCleanup, cleanup_invalid_provider_token,
+};
+use crate::runtime_counters::RuntimeCounterCollector;
 use tracing::Instrument;
 
 pub(crate) struct DispatchWorkerDeps {
@@ -9,7 +12,7 @@ pub(crate) struct DispatchWorkerDeps {
     pub wns: Arc<dyn WnsClient>,
     pub store: Storage,
     pub private: Option<Arc<PrivateState>>,
-    pub stats: Arc<StatsCollector>,
+    pub runtime_counters: Arc<RuntimeCounterCollector>,
     pub runtime_profile: GatewayRuntimeProfile,
 }
 
@@ -18,7 +21,7 @@ impl DispatchWorkerDeps {
         let runtime = DispatchWorkerRuntime {
             store: self.store,
             private: self.private,
-            stats: self.stats,
+            runtime_counters: self.runtime_counters,
         };
         let pool = DispatchWorkerPool {
             apns: self.apns,
@@ -129,22 +132,19 @@ impl DispatchWorkerPool {
                             );
                         }
                         if dispatch.is_invalid_token() {
-                            let _ = runtime
-                                .store
-                                .unsubscribe_channel_for_device_key(
-                                    job.channel_id,
-                                    job.device_key.as_ref(),
-                                )
-                                .await;
-                            runtime
-                                .cleanup_private_outbox_on_invalid_token(
-                                    job.platform,
-                                    job.device_token.as_ref(),
-                                    "APNS",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await;
+                            cleanup_invalid_provider_token(ProviderInvalidTokenCleanup {
+                                store: &runtime.store,
+                                private: runtime.private.as_deref(),
+                                runtime_counters: runtime.runtime_counters.as_ref(),
+                                channel_id: job.channel_id,
+                                channel_id_text: &channel_id,
+                                device_key: job.device_key.as_ref(),
+                                platform: job.platform,
+                                device_token: job.device_token.as_ref(),
+                                provider: "APNS",
+                                correlation_id: job.correlation_id.as_ref(),
+                            })
+                            .await;
                         }
                     }
                     emit_dispatch_worker_stopped("APNS", worker_slot, "channel_closed");
@@ -248,22 +248,19 @@ impl DispatchWorkerPool {
                             );
                         }
                         if dispatch.is_invalid_token() {
-                            let _ = runtime
-                                .store
-                                .unsubscribe_channel_for_device_key(
-                                    job.channel_id,
-                                    job.device_key.as_ref(),
-                                )
-                                .await;
-                            runtime
-                                .cleanup_private_outbox_on_invalid_token(
-                                    Platform::ANDROID,
-                                    job.device_token.as_ref(),
-                                    "FCM",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await;
+                            cleanup_invalid_provider_token(ProviderInvalidTokenCleanup {
+                                store: &runtime.store,
+                                private: runtime.private.as_deref(),
+                                runtime_counters: runtime.runtime_counters.as_ref(),
+                                channel_id: job.channel_id,
+                                channel_id_text: &channel_id,
+                                device_key: job.device_key.as_ref(),
+                                platform: Platform::ANDROID,
+                                device_token: job.device_token.as_ref(),
+                                provider: "FCM",
+                                correlation_id: job.correlation_id.as_ref(),
+                            })
+                            .await;
                         }
                     }
                     emit_dispatch_worker_stopped("FCM", worker_slot, "channel_closed");
@@ -346,22 +343,19 @@ impl DispatchWorkerPool {
                             );
                         }
                         if dispatch.is_invalid_token() {
-                            let _ = runtime
-                                .store
-                                .unsubscribe_channel_for_device_key(
-                                    job.channel_id,
-                                    job.device_key.as_ref(),
-                                )
-                                .await;
-                            runtime
-                                .cleanup_private_outbox_on_invalid_token(
-                                    Platform::WINDOWS,
-                                    job.device_token.as_ref(),
-                                    "WNS",
-                                    job.correlation_id.as_ref(),
-                                    &channel_id,
-                                )
-                                .await;
+                            cleanup_invalid_provider_token(ProviderInvalidTokenCleanup {
+                                store: &runtime.store,
+                                private: runtime.private.as_deref(),
+                                runtime_counters: runtime.runtime_counters.as_ref(),
+                                channel_id: job.channel_id,
+                                channel_id_text: &channel_id,
+                                device_key: job.device_key.as_ref(),
+                                platform: Platform::WINDOWS,
+                                device_token: job.device_token.as_ref(),
+                                provider: "WNS",
+                                correlation_id: job.correlation_id.as_ref(),
+                            })
+                            .await;
                         }
                     }
                     emit_dispatch_worker_stopped("WNS", worker_slot, "channel_closed");

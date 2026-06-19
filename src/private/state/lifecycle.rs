@@ -6,7 +6,7 @@ impl PrivateState {
         store: Storage,
         config: PrivateConfig,
         device_registry: Arc<DeviceRegistry>,
-        stats: Arc<StatsCollector>,
+        runtime_counters: Arc<RuntimeCounterCollector>,
     ) -> Self {
         let hub = Arc::new(PrivateHub::new(store, &config));
         let owner = format!("gateway-{}", std::process::id());
@@ -16,7 +16,7 @@ impl PrivateState {
             hub,
             config,
             device_registry,
-            stats,
+            runtime_counters,
             metrics: Arc::new(metrics::PrivateMetrics::default()),
             fallback_tasks,
             session_coordinator: Arc::new(InMemoryCoordinator::new()),

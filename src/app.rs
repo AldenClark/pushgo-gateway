@@ -7,7 +7,7 @@ use crate::{
     private::{PrivateConfig, PrivateState},
     providers::{ApnsClient, FcmClient, WnsClient},
     routing::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord, derive_private_device_id},
-    stats::StatsCollector,
+    runtime_counters::RuntimeCounterCollector,
     storage::{DeviceRouteRecordRow, MaintenanceCleanupConfig, Storage, StorageInitConfig},
     value::DeviceKeyRef,
 };
@@ -46,11 +46,10 @@ pub(crate) struct AppState {
     pub dispatch: DispatchChannels,
     pub auth: AuthMode,
     pub private_channel_enabled: bool,
-    pub diagnostics_api_enabled: bool,
     pub public_base_url: Option<Arc<str>>,
     pub device_registry: Arc<DeviceRegistry>,
     pub device_operation_guards: Arc<DeviceOperationGuards>,
-    pub stats: Arc<StatsCollector>,
+    pub runtime_counters: Arc<RuntimeCounterCollector>,
     pub private_transport_profile: PrivateTransportProfile,
     pub private: Option<Arc<PrivateState>>,
     pub store: Storage,
@@ -158,7 +157,7 @@ pub async fn build_app(
     let _build_span = tracing::info_span!(
         "gateway.app.build",
         http_addr = %args.http_addr,
-        observability_profile = %args.observability_config().profile.as_str(),
+        observability_log_level = %args.observability_config().log_level.as_str(),
         runtime_profile = %runtime_tuning.profile.as_str(),
         mcp_enabled = args.mcp_enabled
     )
@@ -168,19 +167,14 @@ pub async fn build_app(
         ::tracing::Level::INFO,
         event = "gateway.app_build_started"
     );
-    let observability = args.observability_config();
     let store = Storage::new_with_config(StorageInitConfig {
         db_url: args.db_url.clone(),
         runtime_profile: runtime_tuning.profile,
-        stats_enabled: observability.stats_enabled,
         mcp_enabled: args.mcp_enabled,
     })
     .await?;
-    let stats = StatsCollector::spawn_with_mode(
-        store.clone(),
-        observability.stats_enabled,
-        runtime_tuning.profile,
-    );
+    let runtime_counters =
+        RuntimeCounterCollector::spawn_with_mode(store.clone(), false, runtime_tuning.profile);
     let device_registry = Arc::new(DeviceRegistry::new());
     let device_operation_guards = Arc::new(DeviceOperationGuards::default());
     restore_device_registry(&store, &device_registry).await?;
@@ -234,12 +228,10 @@ pub async fn build_app(
             private_stale_outbox_ttl_secs: runtime_tuning.maintenance.private_stale_outbox_ttl_secs,
             orphan_device_ttl_secs: runtime_tuning.maintenance.orphan_device_ttl_secs,
             stale_subscription_ttl_secs: runtime_tuning.maintenance.stale_subscription_ttl_secs,
+            frozen_subscription_ttl_secs: runtime_tuning.maintenance.frozen_subscription_ttl_secs,
             soft_deleted_device_ttl_secs: runtime_tuning.maintenance.soft_deleted_device_ttl_secs,
             orphan_channel_ttl_secs: runtime_tuning.maintenance.orphan_channel_ttl_secs,
             dedupe_retention_secs: runtime_tuning.maintenance.dedupe_retention_secs,
-            audit_retention_secs: runtime_tuning.maintenance.audit_retention_secs,
-            hourly_stats_retention_secs: runtime_tuning.maintenance.hourly_stats_retention_secs,
-            daily_stats_retention_secs: runtime_tuning.maintenance.daily_stats_retention_secs,
             delete_batch: runtime_tuning.maintenance.delete_batch,
             stale_subscription_cleanup_enabled: runtime_tuning
                 .maintenance
@@ -250,12 +242,7 @@ pub async fn build_app(
             orphan_channel_cleanup_enabled: runtime_tuning
                 .maintenance
                 .orphan_channel_cleanup_enabled,
-            audit_retention_cleanup_enabled: runtime_tuning
-                .maintenance
-                .audit_retention_cleanup_enabled,
-            stats_retention_cleanup_enabled: runtime_tuning
-                .maintenance
-                .stats_retention_cleanup_enabled,
+            dry_run: runtime_tuning.maintenance.dry_run,
         },
         gateway_token: args.token.clone(),
     }
@@ -265,7 +252,7 @@ pub async fn build_app(
             store.clone(),
             private_config,
             Arc::clone(&device_registry),
-            Arc::clone(&stats),
+            Arc::clone(&runtime_counters),
         ));
         state
             .spawn_configured_transports()
@@ -282,7 +269,7 @@ pub async fn build_app(
         wns: Arc::clone(&wns),
         store: store.clone(),
         private: private.clone(),
-        stats: Arc::clone(&stats),
+        runtime_counters: Arc::clone(&runtime_counters),
         runtime_profile: runtime_tuning.profile,
     }
     .spawn(receivers);
@@ -332,11 +319,10 @@ pub async fn build_app(
         dispatch,
         auth: auth.clone(),
         private_channel_enabled,
-        diagnostics_api_enabled: observability.diagnostics_api_enabled,
         public_base_url,
         device_registry,
         device_operation_guards,
-        stats,
+        runtime_counters,
         private_transport_profile,
         private: private.clone(),
         store,

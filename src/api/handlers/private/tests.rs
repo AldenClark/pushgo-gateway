@@ -1,13 +1,9 @@
 use std::sync::Arc;
 
-use axum::http::{HeaderMap, header::HOST};
+use axum::http::HeaderMap;
 
 use super::{
-    PRIVATE_WS_SUBPROTOCOL,
-    network::{
-        ObservedIpScope, PrivateDiagnosticsRequest, PrivateRequestHeaders, ResolvedIpSource,
-    },
-    runtime::GatewayProfileResponse,
+    PRIVATE_WS_SUBPROTOCOL, network::PrivateRequestHeaders, runtime::GatewayProfileResponse,
 };
 use crate::app::PrivateTransportProfile;
 
@@ -57,46 +53,6 @@ fn gateway_profile_disabled_omits_transport() {
 }
 
 #[test]
-fn classify_ip_scope_detects_cgnat() {
-    assert_eq!(
-        ObservedIpScope::classify("100.64.1.2"),
-        ObservedIpScope::CarrierGradeNat
-    );
-    assert_eq!(
-        ObservedIpScope::classify("100.127.255.254"),
-        ObservedIpScope::CarrierGradeNat
-    );
-}
-
-#[test]
-fn request_headers_resolve_forwarded_proto() {
-    let mut headers = HeaderMap::new();
-    headers.insert("forwarded", "for=1.2.3.4;proto=https".parse().unwrap());
-    let request = PrivateRequestHeaders::new(&headers);
-    assert_eq!(request.forwarded_pair("proto").as_deref(), Some("https"));
-    assert_eq!(request.resolved_ip_source(), ResolvedIpSource::Forwarded);
-}
-
-#[test]
-fn network_observation_collects_proxy_headers() {
-    let mut headers = HeaderMap::new();
-    headers.insert(HOST, "example.com".parse().unwrap());
-    headers.insert("x-forwarded-for", "203.0.113.8".parse().unwrap());
-    headers.insert("x-forwarded-proto", "https".parse().unwrap());
-    let request = PrivateDiagnosticsRequest::new("198.51.100.9:443".parse().unwrap(), &headers);
-    let observation = request.observe_network();
-
-    assert_eq!(observation.host.as_deref(), Some("example.com"));
-    assert_eq!(observation.x_forwarded_for.as_deref(), Some("203.0.113.8"));
-    assert_eq!(observation.forwarded_proto.as_deref(), Some("https"));
-    assert!(observation.proxy_detected());
-    assert_eq!(
-        observation.resolved_ip_source,
-        ResolvedIpSource::XForwardedFor
-    );
-}
-
-#[test]
 fn offers_ws_subprotocol_matches_csv_entries() {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -108,20 +64,4 @@ fn offers_ws_subprotocol_matches_csv_entries() {
     let request = PrivateRequestHeaders::new(&headers);
     assert!(request.offers_ws_subprotocol(PRIVATE_WS_SUBPROTOCOL));
     assert!(!request.offers_ws_subprotocol("missing-proto"));
-}
-
-#[test]
-fn resolved_ip_source_prefers_x_forwarded_for_over_other_headers() {
-    let mut headers = HeaderMap::new();
-    headers.insert("x-real-ip", "198.51.100.42".parse().unwrap());
-    headers.insert(
-        "forwarded",
-        "for=198.51.100.43;proto=https".parse().unwrap(),
-    );
-    headers.insert("x-forwarded-for", "198.51.100.44".parse().unwrap());
-    let request = PrivateRequestHeaders::new(&headers);
-    assert_eq!(
-        request.resolved_ip_source(),
-        ResolvedIpSource::XForwardedFor
-    );
 }

@@ -17,7 +17,6 @@ pub struct SqliteDb {
     core_read_pool: SqlitePool,
     delivery_pool: SqlitePool,
     dispatch_pool: SqlitePool,
-    telemetry_pool: Option<SqlitePool>,
     runtime_pool: Option<SqlitePool>,
     // Core writes stay serialized to match SQLite's single-writer model.
     pool: SqlitePool,
@@ -34,10 +33,6 @@ impl SqliteDb {
 
     fn dispatch_pool(&self) -> &SqlitePool {
         &self.dispatch_pool
-    }
-
-    fn telemetry_pool(&self) -> &SqlitePool {
-        self.telemetry_pool.as_ref().unwrap_or(&self.pool)
     }
 
     fn runtime_pool(&self) -> &SqlitePool {

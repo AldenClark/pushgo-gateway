@@ -131,6 +131,7 @@ impl FallbackRuntime {
             let now = chrono::Utc::now().timestamp_millis();
             let claim_until =
                 now.saturating_add(self.state.config.ack_timeout_secs.clamp(5, 120) as i64 * 1000);
+            let worker_id = format!("private-fallback:{}", std::process::id());
             let remaining_budget = max_processed_total.saturating_sub(processed_total);
             if remaining_budget == 0 {
                 break;
@@ -153,7 +154,13 @@ impl FallbackRuntime {
                 let claimed = self
                     .state
                     .hub
-                    .claim_due_outbox_for_device(device_id, now, device_limit, claim_until)
+                    .claim_due_outbox_for_device(
+                        device_id,
+                        now,
+                        device_limit,
+                        claim_until,
+                        worker_id.as_str(),
+                    )
                     .await?;
                 if claimed.is_empty() {
                     continue;
@@ -495,15 +502,13 @@ fn emit_maintenance_cleanup_stats(cleanup: &MaintenanceCleanupStats) {
         .saturating_add(cleanup.provider_pull_pruned)
         .saturating_add(cleanup.orphan_devices_pruned)
         .saturating_add(cleanup.stale_subscriptions_pruned)
+        .saturating_add(cleanup.frozen_subscriptions_pruned)
         .saturating_add(cleanup.soft_deleted_devices_pruned)
-        .saturating_add(cleanup.orphan_channels_pruned)
-        .saturating_add(cleanup.audit_rows_pruned)
-        .saturating_add(cleanup.hourly_stats_pruned)
-        .saturating_add(cleanup.daily_stats_pruned);
+        .saturating_add(cleanup.orphan_channels_pruned);
     if total == 0 {
         return;
     }
-        ::tracing::event!(
+    ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
         event = "private.maintenance_cleanup",
@@ -512,11 +517,9 @@ fn emit_maintenance_cleanup_stats(cleanup: &MaintenanceCleanupStats) {
         provider_pull_pruned = (cleanup.provider_pull_pruned as u64),
         orphan_devices_pruned = (cleanup.orphan_devices_pruned as u64),
         stale_subscriptions_pruned = (cleanup.stale_subscriptions_pruned as u64),
+        frozen_subscriptions_pruned = (cleanup.frozen_subscriptions_pruned as u64),
         soft_deleted_devices_pruned = (cleanup.soft_deleted_devices_pruned as u64),
-        orphan_channels_pruned = (cleanup.orphan_channels_pruned as u64),
-        audit_rows_pruned = (cleanup.audit_rows_pruned as u64),
-        hourly_stats_pruned = (cleanup.hourly_stats_pruned as u64),
-        daily_stats_pruned = (cleanup.daily_stats_pruned as u64)
+        orphan_channels_pruned = (cleanup.orphan_channels_pruned as u64)
     );
 }
 
@@ -529,7 +532,7 @@ mod tests {
     use crate::{
         private::{PrivateConfig, PrivateState, protocol::PrivatePayloadEnvelope},
         routing::{DeviceRegistry, derive_private_device_id},
-        stats::StatsCollector,
+        runtime_counters::RuntimeCounterCollector,
         storage::{
             MaintenanceCleanupConfig, OUTBOX_STATUS_PENDING, OUTBOX_STATUS_SENT, PrivateMessage,
             Storage,
@@ -553,12 +556,12 @@ mod tests {
             let storage = Storage::new(Some(db_url.as_str()))
                 .await
                 .expect("storage should initialize");
-            let stats = StatsCollector::spawn(storage.clone());
+            let runtime_counters = RuntimeCounterCollector::spawn(storage.clone());
             let state = Arc::new(PrivateState::new(
                 storage,
                 test_private_config(),
                 Arc::new(DeviceRegistry::new()),
-                stats,
+                                runtime_counters,
             ));
             Self { _dir: dir, state }
         }

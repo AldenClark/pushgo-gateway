@@ -1,93 +1,50 @@
 use super::*;
-use crate::dispatch::ApnsJob;
+use crate::delivery_core::execution::provider::{
+    ProviderDispatchContext, ProviderDispatchPayload, enqueue_provider_dispatch,
+};
 
 pub(super) async fn dispatch(
     prepared: &PreparedDispatch<'_>,
     payloads: &ProviderPayloads,
-    target: &ResolvedProviderTarget<'_>,
+    target: &ResolvedProviderTarget,
+    provider_payload: PreparedProviderPayload,
     progress: &mut DispatchProgress,
 ) -> Result<(), Error> {
-    let direct_payload = if target.device.platform == Platform::WATCHOS {
-        payloads.watchos_apns_payload.clone()
-    } else {
-        payloads.apns_payload.clone()
-    }
-    .ok_or(Error::Internal("missing APNs payload".to_string()))?;
-    let wakeup_payload = Arc::new(ApnsPayload::wakeup(
-        payloads.apns_wakeup_title.clone(),
-        payloads.apns_wakeup_body.clone(),
-        Some(prepared.channel_id_value.clone()),
-        prepared.effective_ttl,
-        SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
-    ));
-    let selection = match ProviderDeliverySelection::resolve(
-        target.device.platform,
-        direct_payload.encoded_len().map_err(|err| {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::ERROR,
-                event = "dispatch.apns_direct_payload_encode_failed",
-                correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
-                delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
-                channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-                op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
-                device_key = %(crate::util::redact_text(target.device_key.as_ref())),
-                device_token = %(crate::util::redact_text(target.device.token_str())),
-                platform = %(target.device.platform.name()),
-                error = %(err.to_string())
-            );
-            Error::Internal(err.to_string())
-        })?,
-        wakeup_payload.encoded_len().map_err(|err| {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::ERROR,
-                event = "dispatch.apns_wakeup_payload_encode_failed",
-                correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
-                delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
-                channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
-                op_id = %(crate::util::redact_text(prepared.op_id.as_str())),
-                device_key = %(crate::util::redact_text(target.device_key.as_ref())),
-                device_token = %(crate::util::redact_text(target.device.token_str())),
-                platform = %(target.device.platform.name()),
-                error = %(err.to_string())
-            );
-            Error::Internal(err.to_string())
-        })?,
-        target.provider_pull_delivery.is_some(),
-    ) {
-        Ok(value) => value,
-        Err(err) => {
-            record_provider_path_rejected(prepared, target, progress, err.to_string()).await;
-            return Ok(());
-        }
+    let PreparedProviderPayload::Apns {
+        direct_payload,
+        wakeup_payload,
+        selection,
+    } = provider_payload
+    else {
+        return Err(Error::Internal(
+            "prepared provider payload did not match APNs target".to_string(),
+        ));
     };
 
-    match prepared.state.dispatch.try_send_apns(ApnsJob {
-        channel_id: prepared.channel_id,
-        correlation_id: Arc::clone(&prepared.correlation_id),
-        delivery_id: Arc::clone(&prepared.delivery_id_ref),
-        device_key: Arc::clone(&target.device_key),
-        device_token: Arc::from(target.device.token_str()),
-        platform: target.device.platform,
-        direct_payload: Arc::clone(&direct_payload),
-        wakeup_payload: Some(Arc::clone(&wakeup_payload)),
-        initial_path: selection.initial_path,
-        wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
-        collapse_id: payloads.apns_collapse_id.clone(),
-    }) {
+    let path = selection.initial_path.into();
+    match enqueue_provider_dispatch(
+        ProviderDispatchContext {
+            dispatch: prepared.runtime.dispatch_channels(),
+            channel_id: prepared.channel_id,
+            correlation_id: Arc::clone(&prepared.correlation_id),
+            delivery_id: Arc::clone(&prepared.delivery_id_ref),
+            device_key: Arc::clone(&target.device_key),
+            device_token: Arc::from(target.device.token_str()),
+        },
+        ProviderDispatchPayload::Apns {
+            platform: target.device.platform,
+            direct_payload: Arc::clone(&direct_payload),
+            wakeup_payload: Arc::clone(&wakeup_payload),
+            initial_path: path,
+            wakeup_payload_within_limit: selection.wakeup_payload_within_limit,
+            collapse_id: payloads.apns_collapse_id.clone(),
+        },
+    ) {
         Ok(()) => {
-            record_provider_enqueued(prepared, target, progress, selection.initial_path).await;
+            record_provider_enqueued(prepared, target, progress, path).await;
         }
         Err(err) => {
-            record_provider_enqueue_failed(
-                prepared,
-                target,
-                progress,
-                selection.initial_path,
-                &err,
-            )
-            .await;
+            record_provider_enqueue_failed(prepared, target, progress, path, &err).await;
         }
     }
 
