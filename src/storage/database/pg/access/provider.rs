@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::database::pg::access::maintenance::delete_orphan_private_payload_in_pg_tx;
 use std::sync::Arc;
 
 impl PostgresDb {
@@ -104,6 +105,7 @@ impl PostgresDb {
             .bind(delivery_id)
             .execute(&mut *tx)
             .await?;
+            delete_orphan_private_payload_in_pg_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
@@ -174,6 +176,7 @@ impl PostgresDb {
             .bind(delivery_id)
             .execute(&mut *tx)
             .await?;
+            delete_orphan_private_payload_in_pg_tx(&mut tx, delivery_id).await?;
         }
 
         tx.commit().await?;
@@ -214,6 +217,7 @@ impl PostgresDb {
             .bind(delivery_id)
             .execute(&mut *tx)
             .await?;
+            delete_orphan_private_payload_in_pg_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),

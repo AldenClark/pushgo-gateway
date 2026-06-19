@@ -11,12 +11,12 @@ use crate::{
     delivery_core::source::IngressSource,
     delivery_core::{
         auth::SubmitAuth,
-        domain::message::MessageInput,
         submit::{
             ChannelSelector, DomainCommandInput, EventInput, ResponseMode, SubmitCommand,
             SubmitContext, ThingInput, submit_command,
         },
     },
+    domain_model::message::MessageInput,
     mqtt::{
         MqttMessageTopic, MqttPublishCommand, MqttPublishDedupeDecision, MqttPublishDedupeKey,
         MqttPublishEnvelope, MqttRole,

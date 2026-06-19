@@ -5,7 +5,6 @@ use crate::{
     app::AppState,
     delivery_core::{
         auth::SubmitAuth,
-        domain::message::MessageInput,
         response::{DeliverySummary, EntityRef},
         source::IngressSource,
         submit::{
@@ -13,6 +12,7 @@ use crate::{
             submit_command,
         },
     },
+    domain_model::message::MessageInput,
 };
 
 #[derive(Debug, Clone)]

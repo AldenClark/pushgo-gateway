@@ -820,6 +820,79 @@ async fn provider_pull_items_limit_and_order_works() {
 }
 
 #[tokio::test]
+async fn provider_pull_drains_queue_and_orphan_payloads_on_read() {
+    let ctx = setup_sqlite_storage("provider-pull-drains-orphan-payloads").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [4; 16];
+    let delivery_id = "delivery-provider-drain-orphan-001";
+    let message = PrivateMessage {
+        payload: vec![1, 2, 3].into(),
+        size: 3,
+        sent_at: now,
+        expires_at: now + 600_000,
+    };
+
+    ctx.storage
+        .insert_private_message(delivery_id, &message)
+        .await
+        .expect("insert shared private payload should succeed");
+
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "INSERT INTO provider_pull_queue \
+         (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+         VALUES (?, ?, X'', 0, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&device_id[..])
+    .bind(delivery_id)
+    .bind(message.sent_at)
+    .bind(message.expires_at)
+    .bind(Platform::ANDROID.name())
+    .bind("fcm-token-provider-drain-orphan-001")
+    .bind(now)
+    .bind(now)
+    .execute(&mut conn)
+    .await
+    .expect("provider pull queue insert should succeed");
+    let payload_count_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM private_payloads WHERE delivery_id = ?")
+            .bind(delivery_id)
+            .fetch_one(&mut conn)
+            .await
+            .expect("private payload count before pull should succeed");
+    assert_eq!(payload_count_before, 1);
+    drop(conn);
+
+    let pulled = ctx
+        .storage
+        .pull_provider_items(device_id, now + 1, 10)
+        .await
+        .expect("provider pull should succeed");
+    assert_eq!(pulled.len(), 1);
+    assert_eq!(pulled[0].delivery_id, delivery_id);
+
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let queue_count_after: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM provider_pull_queue WHERE delivery_id = ?")
+            .bind(delivery_id)
+            .fetch_one(&mut conn)
+            .await
+            .expect("provider queue count after pull should succeed");
+    let payload_count_after: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM private_payloads WHERE delivery_id = ?")
+            .bind(delivery_id)
+            .fetch_one(&mut conn)
+            .await
+            .expect("private payload count after pull should succeed");
+    assert_eq!(queue_count_after, 0);
+    assert_eq!(payload_count_after, 0);
+}
+
+#[tokio::test]
 async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
     let ctx = setup_sqlite_storage("provider-to-private-migration-capacity").await;
 

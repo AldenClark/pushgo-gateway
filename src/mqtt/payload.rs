@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::api::Error;
-use crate::delivery_core::domain::{
+use crate::domain_model::{
     event::{EventCloseCommand, EventCommand, EventCreateCommand, EventPatch, EventUpdateCommand},
     thing::{
         ThingArchiveCommand, ThingCommand, ThingCreateCommand, ThingDeleteCommand, ThingPatch,

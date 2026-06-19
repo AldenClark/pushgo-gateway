@@ -7,7 +7,6 @@ use crate::runtime_counters::DeviceRuntimeCounterDelta;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCounterEvent {
     SubmitAccepted,
-    SubmitRejected,
     DeliveryQueued,
     DeliveryFailed,
 }

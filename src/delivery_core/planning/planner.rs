@@ -1,6 +1,4 @@
-use crate::{
-    delivery_core::domain::projection::DomainDeliveryPolicy, storage::DeviceId, storage::Platform,
-};
+use crate::{domain_model::projection::DomainDeliveryPolicy, storage::DeviceId, storage::Platform};
 
 use super::plan::{
     DeliveryPlan, DeliverySkip, DeliverySkipReason, DeliveryTargetPlan, PayloadRef,

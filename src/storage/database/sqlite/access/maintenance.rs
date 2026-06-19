@@ -558,7 +558,7 @@ async fn select_delivery_keys(
         .collect())
 }
 
-async fn delete_orphan_private_payload_in_sqlite_tx(
+pub(super) async fn delete_orphan_private_payload_in_sqlite_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     delivery_id: &str,
 ) -> StoreResult<()> {

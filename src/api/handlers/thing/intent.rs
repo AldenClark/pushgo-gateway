@@ -3,17 +3,13 @@ use super::types::{
     ThingUpdateRequest,
 };
 
-pub(crate) use crate::delivery_core::domain::thing::ThingPatch;
+pub(crate) use crate::domain_model::thing::ThingPatch;
 
-pub(crate) type ThingCommand = crate::delivery_core::domain::thing::ThingCommand<ThingPatch>;
-pub(crate) type ThingCreateCommand =
-    crate::delivery_core::domain::thing::ThingCreateCommand<ThingPatch>;
-pub(crate) type ThingUpdateCommand =
-    crate::delivery_core::domain::thing::ThingUpdateCommand<ThingPatch>;
-pub(crate) type ThingArchiveCommand =
-    crate::delivery_core::domain::thing::ThingArchiveCommand<ThingPatch>;
-pub(crate) type ThingDeleteCommand =
-    crate::delivery_core::domain::thing::ThingDeleteCommand<ThingPatch>;
+pub(crate) type ThingCommand = crate::domain_model::thing::ThingCommand<ThingPatch>;
+pub(crate) type ThingCreateCommand = crate::domain_model::thing::ThingCreateCommand<ThingPatch>;
+pub(crate) type ThingUpdateCommand = crate::domain_model::thing::ThingUpdateCommand<ThingPatch>;
+pub(crate) type ThingArchiveCommand = crate::domain_model::thing::ThingArchiveCommand<ThingPatch>;
+pub(crate) type ThingDeleteCommand = crate::domain_model::thing::ThingDeleteCommand<ThingPatch>;
 
 impl From<ThingPatchFields> for ThingPatch {
     fn from(value: ThingPatchFields) -> Self {

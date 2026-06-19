@@ -72,18 +72,41 @@ pub(crate) async fn messages_pull(
         let mut items = Vec::with_capacity(raw_items.len());
         let mut dropped_decode = 0u64;
         let mut dropped_version = 0u64;
+        let raw_item_count = raw_items.len() as u64;
         for item in raw_items {
+            let delivery_id = item.delivery_id;
+            let payload_size = item.payload.len() as u64;
             let Some(envelope) = ProviderPullEnvelope::decode_postcard(item.payload.as_ref())
             else {
                 dropped_decode += 1;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "provider.pull_item_dropped",
+                    device_key = %(crate::util::redact_text(device_key.as_str())),
+                    delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+                    encoded_bytes = payload_size,
+                    reason = %("payload_decode_failed")
+                );
                 continue;
             };
             if !envelope.is_supported_version() {
                 dropped_version += 1;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "provider.pull_item_dropped",
+                    device_key = %(crate::util::redact_text(device_key.as_str())),
+                    delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
+                    encoded_bytes = payload_size,
+                    wire_version = envelope.payload_version,
+                    supported_wire_version = ProviderPullEnvelope::CURRENT_VERSION,
+                    reason = %("payload_version_unsupported")
+                );
                 continue;
             }
             items.push(PullItem {
-                delivery_id: item.delivery_id,
+                delivery_id,
                 payload: envelope.data,
             });
         }
@@ -93,6 +116,8 @@ pub(crate) async fn messages_pull(
             ::tracing::Level::INFO,
             event = "provider.pull_completed",
             device_key = %(crate::util::redact_text(device_key.as_str())),
+            requested_delivery_id = payload.delivery_id.is_some(),
+            raw_items = raw_item_count,
             items_returned = (items.len() as u64),
             dropped_decode = (dropped_decode),
             dropped_version = (dropped_version)

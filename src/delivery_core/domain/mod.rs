@@ -1,7 +1,2 @@
-pub(crate) mod common;
-pub(crate) mod event;
-pub(crate) mod ids;
-pub(crate) mod message;
-pub(crate) mod projection;
-pub(crate) mod spec;
-pub(crate) mod thing;
+#[allow(unused_imports)]
+pub(crate) use crate::domain_model::{common, event, ids, message, projection, spec, thing};

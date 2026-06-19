@@ -1,14 +1,11 @@
 use super::types::{EventCloseRequest, EventCreateRequest, EventPatchFields, EventUpdateRequest};
 
-pub(crate) type EventCommand = crate::delivery_core::domain::event::EventCommand<EventPatch>;
-pub(crate) type EventCreateCommand =
-    crate::delivery_core::domain::event::EventCreateCommand<EventPatch>;
-pub(crate) type EventUpdateCommand =
-    crate::delivery_core::domain::event::EventUpdateCommand<EventPatch>;
-pub(crate) type EventCloseCommand =
-    crate::delivery_core::domain::event::EventCloseCommand<EventPatch>;
+pub(crate) type EventCommand = crate::domain_model::event::EventCommand<EventPatch>;
+pub(crate) type EventCreateCommand = crate::domain_model::event::EventCreateCommand<EventPatch>;
+pub(crate) type EventUpdateCommand = crate::domain_model::event::EventUpdateCommand<EventPatch>;
+pub(crate) type EventCloseCommand = crate::domain_model::event::EventCloseCommand<EventPatch>;
 
-pub(crate) use crate::delivery_core::domain::event::EventPatch;
+pub(crate) use crate::domain_model::event::EventPatch;
 
 impl From<EventPatchFields> for EventPatch {
     fn from(value: EventPatchFields) -> Self {

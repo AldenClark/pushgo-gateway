@@ -514,7 +514,7 @@ impl MySqlDb {
     }
 }
 
-async fn delete_orphan_private_payload_in_mysql_tx(
+pub(super) async fn delete_orphan_private_payload_in_mysql_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     delivery_id: &str,
 ) -> StoreResult<()> {

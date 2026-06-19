@@ -198,7 +198,7 @@ async fn submit_message(
         .await?;
     let delivery = output;
     let delivery_id = delivery.delivery_id.clone();
-    let outcome = delivery.submit_outcome();
+    let acceptance = delivery.submit_acceptance();
     let result = SubmitResult {
         channel_id: delivery.channel_id.clone(),
         op_id: delivery.op_id.clone(),
@@ -207,7 +207,7 @@ async fn submit_message(
             thing_id: scoped_thing_id,
         },
         delivery_id,
-        outcome,
+        acceptance,
         summary: delivery,
     };
     Ok(result)
@@ -250,13 +250,13 @@ async fn submit_event(
         })
         .await?;
     let delivery_id = delivery.delivery_id.clone();
-    let outcome = delivery.submit_outcome();
+    let acceptance = delivery.submit_acceptance();
     Ok(SubmitResult {
         channel_id: delivery.channel_id.clone(),
         op_id: delivery.op_id.clone(),
         entity: EntityRef::Event { event_id, thing_id },
         delivery_id,
-        outcome,
+        acceptance,
         summary: delivery,
     })
 }
@@ -298,13 +298,13 @@ async fn submit_thing(
         })
         .await?;
     let delivery_id = delivery.delivery_id.clone();
-    let outcome = delivery.submit_outcome();
+    let acceptance = delivery.submit_acceptance();
     Ok(SubmitResult {
         channel_id: delivery.channel_id.clone(),
         op_id: delivery.op_id.clone(),
         entity: EntityRef::Thing { thing_id },
         delivery_id,
-        outcome,
+        acceptance,
         summary: delivery,
     })
 }
@@ -353,7 +353,7 @@ mod tests {
     use crate::{
         delivery_core::{
             execution::request::{DispatchEventInput, DispatchMessageInput, DispatchThingInput},
-            response::{DeliveryDedupeStatus, DeliveryDispatchStatus, SubmitOutcome},
+            response::{DeliveryDedupeStatus, DeliveryDispatchStatus, SubmitAcceptance},
         },
         storage::{OpDedupeReservation, SemanticIdReservation, StoreResult},
     };
@@ -508,7 +508,7 @@ mod tests {
         .await
         .expect("pending duplicate summary should remain a submit result");
 
-        assert_eq!(result.outcome, SubmitOutcome::AcceptedDuplicatePending);
+        assert_eq!(result.acceptance, SubmitAcceptance::DuplicatePending);
         assert_eq!(
             result.summary.failure_error_message(),
             Some("notification dispatch is already pending")

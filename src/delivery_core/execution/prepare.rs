@@ -34,7 +34,7 @@ pub(crate) struct DispatchPreparationInput {
     pub(crate) occurred_at: i64,
     pub(crate) alert: DispatchAlert,
     pub(crate) payload: DispatchEntityPayload,
-    pub(crate) delivery_policy: crate::delivery_core::domain::projection::DomainDeliveryPolicy,
+    pub(crate) delivery_policy: crate::domain_model::projection::DomainDeliveryPolicy,
     pub(crate) dispatch_targets: Vec<DispatchTarget>,
     pub(crate) private_enabled: bool,
     pub(crate) private_default_ttl_secs: i64,
@@ -408,8 +408,8 @@ mod tests {
                 HashMap::new(),
                 HashMap::new(),
             ),
-            delivery_policy:
-                crate::delivery_core::domain::projection::DomainDeliveryPolicy::fanout_default(),
+            delivery_policy: crate::domain_model::projection::DomainDeliveryPolicy::fanout_default(
+            ),
             dispatch_targets: vec![DispatchTarget::Provider {
                 platform: Platform::ANDROID,
                 provider_token: "   ".to_string(),
@@ -440,8 +440,8 @@ mod tests {
                 HashMap::new(),
                 HashMap::new(),
             ),
-            delivery_policy:
-                crate::delivery_core::domain::projection::DomainDeliveryPolicy::fanout_default(),
+            delivery_policy: crate::domain_model::projection::DomainDeliveryPolicy::fanout_default(
+            ),
             dispatch_targets: vec![DispatchTarget::Private {
                 device_id: [7; 16],
                 platform: Platform::MQTT,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::database::mysql::access::maintenance::delete_orphan_private_payload_in_mysql_tx;
 use std::sync::Arc;
 
 impl MySqlDb {
@@ -103,6 +104,7 @@ impl MySqlDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            delete_orphan_private_payload_in_mysql_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
@@ -171,6 +173,7 @@ impl MySqlDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            delete_orphan_private_payload_in_mysql_tx(&mut tx, delivery_id).await?;
         }
 
         tx.commit().await?;
@@ -209,6 +212,7 @@ impl MySqlDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            delete_orphan_private_payload_in_mysql_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),

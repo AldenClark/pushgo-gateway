@@ -2,11 +2,11 @@ use std::{fs, path::Path};
 
 const CHECKED_DIRS: &[&str] = &[
     "src/delivery_core/auth.rs",
-    "src/delivery_core/domain",
     "src/delivery_core/error.rs",
     "src/delivery_core/payload",
     "src/delivery_core/planning",
     "src/delivery_core/response.rs",
+    "src/domain_model",
 ];
 
 const SUBMIT_RUNTIME_ADAPTER: &str = "src/delivery_core/execution/submit_runtime.rs";
@@ -640,6 +640,51 @@ fn storage_queue_state_boundaries_match_delivery_roles() {
     assert!(
         violations.is_empty(),
         "storage queue state must distinguish private outbox retry state from provider pull cache:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn domain_model_contract_lives_outside_delivery_core() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let domain_model_dir = manifest_dir.join("src/domain_model");
+    let delivery_core_domain =
+        fs::read_to_string(manifest_dir.join("src/delivery_core/domain/mod.rs"))
+            .expect("delivery_core domain compatibility module should be readable");
+    let mut violations = Vec::new();
+
+    for required in [
+        "message.rs",
+        "event.rs",
+        "thing.rs",
+        "spec.rs",
+        "projection.rs",
+        "ids.rs",
+        "common.rs",
+    ] {
+        if !domain_model_dir.join(required).exists() {
+            violations.push(format!("src/domain_model is missing {required}"));
+        }
+    }
+
+    if !delivery_core_domain.contains("pub(crate) use crate::domain_model") {
+        violations.push(
+            "delivery_core::domain must stay a compatibility re-export of domain_model".to_string(),
+        );
+    }
+    if delivery_core_domain.contains("pub(crate) mod message")
+        || delivery_core_domain.contains("pub(crate) mod event")
+        || delivery_core_domain.contains("pub(crate) mod thing")
+    {
+        violations.push(
+            "delivery_core::domain reintroduced model implementations under delivery core"
+                .to_string(),
+        );
+    }
+
+    assert!(
+        violations.is_empty(),
+        "domain model contract must remain a shared layer outside delivery_core:\n{}",
         violations.join("\n")
     );
 }
@@ -1691,14 +1736,13 @@ fn planner_must_consume_domain_delivery_policy() {
 #[test]
 fn domain_action_specs_must_remain_descriptive_contracts() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let spec_source = fs::read_to_string(manifest_dir.join("src/delivery_core/domain/spec.rs"))
+    let spec_source = fs::read_to_string(manifest_dir.join("src/domain_model/spec.rs"))
         .expect("domain spec source should be readable");
-    let message_source =
-        fs::read_to_string(manifest_dir.join("src/delivery_core/domain/message.rs"))
-            .expect("message domain source should be readable");
-    let event_source = fs::read_to_string(manifest_dir.join("src/delivery_core/domain/event.rs"))
+    let message_source = fs::read_to_string(manifest_dir.join("src/domain_model/message.rs"))
+        .expect("message domain source should be readable");
+    let event_source = fs::read_to_string(manifest_dir.join("src/domain_model/event.rs"))
         .expect("event domain source should be readable");
-    let thing_source = fs::read_to_string(manifest_dir.join("src/delivery_core/domain/thing.rs"))
+    let thing_source = fs::read_to_string(manifest_dir.join("src/domain_model/thing.rs"))
         .expect("thing domain source should be readable");
     let mut violations = Vec::new();
 
@@ -1751,9 +1795,9 @@ fn domain_action_specs_must_remain_descriptive_contracts() {
 fn domain_commands_do_not_trust_payload_channel_identity() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let domain_files = [
-        "src/delivery_core/domain/message.rs",
-        "src/delivery_core/domain/event.rs",
-        "src/delivery_core/domain/thing.rs",
+        "src/domain_model/message.rs",
+        "src/domain_model/event.rs",
+        "src/domain_model/thing.rs",
     ];
     let mut violations = Vec::new();
 
@@ -1782,9 +1826,9 @@ fn domain_commands_do_not_trust_payload_channel_identity() {
 #[test]
 fn event_and_thing_domain_commands_do_not_interpret_business_payload_values() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let event_source = fs::read_to_string(manifest_dir.join("src/delivery_core/domain/event.rs"))
+    let event_source = fs::read_to_string(manifest_dir.join("src/domain_model/event.rs"))
         .expect("event domain source should be readable");
-    let thing_source = fs::read_to_string(manifest_dir.join("src/delivery_core/domain/thing.rs"))
+    let thing_source = fs::read_to_string(manifest_dir.join("src/domain_model/thing.rs"))
         .expect("thing domain source should be readable");
     let value_mod_source =
         fs::read_to_string(manifest_dir.join("src/value/mod.rs")).expect("value mod readable");

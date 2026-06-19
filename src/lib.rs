@@ -3,6 +3,7 @@
 pub mod app;
 pub mod args;
 pub(crate) mod delivery_core;
+pub(crate) mod domain_model;
 pub(crate) mod mcp;
 pub(crate) mod mqtt;
 pub mod private;

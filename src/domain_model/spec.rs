@@ -36,7 +36,7 @@ pub(crate) struct ActionSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delivery_core::domain::{
+    use crate::domain_model::{
         event::EventCommandKind, message::MessageSend, thing::ThingCommandKind,
     };
 

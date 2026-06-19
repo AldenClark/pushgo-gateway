@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::database::sqlite::access::maintenance::delete_orphan_private_payload_in_sqlite_tx;
 use std::sync::Arc;
 
 impl SqliteDb {
@@ -155,6 +156,7 @@ impl SqliteDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
@@ -218,6 +220,7 @@ impl SqliteDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
         }
         tx.commit().await?;
         Ok(out)
@@ -250,6 +253,7 @@ impl SqliteDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),

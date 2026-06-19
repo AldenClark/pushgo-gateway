@@ -62,7 +62,7 @@ impl McpRpcService<'_> {
                     authorized_context,
                 ),
                 command: crate::delivery_core::submit::DomainCommandInput::Message(Box::new(
-                    crate::delivery_core::domain::message::MessageInput {
+                    crate::domain_model::message::MessageInput {
                         op_id: parsed.op_id,
                         thing_id: parsed.thing_id,
                         occurred_at: parsed.occurred_at,

@@ -492,7 +492,7 @@ impl PostgresDb {
     }
 }
 
-async fn delete_orphan_private_payload_in_pg_tx(
+pub(super) async fn delete_orphan_private_payload_in_pg_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     delivery_id: &str,
 ) -> StoreResult<()> {

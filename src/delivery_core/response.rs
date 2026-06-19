@@ -4,16 +4,15 @@ pub(crate) struct SubmitResult {
     pub(crate) op_id: String,
     pub(crate) entity: EntityRef,
     pub(crate) delivery_id: String,
-    pub(crate) outcome: SubmitOutcome,
+    pub(crate) acceptance: SubmitAcceptance,
     pub(crate) summary: DeliverySummary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SubmitOutcome {
-    AcceptedNew,
-    AcceptedDuplicateCompleted,
-    AcceptedDuplicatePending,
-    Rejected,
+pub(crate) enum SubmitAcceptance {
+    New,
+    DuplicateCompleted,
+    DuplicatePending,
 }
 
 #[derive(Debug, Clone)]
@@ -145,13 +144,12 @@ impl DeliverySummary {
         }
     }
 
-    pub(crate) fn submit_outcome(&self) -> SubmitOutcome {
+    pub(crate) fn submit_acceptance(&self) -> SubmitAcceptance {
         match self.dedupe_status {
-            DeliveryDedupeStatus::New => SubmitOutcome::AcceptedNew,
-            DeliveryDedupeStatus::DuplicateCompleted => SubmitOutcome::AcceptedDuplicateCompleted,
-            DeliveryDedupeStatus::DuplicatePending => SubmitOutcome::AcceptedDuplicatePending,
+            DeliveryDedupeStatus::New => SubmitAcceptance::New,
+            DeliveryDedupeStatus::DuplicateCompleted => SubmitAcceptance::DuplicateCompleted,
+            DeliveryDedupeStatus::DuplicatePending => SubmitAcceptance::DuplicatePending,
         }
-        .into_rejected_on_failure(self.failure_error_message())
     }
 
     pub(crate) fn dedupe_settle_action(&self) -> DeliveryDedupeSettleAction {
@@ -163,20 +161,6 @@ impl DeliverySummary {
             | DeliveryDispatchStatus::AttemptedPartialFailure => {
                 DeliveryDedupeSettleAction::FinalizeSent
             }
-        }
-    }
-}
-
-trait SubmitOutcomeFailureExt {
-    fn into_rejected_on_failure(self, failure: Option<&'static str>) -> SubmitOutcome;
-}
-
-impl SubmitOutcomeFailureExt for SubmitOutcome {
-    fn into_rejected_on_failure(self, failure: Option<&'static str>) -> SubmitOutcome {
-        if failure.is_some() && self != SubmitOutcome::AcceptedDuplicatePending {
-            SubmitOutcome::Rejected
-        } else {
-            self
         }
     }
 }
@@ -196,8 +180,8 @@ mod tests {
         );
 
         assert_eq!(
-            summary.submit_outcome(),
-            SubmitOutcome::AcceptedDuplicateCompleted
+            summary.submit_acceptance(),
+            SubmitAcceptance::DuplicateCompleted
         );
     }
 
@@ -212,8 +196,8 @@ mod tests {
         );
 
         assert_eq!(
-            summary.submit_outcome(),
-            SubmitOutcome::AcceptedDuplicatePending
+            summary.submit_acceptance(),
+            SubmitAcceptance::DuplicatePending
         );
     }
 
@@ -239,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn delivery_summary_reports_not_attempted_as_rejected() {
+    fn delivery_summary_keeps_acceptance_separate_from_dispatch_failure() {
         let summary = DeliverySummary::new(
             "channel".to_string(),
             "op".to_string(),
@@ -252,7 +236,7 @@ mod tests {
             summary.failure_error_message(),
             Some("notification dispatch was not attempted")
         );
-        assert_eq!(summary.submit_outcome(), SubmitOutcome::Rejected);
+        assert_eq!(summary.submit_acceptance(), SubmitAcceptance::New);
     }
 
     #[test]

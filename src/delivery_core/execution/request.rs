@@ -1,7 +1,8 @@
 use hashbrown::HashMap;
 
-use crate::delivery_core::{
-    domain::projection::DomainDeliveryPolicy, payload::EntityKind, submit::AuthorizedSubmitChannel,
+use crate::{
+    delivery_core::{payload::EntityKind, submit::AuthorizedSubmitChannel},
+    domain_model::projection::DomainDeliveryPolicy,
 };
 
 pub(crate) struct DispatchMessageInput {
