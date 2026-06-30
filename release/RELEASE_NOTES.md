@@ -8,6 +8,16 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.2.11]
+
+### Improved
+- Added MQTT 5 private transport support for gateway deployments, including publish-only and persistent subscribe device modes, QoS 1 delivery, MQTT Will handling, and realtime downlink for message, event, and thing payloads.
+- Improved sender tracking by making `op_id` gateway-owned across message/event/thing sends and exposing sender-facing status lookup through `/send_status/{op_id}`.
+- Improved Docker and container deployment defaults: images now expose MQTT `1883/tcp`, use `PUSHGO_RUNTIME_PROFILE` for runtime tuning, and no longer advertise removed private queue tuning environment variables.
+- Improved upgrade readiness documentation for operators moving from older private-channel deployments, including database backup expectations, runtime-table hard-reset semantics, and explicit transport/profile configuration.
+- Added an explicit managed database upgrade preflight (`--db-upgrade plan|run`) with stdout progress, upgrade state tables, locking, backup policy enforcement, verification, and SQLite restore support. See `docs/gateway-database-upgrade-plan.md`.
+- Improved release validation coverage with all-model sandbox delivery, public/private stress passes, MQTT protocol tests, and migration/legacy/hard-reset checks.
+
 ## [v1.2.10]
 
 ### Improved

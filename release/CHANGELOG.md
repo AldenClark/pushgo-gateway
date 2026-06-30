@@ -12,6 +12,23 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
+## [v1.2.11] - 2026-06-30
+
+### Changed
+- Bumped package/runtime version to `1.2.11` and aligned lockfile metadata for this release line.
+- Completed the gateway delivery-core architecture refresh around gateway-owned `op_id`, sender-facing `/send_status/{op_id}`, and unified message/event/thing submit status tracking.
+- Added MQTT 5 as an explicit private transport (`mqtt`) with QoS 1 ingress, persistent subscribe device identity via MQTT 5 Assigned Client Identifier, publish-only temporary connections, Will message validation/execution, and realtime downlink payload envelopes for message/event/thing models.
+- Updated Docker runtime defaults in `Dockerfile.gha` and `Dockerfile.local` to expose MQTT `1883/tcp`, bind MQTT inside the container, and use `PUSHGO_RUNTIME_PROFILE` instead of obsolete per-queue/private tuning environment variables.
+- Updated ECS benchmark deployment scripts to write `PUSHGO_RUNTIME_PROFILE`, `PUSHGO_PRIVATE_TRANSPORTS`, and MQTT bind/advertise ports while removing old private ack/max-pending/fallback tuning environment output.
+- Refreshed README and API HTML documentation for MQTT, Docker/container operation, gateway-owned `op_id`, and old-version upgrade requirements.
+- Added the explicit managed database upgrade path described in `docs/gateway-database-upgrade-plan.md`, including startup preflight orchestration, `--db-upgrade plan|run`, stdout reporting, upgrade state tables, backend locks, backup policy handling, verification, and SQLite backup restore.
+
+### Test
+- Passed full release preflight: `scripts/preflight_release_audit.sh all`.
+- Passed migration/legacy/hard-reset upgrade suites and targeted channel sync, route switch, provider-token retirement, private transport, runtime profile, send-status, and MQTT test filters.
+- Added managed-upgrade tests for SQLite plan/run, unfinished-run rejection, backup creation, rollback restore after injected verification failure, and PostgreSQL/MySQL external snapshot recording.
+- Passed all-model sandbox delivery drill for message, event, and thing flows plus public/private stress passes.
+
 ## [v1.2.10] - 2026-06-10
 
 ### Changed

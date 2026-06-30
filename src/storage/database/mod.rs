@@ -9,6 +9,7 @@ mod access;
 #[path = "driver/mod.rs"]
 mod driver;
 pub(crate) mod migration;
+pub mod upgrade;
 
 pub mod mysql;
 pub mod pg;

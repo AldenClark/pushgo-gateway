@@ -10,6 +10,19 @@ pub(crate) const DEVICE_IDENTITY_V8_MIGRATION: SchemaMigrationDefinition =
         description: "Hard-cut gateway runtime schema for device-key identity and provider route separation",
         checksum: "sha256:426de3f380802b8706ddd10151d30d4ba8286fddb234eeefc7800c42d7860a29",
         target_schema_version: STORAGE_SCHEMA_VERSION_MIGRATABLE,
+        risk: MigrationRisk::RuntimeReset,
+        backup_policy: BackupPolicy::Required,
+        rollback_policy: RollbackPolicy::RestoreBackup,
+        steps: &[
+            MigrationStepDefinition {
+                id: "drop_legacy_runtime_tables",
+                description: "Drop legacy runtime tables that cannot be shape-migrated safely",
+            },
+            MigrationStepDefinition {
+                id: "recreate_runtime_tables",
+                description: "Recreate runtime tables with device-key identity schema",
+            },
+        ],
     };
 
 pub(crate) const OBSERVABILITY_V9_MIGRATION: SchemaMigrationDefinition =
@@ -18,6 +31,19 @@ pub(crate) const OBSERVABILITY_V9_MIGRATION: SchemaMigrationDefinition =
         description: "Drop deprecated delivery_audit table and finalize diagnostics + tracing + stats matrix",
         checksum: "sha256:8f4cb15c7dc5a328a88f596f59eaec157045a78287cf27a52f88f0a5518f5e47",
         target_schema_version: STORAGE_SCHEMA_VERSION,
+        risk: MigrationRisk::Destructive,
+        backup_policy: BackupPolicy::Recommended,
+        rollback_policy: RollbackPolicy::ManualRestore,
+        steps: &[
+            MigrationStepDefinition {
+                id: "drop_deprecated_observability_tables",
+                description: "Drop deprecated observability tables superseded by tracing and counters",
+            },
+            MigrationStepDefinition {
+                id: "normalize_epoch_columns",
+                description: "Normalize legacy second timestamps to milliseconds once",
+            },
+        ],
     };
 
 pub(crate) const SCHEMA_MIGRATIONS: &[SchemaMigrationDefinition] =
@@ -29,6 +55,76 @@ pub(crate) struct SchemaMigrationDefinition {
     pub description: &'static str,
     pub checksum: &'static str,
     pub target_schema_version: &'static str,
+    pub risk: MigrationRisk,
+    pub backup_policy: BackupPolicy,
+    pub rollback_policy: RollbackPolicy,
+    pub steps: &'static [MigrationStepDefinition],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum MigrationRisk {
+    Trivial,
+    AdditiveSchema,
+    DataShapeChange,
+    RuntimeReset,
+    Destructive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum BackupPolicy {
+    None,
+    Recommended,
+    Required,
+    ExternalRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum RollbackPolicy {
+    TransactionOnly,
+    RestoreBackup,
+    ManualRestore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MigrationStepDefinition {
+    pub id: &'static str,
+    pub description: &'static str,
+}
+
+impl MigrationRisk {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trivial => "Trivial",
+            Self::AdditiveSchema => "AdditiveSchema",
+            Self::DataShapeChange => "DataShapeChange",
+            Self::RuntimeReset => "RuntimeReset",
+            Self::Destructive => "Destructive",
+        }
+    }
+}
+
+impl BackupPolicy {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Recommended => "Recommended",
+            Self::Required => "Required",
+            Self::ExternalRequired => "ExternalRequired",
+        }
+    }
+}
+
+impl RollbackPolicy {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::TransactionOnly => "TransactionOnly",
+            Self::RestoreBackup => "RestoreBackup",
+            Self::ManualRestore => "ManualRestore",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +344,28 @@ mod tests {
             STORAGE_SCHEMA_VERSION
         );
         assert_eq!(SCHEMA_MIGRATIONS.last(), Some(&OBSERVABILITY_V9_MIGRATION));
+    }
+
+    #[test]
+    fn migration_catalog_declares_upgrade_policy_for_every_migration() {
+        for migration in SCHEMA_MIGRATIONS {
+            assert!(!migration.id.trim().is_empty());
+            assert!(!migration.description.trim().is_empty());
+            assert!(!migration.checksum.trim().is_empty());
+            assert!(!migration.target_schema_version.trim().is_empty());
+            assert!(
+                !migration.steps.is_empty(),
+                "{} must expose at least one operator-visible step",
+                migration.id
+            );
+            for step in migration.steps {
+                assert!(
+                    !step.id.trim().is_empty() && !step.description.trim().is_empty(),
+                    "{} contains an incomplete step policy",
+                    migration.id
+                );
+            }
+        }
     }
 
     #[test]

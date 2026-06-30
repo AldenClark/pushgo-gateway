@@ -9,7 +9,7 @@ SCENARIOS=(
   message_small_hot
   message_large_markdown
   message_complex_payload
-  message_duplicate_op
+  message_sender_status_lookup
   message_multi_channel
   dispatch_private_broadcast
   provider_unreachable_mock

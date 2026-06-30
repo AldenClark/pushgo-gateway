@@ -19,10 +19,8 @@ mkdir -p "$PUSHGO_BENCH_RESULT_DIR"
 export PUSHGO_DB_URL="$PUSHGO_BENCH_DB_URL"
 export PUSHGO_HTTP_ADDR="${PUSHGO_HTTP_ADDR:-127.0.0.1:6666}"
 export PUSHGO_TOKEN="$PUSHGO_BENCH_TOKEN"
+export PUSHGO_RUNTIME_PROFILE="${PUSHGO_RUNTIME_PROFILE:-small}"
 export PUSHGO_PRIVATE_TRANSPORTS="${PUSHGO_PRIVATE_TRANSPORTS:-wss}"
-export PUSHGO_OBSERVABILITY_PROFILE="${PUSHGO_OBSERVABILITY_PROFILE:-ops}"
-export PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED="${PUSHGO_OBSERVABILITY_DIAGNOSTICS_API_ENABLED:-true}"
-export PUSHGO_OBSERVABILITY_STATS_ENABLED="${PUSHGO_OBSERVABILITY_STATS_ENABLED:-true}"
 export PUSHGO_OBSERVABILITY_LOG_LEVEL="${PUSHGO_OBSERVABILITY_LOG_LEVEL:-warn}"
 
 cargo build --profile profiling --bin pushgo-gateway >"$PUSHGO_BENCH_RESULT_DIR/build.log" 2>&1
@@ -42,6 +40,7 @@ curl -fsS -H "Authorization: Bearer $PUSHGO_BENCH_TOKEN" "$PUSHGO_BENCH_BASE_URL
 
 python3 bench/scripts/run_scenario.py baseline_auth --out-name baseline_auth
 python3 bench/scripts/run_scenario.py message_small_hot --out-name message_small_hot
+python3 bench/scripts/run_scenario.py message_sender_status_lookup --out-name message_sender_status_lookup
 python3 bench/scripts/run_scenario.py event_lifecycle --out-name event_lifecycle
 python3 bench/scripts/summarize_results.py "$PUSHGO_BENCH_RESULT_DIR"
 

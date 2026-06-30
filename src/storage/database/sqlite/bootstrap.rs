@@ -183,6 +183,24 @@ impl SqliteDb {
         Ok(this)
     }
 
+    pub(crate) async fn open_for_upgrade(
+        db_url: &str,
+        runtime_profile: GatewayRuntimeProfile,
+        mcp_enabled: bool,
+    ) -> StoreResult<Self> {
+        let tuning = RuntimeTuning::for_profile(runtime_profile).sqlite;
+        ensure_sqlite_parent_dir(db_url)?;
+        let pool =
+            connect_sqlite_pool(db_url, 1, tuning.core_write_acquire_timeout, tuning).await?;
+        Ok(Self {
+            core_read_pool: pool.clone(),
+            delivery_pool: pool.clone(),
+            dispatch_pool: pool.clone(),
+            runtime_pool: mcp_enabled.then(|| pool.clone()),
+            pool,
+        })
+    }
+
     async fn init_schema(
         &self,
         tuning: crate::runtime_config::SqliteRuntimeTuning,
@@ -974,6 +992,448 @@ impl SqliteDb {
 
         Ok(())
     }
+}
+
+pub(crate) struct SqliteUpgradeLockGuard {
+    path: Option<std::path::PathBuf>,
+}
+
+impl Drop for SqliteUpgradeLockGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+impl SqliteDb {
+    pub(crate) async fn inspect_upgrade_plan(
+        &self,
+    ) -> crate::storage::database::upgrade::UpgradeResult<
+        crate::storage::database::upgrade::UpgradePlan,
+    > {
+        let applied_migrations = if self.sqlite_table_exists("pushgo_schema_migrations").await? {
+            self.load_sqlite_schema_migrations().await?
+        } else {
+            Vec::new()
+        };
+        validate_applied_schema_migrations(&applied_migrations)?;
+        let current_version = if self.sqlite_table_exists("pushgo_schema_meta").await? {
+            self.load_sqlite_schema_version().await?
+        } else {
+            None
+        };
+        let plan = SchemaMigrationPlan::for_state(
+            current_version.as_deref(),
+            self.sqlite_runtime_tables_present().await?,
+            &applied_migrations,
+        )?;
+        Ok(crate::storage::database::upgrade::UpgradePlan::from_schema_plan(plan))
+    }
+
+    async fn sqlite_table_exists(&self, table: &str) -> StoreResult<bool> {
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        )
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(exists.is_some())
+    }
+}
+
+impl crate::storage::database::upgrade::lock::UpgradeLockAccess for SqliteDb {
+    type Guard = SqliteUpgradeLockGuard;
+
+    async fn acquire_upgrade_lock(
+        &self,
+        db_url: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<Self::Guard> {
+        let Some(db_path) = sqlite_path_from_url(db_url) else {
+            return Ok(SqliteUpgradeLockGuard { path: None });
+        };
+        let lock_path = std::path::PathBuf::from(format!("{db_path}.upgrade.lock"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(lock_path.as_path())
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                writeln!(file, "pid={}", std::process::id())?;
+                Ok(SqliteUpgradeLockGuard {
+                    path: Some(lock_path),
+                })
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!(
+                        "sqlite upgrade lock already exists at {}; another gateway may be upgrading. Stop other instances or remove the stale lock only after confirming no upgrade process is active.",
+                        lock_path.display()
+                    )),
+                ))
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+impl crate::storage::database::upgrade::state::UpgradeStateAccess for SqliteDb {
+    async fn ensure_upgrade_state_tables(
+        &self,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pushgo_upgrade_runs (\
+                run_id TEXT PRIMARY KEY,\
+                gateway_version TEXT NOT NULL,\
+                driver TEXT NOT NULL,\
+                from_schema_version TEXT,\
+                target_schema_version TEXT NOT NULL,\
+                status TEXT NOT NULL,\
+                backup_uri TEXT,\
+                backup_sha256 TEXT,\
+                started_at INTEGER NOT NULL,\
+                finished_at INTEGER,\
+                error TEXT\
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pushgo_upgrade_steps (\
+                run_id TEXT NOT NULL,\
+                step_order INTEGER NOT NULL,\
+                migration_id TEXT NOT NULL,\
+                step_id TEXT NOT NULL,\
+                description TEXT NOT NULL,\
+                status TEXT NOT NULL,\
+                started_at INTEGER NOT NULL,\
+                finished_at INTEGER,\
+                error TEXT,\
+                PRIMARY KEY (run_id, step_order)\
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn unfinished_upgrade_runs(
+        &self,
+    ) -> crate::storage::database::upgrade::UpgradeResult<Vec<String>> {
+        let rows = sqlx::query("SELECT run_id, status FROM pushgo_upgrade_runs")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let status: String = row.get("status");
+                crate::storage::database::upgrade::state::UpgradeRunStatus::unfinished(
+                    status.as_str(),
+                )
+                .then(|| row.get("run_id"))
+            })
+            .collect())
+    }
+
+    async fn insert_upgrade_run(
+        &self,
+        run_id: &str,
+        driver: crate::storage::types::DatabaseKind,
+        from_schema_version: Option<&str>,
+        target_schema_version: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        sqlx::query(
+            "INSERT INTO pushgo_upgrade_runs \
+             (run_id, gateway_version, driver, from_schema_version, target_schema_version, status, started_at) \
+             VALUES (?, ?, ?, ?, ?, 'planned', ?)",
+        )
+        .bind(run_id)
+        .bind(env!("CARGO_PKG_VERSION"))
+        .bind(driver.as_str())
+        .bind(from_schema_version)
+        .bind(target_schema_version)
+        .bind(Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_upgrade_run_status(
+        &self,
+        run_id: &str,
+        status: crate::storage::database::upgrade::state::UpgradeRunStatus,
+        backup_uri: Option<&str>,
+        backup_sha256: Option<&str>,
+        error: Option<&str>,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        let finished_at = matches!(
+            status,
+            crate::storage::database::upgrade::state::UpgradeRunStatus::Completed
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::Failed
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::RolledBack
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::RollbackFailed
+        )
+        .then(|| Utc::now().timestamp());
+        sqlx::query(
+            "UPDATE pushgo_upgrade_runs \
+             SET status = ?, \
+                 backup_uri = COALESCE(?, backup_uri), \
+                 backup_sha256 = COALESCE(?, backup_sha256), \
+                 finished_at = COALESCE(?, finished_at), \
+                 error = COALESCE(?, error) \
+             WHERE run_id = ?",
+        )
+        .bind(status.as_str())
+        .bind(backup_uri)
+        .bind(backup_sha256)
+        .bind(finished_at)
+        .bind(error)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_upgrade_step(
+        &self,
+        run_id: &str,
+        step_order: i64,
+        migration_id: &str,
+        step_id: &str,
+        description: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        sqlx::query(
+            "INSERT INTO pushgo_upgrade_steps \
+             (run_id, step_order, migration_id, step_id, description, status, started_at) \
+             VALUES (?, ?, ?, ?, ?, 'planned', ?)",
+        )
+        .bind(run_id)
+        .bind(step_order)
+        .bind(migration_id)
+        .bind(step_id)
+        .bind(description)
+        .bind(Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_upgrade_step(
+        &self,
+        run_id: &str,
+        step_order: i64,
+        status: crate::storage::database::upgrade::state::UpgradeRunStatus,
+        error: Option<&str>,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        let finished_at = matches!(
+            status,
+            crate::storage::database::upgrade::state::UpgradeRunStatus::Completed
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::Failed
+        )
+        .then(|| Utc::now().timestamp());
+        sqlx::query(
+            "UPDATE pushgo_upgrade_steps \
+             SET status = ?, finished_at = COALESCE(?, finished_at), error = COALESCE(?, error) \
+             WHERE run_id = ? AND step_order = ?",
+        )
+        .bind(status.as_str())
+        .bind(finished_at)
+        .bind(error)
+        .bind(run_id)
+        .bind(step_order)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for SqliteDb {
+    async fn create_upgrade_backup(
+        &self,
+        db_url: &str,
+        _driver: crate::storage::types::DatabaseKind,
+        policy: crate::storage::database::migration::BackupPolicy,
+        run_id: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<
+        Option<crate::storage::database::upgrade::backup::BackupArtifact>,
+    > {
+        if matches!(
+            policy,
+            crate::storage::database::migration::BackupPolicy::None
+        ) {
+            return Ok(None);
+        }
+        let Some(db_path) = sqlite_path_from_url(db_url) else {
+            return Ok(None);
+        };
+        sqlx::query("PRAGMA wal_checkpoint(FULL)")
+            .execute(&self.pool)
+            .await?;
+        let source = std::path::PathBuf::from(db_path.as_str());
+        let backup_path = std::path::PathBuf::from(format!("{db_path}.upgrade-{run_id}.bak"));
+        fs::copy(source.as_path(), backup_path.as_path())?;
+        let (sha256, bytes) = sha256_file(backup_path.as_path())?;
+        let manifest_path = backup_path.with_extension("bak.manifest");
+        let schema_version = if self.sqlite_table_exists("pushgo_schema_meta").await? {
+            self.load_sqlite_schema_version().await?
+        } else {
+            None
+        };
+        let manifest = format!(
+            "driver=sqlite\nschema_version={}\nbytes={bytes}\nsha256={sha256}\nsource={}\nbackup={}\n",
+            schema_version.as_deref().unwrap_or("none"),
+            source.display(),
+            backup_path.display()
+        );
+        fs::write(manifest_path, manifest)?;
+        let backup_url = format!("sqlite://{}?mode=ro", backup_path.to_string_lossy());
+        let backup_pool = connect_sqlite_pool(
+            backup_url.as_str(),
+            1,
+            std::time::Duration::from_secs(5),
+            RuntimeTuning::for_profile(GatewayRuntimeProfile::Small).sqlite,
+        )
+        .await?;
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&backup_pool)
+            .await?;
+        backup_pool.close().await;
+        if integrity != "ok" {
+            return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                StoreError::Upgrade(format!("sqlite backup integrity check failed: {integrity}")),
+            ));
+        }
+        Ok(Some(
+            crate::storage::database::upgrade::backup::BackupArtifact {
+                uri: backup_path.to_string_lossy().to_string(),
+                sha256,
+                bytes,
+            },
+        ))
+    }
+
+    async fn restore_upgrade_backup(
+        &self,
+        db_url: &str,
+        artifact: &crate::storage::database::upgrade::backup::BackupArtifact,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        let Some(db_path) = sqlite_path_from_url(db_url) else {
+            return Ok(());
+        };
+        self.core_read_pool.close().await;
+        self.delivery_pool.close().await;
+        self.dispatch_pool.close().await;
+        if let Some(pool) = &self.runtime_pool {
+            pool.close().await;
+        }
+        self.pool.close().await;
+        let target = std::path::PathBuf::from(db_path.as_str());
+        fs::copy(artifact.uri.as_str(), target.as_path())?;
+        let _ = fs::remove_file(format!("{db_path}-wal"));
+        let _ = fs::remove_file(format!("{db_path}-shm"));
+        Ok(())
+    }
+}
+
+impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for SqliteDb {
+    async fn verify_upgrade(
+        &self,
+        target_schema_version: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        #[cfg(test)]
+        if self
+            .sqlite_table_exists("__pushgo_upgrade_inject_verify_failure")
+            .await?
+        {
+            return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                StoreError::Upgrade("injected upgrade verification failure".to_string()),
+            ));
+        }
+        let schema_version = self.load_sqlite_schema_version().await?;
+        if schema_version.as_deref() != Some(target_schema_version) {
+            return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                StoreError::SchemaVersionMismatch {
+                    expected: target_schema_version.to_string(),
+                    actual: schema_version.unwrap_or_else(|| "none".to_string()),
+                },
+            ));
+        }
+        let applied = self.load_sqlite_schema_migrations().await?;
+        validate_applied_schema_migrations(&applied)?;
+        for table in [
+            "channels",
+            "devices",
+            "channel_subscriptions",
+            "private_payloads",
+            "sender_submit_status",
+            "pushgo_upgrade_runs",
+            "pushgo_upgrade_steps",
+        ] {
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            )
+            .bind(table)
+            .fetch_optional(&self.pool)
+            .await?;
+            if exists.is_none() {
+                return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!("required table missing after upgrade: {table}")),
+                ));
+            }
+        }
+        for stmt in SQLITE_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
+            let table = stmt
+                .strip_prefix("DROP TABLE IF EXISTS ")
+                .unwrap_or_default();
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            )
+            .bind(table)
+            .fetch_optional(&self.pool)
+            .await?;
+            if exists.is_some() {
+                return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!(
+                        "deprecated observability table remains after upgrade: {table}"
+                    )),
+                ));
+            }
+        }
+        sqlx::query(
+            "INSERT INTO sender_submit_status \
+             (op_id, channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at) \
+             VALUES ('upgrade-smoke', X'00000000000000000000000000000000', 'message', 'upgrade-smoke', 'accepted', NULL, 1, 1, 2) \
+             ON CONFLICT(op_id) DO UPDATE SET updated_at = excluded.updated_at",
+        )
+        .execute(&self.pool)
+        .await?;
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM sender_submit_status WHERE op_id = 'upgrade-smoke'",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        if status != "accepted" {
+            return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                StoreError::Upgrade("sender status smoke readback failed".to_string()),
+            ));
+        }
+        sqlx::query("DELETE FROM sender_submit_status WHERE op_id = 'upgrade-smoke'")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+fn sha256_file(path: &std::path::Path) -> StoreResult<(String, u64)> {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(path)?;
+    let digest = Sha256::digest(bytes.as_slice());
+    let sha256 = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok((sha256, bytes.len() as u64))
 }
 
 fn ensure_sqlite_parent_dir(db_url: &str) -> StoreResult<()> {

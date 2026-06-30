@@ -10,6 +10,10 @@ use pushgo_gateway::{
     private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
     runtime_config::RuntimeTuning,
+    storage::{
+        StorageInitConfig,
+        database::upgrade::{UpgradeManager, UpgradeMode},
+    },
 };
 
 use crate::token_providers::remote::{
@@ -38,6 +42,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     init_native_tracing(observability.log_level);
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
     pushgo_gateway::util::install_panic_trace_hook();
+    if let Some(mode) = args.db_upgrade.as_deref() {
+        run_db_upgrade_subpath(&args, mode).await?;
+        return Ok(());
+    }
     let apns_endpoint = apns_endpoint(args.sandbox_mode);
     let token_service_url = args.token_service_base_url()?;
     print_startup_diagnostics(
@@ -102,6 +110,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .with_graceful_shutdown(shutdown_signal(private))
     .await?;
 
+    Ok(())
+}
+
+async fn run_db_upgrade_subpath(args: &Args, raw_mode: &str) -> Result<(), Box<dyn Error>> {
+    let mode = match raw_mode.trim().to_ascii_lowercase().as_str() {
+        "plan" => UpgradeMode::PlanOnly,
+        "run" | "execute" => UpgradeMode::Execute,
+        other => {
+            return Err(
+                format!("invalid --db-upgrade value `{other}` (expected plan or run)").into(),
+            );
+        }
+    };
+    let manager = UpgradeManager::new(StorageInitConfig {
+        db_url: args.db_url.clone(),
+        runtime_profile: args.runtime_profile()?,
+        mcp_enabled: args.mcp_enabled,
+        managed_upgrade: false,
+    });
+    manager.run(mode).await?;
     Ok(())
 }
 

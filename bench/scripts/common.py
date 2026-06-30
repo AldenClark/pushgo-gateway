@@ -232,14 +232,12 @@ def message_payload(
     *,
     payload_size: int = 1024,
     variant: str = "normal",
-    op_id: str | None = None,
     thing_id: str | None = None,
 ) -> dict[str, Any]:
     body_size = max(64, payload_size)
     payload: dict[str, Any] = {
         "channel_id": channel_id,
         "password": password,
-        "op_id": op_id or f"bench-message-{variant}-{i}-{utc_millis()}",
         "occurred_at": utc_millis(),
         "title": f"Bench {variant} message {i}",
         "body": benchmark_text(body_size, f"{variant}-{i}"),
@@ -271,7 +269,6 @@ def event_create_payload(channel_id: str, password: str, i: int) -> dict[str, An
     return {
         "channel_id": channel_id,
         "password": password,
-        "op_id": f"bench-event-create-{i}-{now}",
         "event_time": now,
         "title": f"Bench event {i}",
         "description": "Mock event lifecycle load sample",
@@ -294,7 +291,6 @@ def event_update_payload(
         "channel_id": channel_id,
         "password": password,
         "event_id": event_id,
-        "op_id": f"bench-event-update-{i}-{step}-{now}",
         "event_time": now,
         "status": "acknowledged" if step % 2 else "open",
         "message": f"event update {step}",
@@ -310,7 +306,6 @@ def event_close_payload(channel_id: str, password: str, event_id: str, i: int) -
         "channel_id": channel_id,
         "password": password,
         "event_id": event_id,
-        "op_id": f"bench-event-close-{i}-{now}",
         "event_time": now,
         "status": "closed",
         "message": "event closed",
@@ -326,7 +321,6 @@ def thing_create_payload(channel_id: str, password: str, i: int) -> dict[str, An
     return {
         "channel_id": channel_id,
         "password": password,
-        "op_id": f"bench-thing-create-{i}-{now}",
         "created_at": now,
         "observed_at": now,
         "title": f"Bench thing {i}",
@@ -350,7 +344,6 @@ def thing_update_payload(
         "channel_id": channel_id,
         "password": password,
         "thing_id": thing_id,
-        "op_id": f"bench-thing-update-{i}-{step}-{now}",
         "observed_at": now,
         "title": f"Bench thing {i}",
         "tags": ["bench", "thing", "updated"],

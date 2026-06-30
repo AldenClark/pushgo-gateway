@@ -34,6 +34,8 @@ pub enum StoreError {
     PasswordHash(String),
     #[error("Schema version mismatch: expected {expected}, got {actual}")]
     SchemaVersionMismatch { expected: String, actual: String },
+    #[error("Database upgrade failed: {0}")]
+    Upgrade(String),
 }
 
 impl From<argon2::password_hash::Error> for StoreError {

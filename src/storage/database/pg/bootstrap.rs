@@ -95,6 +95,22 @@ impl PostgresDb {
         Ok(this)
     }
 
+    pub(crate) async fn open_for_upgrade(
+        db_url: &str,
+        runtime_profile: GatewayRuntimeProfile,
+    ) -> StoreResult<Self> {
+        let tuning = RuntimeTuning::for_profile(runtime_profile).external_db;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .min_connections(0)
+            .acquire_timeout(tuning.acquire_timeout)
+            .idle_timeout(tuning.idle_timeout)
+            .max_lifetime(tuning.max_lifetime)
+            .connect(db_url)
+            .await?;
+        Ok(Self { pool })
+    }
+
     async fn init_schema(&self) -> StoreResult<()> {
         ::tracing::event!(
             target: "gateway.trace_event",
@@ -654,6 +670,345 @@ impl PostgresDb {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
 
+        Ok(())
+    }
+}
+
+pub(crate) struct PgUpgradeLockGuard {
+    pool: sqlx::PgPool,
+}
+
+impl Drop for PgUpgradeLockGuard {
+    fn drop(&mut self) {
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            let _ = sqlx::query("SELECT pg_advisory_unlock(784477031742001)")
+                .execute(&pool)
+                .await;
+        });
+    }
+}
+
+impl PostgresDb {
+    pub(crate) async fn inspect_upgrade_plan(
+        &self,
+    ) -> crate::storage::database::upgrade::UpgradeResult<
+        crate::storage::database::upgrade::UpgradePlan,
+    > {
+        let applied_migrations = if self.pg_table_exists("pushgo_schema_migrations").await? {
+            self.load_pg_schema_migrations().await?
+        } else {
+            Vec::new()
+        };
+        validate_applied_schema_migrations(&applied_migrations)?;
+        let current_version = if self.pg_table_exists("pushgo_schema_meta").await? {
+            self.load_pg_schema_version().await?
+        } else {
+            None
+        };
+        let plan = SchemaMigrationPlan::for_state(
+            current_version.as_deref(),
+            self.pg_runtime_tables_present().await?,
+            &applied_migrations,
+        )?;
+        Ok(crate::storage::database::upgrade::UpgradePlan::from_schema_plan(plan))
+    }
+
+    async fn pg_table_exists(&self, table: &str) -> StoreResult<bool> {
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT 1::BIGINT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1 LIMIT 1",
+        )
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(exists.is_some())
+    }
+}
+
+impl crate::storage::database::upgrade::lock::UpgradeLockAccess for PostgresDb {
+    type Guard = PgUpgradeLockGuard;
+
+    async fn acquire_upgrade_lock(
+        &self,
+        _db_url: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<Self::Guard> {
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(784477031742001)")
+            .fetch_one(&self.pool)
+            .await?;
+        if !locked {
+            return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                StoreError::Upgrade(
+                    "postgres advisory upgrade lock is held by another process; stop other gateway instances or wait for the upgrade to finish".to_string(),
+                ),
+            ));
+        }
+        Ok(PgUpgradeLockGuard {
+            pool: self.pool.clone(),
+        })
+    }
+}
+
+impl crate::storage::database::upgrade::state::UpgradeStateAccess for PostgresDb {
+    async fn ensure_upgrade_state_tables(
+        &self,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pushgo_upgrade_runs (\
+                run_id VARCHAR(64) PRIMARY KEY,\
+                gateway_version TEXT NOT NULL,\
+                driver TEXT NOT NULL,\
+                from_schema_version TEXT,\
+                target_schema_version TEXT NOT NULL,\
+                status TEXT NOT NULL,\
+                backup_uri TEXT,\
+                backup_sha256 TEXT,\
+                started_at BIGINT NOT NULL,\
+                finished_at BIGINT,\
+                error TEXT\
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pushgo_upgrade_steps (\
+                run_id VARCHAR(64) NOT NULL,\
+                step_order BIGINT NOT NULL,\
+                migration_id TEXT NOT NULL,\
+                step_id TEXT NOT NULL,\
+                description TEXT NOT NULL,\
+                status TEXT NOT NULL,\
+                started_at BIGINT NOT NULL,\
+                finished_at BIGINT,\
+                error TEXT,\
+                PRIMARY KEY (run_id, step_order)\
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn unfinished_upgrade_runs(
+        &self,
+    ) -> crate::storage::database::upgrade::UpgradeResult<Vec<String>> {
+        let rows = sqlx::query("SELECT run_id, status FROM pushgo_upgrade_runs")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let status: String = row.get("status");
+                crate::storage::database::upgrade::state::UpgradeRunStatus::unfinished(
+                    status.as_str(),
+                )
+                .then(|| row.get("run_id"))
+            })
+            .collect())
+    }
+
+    async fn insert_upgrade_run(
+        &self,
+        run_id: &str,
+        driver: crate::storage::types::DatabaseKind,
+        from_schema_version: Option<&str>,
+        target_schema_version: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        sqlx::query(
+            "INSERT INTO pushgo_upgrade_runs \
+             (run_id, gateway_version, driver, from_schema_version, target_schema_version, status, started_at) \
+             VALUES ($1, $2, $3, $4, $5, 'planned', $6)",
+        )
+        .bind(run_id)
+        .bind(env!("CARGO_PKG_VERSION"))
+        .bind(driver.as_str())
+        .bind(from_schema_version)
+        .bind(target_schema_version)
+        .bind(Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_upgrade_run_status(
+        &self,
+        run_id: &str,
+        status: crate::storage::database::upgrade::state::UpgradeRunStatus,
+        backup_uri: Option<&str>,
+        backup_sha256: Option<&str>,
+        error: Option<&str>,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        let finished_at = matches!(
+            status,
+            crate::storage::database::upgrade::state::UpgradeRunStatus::Completed
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::Failed
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::RolledBack
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::RollbackFailed
+        )
+        .then(|| Utc::now().timestamp());
+        sqlx::query(
+            "UPDATE pushgo_upgrade_runs \
+             SET status = $1, backup_uri = COALESCE($2, backup_uri), backup_sha256 = COALESCE($3, backup_sha256), finished_at = COALESCE($4, finished_at), error = COALESCE($5, error) \
+             WHERE run_id = $6",
+        )
+        .bind(status.as_str())
+        .bind(backup_uri)
+        .bind(backup_sha256)
+        .bind(finished_at)
+        .bind(error)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_upgrade_step(
+        &self,
+        run_id: &str,
+        step_order: i64,
+        migration_id: &str,
+        step_id: &str,
+        description: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        sqlx::query(
+            "INSERT INTO pushgo_upgrade_steps \
+             (run_id, step_order, migration_id, step_id, description, status, started_at) \
+             VALUES ($1, $2, $3, $4, $5, 'planned', $6)",
+        )
+        .bind(run_id)
+        .bind(step_order)
+        .bind(migration_id)
+        .bind(step_id)
+        .bind(description)
+        .bind(Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_upgrade_step(
+        &self,
+        run_id: &str,
+        step_order: i64,
+        status: crate::storage::database::upgrade::state::UpgradeRunStatus,
+        error: Option<&str>,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        let finished_at = matches!(
+            status,
+            crate::storage::database::upgrade::state::UpgradeRunStatus::Completed
+                | crate::storage::database::upgrade::state::UpgradeRunStatus::Failed
+        )
+        .then(|| Utc::now().timestamp());
+        sqlx::query(
+            "UPDATE pushgo_upgrade_steps SET status = $1, finished_at = COALESCE($2, finished_at), error = COALESCE($3, error) WHERE run_id = $4 AND step_order = $5",
+        )
+        .bind(status.as_str())
+        .bind(finished_at)
+        .bind(error)
+        .bind(run_id)
+        .bind(step_order)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for PostgresDb {
+    async fn create_upgrade_backup(
+        &self,
+        _db_url: &str,
+        _driver: crate::storage::types::DatabaseKind,
+        policy: crate::storage::database::migration::BackupPolicy,
+        run_id: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<
+        Option<crate::storage::database::upgrade::backup::BackupArtifact>,
+    > {
+        if matches!(
+            policy,
+            crate::storage::database::migration::BackupPolicy::None
+        ) {
+            return Ok(None);
+        }
+        let snapshot = external_snapshot_or_test_default("PostgreSQL")?;
+        Ok(Some(
+            crate::storage::database::upgrade::backup::BackupArtifact {
+                uri: format!("postgres-external-snapshot:{snapshot}:{run_id}"),
+                sha256: "external".to_string(),
+                bytes: 0,
+            },
+        ))
+    }
+
+    async fn restore_upgrade_backup(
+        &self,
+        _db_url: &str,
+        _artifact: &crate::storage::database::upgrade::backup::BackupArtifact,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        Err(crate::storage::database::upgrade::UpgradeError::Store(
+            StoreError::Upgrade(
+                "PostgreSQL rollback requires manual restore from the recorded external snapshot or pg_restore artifact".to_string(),
+            ),
+        ))
+    }
+}
+
+fn external_snapshot_or_test_default(
+    driver: &str,
+) -> crate::storage::database::upgrade::UpgradeResult<String> {
+    match std::env::var("PUSHGO_DB_UPGRADE_EXTERNAL_SNAPSHOT") {
+        Ok(value) => Ok(value),
+        Err(_) => {
+            #[cfg(test)]
+            {
+                Ok(format!("{}-test-snapshot", driver.to_ascii_lowercase()))
+            }
+            #[cfg(not(test))]
+            {
+                Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!(
+                        "{driver} upgrade requires PUSHGO_DB_UPGRADE_EXTERNAL_SNAPSHOT or an operator-run dump before destructive/runtime-reset migrations"
+                    )),
+                ))
+            }
+        }
+    }
+}
+
+impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for PostgresDb {
+    async fn verify_upgrade(
+        &self,
+        target_schema_version: &str,
+    ) -> crate::storage::database::upgrade::UpgradeResult<()> {
+        let schema_version = self.load_pg_schema_version().await?;
+        if schema_version.as_deref() != Some(target_schema_version) {
+            return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                StoreError::SchemaVersionMismatch {
+                    expected: target_schema_version.to_string(),
+                    actual: schema_version.unwrap_or_else(|| "none".to_string()),
+                },
+            ));
+        }
+        validate_applied_schema_migrations(&self.load_pg_schema_migrations().await?)?;
+        for table in [
+            "channels",
+            "devices",
+            "channel_subscriptions",
+            "private_payloads",
+            "sender_submit_status",
+            "pushgo_upgrade_runs",
+            "pushgo_upgrade_steps",
+        ] {
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT 1::BIGINT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1 LIMIT 1",
+            )
+            .bind(table)
+            .fetch_optional(&self.pool)
+            .await?;
+            if exists.is_none() {
+                return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!("required table missing after upgrade: {table}")),
+                ));
+            }
+        }
         Ok(())
     }
 }

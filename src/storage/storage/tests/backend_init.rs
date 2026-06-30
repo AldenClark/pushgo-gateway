@@ -224,6 +224,18 @@ async fn postgres_init_hard_reset_legacy_runtime_preserves_base_data_and_recover
     .await
     .expect("postgres schema version query should succeed");
     assert_eq!(schema_version.as_deref(), Some(STORAGE_SCHEMA_VERSION));
+    let backup_uri: Option<String> = sqlx::query_scalar(
+        "SELECT backup_uri FROM pushgo_upgrade_runs WHERE backup_uri IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+    )
+    .fetch_optional(&mut verify)
+    .await
+    .expect("postgres backup uri should be queryable");
+    assert!(
+        backup_uri
+            .as_deref()
+            .is_some_and(|value| value.contains("postgresql-test-snapshot")),
+        "postgres managed upgrade should record external snapshot"
+    );
 
     let preserved_channel_count: i64 =
         sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE alias = 'legacy-boundary-channel'")
@@ -300,7 +312,10 @@ async fn postgres_init_rejects_current_migration_checksum_drift() {
     let err = Storage::new(Some(db_url.as_str()))
         .await
         .expect_err("checksum drift should reject postgres startup");
-    assert!(matches!(err, StoreError::SchemaVersionMismatch { .. }));
+    assert!(
+        matches!(&err, StoreError::Upgrade(message) if message.contains("Schema version mismatch")),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -385,6 +400,18 @@ async fn mysql_init_hard_reset_legacy_runtime_preserves_base_data_and_recovers_w
     .await
     .expect("mysql schema version query should succeed");
     assert_eq!(schema_version.as_deref(), Some(STORAGE_SCHEMA_VERSION));
+    let backup_uri: Option<String> = sqlx::query_scalar(
+        "SELECT backup_uri FROM pushgo_upgrade_runs WHERE backup_uri IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+    )
+    .fetch_optional(&mut verify)
+    .await
+    .expect("mysql backup uri should be queryable");
+    assert!(
+        backup_uri
+            .as_deref()
+            .is_some_and(|value| value.contains("mysql-test-snapshot")),
+        "mysql managed upgrade should record external snapshot"
+    );
 
     let preserved_channel_count: i64 =
         sqlx::query_scalar("SELECT COUNT(1) FROM channels WHERE alias = 'legacy-boundary-channel'")
@@ -458,7 +485,10 @@ async fn mysql_init_rejects_current_migration_checksum_drift() {
     let err = Storage::new(Some(db_url.as_str()))
         .await
         .expect_err("checksum drift should reject mysql startup");
-    assert!(matches!(err, StoreError::SchemaVersionMismatch { .. }));
+    assert!(
+        matches!(&err, StoreError::Upgrade(message) if message.contains("Schema version mismatch")),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[tokio::test]

@@ -2,7 +2,7 @@
 
 This directory contains a lightweight benchmark and resource-monitoring setup for `pushgo-gateway`. It is designed to expose bottlenecks, not to produce polished reports.
 
-The scripts do not modify public APIs and do not require a heavy benchmark platform. They use Python standard library HTTP clients plus optional shell wrappers. Raw HTTP results, resource samples, diagnostics snapshots, and simple summaries are written under `bench/results/` by default.
+The scripts do not modify public APIs and do not require a heavy benchmark platform. They use Python standard library HTTP clients plus optional shell wrappers. Raw HTTP results, resource samples, optional legacy diagnostics samples, and simple summaries are written under `bench/results/` by default.
 
 ## Environment
 
@@ -23,15 +23,15 @@ Supported benchmark variables:
 | `PUSHGO_BENCH_PID` | empty | Gateway PID for resource sampling |
 | `PUSHGO_BENCH_WS_HOLD_SECONDS` | `0.5` | Hold time for each raw `/private/ws` handshake in `private_wss_profile` |
 
-The gateway tuning variables used by the matrix runner are:
+Common gateway-side variables for the local benchmark gateway are:
 
-| Variable |
-| --- |
-| `PUSHGO_DISPATCH_WORKER_COUNT` |
-| `PUSHGO_DISPATCH_QUEUE_CAPACITY` |
-| `PUSHGO_SQLITE_MAX_CONNECTIONS` |
-| `PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS` |
-| `PUSHGO_OBSERVABILITY_LOG_LEVEL` |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PUSHGO_RUNTIME_PROFILE` | `small` | Gateway runtime preset for local bench startup |
+| `PUSHGO_PRIVATE_TRANSPORTS` | `wss` | Private transport surface to enable during private-path scenarios |
+| `PUSHGO_OBSERVABILITY_LOG_LEVEL` | `warn` | Gateway log verbosity |
+
+Sender payloads must not include `op_id` in gateway `1.2.11+`. The gateway generates `op_id`, returns it in submit responses, and exposes sender-facing lookup at `/send_status/{op_id}`. The benchmark captures that response value in `message_sender_status_lookup`.
 
 ## Start A Bench Gateway
 
@@ -101,7 +101,7 @@ bench/scripts/run_matrix.sh message_small_hot
 bench/scripts/run_matrix.sh dispatch_private_broadcast
 ```
 
-The matrix varies dispatch workers, dispatch queue capacity, SQLite max connections, dispatch target cache TTL, and observability log level. It only changes environment variables for the process that starts the scenario; for server-side settings, restart the gateway with the tested value before each run, or wrap `run_gateway.sh` in your own process supervisor. Treat same-process matrix results as command documentation unless the gateway was restarted with those values.
+The matrix varies client-side virtual users, request rate, payload size, and benchmark process log level. Server-side runtime profile changes are startup-time settings; restart the gateway with the tested `PUSHGO_RUNTIME_PROFILE` before comparing those runs.
 
 Generate a simple combined summary:
 
@@ -126,8 +126,8 @@ The data contains mock channels, devices, subscriptions, normal messages, markdo
 | Requirement | Scenario(s) |
 | --- | --- |
 | Baseline `/healthz`, `/readyz`, lightweight API, normal/missing/wrong token | `baseline_auth` |
-| Message small/large/complex/ciphertext/duplicate/multi-channel/hot-channel writes | `message_small_hot`, `message_large_markdown`, `message_complex_payload`, `message_duplicate_op`, `message_multi_channel` |
-| Dispatch single-channel multi-device broadcast, provider unreachable/mock failure, queue/worker/cache pressure | `dispatch_private_broadcast`, `provider_unreachable_mock`, `run_matrix.sh` |
+| Message small/large/complex/ciphertext/status-lookup/multi-channel/hot-channel writes | `message_small_hot`, `message_large_markdown`, `message_complex_payload`, `message_sender_status_lookup`, `message_multi_channel` |
+| Dispatch single-channel multi-device broadcast, provider unreachable/mock failure, client pressure | `dispatch_private_broadcast`, `provider_unreachable_mock`, `run_matrix.sh` |
 | Event create/update/close and repeated lifecycle | `event_lifecycle` |
 | Thing create/update/archive/delete, hot object updates, message associated with thing | `thing_lifecycle` |
 | Device register, channel route, subscribe, unsubscribe churn | `device_subscription_churn` |
@@ -152,9 +152,9 @@ Every scenario records purpose, pressure model, likely bottlenecks, collected me
 | TCP | ESTABLISHED, TIME_WAIT, CLOSE_WAIT |
 | Storage | SQLite DB and WAL byte size |
 | IO/network | disk and network counters where the OS exposes them |
-| Gateway internals | diagnostics/private metrics and memory snapshots when diagnostics are enabled |
+| Gateway internals | legacy diagnostics/private metrics and memory snapshots when those endpoints are present |
 
-Unavailable metrics are written as `unavailable` rather than guessed.
+Unavailable metrics are written as `unavailable` rather than guessed. The current release test contract does not require diagnostics endpoints; use `resources.csv`, HTTP results, and gateway logs as the primary benchmark evidence.
 
 Manual monitor:
 
@@ -167,7 +167,7 @@ python3 bench/scripts/resource_monitor.py --pid "$PUSHGO_BENCH_PID" --out bench/
 Keep these conclusions separate:
 
 1. Gateway HTTP inbound capacity: measured by HTTP status, RPS, latency, and auth/error path results.
-2. Gateway internal dispatch capacity: inferred from private dispatch fanout, target lookup/cache behavior, queue symptoms, DB/WAL growth, diagnostics, CPU/RSS/fd/TCP trends.
+2. Gateway internal dispatch capacity: inferred from private dispatch fanout, DB/WAL growth, HTTP latency/status, gateway logs, CPU/RSS/fd/TCP trends, and diagnostics when available.
 3. Real APNS/FCM/WNS provider delivery capacity: not measured unless real provider credentials, token service, and provider endpoints are deliberately configured. Private/mock/local results must not be reported as real push provider capacity.
 
 ## Reading Results

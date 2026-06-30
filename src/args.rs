@@ -241,6 +241,10 @@ pub struct Args {
     #[arg(env = "PUSHGO_DB_URL", long = "db-url")]
     pub db_url: Option<String>,
 
+    /// Run only the explicit database upgrade subpath and exit. Supported values: plan, run.
+    #[arg(env = "PUSHGO_DB_UPGRADE", long = "db-upgrade")]
+    pub db_upgrade: Option<String>,
+
     /// QUIC bind address for the private transport listener.
     #[arg(
         env = "PUSHGO_PRIVATE_QUIC_BIND",
@@ -355,6 +359,7 @@ impl Args {
     pub fn normalized(mut self) -> Self {
         self.token = normalize_optional_non_empty(self.token);
         self.db_url = normalize_optional_non_empty(self.db_url);
+        self.db_upgrade = normalize_optional_non_empty(self.db_upgrade);
         self.private_tls_cert_path = normalize_optional_non_empty(self.private_tls_cert_path);
         self.private_tls_key_path = normalize_optional_non_empty(self.private_tls_key_path);
         self.public_base_url = normalize_optional_non_empty(self.public_base_url);

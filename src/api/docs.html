@@ -268,9 +268,14 @@
         </p>
         <p class="callout">
           私有传输运行参数（QUIC/TCP/WSS/MQTT）不在本页；请参考 gateway README 的
-          “Private Transport Model / CLI Reference”，并使用
+          “Private Transport Model / CLI Reference / Upgrade Notes for v1.2.11”，并使用
           <code>PUSHGO_PRIVATE_TRANSPORTS</code>（或
-          <code>--private-transports</code>）做显式启停配置。
+          <code>--private-transports</code>）做显式启停配置。Docker/container
+          部署需要显式发布 MQTT <code>1883/tcp</code> 或在边缘层终止
+          <code>8883/tcp</code>。
+          <br />
+          发送端不得传入 <code>op_id</code>；它由 gateway 生成并在响应中返回。
+          若旧客户端继续传入，gateway 返回 <code>400 op_id_not_allowed</code>。
           <br />
           MQTT 客户端必须使用 MQTT 5 和 QoS 1。CONNECT 使用 User Property
           <code>device_type=publish</code> 表示临时只发送连接，或
@@ -295,8 +300,15 @@
           <br />
           Private runtime configuration (QUIC/TCP/WSS/MQTT) is not covered on this
           page. See gateway README sections “Private Transport Model / CLI
-          Reference” and use <code>PUSHGO_PRIVATE_TRANSPORTS</code> (or
+          Reference / Upgrade Notes for v1.2.11” and use
+          <code>PUSHGO_PRIVATE_TRANSPORTS</code> (or
           <code>--private-transports</code>) for explicit transport enablement.
+          Docker/container deployments must publish MQTT <code>1883/tcp</code>,
+          or terminate TLS at the edge on <code>8883/tcp</code>.
+          <br />
+          Sender requests must not provide <code>op_id</code>; gateway generates
+          it and returns it in the response. Legacy clients that still provide
+          <code>op_id</code> receive <code>400 op_id_not_allowed</code>.
           <br />
           MQTT clients must use MQTT 5 and QoS 1. CONNECT uses User Property
           <code>device_type=publish</code> for temporary publish-only connections,

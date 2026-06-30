@@ -57,4 +57,8 @@ impl DatabaseDriver {
             format!("{trimmed}?mode=rwc")
         }
     }
+
+    pub fn normalize_db_url_public(db_url: Option<&str>) -> String {
+        Self::normalize_db_url(db_url)
+    }
 }

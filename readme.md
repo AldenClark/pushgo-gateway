@@ -335,6 +335,7 @@ WorkingDirectory=/opt/pushgo-gateway
 ExecStart=/opt/pushgo-gateway/pushgo-gateway \
   --http-addr 0.0.0.0:6666 \
   --private-transports quic,tcp,wss \
+  --runtime-profile public \
   --private-quic-bind 127.0.0.1:5223 \
   --private-quic-port 443 \
   --private-tcp-bind 127.0.0.1:5223 \
@@ -370,6 +371,13 @@ Build locally from source:
 docker build -f Dockerfile.local -t pushgo-gateway:local .
 ```
 
+On macOS with Apple container:
+
+```bash
+container system start
+container build -f Dockerfile.local -t pushgo-gateway:local .
+```
+
 Image ports:
 
 - `6666/tcp`: HTTP API + WSS
@@ -386,10 +394,12 @@ docker run -d --name pushgo-gateway \
   -p 6666:6666 \
   -p 5223:5223/tcp \
   -p 5223:5223/udp \
+  -p 1883:1883/tcp \
   -e PUSHGO_HTTP_ADDR=0.0.0.0:6666 \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
-  -e PUSHGO_PRIVATE_TRANSPORTS=quic,tcp,wss \
+  -e PUSHGO_RUNTIME_PROFILE=public \
+  -e PUSHGO_PRIVATE_TRANSPORTS=quic,tcp,wss,mqtt \
   -e PUSHGO_MCP_ENABLED=true \
   -e PUSHGO_PUBLIC_BASE_URL='https://gateway.example.com' \
   -e PUSHGO_MCP_PREDEFINED_CLIENTS='chatgpt-prod:replace-me' \
@@ -397,13 +407,41 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_PRIVATE_QUIC_PORT=443 \
   -e PUSHGO_PRIVATE_TCP_BIND=0.0.0.0:5223 \
   -e PUSHGO_PRIVATE_TCP_PORT=5223 \
+  -e PUSHGO_MQTT_BIND=0.0.0.0:1883 \
+  -e PUSHGO_MQTT_PORT=1883 \
   -e PUSHGO_PRIVATE_TLS_CERT=/certs/fullchain.pem \
   -e PUSHGO_PRIVATE_TLS_KEY=/certs/privkey.pem \
   -v /etc/pushgo/certs:/certs:ro \
   ghcr.io/<owner>/pushgo-gateway:latest
 ```
 
+The same image can be run locally with Apple container:
+
+```bash
+container run -d --name pushgo-gateway \
+  -p 6666:6666 \
+  -p 5223:5223/tcp \
+  -p 5223:5223/udp \
+  -p 1883:1883/tcp \
+  -e PUSHGO_HTTP_ADDR=0.0.0.0:6666 \
+  -e PUSHGO_DB_URL='sqlite:///data/pushgo-gateway.sqlite' \
+  -e PUSHGO_RUNTIME_PROFILE=small \
+  -e PUSHGO_PRIVATE_TRANSPORTS=wss,mqtt \
+  -e PUSHGO_MQTT_BIND=0.0.0.0:1883 \
+  -v pushgo-gateway-data:/data \
+  pushgo-gateway:local
+```
+
 If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_CLIENTS`. For fixed clients, keep `PUSHGO_PUBLIC_BASE_URL` on the public HTTPS origin exposed by your reverse proxy or LB.
+
+## Upgrade Notes for v1.2.11
+
+1. Back up the database before the first start after upgrade. Legacy runtime schema versions may trigger a runtime-table hard reset; channel/base data is preserved by migration tests, but runtime queues and deprecated observability rows can be rebuilt or dropped.
+2. Replace legacy private-channel switches with `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`. Use `none`, `wss`, `quic,tcp,wss`, or `quic,tcp,wss,mqtt` explicitly.
+3. Replace removed per-queue private tuning environment variables with `PUSHGO_RUNTIME_PROFILE=small|public`. The profile controls queue, cache, dispatch, and DB-pool defaults.
+4. Sender clients must stop providing `op_id`. Gateway returns `400 op_id_not_allowed` when sender payloads contain `op_id`; use the returned `op_id` and `/send_status/{op_id}` for sender-facing status.
+5. MQTT deployments must publish `1883/tcp` for plain MQTT or terminate TLS at the edge on `8883/tcp`. If gateway terminates MQTT/TLS directly, set `PUSHGO_MQTT_TLS_ENABLED=true` and provide `PUSHGO_PRIVATE_TLS_CERT` / `PUSHGO_PRIVATE_TLS_KEY`.
+6. For cross-database upgrade validation, run `scripts/storage_crossdb_parity.sh`. The script uses Docker when available and falls back to Apple container when `CONTAINER_CLI=container` or Docker is absent.
 
 ## Production Recommendations
 
@@ -706,6 +744,7 @@ WorkingDirectory=/opt/pushgo-gateway
 ExecStart=/opt/pushgo-gateway/pushgo-gateway \
   --http-addr 0.0.0.0:6666 \
   --private-transports quic,tcp,wss \
+  --runtime-profile public \
   --private-quic-bind 127.0.0.1:5223 \
   --private-quic-port 443 \
   --private-tcp-bind 127.0.0.1:5223 \
@@ -741,6 +780,13 @@ Docker 镜像文件说明：
 docker build -f Dockerfile.local -t pushgo-gateway:local .
 ```
 
+macOS 使用 Apple container：
+
+```bash
+container system start
+container build -f Dockerfile.local -t pushgo-gateway:local .
+```
+
 镜像默认暴露端口：
 
 - `6666/tcp`：HTTP API + WSS
@@ -757,10 +803,12 @@ docker run -d --name pushgo-gateway \
   -p 6666:6666 \
   -p 5223:5223/tcp \
   -p 5223:5223/udp \
+  -p 1883:1883/tcp \
   -e PUSHGO_HTTP_ADDR=0.0.0.0:6666 \
   -e PUSHGO_DB_URL='postgres://user:pass@db:5432/pushgo' \
   -e PUSHGO_TOKEN_SERVICE_URL='https://token.pushgo.dev' \
-  -e PUSHGO_PRIVATE_TRANSPORTS=quic,tcp,wss \
+  -e PUSHGO_RUNTIME_PROFILE=public \
+  -e PUSHGO_PRIVATE_TRANSPORTS=quic,tcp,wss,mqtt \
   -e PUSHGO_MCP_ENABLED=true \
   -e PUSHGO_PUBLIC_BASE_URL='https://gateway.example.com' \
   -e PUSHGO_MCP_PREDEFINED_CLIENTS='chatgpt-prod:replace-me' \
@@ -768,13 +816,41 @@ docker run -d --name pushgo-gateway \
   -e PUSHGO_PRIVATE_QUIC_PORT=443 \
   -e PUSHGO_PRIVATE_TCP_BIND=0.0.0.0:5223 \
   -e PUSHGO_PRIVATE_TCP_PORT=5223 \
+  -e PUSHGO_MQTT_BIND=0.0.0.0:1883 \
+  -e PUSHGO_MQTT_PORT=1883 \
   -e PUSHGO_PRIVATE_TLS_CERT=/certs/fullchain.pem \
   -e PUSHGO_PRIVATE_TLS_KEY=/certs/privkey.pem \
   -v /etc/pushgo/certs:/certs:ro \
   ghcr.io/<owner>/pushgo-gateway:latest
 ```
 
+同一镜像也可以用 Apple container 本地运行：
+
+```bash
+container run -d --name pushgo-gateway \
+  -p 6666:6666 \
+  -p 5223:5223/tcp \
+  -p 5223:5223/udp \
+  -p 1883:1883/tcp \
+  -e PUSHGO_HTTP_ADDR=0.0.0.0:6666 \
+  -e PUSHGO_DB_URL='sqlite:///data/pushgo-gateway.sqlite' \
+  -e PUSHGO_RUNTIME_PROFILE=small \
+  -e PUSHGO_PRIVATE_TRANSPORTS=wss,mqtt \
+  -e PUSHGO_MQTT_BIND=0.0.0.0:1883 \
+  -v pushgo-gateway-data:/data \
+  pushgo-gateway:local
+```
+
 如果使用 Dynamic Client Registration，可以不传 `PUSHGO_MCP_PREDEFINED_CLIENTS`。如果是固定客户端，建议把 `PUSHGO_PUBLIC_BASE_URL` 设为反向代理或 LB 对外暴露的 HTTPS 域名。
+
+## v1.2.11 升级说明
+
+1. 首次启动新版本前先备份数据库。旧 runtime schema 可能触发 runtime 表 hard reset；迁移测试覆盖了频道等基础数据保留，但 runtime 队列和废弃观测表可能被重建或清理。
+2. 将旧私有通道开关替换为 `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`，显式使用 `none`、`wss`、`quic,tcp,wss` 或 `quic,tcp,wss,mqtt`。
+3. 移除旧的私有队列调参环境变量，改用 `PUSHGO_RUNTIME_PROFILE=small|public`。队列、缓存、dispatch 和 DB pool 默认值由 profile 统一控制。
+4. 发送端不得再传 `op_id`。如果 payload 包含 `op_id`，gateway 会返回 `400 op_id_not_allowed`；发送端应保存响应里的 `op_id`，再通过 `/send_status/{op_id}` 查询发送状态。
+5. MQTT 部署需要发布 `1883/tcp` 明文端口，或在边缘层终止 `8883/tcp` TLS。如果由 gateway 直接终止 MQTT/TLS，需要设置 `PUSHGO_MQTT_TLS_ENABLED=true` 并提供 `PUSHGO_PRIVATE_TLS_CERT` / `PUSHGO_PRIVATE_TLS_KEY`。
+6. 跨库升级验证可运行 `scripts/storage_crossdb_parity.sh`。脚本优先使用 Docker；没有 Docker 时可使用 Apple container，也可以显式设置 `CONTAINER_CLI=container`。
 
 ## 生产建议
 

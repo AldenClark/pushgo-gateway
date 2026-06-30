@@ -562,6 +562,166 @@ async fn sqlite_init_records_current_schema_migration() {
 }
 
 #[tokio::test]
+async fn sqlite_managed_upgrade_records_run_steps_and_verifies_schema() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-managed-upgrade-state");
+    let ctx = ctx.await;
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let run: (String, String, String) = sqlx::query_as(
+        "SELECT driver, target_schema_version, status \
+         FROM pushgo_upgrade_runs \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("managed upgrade run should be recorded");
+    assert_eq!(run.0, "sqlite");
+    assert_eq!(run.1, STORAGE_SCHEMA_VERSION);
+    assert_eq!(run.2, "completed");
+
+    let step_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM pushgo_upgrade_steps")
+        .fetch_one(&mut conn)
+        .await
+        .expect("managed upgrade steps should be recorded");
+    assert!(
+        step_count >= 1,
+        "fresh install should expose at least one upgrade step"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_managed_upgrade_creates_backup_before_legacy_runtime_hard_reset() {
+    let ctx = setup_sqlite_storage_with_custom_schema(
+        "sqlite-managed-upgrade-backup-before-hard-reset",
+        &[
+            "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+            "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-03-18-gateway-v4')",
+            "CREATE TABLE IF NOT EXISTS channels (channel_id BLOB PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS private_bindings (platform INTEGER NOT NULL, token_hash BLOB NOT NULL, device_id BLOB NOT NULL, PRIMARY KEY (platform, token_hash))",
+        ],
+    )
+    .await;
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite verification connection should succeed");
+    let backup_uri: Option<String> = sqlx::query_scalar(
+        "SELECT backup_uri FROM pushgo_upgrade_runs \
+         WHERE backup_uri IS NOT NULL \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .fetch_optional(&mut conn)
+    .await
+    .expect("backup uri should be queryable");
+    let backup_uri = backup_uri.expect("legacy hard reset should create a backup");
+    assert!(
+        std::path::Path::new(backup_uri.as_str()).exists(),
+        "backup file should exist at {backup_uri}"
+    );
+    let backup_sha: Option<String> = sqlx::query_scalar(
+        "SELECT backup_sha256 FROM pushgo_upgrade_runs \
+         WHERE backup_uri = ?",
+    )
+    .bind(backup_uri)
+    .fetch_optional(&mut conn)
+    .await
+    .expect("backup sha should be queryable");
+    assert!(
+        backup_sha.as_deref().is_some_and(|value| value.len() == 64),
+        "backup sha should be a hex sha256"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_managed_upgrade_restores_backup_after_injected_verify_failure() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("sqlite-upgrade-restore.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite setup connection should succeed");
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+        "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-03-18-gateway-v4')",
+        "CREATE TABLE IF NOT EXISTS private_bindings (platform INTEGER NOT NULL, token_hash BLOB NOT NULL, device_id BLOB NOT NULL, PRIMARY KEY (platform, token_hash))",
+        "CREATE TABLE IF NOT EXISTS __pushgo_upgrade_inject_verify_failure (marker TEXT PRIMARY KEY)",
+        "INSERT OR REPLACE INTO __pushgo_upgrade_inject_verify_failure (marker) VALUES ('fail')",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut conn)
+            .await
+            .expect("restore fixture statement should succeed");
+    }
+    drop(conn);
+
+    let err = crate::storage::database::upgrade::UpgradeManager::new(StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .run(crate::storage::database::upgrade::UpgradeMode::Execute)
+    .await
+    .expect_err("injected verify failure should fail managed upgrade");
+    assert!(
+        err.to_string()
+            .contains("injected upgrade verification failure"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut verify = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite verification connection should succeed after restore");
+    let schema_version: Option<String> = sqlx::query_scalar(
+        "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = 'schema_version'",
+    )
+    .fetch_optional(&mut verify)
+    .await
+    .expect("schema version should remain queryable after restore");
+    assert_eq!(schema_version.as_deref(), Some("2026-03-18-gateway-v4"));
+    let marker_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM __pushgo_upgrade_inject_verify_failure")
+            .fetch_one(&mut verify)
+            .await
+            .expect("restore marker should remain after backup restore");
+    assert_eq!(marker_count, 1);
+}
+
+#[tokio::test]
+async fn sqlite_managed_upgrade_rejects_unfinished_run_before_startup() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("sqlite-unfinished-upgrade.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite setup connection should succeed");
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+        "INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-22-gateway-v9')",
+        "CREATE TABLE IF NOT EXISTS pushgo_schema_migrations (migration_id TEXT PRIMARY KEY, description TEXT NOT NULL, checksum TEXT NOT NULL, target_schema_version TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, execution_ms INTEGER NOT NULL, success INTEGER NOT NULL, error TEXT)",
+        "CREATE TABLE IF NOT EXISTS pushgo_upgrade_runs (run_id TEXT PRIMARY KEY, gateway_version TEXT NOT NULL, driver TEXT NOT NULL, from_schema_version TEXT, target_schema_version TEXT NOT NULL, status TEXT NOT NULL, backup_uri TEXT, backup_sha256 TEXT, started_at INTEGER NOT NULL, finished_at INTEGER, error TEXT)",
+        "CREATE TABLE IF NOT EXISTS pushgo_upgrade_steps (run_id TEXT NOT NULL, step_order INTEGER NOT NULL, migration_id TEXT NOT NULL, step_id TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER, error TEXT, PRIMARY KEY (run_id, step_order))",
+        "INSERT INTO pushgo_upgrade_runs (run_id, gateway_version, driver, from_schema_version, target_schema_version, status, started_at) VALUES ('unfinished-run', 'test', 'sqlite', '2026-04-22-gateway-v9', '2026-04-22-gateway-v9', 'migrating', 1)",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut conn)
+            .await
+            .expect("unfinished run fixture statement should succeed");
+    }
+    drop(conn);
+
+    let err = Storage::new(Some(db_url.as_str()))
+        .await
+        .expect_err("unfinished upgrade should reject startup");
+    assert!(
+        matches!(&err, StoreError::Upgrade(message) if message.contains("unfinished upgrade run")),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[tokio::test]
 async fn sqlite_init_rejects_current_migration_checksum_drift() {
     let latest = crate::storage::database::migration::latest_schema_migration();
     let dir = tempdir().expect("tempdir should be created");
@@ -597,7 +757,7 @@ async fn sqlite_init_rejects_current_migration_checksum_drift() {
         .await
         .expect_err("checksum drift should reject startup");
     assert!(
-        matches!(err, StoreError::SchemaVersionMismatch { .. }),
+        matches!(&err, StoreError::Upgrade(message) if message.contains("Schema version mismatch")),
         "unexpected error: {err:?}"
     );
 }

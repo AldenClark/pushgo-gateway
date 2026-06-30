@@ -28,6 +28,7 @@ pub struct StorageInitConfig {
     pub db_url: Option<String>,
     pub runtime_profile: GatewayRuntimeProfile,
     pub mcp_enabled: bool,
+    pub managed_upgrade: bool,
 }
 
 impl Default for StorageInitConfig {
@@ -36,6 +37,7 @@ impl Default for StorageInitConfig {
             db_url: None,
             runtime_profile: GatewayRuntimeProfile::Small,
             mcp_enabled: false,
+            managed_upgrade: true,
         }
     }
 }
@@ -57,7 +59,15 @@ impl Storage {
             ::tracing::Level::INFO,
             event = "storage.init_started"
         );
-        let driver = DatabaseDriver::new_with_config(config)
+        if config.managed_upgrade {
+            crate::storage::database::upgrade::UpgradeManager::new(config.clone())
+                .run(crate::storage::database::upgrade::UpgradeMode::Execute)
+                .await
+                .map_err(|err| StoreError::Upgrade(err.to_string()))?;
+        }
+        let mut driver_config = config;
+        driver_config.managed_upgrade = false;
+        let driver = DatabaseDriver::new_with_config(driver_config)
             .await
             .inspect_err(|err| {
                 ::tracing::event!(

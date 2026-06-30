@@ -79,7 +79,7 @@ SCENARIOS: dict[str, dict[str, str]] = {
     "message_small_hot": {
         "purpose": "Find single-channel small-message ingress and dispatch enqueue limit.",
         "pressure_model": "POST /message to one hot channel with small JSON bodies.",
-        "expected_bottlenecks": "Channel password lookup, semantic id/op_id dedupe, SQLite write lock, dispatch target lookup, private enqueue.",
+        "expected_bottlenecks": "Channel password lookup, gateway op_id allocation, SQLite write lock, dispatch target lookup, private enqueue.",
         "metrics": "HTTP latency/status plus DB/WAL growth, CPU, RSS, fd, diagnostics private outbox/connection counters.",
         "judgement": "Sustained 2xx with flat p95 and bounded WAL; rising p99 or 5xx marks a bottleneck candidate.",
         "next_steps": "Correlate p99 rise with WAL growth, dispatch queue settings, and target cache TTL.",
@@ -94,19 +94,19 @@ SCENARIOS: dict[str, dict[str, str]] = {
     },
     "message_complex_payload": {
         "purpose": "Measure validation cost for metadata/tags/severity/ttl/url/images/ciphertext combinations.",
-        "pressure_model": "POST /message with complex JSON and rotating op_id values.",
+        "pressure_model": "POST /message with complex JSON and gateway-generated op_id values.",
         "expected_bottlenecks": "Payload validation, metadata encoding, provider/private payload construction.",
         "metrics": "RPS, p95/p99, 4xx validation rate, CPU, DB/WAL, dispatch diagnostics.",
         "judgement": "Complex payload p95 should be explainably higher than small payload, without error-rate growth.",
         "next_steps": "Compare with message_small_hot to isolate parse/validation overhead.",
     },
-    "message_duplicate_op": {
-        "purpose": "Measure idempotency/dedupe overhead under repeated op_id submissions.",
-        "pressure_model": "POST /message to one channel with the same op_id across workers.",
-        "expected_bottlenecks": "Semantic id lookup, dedupe table contention, completion guard storage.",
-        "metrics": "2xx/409-like behavior if introduced, p99 latency, DB/WAL size, CPU.",
-        "judgement": "Repeated op_id should stay fast and stable; rising p99 suggests dedupe contention.",
-        "next_steps": "Inspect semantic id and dispatch lifecycle storage access paths.",
+    "message_sender_status_lookup": {
+        "purpose": "Measure sender-facing status lookup after gateway-owned op_id allocation.",
+        "pressure_model": "POST /message, capture the returned op_id, then GET /send_status/{op_id}.",
+        "expected_bottlenecks": "Sender status insert/update, lookup index, JSON response serialization.",
+        "metrics": "Submit and status lookup latency/status, DB/WAL size, CPU.",
+        "judgement": "Both submit and immediate status lookup should remain 2xx with bounded p95.",
+        "next_steps": "If status lookup slows or returns 404, inspect sender_status persistence and retention paths.",
     },
     "message_multi_channel": {
         "purpose": "Compare hot-channel pressure with evenly distributed multi-channel writes.",
@@ -174,7 +174,7 @@ SCENARIOS: dict[str, dict[str, str]] = {
     },
     "event_create_only": {
         "purpose": "Isolate event create and op dedupe finalization pressure.",
-        "pressure_model": "POST /event/create with unique op_id values against one seeded hot channel.",
+        "pressure_model": "POST /event/create with gateway-generated op_id values against one seeded hot channel.",
         "expected_bottlenecks": "Semantic id allocation, event insert, op dedupe finalization, notification dispatch.",
         "metrics": "Create status/latency, 5xx samples, CPU, DB/WAL growth, diagnostics.",
         "judgement": "Create-only should not return `failed to finalize op dedupe` at tested concurrency.",
@@ -182,7 +182,7 @@ SCENARIOS: dict[str, dict[str, str]] = {
     },
     "event_update_hot": {
         "purpose": "Isolate repeated updates against one fixed event.",
-        "pressure_model": "Seed one event, then POST /event/update with unique op_id values for the same event_id.",
+        "pressure_model": "Seed one event, then POST /event/update with gateway-generated op_id values for the same event_id.",
         "expected_bottlenecks": "Hot event update contention, profile merge, op dedupe finalization, notification dispatch.",
         "metrics": "Update status/latency, 5xx samples, CPU, DB/WAL growth, diagnostics.",
         "judgement": "Hot update should not create 5xx; p99 growth indicates hot-row or dedupe contention.",
@@ -190,7 +190,7 @@ SCENARIOS: dict[str, dict[str, str]] = {
     },
     "event_close_only": {
         "purpose": "Isolate event close finalization pressure.",
-        "pressure_model": "Pre-create an event pool, then POST /event/close once per event with unique op_id values.",
+        "pressure_model": "Pre-create an event pool, then POST /event/close once per event with gateway-generated op_id values.",
         "expected_bottlenecks": "Close state update, op dedupe finalization, notification dispatch.",
         "metrics": "Close status/latency, 5xx samples, CPU, DB/WAL growth, diagnostics.",
         "judgement": "Close-only should not return dedupe finalization 500 under tested concurrency.",
@@ -482,7 +482,7 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
         "message_small_hot",
         "message_large_markdown",
         "message_complex_payload",
-        "message_duplicate_op",
+        "message_sender_status_lookup",
         "spike_message",
         "soak_message",
         "ramp_message",
@@ -492,9 +492,8 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
         variant = {
             "message_large_markdown": "large_markdown",
             "message_complex_payload": "complex",
-            "message_duplicate_op": "duplicate",
+            "message_sender_status_lookup": "sender_status",
         }.get(name, "small")
-        duplicate_op = f"bench-duplicate-{utc_millis()}" if name == "message_duplicate_op" else None
 
         def op(i: int) -> list[dict[str, Any]]:
             size = config.payload_size
@@ -506,9 +505,14 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
                 i,
                 payload_size=size,
                 variant=variant,
-                op_id=duplicate_op,
             )
-            return [client.request("POST", "/message", body)]
+            submit = client.request("POST", "/message", body)
+            if name != "message_sender_status_lookup":
+                return [submit]
+            op_id = extract_data(submit).get("op_id")
+            if not op_id:
+                return [submit]
+            return [submit, client.request("GET", f"/send_status/{op_id}")]
 
         return op
 
@@ -859,7 +863,6 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
                         "title": f"ntfy bench {i}",
                         "priority": "4",
                         "tags": "bench,ntfy",
-                        "op_id": f"bench-ntfy-{i}-{utc_millis()}",
                     }
                 )
                 return [
@@ -875,7 +878,6 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
                     {
                         "title": f"serverchan bench {i}",
                         "desp": benchmark_text(config.payload_size, "serverchan"),
-                        "op_id": f"bench-serverchan-{i}-{utc_millis()}",
                     }
                 )
                 return [client.request("GET", f"/serverchan/{encoded_key}?{query}")]
@@ -884,7 +886,6 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
                     {
                         "level": "timeSensitive",
                         "tags": "bench,bark",
-                        "op_id": f"bench-bark-{i}-{utc_millis()}",
                     }
                 )
                 return [client.request("GET", f"/bark/{encoded_key}/Bench%20body?{query}")]
@@ -898,7 +899,6 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
                         "body": benchmark_text(config.payload_size, "bark"),
                         "level": "active",
                         "tags": ["bench", "bark"],
-                        "op_id": f"bench-bark-v2-{i}-{utc_millis()}",
                     },
                 )
             ]

@@ -171,6 +171,7 @@ pub async fn build_app(
         db_url: args.db_url.clone(),
         runtime_profile: runtime_tuning.profile,
         mcp_enabled: args.mcp_enabled,
+        managed_upgrade: true,
     })
     .await?;
     let runtime_counters =

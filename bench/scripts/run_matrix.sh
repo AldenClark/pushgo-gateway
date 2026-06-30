@@ -15,24 +15,20 @@ run_case() {
     python3 bench/scripts/run_scenario.py "$SCENARIO" --out-name "$name"
 }
 
-for workers in 2 4 8 16; do
-  run_case "worker_count_$workers" PUSHGO_DISPATCH_WORKER_COUNT="$workers"
+for vus in 1 2 4 8; do
+  run_case "client_vus_$vus" PUSHGO_BENCH_VUS="$vus"
 done
 
-for capacity in 256 1024 4096 16384; do
-  run_case "queue_capacity_$capacity" PUSHGO_DISPATCH_QUEUE_CAPACITY="$capacity"
+for rps in 5 20 50 100; do
+  run_case "client_rps_$rps" PUSHGO_BENCH_RPS="$rps"
 done
 
-for sqlite_connections in 1 2 4 8; do
-  run_case "sqlite_max_connections_$sqlite_connections" PUSHGO_SQLITE_MAX_CONNECTIONS="$sqlite_connections"
+for payload_size in 512 1024 4096 24576; do
+  run_case "payload_${payload_size}b" PUSHGO_BENCH_PAYLOAD_SIZE="$payload_size"
 done
 
-for ttl_ms in 200 1000 2000 10000; do
-  run_case "targets_cache_ttl_${ttl_ms}ms" PUSHGO_DISPATCH_TARGETS_CACHE_TTL_MS="$ttl_ms"
-done
-
-for log_level in warn info debug; do
-  run_case "log_level_$log_level" PUSHGO_OBSERVABILITY_LOG_LEVEL="$log_level"
+for log_level in warn info; do
+  run_case "client_log_level_$log_level" PUSHGO_OBSERVABILITY_LOG_LEVEL="$log_level"
 done
 
 python3 bench/scripts/summarize_results.py "$BASE_RESULT_DIR"
