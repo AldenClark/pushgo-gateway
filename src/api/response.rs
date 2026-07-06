@@ -43,6 +43,7 @@ task_local! {
 pub(crate) enum ApiLocale {
     En,
     ZhCn,
+    ZhTw,
 }
 
 impl ApiLocale {
@@ -68,6 +69,17 @@ impl ApiLocale {
         {
             return Some(Self::ZhCn);
         }
+        if normalized.starts_with("zh-tw")
+            || normalized.starts_with("zh_tw")
+            || normalized.starts_with("zh-hk")
+            || normalized.starts_with("zh_hk")
+            || normalized.starts_with("zh-mo")
+            || normalized.starts_with("zh_mo")
+            || normalized.starts_with("zh_hant")
+            || normalized.starts_with("zh-hant")
+        {
+            return Some(Self::ZhTw);
+        }
         match normalized.as_str() {
             "en" | "en-us" | "en-gb" => Some(Self::En),
             _ if normalized.starts_with("en-") || normalized.starts_with("en_") => Some(Self::En),
@@ -79,6 +91,7 @@ impl ApiLocale {
         match self {
             Self::En => "en",
             Self::ZhCn => "zh-CN",
+            Self::ZhTw => "zh-TW",
         }
     }
 }
@@ -557,28 +570,40 @@ fn localized_problem_title(locale: ApiLocale, category: ApiProblemCategory) -> &
     match (locale, category) {
         (ApiLocale::En, ApiProblemCategory::Validation) => "Validation failed",
         (ApiLocale::ZhCn, ApiProblemCategory::Validation) => "请求参数有误",
+        (ApiLocale::ZhTw, ApiProblemCategory::Validation) => "請求參數有誤",
         (ApiLocale::En, ApiProblemCategory::Auth) => "Authentication failed",
         (ApiLocale::ZhCn, ApiProblemCategory::Auth) => "认证失败",
+        (ApiLocale::ZhTw, ApiProblemCategory::Auth) => "認證失敗",
         (ApiLocale::En, ApiProblemCategory::Permission) => "Permission denied",
         (ApiLocale::ZhCn, ApiProblemCategory::Permission) => "权限不足",
+        (ApiLocale::ZhTw, ApiProblemCategory::Permission) => "權限不足",
         (ApiLocale::En, ApiProblemCategory::NotFound) => "Resource not found",
         (ApiLocale::ZhCn, ApiProblemCategory::NotFound) => "资源不存在",
+        (ApiLocale::ZhTw, ApiProblemCategory::NotFound) => "資源不存在",
         (ApiLocale::En, ApiProblemCategory::Conflict) => "Request conflicts with current state",
         (ApiLocale::ZhCn, ApiProblemCategory::Conflict) => "请求与当前状态冲突",
+        (ApiLocale::ZhTw, ApiProblemCategory::Conflict) => "請求與目前狀態衝突",
         (ApiLocale::En, ApiProblemCategory::FeatureDisabled) => "Feature unavailable",
         (ApiLocale::ZhCn, ApiProblemCategory::FeatureDisabled) => "功能不可用",
+        (ApiLocale::ZhTw, ApiProblemCategory::FeatureDisabled) => "功能不可用",
         (ApiLocale::En, ApiProblemCategory::RateLimit) => "Too many requests",
         (ApiLocale::ZhCn, ApiProblemCategory::RateLimit) => "请求过于频繁",
+        (ApiLocale::ZhTw, ApiProblemCategory::RateLimit) => "請求過於頻繁",
         (ApiLocale::En, ApiProblemCategory::TooBusy) => "Service temporarily unavailable",
         (ApiLocale::ZhCn, ApiProblemCategory::TooBusy) => "服务暂时不可用",
+        (ApiLocale::ZhTw, ApiProblemCategory::TooBusy) => "服務暫時不可用",
         (ApiLocale::En, ApiProblemCategory::Network) => "Network unavailable",
         (ApiLocale::ZhCn, ApiProblemCategory::Network) => "网络不可用",
+        (ApiLocale::ZhTw, ApiProblemCategory::Network) => "網路不可用",
         (ApiLocale::En, ApiProblemCategory::Upstream) => "Upstream service failed",
         (ApiLocale::ZhCn, ApiProblemCategory::Upstream) => "上游服务异常",
+        (ApiLocale::ZhTw, ApiProblemCategory::Upstream) => "上游服務異常",
         (ApiLocale::En, ApiProblemCategory::Local) => "Local operation failed",
         (ApiLocale::ZhCn, ApiProblemCategory::Local) => "本地操作失败",
+        (ApiLocale::ZhTw, ApiProblemCategory::Local) => "本機操作失敗",
         (ApiLocale::En, ApiProblemCategory::Internal) => "Internal server error",
         (ApiLocale::ZhCn, ApiProblemCategory::Internal) => "服务内部错误",
+        (ApiLocale::ZhTw, ApiProblemCategory::Internal) => "服務內部錯誤",
     }
 }
 
@@ -594,22 +619,29 @@ fn localized_problem_message(
         (ApiLocale::ZhCn, Some("authentication_failed")) => {
             Some("网关认证失败，请检查服务器令牌。")
         }
+        (ApiLocale::ZhTw, Some("authentication_failed")) => {
+            Some("閘道認證失敗，請檢查伺服器權杖。")
+        }
         (ApiLocale::En, Some("device_key_not_found")) => {
             Some("This device registration is no longer valid. Please retry.")
         }
         (ApiLocale::ZhCn, Some("device_key_not_found")) => Some("当前设备注册已失效，请重试。"),
+        (ApiLocale::ZhTw, Some("device_key_not_found")) => Some("目前裝置註冊已失效，請重試。"),
         (ApiLocale::En, Some("device_not_found")) => {
             Some("This device route no longer exists. Please retry.")
         }
         (ApiLocale::ZhCn, Some("device_not_found")) => Some("当前设备路由已失效，请重试。"),
+        (ApiLocale::ZhTw, Some("device_not_found")) => Some("目前裝置路由已失效，請重試。"),
         (ApiLocale::En, Some("invalid_channel_id")) => {
             Some("The channel ID format is invalid. Please check and retry.")
         }
         (ApiLocale::ZhCn, Some("invalid_channel_id")) => Some("频道 ID 格式不正确，请检查后重试。"),
+        (ApiLocale::ZhTw, Some("invalid_channel_id")) => Some("頻道 ID 格式不正確，請檢查後重試。"),
         (ApiLocale::En, Some("invalid_password")) => {
             Some("The channel password format is invalid. Please check and retry.")
         }
         (ApiLocale::ZhCn, Some("invalid_password")) => Some("频道密码格式不正确，请检查后重试。"),
+        (ApiLocale::ZhTw, Some("invalid_password")) => Some("頻道密碼格式不正確，請檢查後重試。"),
         (ApiLocale::En, Some("password_mismatch"))
         | (ApiLocale::En, Some("invalid_channel_password")) => {
             Some("The channel password is incorrect. Please verify it and try again.")
@@ -618,15 +650,25 @@ fn localized_problem_message(
         | (ApiLocale::ZhCn, Some("invalid_channel_password")) => {
             Some("频道密码不正确，请检查后重试。")
         }
+        (ApiLocale::ZhTw, Some("password_mismatch"))
+        | (ApiLocale::ZhTw, Some("invalid_channel_password")) => {
+            Some("頻道密碼不正確，請檢查後重試。")
+        }
         (ApiLocale::En, Some("channel_not_found")) => {
             Some("The channel does not exist or is no longer available. Please refresh and retry.")
         }
         (ApiLocale::ZhCn, Some("channel_not_found")) => Some("频道不存在或已失效，请刷新后重试。"),
+        (ApiLocale::ZhTw, Some("channel_not_found")) => {
+            Some("頻道不存在或已失效，請重新整理後重試。")
+        }
         (ApiLocale::En, Some("private_channel_disabled")) => {
             Some("Private channel is disabled on this gateway. Please use the system push channel.")
         }
         (ApiLocale::ZhCn, Some("private_channel_disabled")) => {
             Some("当前网关未开启私有通道，请改用系统推送通道。")
+        }
+        (ApiLocale::ZhTw, Some("private_channel_disabled")) => {
+            Some("目前閘道未開啟私有通道，請改用系統推播通道。")
         }
         (ApiLocale::En, Some("private_channel_runtime_unavailable")) => {
             Some("Private channel is temporarily unavailable. Please retry later.")
@@ -634,11 +676,17 @@ fn localized_problem_message(
         (ApiLocale::ZhCn, Some("private_channel_runtime_unavailable")) => {
             Some("当前私有通道暂时不可用，请稍后重试。")
         }
+        (ApiLocale::ZhTw, Some("private_channel_runtime_unavailable")) => {
+            Some("目前私有通道暫時不可用，請稍後重試。")
+        }
         (ApiLocale::En, Some("private_channel_unhealthy")) => {
             Some("Private channel health is degraded. Please retry later.")
         }
         (ApiLocale::ZhCn, Some("private_channel_unhealthy")) => {
             Some("当前私有通道状态异常，请稍后重试。")
+        }
+        (ApiLocale::ZhTw, Some("private_channel_unhealthy")) => {
+            Some("目前私有通道狀態異常，請稍後重試。")
         }
         (ApiLocale::En, Some("private_wss_transport_disabled")) => {
             Some("Private WebSocket transport is disabled on this gateway.")
@@ -646,11 +694,17 @@ fn localized_problem_message(
         (ApiLocale::ZhCn, Some("private_wss_transport_disabled")) => {
             Some("当前网关未开启私有 WebSocket 通道。")
         }
+        (ApiLocale::ZhTw, Some("private_wss_transport_disabled")) => {
+            Some("目前閘道未開啟私有 WebSocket 通道。")
+        }
         (ApiLocale::En, Some("missing_websocket_subprotocol")) => {
             Some("The private WebSocket request is missing the required subprotocol.")
         }
         (ApiLocale::ZhCn, Some("missing_websocket_subprotocol")) => {
             Some("当前私有 WebSocket 请求缺少必需的子协议。")
+        }
+        (ApiLocale::ZhTw, Some("missing_websocket_subprotocol")) => {
+            Some("目前私有 WebSocket 請求缺少必要的子協定。")
         }
         (ApiLocale::En, Some("provider_token_missing"))
         | (ApiLocale::En, Some("provider_token_required")) => {
@@ -660,6 +714,10 @@ fn localized_problem_message(
         | (ApiLocale::ZhCn, Some("provider_token_required")) => {
             Some("当前设备推送通道尚未就绪，请刷新设备路由后重试。")
         }
+        (ApiLocale::ZhTw, Some("provider_token_missing"))
+        | (ApiLocale::ZhTw, Some("provider_token_required")) => {
+            Some("目前裝置推播通道尚未就緒，請重新整理裝置路由後重試。")
+        }
         (ApiLocale::En, Some("platform_mismatch"))
         | (ApiLocale::En, Some("channel_type_mismatch")) => {
             Some("The device binding has changed. Please retry with the latest route.")
@@ -668,31 +726,47 @@ fn localized_problem_message(
         | (ApiLocale::ZhCn, Some("channel_type_mismatch")) => {
             Some("当前设备绑定信息已变化，请使用最新路由重试。")
         }
+        (ApiLocale::ZhTw, Some("platform_mismatch"))
+        | (ApiLocale::ZhTw, Some("channel_type_mismatch")) => {
+            Some("目前裝置綁定資訊已變更，請使用最新路由重試。")
+        }
         (ApiLocale::En, Some("invalid_device_token")) => {
             Some("The push token is invalid. Please refresh it and try again.")
         }
         (ApiLocale::ZhCn, Some("invalid_device_token")) => {
             Some("设备推送令牌无效，请重新获取后重试。")
         }
+        (ApiLocale::ZhTw, Some("invalid_device_token")) => {
+            Some("裝置推播權杖無效，請重新取得後重試。")
+        }
         (ApiLocale::En, Some("invalid_platform")) => Some("The platform field is invalid."),
         (ApiLocale::ZhCn, Some("invalid_platform")) => Some("平台字段无效。"),
+        (ApiLocale::ZhTw, Some("invalid_platform")) => Some("平台欄位無效。"),
         (ApiLocale::En, Some("invalid_channel_name")) => {
             Some("The channel name must not be empty.")
         }
         (ApiLocale::ZhCn, Some("invalid_channel_name")) => Some("频道名称不能为空。"),
+        (ApiLocale::ZhTw, Some("invalid_channel_name")) => Some("頻道名稱不能為空。"),
         (ApiLocale::En, Some("channel_id_required")) => Some("The channel ID is required."),
         (ApiLocale::ZhCn, Some("channel_id_required")) => Some("频道 ID 不能为空。"),
+        (ApiLocale::ZhTw, Some("channel_id_required")) => Some("頻道 ID 不能為空。"),
         (ApiLocale::En, Some("password_required")) => Some("The channel password is required."),
         (ApiLocale::ZhCn, Some("password_required")) => Some("频道密码不能为空。"),
+        (ApiLocale::ZhTw, Some("password_required")) => Some("頻道密碼不能為空。"),
         (ApiLocale::En, Some("event_id_required")) => Some("The event ID is required."),
         (ApiLocale::ZhCn, Some("event_id_required")) => Some("事件 ID 不能为空。"),
+        (ApiLocale::ZhTw, Some("event_id_required")) => Some("事件 ID 不能為空。"),
         (ApiLocale::En, Some("thing_id_required")) => Some("The thing ID is required."),
         (ApiLocale::ZhCn, Some("thing_id_required")) => Some("对象 ID 不能为空。"),
+        (ApiLocale::ZhTw, Some("thing_id_required")) => Some("物件 ID 不能為空。"),
         (ApiLocale::En, Some("event_id_forbidden_on_create")) => {
             Some("Do not provide an event ID when creating a new event.")
         }
         (ApiLocale::ZhCn, Some("event_id_forbidden_on_create")) => {
             Some("创建事件时无需提供事件 ID。")
+        }
+        (ApiLocale::ZhTw, Some("event_id_forbidden_on_create")) => {
+            Some("建立事件時不需要提供事件 ID。")
         }
         (ApiLocale::En, Some("thing_id_forbidden_on_create")) => {
             Some("Do not provide a thing ID when creating a new thing.")
@@ -700,11 +774,17 @@ fn localized_problem_message(
         (ApiLocale::ZhCn, Some("thing_id_forbidden_on_create")) => {
             Some("创建对象时无需提供对象 ID。")
         }
+        (ApiLocale::ZhTw, Some("thing_id_forbidden_on_create")) => {
+            Some("建立物件時不需要提供物件 ID。")
+        }
         (ApiLocale::En, Some("created_at_forbidden_on_update")) => {
             Some("The created_at field is only allowed when creating a thing.")
         }
         (ApiLocale::ZhCn, Some("created_at_forbidden_on_update")) => {
             Some("created_at 仅允许在创建对象时传入。")
+        }
+        (ApiLocale::ZhTw, Some("created_at_forbidden_on_update")) => {
+            Some("created_at 僅允許在建立物件時傳入。")
         }
         (ApiLocale::En, Some("channels_limit_exceeded")) => {
             Some("Too many channels were submitted in one request. Please split the sync batch.")
@@ -712,11 +792,17 @@ fn localized_problem_message(
         (ApiLocale::ZhCn, Some("channels_limit_exceeded")) => {
             Some("单次同步的频道数量过多，请拆分后重试。")
         }
+        (ApiLocale::ZhTw, Some("channels_limit_exceeded")) => {
+            Some("單次同步的頻道數量過多，請拆分後重試。")
+        }
         (ApiLocale::En, Some("channel_subscriber_limit_exceeded")) => Some(
             "This channel already has 32 subscribers. Remove an unused subscriber before adding another device.",
         ),
         (ApiLocale::ZhCn, Some("channel_subscriber_limit_exceeded")) => {
             Some("该频道已达到 32 个订阅者上限，请先移除不再使用的设备。")
+        }
+        (ApiLocale::ZhTw, Some("channel_subscriber_limit_exceeded")) => {
+            Some("該頻道已達到 32 個訂閱者上限，請先移除不再使用的裝置。")
         }
         (ApiLocale::En, Some("channel_binding_invalid")) => {
             Some("Provide either a channel ID or a channel name, but not both.")
@@ -724,21 +810,30 @@ fn localized_problem_message(
         (ApiLocale::ZhCn, Some("channel_binding_invalid")) => {
             Some("请在频道 ID 和频道名称之间二选一填写，不能同时为空或同时提供。")
         }
+        (ApiLocale::ZhTw, Some("channel_binding_invalid")) => {
+            Some("請在頻道 ID 和頻道名稱之間二選一填寫，不能同時為空或同時提供。")
+        }
         (ApiLocale::En, Some("server_busy")) => Some("The service is busy. Please retry later."),
         (ApiLocale::ZhCn, Some("server_busy")) => Some("服务繁忙，请稍后重试。"),
+        (ApiLocale::ZhTw, Some("server_busy")) => Some("服務繁忙，請稍後重試。"),
         (ApiLocale::En, Some("route_not_found")) => {
             Some("The requested API route does not exist on this gateway.")
         }
         (ApiLocale::ZhCn, Some("route_not_found")) => Some("当前网关不存在该 API 路由。"),
+        (ApiLocale::ZhTw, Some("route_not_found")) => Some("目前閘道不存在該 API 路由。"),
         (ApiLocale::En, Some("upstream_error")) => {
             Some("An upstream service is temporarily unavailable. Please retry later.")
         }
         (ApiLocale::ZhCn, Some("upstream_error")) => Some("上游服务暂时异常，请稍后重试。"),
+        (ApiLocale::ZhTw, Some("upstream_error")) => Some("上游服務暫時異常，請稍後重試。"),
         (ApiLocale::En, Some("internal_error")) | (ApiLocale::En, Some("store_error")) => {
             Some("The service is temporarily unavailable. Please retry later.")
         }
         (ApiLocale::ZhCn, Some("internal_error")) | (ApiLocale::ZhCn, Some("store_error")) => {
             Some("服务暂时异常，请稍后重试。")
+        }
+        (ApiLocale::ZhTw, Some("internal_error")) | (ApiLocale::ZhTw, Some("store_error")) => {
+            Some("服務暫時異常，請稍後重試。")
         }
         _ => localized_problem_message_by_category(locale, inferred.category, detail),
     }
@@ -754,6 +849,7 @@ fn localized_problem_message_by_category(
             Some("The request is invalid. Please check the input and retry.")
         }
         (ApiLocale::ZhCn, ApiProblemCategory::Validation) => Some("请求参数有误，请检查后重试。"),
+        (ApiLocale::ZhTw, ApiProblemCategory::Validation) => Some("請求參數有誤，請檢查後重試。"),
         (ApiLocale::En, ApiProblemCategory::Auth)
         | (ApiLocale::En, ApiProblemCategory::Permission) => {
             Some("Gateway authentication failed. Please verify the server token.")
@@ -762,18 +858,25 @@ fn localized_problem_message_by_category(
         | (ApiLocale::ZhCn, ApiProblemCategory::Permission) => {
             Some("网关认证失败，请检查服务器令牌。")
         }
+        (ApiLocale::ZhTw, ApiProblemCategory::Auth)
+        | (ApiLocale::ZhTw, ApiProblemCategory::Permission) => {
+            Some("閘道認證失敗，請檢查伺服器權杖。")
+        }
         (ApiLocale::En, ApiProblemCategory::NotFound) => {
             Some("The requested resource does not exist or is no longer available.")
         }
         (ApiLocale::ZhCn, ApiProblemCategory::NotFound) => Some("请求的资源不存在或已失效。"),
+        (ApiLocale::ZhTw, ApiProblemCategory::NotFound) => Some("請求的資源不存在或已失效。"),
         (ApiLocale::En, ApiProblemCategory::Conflict) => {
             Some("The request conflicts with the current server state.")
         }
         (ApiLocale::ZhCn, ApiProblemCategory::Conflict) => Some("当前请求与服务端状态冲突。"),
+        (ApiLocale::ZhTw, ApiProblemCategory::Conflict) => Some("目前請求與伺服器狀態衝突。"),
         (ApiLocale::En, ApiProblemCategory::FeatureDisabled) => {
             Some("This feature is not enabled on the gateway.")
         }
         (ApiLocale::ZhCn, ApiProblemCategory::FeatureDisabled) => Some("当前网关未开启该功能。"),
+        (ApiLocale::ZhTw, ApiProblemCategory::FeatureDisabled) => Some("目前閘道未開啟該功能。"),
         (ApiLocale::En, ApiProblemCategory::RateLimit)
         | (ApiLocale::En, ApiProblemCategory::TooBusy)
         | (ApiLocale::En, ApiProblemCategory::Upstream)
@@ -784,12 +887,18 @@ fn localized_problem_message_by_category(
         | (ApiLocale::ZhCn, ApiProblemCategory::TooBusy)
         | (ApiLocale::ZhCn, ApiProblemCategory::Upstream)
         | (ApiLocale::ZhCn, ApiProblemCategory::Internal) => Some("服务暂时异常，请稍后重试。"),
+        (ApiLocale::ZhTw, ApiProblemCategory::RateLimit)
+        | (ApiLocale::ZhTw, ApiProblemCategory::TooBusy)
+        | (ApiLocale::ZhTw, ApiProblemCategory::Upstream)
+        | (ApiLocale::ZhTw, ApiProblemCategory::Internal) => Some("服務暫時異常，請稍後重試。"),
         (ApiLocale::En, ApiProblemCategory::Network) => {
             Some("The network is unavailable. Please retry later.")
         }
         (ApiLocale::ZhCn, ApiProblemCategory::Network) => Some("网络暂时不可用，请稍后重试。"),
+        (ApiLocale::ZhTw, ApiProblemCategory::Network) => Some("網路暫時不可用，請稍後重試。"),
         (ApiLocale::En, ApiProblemCategory::Local) => Some("The local operation failed."),
         (ApiLocale::ZhCn, ApiProblemCategory::Local) => Some("本地操作失败。"),
+        (ApiLocale::ZhTw, ApiProblemCategory::Local) => Some("本機操作失敗。"),
     }
 }
 

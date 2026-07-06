@@ -213,11 +213,18 @@
         display: inline;
       }
       html[data-doc-lang="en"] .lang-zh,
+      html[data-doc-lang="en"] .lang-zh-tw,
       html[data-doc-lang="en"] .lang-sep {
         display: none !important;
       }
       html[data-doc-lang="zh"] .lang-en,
+      html[data-doc-lang="zh"] .lang-zh-tw,
       html[data-doc-lang="zh"] .lang-sep {
+        display: none !important;
+      }
+      html[data-doc-lang="zh-tw"] .lang-en,
+      html[data-doc-lang="zh-tw"] .lang-zh,
+      html[data-doc-lang="zh-tw"] .lang-sep {
         display: none !important;
       }
       @media (max-width: 900px) {
@@ -252,7 +259,8 @@
   <body>
     <div class="lang-switch" aria-label="Language switch">
       <button type="button" data-doc-lang="en">English</button>
-      <button type="button" data-doc-lang="zh">中文</button>
+      <button type="button" data-doc-lang="zh">简体中文</button>
+      <button type="button" data-doc-lang="zh-tw">繁體中文</button>
     </div>
     <main>
       <header>
@@ -2073,6 +2081,181 @@
         const hasHan = (text) => hanRe.test(text);
         const hasLatin = (text) => latinRe.test(text);
 
+        const zhTwPhrases = [
+          ["此页面", "此頁面"],
+          ["面向", "面向"],
+          ["普通消息推送方", "一般訊息推送方"],
+          ["发送类接口", "傳送類介面"],
+          ["私有传输", "私有傳輸"],
+          ["运行参数", "執行參數"],
+          ["不在本页", "不在本頁"],
+          ["请参考", "請參考"],
+          ["并使用", "並使用"],
+          ["显式启停配置", "顯式啟停設定"],
+          ["部署需要", "部署需要"],
+          ["显式发布", "顯式發布"],
+          ["边缘层", "邊緣層"],
+          ["发送端", "傳送端"],
+          ["不得传入", "不得傳入"],
+          ["若旧客户端", "若舊用戶端"],
+          ["继续传入", "繼續傳入"],
+          ["返回", "回傳"],
+          ["客户端", "用戶端"],
+          ["必须使用", "必須使用"],
+          ["表示临时只发送连接", "表示臨時只傳送連線"],
+          ["表示持久接收设备", "表示持久接收裝置"],
+          ["设备", "裝置"],
+          ["为空", "為空"],
+          ["未知", "未知"],
+          ["属于其他", "屬於其他"],
+          ["而被替换时", "而被替換時"],
+          ["会通过", "會透過"],
+          ["返回分配后的", "回傳分配後的"],
+          ["直接使用", "直接使用"],
+          ["区分业务模型", "區分業務模型"],
+          ["上行和下行", "上行與下行"],
+          ["可信通道身份", "可信通道身分"],
+          ["不携带", "不攜帶"],
+          ["遗嘱消息", "遺囑訊息"],
+          ["只允许", "只允許"],
+          ["原始", "原始"],
+          ["可发送到任意频道", "可傳送到任意頻道"],
+          ["必须为", "必須為"],
+          ["包含", "包含"],
+          ["使用同一套", "使用同一套"],
+          ["异常断开", "異常斷線"],
+          ["时发送遗嘱", "時傳送遺囑"],
+          ["正常", "正常"],
+          ["不发送", "不傳送"],
+          ["全局格式", "全域格式"],
+          ["整体请求", "整體請求"],
+          ["响应格式", "回應格式"],
+          ["所有推送接口", "所有推播介面"],
+          ["统一格式", "統一格式"],
+          ["每个接口", "每個介面"],
+          ["业务字段", "業務欄位"],
+          ["请求体限制", "請求體限制"],
+          ["最大", "最大"],
+          ["业务", "業務"],
+          ["由网关生成", "由閘道產生"],
+          ["当前格式", "目前格式"],
+          ["小写十六进制字符串", "小寫十六進位字串"],
+          ["字段", "欄位"],
+          ["说明", "說明"],
+          ["必填", "必填"],
+          ["可选", "選填"],
+          ["字符串", "字串"],
+          ["对象", "物件"],
+          ["数组", "陣列"],
+          ["整数", "整數"],
+          ["布尔", "布林"],
+          ["毫秒", "毫秒"],
+          ["时间戳", "時間戳"],
+          ["标题", "標題"],
+          ["正文", "正文"],
+          ["内容", "內容"],
+          ["图片", "圖片"],
+          ["附件", "附件"],
+          ["优先级", "優先級"],
+          ["频道", "頻道"],
+          ["频道名", "頻道名稱"],
+          ["频道名称", "頻道名稱"],
+          ["密码", "密碼"],
+          ["令牌", "權杖"],
+          ["密钥", "金鑰"],
+          ["签名", "簽章"],
+          ["认证", "認證"],
+          ["鉴权", "鑑權"],
+          ["权限", "權限"],
+          ["错误", "錯誤"],
+          ["失败", "失敗"],
+          ["成功", "成功"],
+          ["创建", "建立"],
+          ["更新", "更新"],
+          ["关闭", "關閉"],
+          ["归档", "封存"],
+          ["删除", "刪除"],
+          ["恢复", "復原"],
+          ["忽略", "忽略"],
+          ["覆盖", "覆蓋"],
+          ["追加", "附加"],
+          ["传输", "傳輸"],
+          ["网关", "閘道"],
+          ["消息", "訊息"],
+          ["事件", "事件"],
+          ["对象", "物件"],
+          ["推送", "推播"],
+          ["链接", "連結"],
+          ["默认", "預設"],
+          ["只读", "唯讀"],
+          ["回退", "降級"],
+          ["兼容", "相容"],
+          ["示例", "範例"],
+          ["请求", "請求"],
+          ["响应", "回應"],
+          ["状态", "狀態"],
+          ["路径", "路徑"],
+          ["接口", "介面"],
+          ["文档", "文件"],
+          ["页面", "頁面"],
+          ["本页", "本頁"],
+          ["简体中文", "繁體中文"],
+        ];
+
+        const zhTwChars = {
+          "页": "頁", "仅": "僅", "类": "類", "发": "發", "传": "傳", "输": "輸",
+          "运": "運", "参": "參", "请": "請", "显": "顯", "启": "啟", "停": "停",
+          "配": "配", "置": "置", "发": "發", "布": "布", "边": "邊", "缘": "緣",
+          "层": "層", "端": "端", "旧": "舊", "户": "戶", "继": "繼", "续": "續",
+          "返": "返", "临": "臨", "时": "時", "连": "連", "设": "設", "备": "備",
+          "为": "為", "属": "屬", "替": "替", "换": "換", "会": "會", "过": "過",
+          "后": "後", "区": "區", "业": "業", "务": "務", "与": "與", "信": "信",
+          "身": "身", "份": "分", "携": "攜", "带": "帶", "遗": "遺", "嘱": "囑",
+          "许": "許", "频": "頻", "须": "須", "含": "含", "异": "異", "断": "斷",
+          "线": "線", "全": "全", "局": "域", "响": "響", "应": "應", "统": "統",
+          "一": "一", "个": "個", "字": "字", "段": "段", "请": "請", "求": "求",
+          "体": "體", "业": "業", "由": "由", "关": "關", "产": "產", "当": "當",
+          "格": "格", "写": "寫", "进": "進", "制": "制", "符": "符", "串": "串",
+          "说": "說", "选": "選", "填": "填", "数": "數", "组": "組", "尔": "爾",
+          "间": "間", "戳": "戳", "题": "題", "图": "圖", "片": "片", "优": "優",
+          "级": "級", "频": "頻", "道": "道", "称": "稱", "码": "碼", "钥": "鑰",
+          "签": "簽", "认": "認", "证": "證", "权": "權", "错": "錯", "误": "誤",
+          "败": "敗", "创": "創", "建": "建", "闭": "閉", "归": "歸", "档": "檔",
+          "删": "刪", "复": "復", "盖": "蓋", "网": "網", "消": "消", "息": "息",
+          "对": "對", "推": "推", "链": "鏈", "默": "默", "读": "讀", "退": "退",
+          "兼": "兼", "样": "樣", "状": "狀", "态": "態", "径": "徑", "档": "檔",
+          "检": "檢", "查": "查", "验": "驗", "验": "驗", "内": "內", "节": "節",
+          "点": "點", "额": "額", "阈": "閾", "值": "值", "转": "轉", "义": "義",
+          "源": "源", "长": "長", "较": "較", "轻": "輕", "稳": "穩", "详": "詳",
+          "开": "開", "关": "關", "处": "處", "理": "理", "标": "標", "记": "記",
+          "录": "錄", "输": "輸", "入": "入", "页": "頁", "项": "項", "类": "類",
+          "导": "導", "联": "聯", "络": "絡", "观": "觀", "测": "測", "产": "產",
+          "品": "品", "结": "結", "构": "構", "语": "語", "约": "約", "议": "議",
+          "实": "實", "现": "現", "阅": "閱", "读": "讀", "历": "歷", "史": "史",
+          "询": "詢", "顺": "順", "序": "序", "组": "組", "织": "織", "别": "別",
+          "执": "執", "超": "超", "视": "視", "确": "確", "认": "認",
+        };
+
+        function toTraditionalChinese(text) {
+          let output = text;
+          for (const [source, target] of zhTwPhrases) {
+            output = output.split(source).join(target);
+          }
+          return output.replace(/[\u4e00-\u9fff]/g, (char) => zhTwChars[char] || char);
+        }
+
+        function makeTraditionalSpan(zhSpan) {
+          const zhTwSpan = zhSpan.cloneNode(true);
+          zhTwSpan.className = "lang-zh-tw";
+          const walker = document.createTreeWalker(zhTwSpan, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            walker.currentNode.nodeValue = toTraditionalChinese(
+              walker.currentNode.nodeValue || "",
+            );
+          }
+          return zhTwSpan;
+        }
+
         function wrapBilingualByBr() {
           const targets = main.querySelectorAll(
             "p,h1,h2,h3,h4,li,th,td,.note,.callout,a",
@@ -2102,10 +2285,22 @@
             if (!zhHtml || !enHtml) continue;
             if (!hasHan(zhHtml) || !hasLatin(enHtml)) continue;
 
-            el.innerHTML =
-              `<span class="lang-zh">${zhHtml}</span>` +
-              `<span class="lang-sep"><br /></span>` +
-              `<span class="lang-en">${enHtml}</span>`;
+            const zhSpan = document.createElement("span");
+            zhSpan.className = "lang-zh";
+            zhSpan.innerHTML = zhHtml;
+
+            const zhTwSpan = makeTraditionalSpan(zhSpan);
+            const firstSep = document.createElement("span");
+            firstSep.className = "lang-sep";
+            firstSep.innerHTML = "<br />";
+            const secondSep = document.createElement("span");
+            secondSep.className = "lang-sep";
+            secondSep.innerHTML = "<br />";
+            const enSpan = document.createElement("span");
+            enSpan.className = "lang-en";
+            enSpan.innerHTML = enHtml;
+
+            el.replaceChildren(zhSpan, firstSep, zhTwSpan, secondSep, enSpan);
           }
         }
 
@@ -2120,7 +2315,7 @@
                 if (parent.closest("pre,code,script,style")) {
                   return NodeFilter.FILTER_REJECT;
                 }
-                if (parent.closest(".lang-zh,.lang-en")) {
+                if (parent.closest(".lang-zh,.lang-zh-tw,.lang-en")) {
                   return NodeFilter.FILTER_REJECT;
                 }
                 const text = node.nodeValue || "";
@@ -2145,17 +2340,25 @@
 
             const fragment = document.createDocumentFragment();
             const zhSpan = document.createElement("span");
+            const zhTwSpan = document.createElement("span");
             const sepSpan = document.createElement("span");
+            const secondSepSpan = document.createElement("span");
             const enSpan = document.createElement("span");
             zhSpan.className = "lang-zh";
+            zhTwSpan.className = "lang-zh-tw";
             sepSpan.className = "lang-sep";
+            secondSepSpan.className = "lang-sep";
             enSpan.className = "lang-en";
             zhSpan.textContent = zhText;
+            zhTwSpan.textContent = toTraditionalChinese(zhText);
             sepSpan.textContent = " / ";
+            secondSepSpan.textContent = " / ";
             enSpan.textContent = enText;
 
             fragment.appendChild(zhSpan);
             fragment.appendChild(sepSpan);
+            fragment.appendChild(zhTwSpan);
+            fragment.appendChild(secondSepSpan);
             fragment.appendChild(enSpan);
             textNode.parentNode.replaceChild(fragment, textNode);
           }
@@ -2168,9 +2371,11 @@
         }
 
         function applyLang(lang, updateUrl = true) {
-          const normalized = lang === "zh" ? "zh" : "en";
+          const normalized =
+            lang === "zh" || lang === "zh-tw" ? lang : "en";
           root.dataset.docLang = normalized;
-          root.lang = normalized === "zh" ? "zh-Hans" : "en";
+          root.lang =
+            normalized === "zh" ? "zh-Hans" : normalized === "zh-tw" ? "zh-Hant" : "en";
           localStorage.setItem("pushgo_docs_lang", normalized);
           setActive(normalized);
 
@@ -2187,9 +2392,9 @@
         const queryLang = new URL(window.location.href).searchParams.get("lang");
         const storedLang = localStorage.getItem("pushgo_docs_lang");
         const initialLang =
-          queryLang === "zh" || queryLang === "en"
+          queryLang === "zh" || queryLang === "zh-tw" || queryLang === "en"
             ? queryLang
-            : storedLang === "zh" || storedLang === "en"
+            : storedLang === "zh" || storedLang === "zh-tw" || storedLang === "en"
               ? storedLang
               : "en";
 

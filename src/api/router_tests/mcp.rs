@@ -731,7 +731,7 @@ async fn oauth_metadata_returns_absolute_endpoints() {
     let json: Value = serde_json::from_slice(&body).expect("json body");
     assert_eq!(
         json.get("ui_locales_supported"),
-        Some(&json!(["en", "zh-CN"]))
+        Some(&json!(["en", "zh-CN", "zh-TW"]))
     );
     for key in [
         "issuer",
@@ -782,6 +782,37 @@ async fn oauth_authorize_page_supports_chinese_locale() {
     assert!(body.contains("PushGo MCP 授权"));
     assert!(body.contains("频道名"));
     assert!(body.contains("失焦后会自动校验"));
+}
+
+#[tokio::test]
+async fn oauth_authorize_page_supports_traditional_chinese_locale() {
+    let state = build_mcp_test_state(AuthMode::Disabled).await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let (register_status, register_body) = post_json(
+        app.clone(),
+        "/oauth/register",
+        json!({
+            "redirect_uris": ["https://client.example/callback"],
+            "token_endpoint_auth_method": "none"
+        }),
+    )
+    .await;
+    assert_eq!(register_status, StatusCode::CREATED);
+    let client_id = register_body
+        .get("client_id")
+        .and_then(Value::as_str)
+        .expect("client_id should exist");
+    let (status, body) = get_text(
+        app,
+        &format!(
+            "/oauth/authorize?client_id={client_id}&redirect_uri=https://client.example/callback&code_challenge=test&code_challenge_method=plain&lang=zh-TW"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("PushGo MCP 授權"));
+    assert!(body.contains("頻道名稱"));
+    assert!(body.contains("失焦後會自動校驗"));
 }
 
 #[tokio::test]

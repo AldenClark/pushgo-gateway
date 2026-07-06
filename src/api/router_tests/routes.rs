@@ -587,6 +587,37 @@ async fn channel_subscribe_accepts_apple_style_zh_hans_locale() {
 }
 
 #[tokio::test]
+async fn channel_subscribe_accepts_apple_style_zh_hant_locale() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let (status, body) = post_json_with_accept_language(
+        app,
+        "/channel/subscribe",
+        json!({
+            "device_key": "missing-device-key-001",
+            "channel_name": "demo-channel",
+            "password": "password-1234"
+        }),
+        Some("zh-Hant-TW, en-US;q=0.8"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("localized_message"))
+            .and_then(Value::as_str),
+        Some("目前裝置註冊已失效，請重試。")
+    );
+    assert_eq!(
+        body.get("problem")
+            .and_then(|value| value.get("locale"))
+            .and_then(Value::as_str),
+        Some("zh-TW")
+    );
+}
+
+#[tokio::test]
 async fn channel_subscribe_rejects_33rd_subscriber_with_structured_limit_error() {
     let state = build_private_test_state().await;
     let app = super::super::build_router(state, "<html>docs</html>");

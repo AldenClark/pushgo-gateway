@@ -1,4 +1,4 @@
-const MCP_UI_LOCALES_SUPPORTED: [&str; 2] = ["en", "zh-CN"];
+const MCP_UI_LOCALES_SUPPORTED: [&str; 3] = ["en", "zh-CN", "zh-TW"];
 const MCP_UI_DEFAULT_LOCALE: &str = "en";
 const MCP_UI_LOCALE_QUERY_PARAMETER: &str = "lang";
 
@@ -6,6 +6,7 @@ const MCP_UI_LOCALE_QUERY_PARAMETER: &str = "lang";
 enum McpLocale {
     En,
     ZhCn,
+    ZhTw,
 }
 
 impl McpLocale {
@@ -23,6 +24,8 @@ impl McpLocale {
         match normalized.as_str() {
             "en" | "en-us" | "en-gb" => Some(Self::En),
             "zh" | "zh-cn" | "zh_hans" | "zh-hans" | "zh-sg" => Some(Self::ZhCn),
+            "zh-tw" | "zh_tw" | "zh-hk" | "zh_hk" | "zh-mo" | "zh_mo" | "zh-hant"
+            | "zh_hant" => Some(Self::ZhTw),
             _ => None,
         }
     }
@@ -31,6 +34,7 @@ impl McpLocale {
         match self {
             Self::En => "en",
             Self::ZhCn => "zh-CN",
+            Self::ZhTw => "zh-TW",
         }
     }
 
@@ -114,6 +118,30 @@ fn oauth_authorize_text(locale: McpLocale) -> OAuthAuthorizeText {
             remove: "删除",
             alert_missing_rows: "请至少填写一行有效的频道信息后再提交。",
         },
+        McpLocale::ZhTw => OAuthAuthorizeText {
+            title: "PushGo MCP 授權",
+            subtitle: "授權後，MCP 用戶端可以存取你在這裡綁定的頻道。",
+            channel_bindings_label: "頻道綁定",
+            channel_id_label: "頻道 ID",
+            password_label: "密碼",
+            status_label: "校驗狀態",
+            channel_name_label: "頻道名稱",
+            action_label: "操作",
+            hint: "頻道 ID 或密碼輸入框失焦後會自動校驗；校驗通過時會同步顯示頻道名稱。",
+            add_row: "+ 新增一列",
+            submit: "確認授權",
+            channel_placeholder: "06J0FZG1Y8XGG14VTQ4Y3G10MR",
+            password_placeholder: "password-1234",
+            status_unvalidated: "未校驗",
+            status_incomplete: "請完整填寫頻道 ID 和密碼",
+            status_validating: "校驗中...",
+            status_ok: "校驗通過",
+            status_failed: "校驗失敗",
+            status_network_error: "網路錯誤",
+            channel_name_empty: "-",
+            remove: "刪除",
+            alert_missing_rows: "請至少填寫一列有效的頻道資訊後再提交。",
+        },
     }
 }
 
@@ -156,6 +184,24 @@ fn bind_page_text(locale: McpLocale, action: BindAction) -> BindPageText {
             password_label: "密码",
             finished: "操作完成。你可以返回 MCP 客户端继续。",
         },
+        (McpLocale::ZhTw, BindAction::Bind) => BindPageText {
+            title: "綁定頻道",
+            subtitle: "請確認頻道憑據後提交。該頁面僅在目前 MCP 工作階段內有效。",
+            submit: "提交",
+            completed: "目前工作階段已經完成，請返回 MCP 用戶端。",
+            channel_id_label: "頻道 ID",
+            password_label: "密碼",
+            finished: "操作完成。你可以返回 MCP 用戶端繼續。",
+        },
+        (McpLocale::ZhTw, BindAction::Revoke) => BindPageText {
+            title: "撤銷頻道授權",
+            subtitle: "請確認頻道憑據後提交。該頁面僅在目前 MCP 工作階段內有效。",
+            submit: "提交",
+            completed: "目前工作階段已經完成，請返回 MCP 用戶端。",
+            channel_id_label: "頻道 ID",
+            password_label: "密碼",
+            finished: "操作完成。你可以返回 MCP 用戶端繼續。",
+        },
         (McpLocale::ZhCn, BindAction::Revoke) => BindPageText {
             title: "撤销频道授权",
             subtitle: "请确认频道凭据后提交。该页面仅在当前 MCP 会话内有效。",
@@ -172,6 +218,7 @@ fn channel_validate_invalid_channel_id(locale: McpLocale) -> &'static str {
     match locale {
         McpLocale::En => "Invalid channel_id format",
         McpLocale::ZhCn => "channel_id 格式错误",
+        McpLocale::ZhTw => "channel_id 格式錯誤",
     }
 }
 
@@ -179,6 +226,7 @@ fn channel_validate_invalid_password(locale: McpLocale) -> &'static str {
     match locale {
         McpLocale::En => "Invalid password format",
         McpLocale::ZhCn => "password 格式错误",
+        McpLocale::ZhTw => "password 格式錯誤",
     }
 }
 
@@ -186,5 +234,6 @@ fn channel_validate_mismatch(locale: McpLocale) -> &'static str {
     match locale {
         McpLocale::En => "Channel not found or password incorrect",
         McpLocale::ZhCn => "频道不存在或密码错误",
+        McpLocale::ZhTw => "頻道不存在或密碼錯誤",
     }
 }
