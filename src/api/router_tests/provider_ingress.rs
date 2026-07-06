@@ -210,3 +210,67 @@ async fn messages_ack_removes_delivery_and_is_idempotent() {
         0
     );
 }
+
+#[tokio::test]
+async fn messages_ack_can_close_watch_delivery_without_closing_phone_delivery() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let phone_device_key = "router-provider-phone-ack";
+    let watch_device_key = "router-provider-watch-ack";
+    let phone_delivery_id = "delivery-phone-ack-001";
+    let watch_delivery_id = "delivery-watch-ack-001";
+    enqueue_provider_pull_item(&state, phone_device_key, phone_delivery_id, "phone-title").await;
+    enqueue_provider_pull_item(&state, watch_device_key, watch_delivery_id, "watch-title").await;
+
+    let (ack_status, ack_body) = post_json(
+        app.clone(),
+        "/messages/ack",
+        json!({
+            "device_key": watch_device_key,
+            "delivery_id": watch_delivery_id
+        }),
+    )
+    .await;
+    assert_eq!(ack_status, StatusCode::OK);
+    assert_eq!(
+        response_data(&ack_body)
+            .get("removed")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let (ack_again_status, ack_again_body) = post_json(
+        app.clone(),
+        "/messages/ack",
+        json!({
+            "device_key": watch_device_key,
+            "delivery_id": watch_delivery_id
+        }),
+    )
+    .await;
+    assert_eq!(ack_again_status, StatusCode::OK);
+    assert_eq!(
+        response_data(&ack_again_body)
+            .get("removed")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let (phone_pull_status, phone_pull_body) = post_json(
+        app,
+        "/messages/pull",
+        json!({
+            "device_key": phone_device_key
+        }),
+    )
+    .await;
+    assert_eq!(phone_pull_status, StatusCode::OK);
+    assert_eq!(
+        response_data(&phone_pull_body)
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("items should be an array")
+            .len(),
+        1
+    );
+}
