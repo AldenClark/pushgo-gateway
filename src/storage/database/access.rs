@@ -282,6 +282,17 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
     async fn automation_counts(&self) -> StoreResult<AutomationCounts>;
     async fn load_mcp_state_json(&self) -> StoreResult<Option<String>>;
     async fn save_mcp_state_json(&self, state_json: &str) -> StoreResult<()>;
+    async fn upsert_live_activity_token(&self, record: &LiveActivityTokenRecord)
+    -> StoreResult<()>;
+    async fn delete_live_activity_token(
+        &self,
+        activity_key: &str,
+        token: Option<&str>,
+    ) -> StoreResult<usize>;
+    async fn list_live_activity_tokens(
+        &self,
+        activity_key: &str,
+    ) -> StoreResult<Vec<LiveActivityTokenRecord>>;
     async fn upsert_sender_submit_status(
         &self,
         record: &SenderSubmitStatusRecord,

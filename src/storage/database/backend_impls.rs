@@ -553,6 +553,28 @@ macro_rules! impl_backend_system_state_access {
                 <$backend>::save_mcp_state_json(self, state_json).await
             }
 
+            async fn upsert_live_activity_token(
+                &self,
+                record: &LiveActivityTokenRecord,
+            ) -> StoreResult<()> {
+                <$backend>::upsert_live_activity_token(self, record).await
+            }
+
+            async fn delete_live_activity_token(
+                &self,
+                activity_key: &str,
+                token: Option<&str>,
+            ) -> StoreResult<usize> {
+                <$backend>::delete_live_activity_token(self, activity_key, token).await
+            }
+
+            async fn list_live_activity_tokens(
+                &self,
+                activity_key: &str,
+            ) -> StoreResult<Vec<LiveActivityTokenRecord>> {
+                <$backend>::list_live_activity_tokens(self, activity_key).await
+            }
+
             async fn upsert_sender_submit_status(
                 &self,
                 record: &SenderSubmitStatusRecord,

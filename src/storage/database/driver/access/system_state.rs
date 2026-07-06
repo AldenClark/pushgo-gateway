@@ -19,6 +19,28 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, save_mcp_state_json(state_json))
     }
 
+    async fn upsert_live_activity_token(
+        &self,
+        record: &LiveActivityTokenRecord,
+    ) -> StoreResult<()> {
+        delegate_db_async!(self, upsert_live_activity_token(record))
+    }
+
+    async fn delete_live_activity_token(
+        &self,
+        activity_key: &str,
+        token: Option<&str>,
+    ) -> StoreResult<usize> {
+        delegate_db_async!(self, delete_live_activity_token(activity_key, token))
+    }
+
+    async fn list_live_activity_tokens(
+        &self,
+        activity_key: &str,
+    ) -> StoreResult<Vec<LiveActivityTokenRecord>> {
+        delegate_db_async!(self, list_live_activity_tokens(activity_key))
+    }
+
     async fn upsert_sender_submit_status(
         &self,
         record: &SenderSubmitStatusRecord,

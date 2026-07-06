@@ -1,3 +1,4 @@
+pub(crate) mod activity;
 pub(crate) mod channel;
 pub(crate) mod channel_auth;
 pub(crate) mod core;
@@ -70,6 +71,23 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route("/event/create", post(event::event_create_to_channel))
         .route("/event/update", post(event::event_update_to_channel))
         .route("/event/close", post(event::event_close_to_channel))
+        .route(
+            "/thing/{thing_id}/event/create",
+            post(event::thing_event_create_to_channel),
+        )
+        .route(
+            "/thing/{thing_id}/event/update",
+            post(event::thing_event_update_to_channel),
+        )
+        .route(
+            "/thing/{thing_id}/event/close",
+            post(event::thing_event_close_to_channel),
+        )
+        .route("/v1/activity/register", post(activity::activity_register))
+        .route(
+            "/v1/activity/unregister",
+            post(activity::activity_unregister),
+        )
         .route("/thing/create", post(thing::thing_create_to_channel))
         .route("/thing/update", post(thing::thing_update_to_channel))
         .route("/thing/archive", post(thing::thing_archive_to_channel))

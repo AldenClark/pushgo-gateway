@@ -14,7 +14,7 @@ use tower::ServiceExt;
 
 use crate::{
     app::{AppState, AuthMode, DeviceOperationGuards},
-    dispatch::DispatchChannels,
+    dispatch::{DispatchChannels, DispatchWorkerReceivers},
     mcp::{McpConfig, McpState},
     private::{PrivateConfig, PrivateState},
     routing::{DeviceRegistry, DeviceRouteRecord},
@@ -23,6 +23,7 @@ use crate::{
     storage::{MaintenanceCleanupConfig, Platform, Storage},
 };
 
+mod activity;
 mod channel_sync;
 mod mcp;
 mod provider_ingress;
@@ -31,6 +32,10 @@ mod routes;
 static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 async fn build_test_state() -> AppState {
+    build_test_state_with_receivers().await.0
+}
+
+async fn build_test_state_with_receivers() -> (AppState, DispatchWorkerReceivers) {
     let unique_id = TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let db_url = format!(
         "sqlite:///tmp/pushgo-router-test-{}-{}-{}.db",
@@ -44,33 +49,36 @@ async fn build_test_state() -> AppState {
     let store = Storage::new(Some(db_url.as_str()))
         .await
         .expect("sqlite test store should initialize");
-    let (dispatch, _receivers) = DispatchChannels::new();
+    let (dispatch, receivers) = DispatchChannels::new();
     let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
-    AppState {
-        dispatch,
-        auth: AuthMode::Disabled,
-        private_channel_enabled: false,
-        public_base_url: Some(Arc::from("https://sandbox.pushgo.dev")),
-        device_registry: Arc::new(DeviceRegistry::new()),
-        device_operation_guards: Arc::new(DeviceOperationGuards::default()),
-        runtime_counters,
-        private_transport_profile: crate::app::PrivateTransportProfile {
-            quic_enabled: true,
-            quic_port: Some(443),
-            tcp_enabled: true,
-            tcp_port: 5223,
-            wss_enabled: true,
-            wss_port: 6666,
-            wss_path: Arc::from("/private/ws"),
-            ws_subprotocol: Arc::from("pushgo-private.v1"),
-            mqtt_enabled: false,
-            mqtt_port: None,
-            mqtt_tls_required: false,
+    (
+        AppState {
+            dispatch,
+            auth: AuthMode::Disabled,
+            private_channel_enabled: false,
+            public_base_url: Some(Arc::from("https://sandbox.pushgo.dev")),
+            device_registry: Arc::new(DeviceRegistry::new()),
+            device_operation_guards: Arc::new(DeviceOperationGuards::default()),
+            runtime_counters,
+            private_transport_profile: crate::app::PrivateTransportProfile {
+                quic_enabled: true,
+                quic_port: Some(443),
+                tcp_enabled: true,
+                tcp_port: 5223,
+                wss_enabled: true,
+                wss_port: 6666,
+                wss_path: Arc::from("/private/ws"),
+                ws_subprotocol: Arc::from("pushgo-private.v1"),
+                mqtt_enabled: false,
+                mqtt_port: None,
+                mqtt_tls_required: false,
+            },
+            private: None,
+            store,
+            mcp: None,
         },
-        private: None,
-        store,
-        mcp: None,
-    }
+        receivers,
+    )
 }
 
 async fn build_mcp_test_state(auth: AuthMode) -> AppState {

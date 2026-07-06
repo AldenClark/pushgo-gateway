@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveActivityTokenRecord {
+    pub activity_key: String,
+    pub channel_id: Option<[u8; 16]>,
+    pub token: String,
+    pub platform: String,
+    pub schema_version: i32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SenderSubmitStatusKind {
     Accepted,

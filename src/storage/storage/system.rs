@@ -17,6 +17,30 @@ impl Storage {
         self.db.save_mcp_state_json(state_json).await
     }
 
+    pub async fn upsert_live_activity_token(
+        &self,
+        record: &LiveActivityTokenRecord,
+    ) -> StoreResult<()> {
+        self.db.upsert_live_activity_token(record).await
+    }
+
+    pub async fn delete_live_activity_token(
+        &self,
+        activity_key: &str,
+        token: Option<&str>,
+    ) -> StoreResult<usize> {
+        self.db
+            .delete_live_activity_token(activity_key, token)
+            .await
+    }
+
+    pub async fn list_live_activity_tokens(
+        &self,
+        activity_key: &str,
+    ) -> StoreResult<Vec<LiveActivityTokenRecord>> {
+        self.db.list_live_activity_tokens(activity_key).await
+    }
+
     pub async fn automation_reset(&self) -> StoreResult<()> {
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();

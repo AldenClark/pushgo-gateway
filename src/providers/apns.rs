@@ -10,6 +10,7 @@ use crate::util::SharedStringMap;
 pub enum ApnsPushType {
     Alert,
     Background,
+    LiveActivity,
 }
 
 /// Core APS payload fields.
@@ -150,6 +151,62 @@ impl ApnsPayload {
         }
     }
 
+    pub fn live_activity(
+        title: String,
+        state: Option<String>,
+        severity: Option<String>,
+        updated_at_millis: i64,
+        event: impl Into<String>,
+        topic: impl Into<String>,
+    ) -> Self {
+        let mut content_state = JsonMap::new();
+        content_state.insert("title".to_string(), JsonValue::String(title));
+        if let Some(state) = state.filter(|value| !value.trim().is_empty()) {
+            content_state.insert("state".to_string(), JsonValue::String(state));
+        }
+        if let Some(severity) = severity.filter(|value| !value.trim().is_empty()) {
+            content_state.insert("severity".to_string(), JsonValue::String(severity));
+        }
+        content_state.insert(
+            "updatedAt".to_string(),
+            JsonValue::String(activitykit_iso8601(updated_at_millis)),
+        );
+        Self {
+            aps: Aps {
+                alert: None,
+                content_available: None,
+                mutable_content: None,
+                thread_id: None,
+                interruption_level: None,
+                timestamp: Some(updated_at_millis / 1000),
+                event: Some(event.into()),
+                content_state: Some(content_state),
+                stale_date: None,
+                dismissal_date: None,
+            },
+            data: SharedStringMap::default(),
+            expiration: None,
+            push_type: ApnsPushType::LiveActivity,
+            topic_override: Some(topic.into()),
+            priority: 10,
+            encoded_body_cache: Mutex::new(None),
+        }
+    }
+
+    pub fn live_activity_end(
+        title: String,
+        state: Option<String>,
+        severity: Option<String>,
+        updated_at_millis: i64,
+        topic: impl Into<String>,
+        dismissal_date: Option<i64>,
+    ) -> Self {
+        let mut payload =
+            Self::live_activity(title, state, severity, updated_at_millis, "end", topic);
+        payload.aps.dismissal_date = dismissal_date;
+        payload
+    }
+
     pub fn push_type(&self) -> ApnsPushType {
         self.push_type
     }
@@ -158,6 +215,7 @@ impl ApnsPayload {
         match self.push_type {
             ApnsPushType::Alert => "alert",
             ApnsPushType::Background => "background",
+            ApnsPushType::LiveActivity => "liveactivity",
         }
     }
 
@@ -182,6 +240,14 @@ impl ApnsPayload {
     pub fn encoded_len(&self) -> Result<usize, serde_json::Error> {
         self.encoded_body().map(|body| body.len())
     }
+}
+
+fn activitykit_iso8601(epoch_millis: i64) -> String {
+    let secs = epoch_millis.div_euclid(1000);
+    let nanos = (epoch_millis.rem_euclid(1000) as u32) * 1_000_000;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos)
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn interruption_level_for(level: &str) -> &'static str {
@@ -241,5 +307,32 @@ mod tests {
         );
         let json = serde_json::to_value(&payload).expect("serialize APNs payload");
         assert!(json["aps"].get("sound").is_none());
+    }
+
+    #[test]
+    fn live_activity_payload_uses_activitykit_headers_and_content_state() {
+        let payload = ApnsPayload::live_activity(
+            "Database latency".to_string(),
+            Some("open".to_string()),
+            Some("critical".to_string()),
+            1_700_000_000_123,
+            "update",
+            "io.ethan.pushgo.push-type.liveactivity",
+        );
+        assert_eq!(payload.push_type_header(), "liveactivity");
+        assert_eq!(
+            payload.topic_override(),
+            Some("io.ethan.pushgo.push-type.liveactivity")
+        );
+        let json = serde_json::to_value(&payload).expect("serialize live activity payload");
+        assert_eq!(json["aps"]["event"], "update");
+        assert_eq!(json["aps"]["timestamp"], 1_700_000_000);
+        assert_eq!(json["aps"]["content-state"]["title"], "Database latency");
+        assert_eq!(json["aps"]["content-state"]["state"], "open");
+        assert_eq!(json["aps"]["content-state"]["severity"], "critical");
+        assert_eq!(
+            json["aps"]["content-state"]["updatedAt"],
+            "2023-11-14T22:13:20.123Z"
+        );
     }
 }

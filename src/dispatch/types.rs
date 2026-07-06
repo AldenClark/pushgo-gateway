@@ -76,6 +76,13 @@ pub(crate) struct DispatchWorkerReceivers {
     pub(super) wns: Receiver<WnsJob>,
 }
 
+#[cfg(test)]
+impl DispatchWorkerReceivers {
+    pub(crate) async fn recv_apns_for_test(&self) -> Result<ApnsJob, flume::RecvError> {
+        self.apns.recv_async().await
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum DispatchError {
     QueueFull,

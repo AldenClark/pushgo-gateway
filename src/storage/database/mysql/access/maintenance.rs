@@ -4,6 +4,68 @@ use crate::storage::{
 };
 
 impl MySqlDb {
+    pub(super) async fn upsert_live_activity_token(
+        &self,
+        record: &LiveActivityTokenRecord,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO live_activity_tokens \
+             (activity_key, token, channel_id, platform, schema_version, created_at, updated_at, expires_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+             ON DUPLICATE KEY UPDATE \
+               channel_id = VALUES(channel_id), \
+               platform = VALUES(platform), \
+               schema_version = VALUES(schema_version), \
+               updated_at = VALUES(updated_at), \
+               expires_at = VALUES(expires_at)",
+        )
+        .bind(record.activity_key.as_str())
+        .bind(record.token.as_str())
+        .bind(record.channel_id.as_ref().map(|id| id.as_slice()))
+        .bind(record.platform.as_str())
+        .bind(record.schema_version)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .bind(record.expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(super) async fn delete_live_activity_token(
+        &self,
+        activity_key: &str,
+        token: Option<&str>,
+    ) -> StoreResult<usize> {
+        let result = if let Some(token) = token {
+            sqlx::query("DELETE FROM live_activity_tokens WHERE activity_key = ? AND token = ?")
+                .bind(activity_key)
+                .bind(token)
+                .execute(&self.pool)
+                .await?
+        } else {
+            sqlx::query("DELETE FROM live_activity_tokens WHERE activity_key = ?")
+                .bind(activity_key)
+                .execute(&self.pool)
+                .await?
+        };
+        Ok(result.rows_affected() as usize)
+    }
+
+    pub(super) async fn list_live_activity_tokens(
+        &self,
+        activity_key: &str,
+    ) -> StoreResult<Vec<LiveActivityTokenRecord>> {
+        let rows = sqlx::query(
+            "SELECT activity_key, token, channel_id, platform, schema_version, created_at, updated_at, expires_at \
+             FROM live_activity_tokens WHERE activity_key = ? ORDER BY updated_at DESC, token ASC",
+        )
+        .bind(activity_key)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(decode_live_activity_token).collect()
+    }
+
     pub(super) async fn upsert_sender_submit_status(
         &self,
         record: &SenderSubmitStatusRecord,
@@ -605,6 +667,27 @@ impl MySqlDb {
         .await?;
         Ok(())
     }
+}
+
+fn decode_live_activity_token(row: sqlx::mysql::MySqlRow) -> StoreResult<LiveActivityTokenRecord> {
+    let channel_bytes: Option<Vec<u8>> = row.get("channel_id");
+    let channel_id = channel_bytes
+        .map(|bytes| {
+            bytes
+                .try_into()
+                .map_err(|_| invalid_sender_status_data("invalid live activity channel_id length"))
+        })
+        .transpose()?;
+    Ok(LiveActivityTokenRecord {
+        activity_key: row.get("activity_key"),
+        token: row.get("token"),
+        channel_id,
+        platform: row.get("platform"),
+        schema_version: row.get("schema_version"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        expires_at: row.get("expires_at"),
+    })
 }
 
 fn decode_sender_submit_status(

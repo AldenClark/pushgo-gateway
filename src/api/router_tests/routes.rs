@@ -5,32 +5,36 @@ use crate::{
 };
 
 #[tokio::test]
-async fn thing_scoped_event_route_returns_not_found() {
+async fn thing_scoped_event_route_is_supported() {
     let state = build_test_state().await;
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "thing-event-device",
+        "thing-event-channel",
+        "password-1234",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        Platform::IOS,
+    )
+    .await;
     let app = super::super::build_router(state, "<html>docs</html>");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/thing/thing-1/event/update")
-                .header("content-type", "application/json")
-                .body(Body::from("{}"))
-                .expect("request should build"),
-        )
-        .await
-        .expect("router should handle request");
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(
-        response.headers().get("x-request-id").is_some(),
-        "404 responses should carry request ids"
-    );
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
-    let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+    let (status, body) = post_json(
+        app,
+        "/thing/thing-1/event/update",
+        json!({
+            "channel_id": channel_id,
+            "password": "password-1234",
+            "event_id": "event-1",
+            "event_time": 1_700_000_000_123i64,
+            "title": "thing event",
+            "status": "open",
+            "severity": "high"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "thing event body: {body:?}");
     assert_eq!(
-        value.get("error_code").and_then(Value::as_str),
-        Some("route_not_found")
+        response_data(&body).get("event_id").and_then(Value::as_str),
+        Some("event-1")
     );
 }
 
