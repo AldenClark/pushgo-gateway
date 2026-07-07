@@ -28,6 +28,7 @@ mod channel_sync;
 mod mcp;
 mod provider_ingress;
 mod routes;
+mod widget_push;
 
 static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 

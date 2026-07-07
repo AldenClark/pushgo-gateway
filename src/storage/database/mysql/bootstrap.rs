@@ -13,6 +13,7 @@ const MYSQL_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) NOT NULL, semantic_id VARCHAR(128) NOT NULL, source VARCHAR(64) NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key), UNIQUE KEY semantic_id_registry_semantic_idx (semantic_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) NOT NULL, channel_id BINARY(16) NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64) NULL, accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (op_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token VARCHAR(512) NOT NULL, channel_id BINARY(16) NULL, platform VARCHAR(32) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (activity_key, token)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key VARCHAR(64) PRIMARY KEY, state_json LONGTEXT NOT NULL, updated_at BIGINT NOT NULL) ENGINE=InnoDB",
 ];
@@ -38,6 +39,8 @@ const MYSQL_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
     "CREATE INDEX live_activity_tokens_channel_idx ON live_activity_tokens (channel_id, updated_at)",
     "CREATE INDEX live_activity_tokens_expires_idx ON live_activity_tokens (expires_at)",
+    "CREATE INDEX widget_push_subscriptions_channel_lookup_idx ON widget_push_subscriptions (device_key, widget_kind, updated_at)",
+    "CREATE INDEX widget_push_subscriptions_token_idx ON widget_push_subscriptions (platform, token)",
 ];
 
 const MYSQL_RUNTIME_INDEX_STATEMENTS: &[&str] = &[

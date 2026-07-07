@@ -13,6 +13,7 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id TEXT PRIMARY KEY, channel_id BLOB NOT NULL, model TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL, dispatch_status TEXT, accepted_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key TEXT NOT NULL, token TEXT NOT NULL, channel_id BLOB, platform TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER, PRIMARY KEY (activity_key, token))",
+    "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key TEXT NOT NULL, platform TEXT NOT NULL, token TEXT NOT NULL, widget_kind TEXT NOT NULL, family TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)",
 ];
@@ -38,6 +39,8 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_channel_idx ON live_activity_tokens (channel_id, updated_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_expires_idx ON live_activity_tokens (expires_at)",
+    "CREATE INDEX IF NOT EXISTS widget_push_subscriptions_channel_lookup_idx ON widget_push_subscriptions (device_key, widget_kind, updated_at)",
+    "CREATE INDEX IF NOT EXISTS widget_push_subscriptions_token_idx ON widget_push_subscriptions (platform, token)",
 ];
 
 const SQLITE_DISPATCH_TABLE_STATEMENTS: &[&str] = &[

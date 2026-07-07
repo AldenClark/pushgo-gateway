@@ -41,6 +41,44 @@ impl Storage {
         self.db.list_live_activity_tokens(activity_key).await
     }
 
+    pub async fn upsert_widget_push_subscriptions(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        token: &str,
+        widgets: &[WidgetPushSubscriptionRecord],
+        schema_version: i32,
+        now: i64,
+    ) -> StoreResult<()> {
+        self.db
+            .upsert_widget_push_subscriptions(
+                device_key,
+                platform,
+                token,
+                widgets,
+                schema_version,
+                now,
+            )
+            .await
+    }
+
+    pub async fn delete_widget_push_token(
+        &self,
+        platform: Platform,
+        token: &str,
+    ) -> StoreResult<usize> {
+        self.db.delete_widget_push_token(platform, token).await
+    }
+
+    pub async fn list_widget_push_targets_for_channel(
+        &self,
+        channel_id: [u8; 16],
+    ) -> StoreResult<Vec<WidgetPushSubscriptionRecord>> {
+        self.db
+            .list_widget_push_targets_for_channel(channel_id)
+            .await
+    }
+
     pub async fn automation_reset(&self) -> StoreResult<()> {
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();

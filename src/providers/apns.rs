@@ -11,6 +11,7 @@ pub enum ApnsPushType {
     Alert,
     Background,
     LiveActivity,
+    Widgets,
 }
 
 /// Core APS payload fields.
@@ -23,6 +24,8 @@ pub struct Aps {
     pub content_available: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mutable_content: Option<u8>,
+    #[serde(rename = "content-changed", skip_serializing_if = "Option::is_none")]
+    pub content_changed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,6 +102,7 @@ impl ApnsPayload {
                 }),
                 content_available: None,
                 mutable_content: Some(1),
+                content_changed: None,
                 thread_id,
                 interruption_level: Some(interruption_level),
                 timestamp: None,
@@ -134,6 +138,7 @@ impl ApnsPayload {
                 alert: Some(Alert { title, body }),
                 content_available: None,
                 mutable_content: Some(1),
+                content_changed: None,
                 thread_id,
                 interruption_level: None,
                 timestamp: None,
@@ -176,6 +181,7 @@ impl ApnsPayload {
                 alert: None,
                 content_available: None,
                 mutable_content: None,
+                content_changed: None,
                 thread_id: None,
                 interruption_level: None,
                 timestamp: Some(updated_at_millis / 1000),
@@ -207,6 +213,30 @@ impl ApnsPayload {
         payload
     }
 
+    pub fn widgets() -> Self {
+        Self {
+            aps: Aps {
+                alert: None,
+                content_available: None,
+                mutable_content: None,
+                content_changed: Some(true),
+                thread_id: None,
+                interruption_level: None,
+                timestamp: None,
+                event: None,
+                content_state: None,
+                stale_date: None,
+                dismissal_date: None,
+            },
+            data: SharedStringMap::default(),
+            expiration: None,
+            push_type: ApnsPushType::Widgets,
+            topic_override: None,
+            priority: 5,
+            encoded_body_cache: Mutex::new(None),
+        }
+    }
+
     pub fn push_type(&self) -> ApnsPushType {
         self.push_type
     }
@@ -216,6 +246,7 @@ impl ApnsPayload {
             ApnsPushType::Alert => "alert",
             ApnsPushType::Background => "background",
             ApnsPushType::LiveActivity => "liveactivity",
+            ApnsPushType::Widgets => "widgets",
         }
     }
 

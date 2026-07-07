@@ -293,6 +293,21 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
         &self,
         activity_key: &str,
     ) -> StoreResult<Vec<LiveActivityTokenRecord>>;
+    async fn upsert_widget_push_subscriptions(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        token: &str,
+        widgets: &[WidgetPushSubscriptionRecord],
+        schema_version: i32,
+        now: i64,
+    ) -> StoreResult<()>;
+    async fn delete_widget_push_token(&self, platform: Platform, token: &str)
+    -> StoreResult<usize>;
+    async fn list_widget_push_targets_for_channel(
+        &self,
+        channel_id: [u8; 16],
+    ) -> StoreResult<Vec<WidgetPushSubscriptionRecord>>;
     async fn upsert_sender_submit_status(
         &self,
         record: &SenderSubmitStatusRecord,

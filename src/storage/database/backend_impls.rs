@@ -575,6 +575,42 @@ macro_rules! impl_backend_system_state_access {
                 <$backend>::list_live_activity_tokens(self, activity_key).await
             }
 
+            async fn upsert_widget_push_subscriptions(
+                &self,
+                device_key: &str,
+                platform: Platform,
+                token: &str,
+                widgets: &[WidgetPushSubscriptionRecord],
+                schema_version: i32,
+                now: i64,
+            ) -> StoreResult<()> {
+                <$backend>::upsert_widget_push_subscriptions(
+                    self,
+                    device_key,
+                    platform,
+                    token,
+                    widgets,
+                    schema_version,
+                    now,
+                )
+                .await
+            }
+
+            async fn delete_widget_push_token(
+                &self,
+                platform: Platform,
+                token: &str,
+            ) -> StoreResult<usize> {
+                <$backend>::delete_widget_push_token(self, platform, token).await
+            }
+
+            async fn list_widget_push_targets_for_channel(
+                &self,
+                channel_id: [u8; 16],
+            ) -> StoreResult<Vec<WidgetPushSubscriptionRecord>> {
+                <$backend>::list_widget_push_targets_for_channel(self, channel_id).await
+            }
+
             async fn upsert_sender_submit_status(
                 &self,
                 record: &SenderSubmitStatusRecord,

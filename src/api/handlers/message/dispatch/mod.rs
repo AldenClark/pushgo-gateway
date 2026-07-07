@@ -36,6 +36,7 @@ mod private;
 mod provider;
 mod tracing;
 mod types;
+mod widgets;
 mod windows;
 
 impl From<CoreProviderDeliveryPath> for ProviderDeliveryPath {
@@ -82,6 +83,7 @@ impl DispatchExecutionDelegate for ApiDispatchDelegate {
             let payloads = ProviderPayloads::build(prepared);
             dispatch_provider_targets(prepared, &payloads, progress).await?;
         }
+        widgets::dispatch_widget_push_targets(prepared).await;
         Ok(())
     }
 

@@ -41,6 +41,43 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, list_live_activity_tokens(activity_key))
     }
 
+    async fn upsert_widget_push_subscriptions(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        token: &str,
+        widgets: &[WidgetPushSubscriptionRecord],
+        schema_version: i32,
+        now: i64,
+    ) -> StoreResult<()> {
+        delegate_db_async!(
+            self,
+            upsert_widget_push_subscriptions(
+                device_key,
+                platform,
+                token,
+                widgets,
+                schema_version,
+                now
+            )
+        )
+    }
+
+    async fn delete_widget_push_token(
+        &self,
+        platform: Platform,
+        token: &str,
+    ) -> StoreResult<usize> {
+        delegate_db_async!(self, delete_widget_push_token(platform, token))
+    }
+
+    async fn list_widget_push_targets_for_channel(
+        &self,
+        channel_id: [u8; 16],
+    ) -> StoreResult<Vec<WidgetPushSubscriptionRecord>> {
+        delegate_db_async!(self, list_widget_push_targets_for_channel(channel_id))
+    }
+
     async fn upsert_sender_submit_status(
         &self,
         record: &SenderSubmitStatusRecord,

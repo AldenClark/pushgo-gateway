@@ -76,6 +76,7 @@ pub(crate) struct PreparedDispatch<'a> {
     pub(crate) runtime: &'a dyn DispatchExecutionRuntime,
     pub(crate) channel_id: [u8; 16],
     pub(crate) channel_id_value: String,
+    pub(crate) entity_type: &'static str,
     pub(crate) op_id: String,
     pub(crate) delivery_id: String,
     pub(crate) delivery_id_ref: Arc<str>,
@@ -126,6 +127,7 @@ impl<'a> PreparedDispatch<'a> {
             delivery_id,
             correlation_id,
             delivery_id_ref,
+            entity_type,
         } = context;
         let dispatch_targets = runtime
             .channel_store()
@@ -177,6 +179,7 @@ impl<'a> PreparedDispatch<'a> {
             runtime,
             channel_id,
             channel_id_value: prepared_core.channel_id,
+            entity_type,
             op_id: prepared_core.op_id,
             delivery_id: prepared_core.delivery_id,
             delivery_id_ref,
@@ -262,6 +265,7 @@ struct DispatchBuildContext {
     delivery_id: String,
     correlation_id: Arc<str>,
     delivery_id_ref: Arc<str>,
+    entity_type: &'static str,
 }
 
 impl DispatchBuildContext {
@@ -272,6 +276,7 @@ impl DispatchBuildContext {
         delivery_id: String,
         correlation_id: Arc<str>,
         delivery_id_ref: Arc<str>,
+        entity_type: &'static str,
     ) -> Self {
         Self {
             channel_id,
@@ -280,6 +285,7 @@ impl DispatchBuildContext {
             delivery_id,
             correlation_id,
             delivery_id_ref,
+            entity_type,
         }
     }
 }
@@ -347,6 +353,7 @@ where
                 delivery_id,
                 Arc::clone(&correlation_id),
                 Arc::clone(&delivery_id_ref),
+                entity_type,
             ),
         )
         .await?;

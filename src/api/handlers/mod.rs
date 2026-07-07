@@ -12,6 +12,7 @@ pub(crate) mod private;
 pub(crate) mod send_ack;
 pub(crate) mod send_status;
 pub(crate) mod thing;
+pub(crate) mod widget_push;
 
 use axum::{
     Router,
@@ -87,6 +88,10 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route(
             "/v1/activity/unregister",
             post(activity::activity_unregister),
+        )
+        .route(
+            "/v1/widget-push/subscription",
+            post(widget_push::widget_push_subscription_upsert),
         )
         .route("/thing/create", post(thing::thing_create_to_channel))
         .route("/thing/update", post(thing::thing_update_to_channel))

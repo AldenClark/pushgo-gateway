@@ -12,6 +12,18 @@ pub struct LiveActivityTokenRecord {
     pub expires_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WidgetPushSubscriptionRecord {
+    pub device_key: String,
+    pub platform: String,
+    pub token: String,
+    pub widget_kind: String,
+    pub family: String,
+    pub schema_version: i32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SenderSubmitStatusKind {
     Accepted,

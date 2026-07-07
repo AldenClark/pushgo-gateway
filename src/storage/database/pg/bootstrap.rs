@@ -13,6 +13,7 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) PRIMARY KEY, semantic_id VARCHAR(128) NOT NULL UNIQUE, source VARCHAR(64), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) PRIMARY KEY, channel_id BYTEA NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64), accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token TEXT NOT NULL, channel_id BYTEA, platform VARCHAR(32) NOT NULL, schema_version INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT, PRIMARY KEY (activity_key, token))",
+    "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL)",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key VARCHAR(64) PRIMARY KEY, state_json TEXT NOT NULL, updated_at BIGINT NOT NULL)",
 ];
@@ -38,6 +39,8 @@ const PG_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_channel_idx ON live_activity_tokens (channel_id, updated_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_expires_idx ON live_activity_tokens (expires_at)",
+    "CREATE INDEX IF NOT EXISTS widget_push_subscriptions_channel_lookup_idx ON widget_push_subscriptions (device_key, widget_kind, updated_at)",
+    "CREATE INDEX IF NOT EXISTS widget_push_subscriptions_token_idx ON widget_push_subscriptions (platform, token)",
 ];
 
 const PG_RUNTIME_INDEX_STATEMENTS: &[&str] = &[

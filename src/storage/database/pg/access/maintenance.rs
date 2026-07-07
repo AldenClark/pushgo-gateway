@@ -66,6 +66,81 @@ impl PostgresDb {
         rows.into_iter().map(decode_live_activity_token).collect()
     }
 
+    pub(super) async fn upsert_widget_push_subscriptions(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        token: &str,
+        widgets: &[WidgetPushSubscriptionRecord],
+        schema_version: i32,
+        now: i64,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "DELETE FROM widget_push_subscriptions \
+             WHERE device_key = $1 AND platform = $2 AND token = $3",
+        )
+        .bind(device_key)
+        .bind(platform.name())
+        .bind(token)
+        .execute(&self.pool)
+        .await?;
+
+        for widget in widgets {
+            sqlx::query(
+                "INSERT INTO widget_push_subscriptions \
+                 (device_key, platform, token, widget_kind, family, schema_version, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(device_key)
+            .bind(platform.name())
+            .bind(token)
+            .bind(widget.widget_kind.as_str())
+            .bind(widget.family.as_str())
+            .bind(schema_version)
+            .bind(now)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn delete_widget_push_token(
+        &self,
+        platform: Platform,
+        token: &str,
+    ) -> StoreResult<usize> {
+        let result =
+            sqlx::query("DELETE FROM widget_push_subscriptions WHERE platform = $1 AND token = $2")
+                .bind(platform.name())
+                .bind(token)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    pub(super) async fn list_widget_push_targets_for_channel(
+        &self,
+        channel_id: [u8; 16],
+    ) -> StoreResult<Vec<WidgetPushSubscriptionRecord>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT w.device_key, w.platform, w.token, w.widget_kind, w.family, \
+                    w.schema_version, w.created_at, w.updated_at \
+             FROM widget_push_subscriptions w \
+             JOIN devices d ON d.device_key = w.device_key \
+             JOIN channel_subscriptions s ON s.device_id = d.device_id \
+             WHERE s.channel_id = $1 AND s.status = 'active' \
+             ORDER BY w.updated_at DESC, w.token ASC, w.widget_kind ASC, w.family ASC",
+        )
+        .bind(&channel_id[..])
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(decode_widget_push_subscription)
+            .collect())
+    }
+
     pub(super) async fn upsert_sender_submit_status(
         &self,
         record: &SenderSubmitStatusRecord,
@@ -664,6 +739,19 @@ fn decode_live_activity_token(row: sqlx::postgres::PgRow) -> StoreResult<LiveAct
         updated_at: row.get("updated_at"),
         expires_at: row.get("expires_at"),
     })
+}
+
+fn decode_widget_push_subscription(row: sqlx::postgres::PgRow) -> WidgetPushSubscriptionRecord {
+    WidgetPushSubscriptionRecord {
+        device_key: row.get("device_key"),
+        platform: row.get("platform"),
+        token: row.get("token"),
+        widget_kind: row.get("widget_kind"),
+        family: row.get("family"),
+        schema_version: row.get("schema_version"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
 }
 
 fn decode_sender_submit_status(

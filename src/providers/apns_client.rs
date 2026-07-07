@@ -8,7 +8,9 @@ use crate::{
     Error,
     providers::{
         ApnsClient, ApnsTokenProvider, BoxFuture, DispatchResult, ProviderFailure,
-        ProviderFailureKind, TokenInfo, apns::ApnsPayload, error::trimmed_body_text,
+        ProviderFailureKind, TokenInfo,
+        apns::{ApnsPayload, ApnsPushType},
+        error::trimmed_body_text,
     },
     runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
     storage::Platform,
@@ -107,6 +109,9 @@ impl ApnsService {
         };
         let topic = match payload.topic_override() {
             Some(topic) => topic.to_string(),
+            None if payload.push_type() == ApnsPushType::Widgets => {
+                format!("{default_topic}.push-type.widgets")
+            }
             None => default_topic.to_string(),
         };
 

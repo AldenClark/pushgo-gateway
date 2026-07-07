@@ -37,6 +37,17 @@ pub(crate) struct ApnsJob {
     pub collapse_id: Option<Arc<str>>,
 }
 
+pub(crate) struct WidgetPushJob {
+    pub channel_id: [u8; 16],
+    pub correlation_id: Arc<str>,
+    pub delivery_id: Arc<str>,
+    pub device_key: Arc<str>,
+    pub device_token: Arc<str>,
+    pub platform: Platform,
+    pub widget_kinds: Arc<[String]>,
+    pub collapse_id: Option<Arc<str>>,
+}
+
 pub(crate) struct FcmJob {
     pub channel_id: [u8; 16],
     pub correlation_id: Arc<str>,
@@ -66,12 +77,14 @@ pub(crate) struct WnsJob {
 #[derive(Clone)]
 pub(crate) struct DispatchChannels {
     apns_tx: Sender<ApnsJob>,
+    widget_push_tx: Sender<WidgetPushJob>,
     fcm_tx: Sender<FcmJob>,
     wns_tx: Sender<WnsJob>,
 }
 
 pub(crate) struct DispatchWorkerReceivers {
     pub(super) apns: Receiver<ApnsJob>,
+    pub(super) widget_push: Receiver<WidgetPushJob>,
     pub(super) fcm: Receiver<FcmJob>,
     pub(super) wns: Receiver<WnsJob>,
 }
@@ -80,6 +93,12 @@ pub(crate) struct DispatchWorkerReceivers {
 impl DispatchWorkerReceivers {
     pub(crate) async fn recv_apns_for_test(&self) -> Result<ApnsJob, flume::RecvError> {
         self.apns.recv_async().await
+    }
+
+    pub(crate) async fn recv_widget_push_for_test(
+        &self,
+    ) -> Result<WidgetPushJob, flume::RecvError> {
+        self.widget_push.recv_async().await
     }
 }
 
@@ -98,16 +117,19 @@ impl DispatchChannels {
     pub(crate) fn with_profile(profile: GatewayRuntimeProfile) -> (Self, DispatchWorkerReceivers) {
         let config = DispatchRuntimeConfig::from_profile(profile);
         let (apns_tx, apns_rx) = flume::bounded(config.queue_capacity);
+        let (widget_push_tx, widget_push_rx) = flume::bounded(config.queue_capacity);
         let (fcm_tx, fcm_rx) = flume::bounded(config.queue_capacity);
         let (wns_tx, wns_rx) = flume::bounded(config.queue_capacity);
         (
             Self {
                 apns_tx,
+                widget_push_tx,
                 fcm_tx,
                 wns_tx,
             },
             DispatchWorkerReceivers {
                 apns: apns_rx,
+                widget_push: widget_push_rx,
                 fcm: fcm_rx,
                 wns: wns_rx,
             },
@@ -116,6 +138,14 @@ impl DispatchChannels {
 
     pub(crate) fn try_send_apns(&self, job: ApnsJob) -> Result<(), DispatchError> {
         match self.apns_tx.try_send(job) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(DispatchError::QueueFull),
+            Err(TrySendError::Disconnected(_)) => Err(DispatchError::ChannelClosed),
+        }
+    }
+
+    pub(crate) fn try_send_widget_push(&self, job: WidgetPushJob) -> Result<(), DispatchError> {
+        match self.widget_push_tx.try_send(job) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(DispatchError::QueueFull),
             Err(TrySendError::Disconnected(_)) => Err(DispatchError::ChannelClosed),
