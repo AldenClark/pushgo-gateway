@@ -8,7 +8,7 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
-## [v1.2.11]
+## [v1.3.0-beta.1]
 
 ### Improved
 - Added MQTT 5 private transport support for gateway deployments, including publish-only and persistent subscribe device modes, QoS 1 delivery, MQTT Will handling, and realtime downlink for message, event, and thing payloads.
@@ -17,6 +17,9 @@ Policy:
 - Improved upgrade readiness documentation for operators moving from older private-channel deployments, including database backup expectations, runtime-table hard-reset semantics, and explicit transport/profile configuration.
 - Added an explicit managed database upgrade preflight (`--db-upgrade plan|run`) with stdout progress, upgrade state tables, locking, backup policy enforcement, verification, and SQLite restore support. See `docs/gateway-database-upgrade-plan.md`.
 - Improved release validation coverage with all-model sandbox delivery, public/private stress passes, MQTT protocol tests, and migration/legacy/hard-reset checks.
+- Added activity maintenance support across gateway APIs and storage backends so activity-token lifecycle data can be registered, updated, and cleaned consistently.
+- Added WidgetKit push subscription + dispatch support so Apple widgets can receive targeted gateway-triggered updates through the same delivery pipeline.
+- Added `zh-TW` localization support for gateway API responses and embedded docs.
 
 ## [v1.2.10]
 
