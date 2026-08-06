@@ -2089,6 +2089,25 @@ fn provider_outcome_callers_cannot_bypass_durable_finalization_retry() {
     }
 }
 
+#[test]
+fn external_database_test_cleanup_removes_anonymous_data_volumes() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend_tests =
+        fs::read_to_string(manifest_dir.join("src/storage/storage/tests/backend_init.rs"))
+            .expect("external database test harness should be readable");
+    let parity_script = fs::read_to_string(manifest_dir.join("scripts/storage_crossdb_parity.sh"))
+        .expect("cross-database parity script should be readable");
+
+    assert!(
+        backend_tests.contains(".args([\"rm\", \"-f\", \"-v\", self.name.as_str()])"),
+        "external database test containers must remove anonymous data volumes"
+    );
+    assert!(
+        parity_script.contains("docker rm -f -v \"$1\""),
+        "cross-database parity cleanup must remove anonymous data volumes"
+    );
+}
+
 fn is_test_source(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == "tests")

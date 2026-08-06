@@ -64,7 +64,7 @@ select_container_cli() {
 
 container_rm() {
   case "$CONTAINER_CLI" in
-    docker) docker rm -f "$1" >/dev/null 2>&1 || true ;;
+    docker) docker rm -f -v "$1" >/dev/null 2>&1 || true ;;
     container) container delete --force "$1" >/dev/null 2>&1 || true ;;
   esac
 }

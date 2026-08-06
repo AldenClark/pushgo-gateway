@@ -22,7 +22,7 @@ PushGo Gateway policy:
 - Made private/provider route migrations and Widget subscription replace-all operations transactional across all supported databases.
 - Made MQTT receiver delivery durable before QoS 1 PUBLISH, retained it for reconnect replay until a successful PUBACK, and prevented packet-id wraparound from overwriting in-flight delivery ownership.
 - Added payload-bound client `op_id` idempotency without allowing duplicate/conflicting requests to overwrite the first sender-status record, plus forward-compatible public DTO decoding that still rejects known action-forbidden fields.
-- Made managed-upgrade no-op verification read-only for existing v9 databases that predate the upgrade-state tables.
+- Made already-current managed-upgrade no-op verification read-only, while beta1 v9 databases take the real managed migration to v10.
 - Strengthened PostgreSQL/MySQL external backup artifact admission by requiring a readable local artifact with an operator-declared completion time within 24 hours and streaming it to verify the declared size and SHA-256. This does not attest that the artifact came from the current database or is restorable.
 - Switched SQLite sidecars to rollback-journal mode so route transitions spanning attached core/delivery databases retain SQLite's documented multi-file atomic commit behavior.
 - Refreshed vulnerable transitive dependencies and added all-feature Clippy plus `cargo audit` enforcement to the release workflow.
@@ -38,7 +38,7 @@ PushGo Gateway policy:
 
 ### Test
 - Passed 481 Gateway tests with all features, including live MySQL/PostgreSQL upgrade coverage; all-feature Clippy passes with warnings denied.
-- Passed `scripts/preflight_release_audit.sh all`: managed schema v9, public sends 200/200, private sends 80/80, and no private outbox leak.
+- Passed `scripts/preflight_release_audit.sh all`: beta1 v9 upgraded to the binary target schema v10, public sends 200/200, private sends 80/80, and no private outbox leak.
 - Passed three live SQLite/MySQL/PostgreSQL parity rounds with every API/DB pair matching and identical normalized hashes per round.
 - Passed `cargo audit` with no vulnerability advisory; the only allowed warning is the yanked-only transitive `spin 0.9.8` notice.
 

@@ -19,7 +19,7 @@ const BETA1_COMMIT: &str = "a84a937ccc7cbcce99c5a0e37f35ed2d0fe55906";
 impl Drop for DockerContainer {
     fn drop(&mut self) {
         let _ = Command::new("docker")
-            .args(["rm", "-f", self.name.as_str()])
+            .args(["rm", "-f", "-v", self.name.as_str()])
             .status();
     }
 }

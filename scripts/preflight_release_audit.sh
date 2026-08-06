@@ -143,10 +143,16 @@ run_managed_upgrade_smoke() {
     cat "$log_file" >&2
     return 1
   }
-  local schema_version
+  local target_schema schema_version
+  target_schema="$(awk -F'target_schema=' '/^\[upgrade\] check started driver=sqlite target_schema=/{split($2, fields, /[[:space:]]/); print fields[1]; exit}' "$log_file")"
+  if [ -z "$target_schema" ]; then
+    echo "managed upgrade smoke could not determine the binary target schema; log follows:" >&2
+    cat "$log_file" >&2
+    return 1
+  fi
   schema_version="$(sqlite3 "$db_file" "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key='schema_version';")"
-  if [ "$schema_version" != "2026-04-22-gateway-v9" ]; then
-    echo "managed upgrade smoke schema mismatch: $schema_version" >&2
+  if [ "$schema_version" != "$target_schema" ]; then
+    echo "managed upgrade smoke schema mismatch: actual=$schema_version expected=$target_schema" >&2
     cat "$log_file" >&2
     return 1
   fi
