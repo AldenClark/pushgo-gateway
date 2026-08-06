@@ -11,7 +11,7 @@ mod private_channels;
 #[path = "access/provider.rs"]
 mod provider;
 #[path = "access/routes.rs"]
-mod routes;
+pub(super) mod routes;
 #[path = "access/subscriptions.rs"]
 mod subscriptions;
 

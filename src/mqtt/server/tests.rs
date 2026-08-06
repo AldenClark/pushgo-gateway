@@ -495,8 +495,8 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
             .await
             .expect("outbox should list")
             .len(),
-        outbox_before_publish,
-        "MQTT realtime downlink should not create private outbox entries"
+        outbox_before_publish + 1,
+        "accepted MQTT downlink should be durable until the receiver sends PUBACK"
     );
     write_client_packet(
         &mut stream,
@@ -618,8 +618,8 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
             .load_private_outbox_entry(device_id, delivery_id.as_str())
             .await
             .expect("outbox should load")
-            .is_none(),
-        "MQTT realtime downlink should not be backed by private outbox"
+            .is_some(),
+        "MQTT QoS1 downlink must remain in the durable outbox until PUBACK"
     );
 
     write_client_packet(
@@ -641,7 +641,7 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
             .await
             .expect("outbox should load")
             .is_none(),
-        "PUBACK should not create private outbox state for MQTT realtime downlink"
+        "PUBACK should clear the durable MQTT outbox record"
     );
 
     let mut unsubscribe = Unsubscribe::new(MqttMessageTopic::format(channel_id.as_str()));
@@ -1401,7 +1401,7 @@ async fn mqtt_will_connect_rejects_publish_only_and_invalid_will_contract() {
 }
 
 #[tokio::test]
-async fn mqtt_will_accepts_thing_scoped_message_without_mqtt_downlink_enqueue() {
+async fn mqtt_will_durably_queues_thing_scoped_message_for_reconnect() {
     let ctx = MqttFlowTestContext::new().await;
     let owner_key = "mqtt-will-thing-owner";
     let channel_password = "mqtt-will-thing-pass";
@@ -1455,8 +1455,9 @@ async fn mqtt_will_accepts_thing_scoped_message_without_mqtt_downlink_enqueue() 
         .expect("outbox should list")
         .len();
     assert_eq!(
-        outbox_after, outbox_before,
-        "thing-scoped MQTT will messages must not enqueue MQTT downlink payloads"
+        outbox_after,
+        outbox_before + 1,
+        "thing-scoped MQTT will delivery must remain durable until PUBACK"
     );
 }
 
@@ -2069,6 +2070,89 @@ async fn mqtt_subscribe_and_unsubscribe_report_auth_topic_and_idempotent_results
     assert_eq!(metrics.mqtt_subscribe_failures, 3);
     assert_eq!(metrics.mqtt_unsubscribe_success, 2);
     assert_eq!(metrics.mqtt_unsubscribe_failures, 2);
+}
+
+#[tokio::test]
+async fn mqtt_negative_puback_retains_durable_outbox_for_redelivery() {
+    let (ctx, mut stream, device_key, channel_id, channel_password) =
+        setup_connected_channel().await;
+    subscribe_stream_to_channel(&mut stream, channel_id.as_str(), &channel_password, 120).await;
+
+    send_message(
+        &ctx.state,
+        MessageSendCommand {
+            channel_id,
+            password: channel_password,
+            op_id: None,
+            thing_id: None,
+            occurred_at: None,
+            title: "MQTT rejected downlink".to_string(),
+            body: Some("must remain durable".to_string()),
+            severity: None,
+            ttl: None,
+            url: None,
+            images: Vec::new(),
+            ciphertext: None,
+            tags: Vec::new(),
+            metadata: serde_json::Map::new(),
+            source: crate::delivery_core::source::IngressSource::HttpMessage,
+        },
+    )
+    .await
+    .expect("message send should succeed");
+
+    let publish = read_publish_with_title(&mut stream, "MQTT rejected downlink").await;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&publish.payload).expect("downlink should be JSON");
+    let delivery_id = payload
+        .get("delivery_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("delivery id should be present")
+        .to_string();
+    let device_id = derive_private_device_id(&device_key);
+    assert!(
+        ctx.state
+            .store
+            .load_private_outbox_entry(device_id, delivery_id.as_str())
+            .await
+            .expect("outbox should load")
+            .is_some()
+    );
+
+    let ack_non_ok_before = ctx.private.metrics.snapshot().frames_ack_non_ok;
+    let mut rejected = PubAck::new(publish.pkid);
+    rejected.reason = PubAckReason::NoMatchingSubscribers;
+    write_client_packet(&mut stream, ClientPacket::PubAck(rejected)).await;
+    wait_until(Duration::from_secs(2), || {
+        let private = Arc::clone(&ctx.private);
+        async move { private.metrics.snapshot().frames_ack_non_ok > ack_non_ok_before }
+    })
+    .await;
+
+    assert!(
+        ctx.state
+            .store
+            .load_private_outbox_entry(device_id, delivery_id.as_str())
+            .await
+            .expect("outbox should load after rejected PUBACK")
+            .is_some(),
+        "negative PUBACK must not delete the durable delivery"
+    );
+}
+
+#[test]
+fn mqtt_packet_id_wrap_skips_inflight_identifiers() {
+    let mut inflight = HashMap::new();
+    inflight.insert(u16::MAX, "delivery-max".to_string());
+    inflight.insert(1, "delivery-one".to_string());
+    let mut next_pkid = u16::MAX;
+
+    assert_eq!(
+        next_available_packet_id(&mut next_pkid, &inflight),
+        2,
+        "wraparound must not overwrite an in-flight packet mapping"
+    );
+    assert_eq!(next_pkid, 3);
 }
 
 async fn wait_until<F, Fut>(duration: Duration, mut predicate: F)

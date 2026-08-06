@@ -351,7 +351,7 @@ impl MqttSession {
                 packet = self.read_packet() => {
                     match packet {
                         Ok(Packet::Publish(publish)) => self.handle_publish(&client, publish).await,
-                        Ok(Packet::PubAck(puback)) => self.handle_puback(&client, puback.pkid).await,
+                        Ok(Packet::PubAck(puback)) => self.handle_puback(&client, puback).await,
                         Ok(Packet::Subscribe(subscribe)) => self.handle_subscribe(&client, subscribe).await,
                         Ok(Packet::Unsubscribe(unsubscribe)) => self.handle_unsubscribe(&client, unsubscribe).await,
                         Ok(Packet::PingReq) => {
@@ -657,9 +657,7 @@ impl MqttSession {
     }
 
     fn next_packet_id(&mut self) -> u16 {
-        let current = self.next_pkid.max(1);
-        self.next_pkid = if current == u16::MAX { 1 } else { current + 1 };
-        current
+        next_available_packet_id(&mut self.next_pkid, &self.inflight)
     }
 
     async fn read_packet(&mut self) -> Result<Packet, String> {
@@ -767,6 +765,21 @@ impl MqttSession {
             remote_addr = %(self.remote_addr.to_string()),
             error = %(error)
         );
+    }
+}
+
+fn next_available_packet_id(next_pkid: &mut u16, inflight: &HashMap<u16, String>) -> u16 {
+    let mut candidate = (*next_pkid).max(1);
+    loop {
+        *next_pkid = if candidate == u16::MAX {
+            1
+        } else {
+            candidate + 1
+        };
+        if !inflight.contains_key(&candidate) {
+            return candidate;
+        }
+        candidate = *next_pkid;
     }
 }
 

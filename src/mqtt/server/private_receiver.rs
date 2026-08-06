@@ -1,6 +1,6 @@
 use mqttbytes::{
     QoS,
-    v5::{Packet, Publish, PublishProperties},
+    v5::{Packet, PubAck, PubAckReason, Publish, PublishProperties},
 };
 
 use crate::{mqtt::MqttRole, private::protocol::DeliverEnvelope};
@@ -8,12 +8,22 @@ use crate::{mqtt::MqttRole, private::protocol::DeliverEnvelope};
 use super::{AuthenticatedMqttClient, MAX_INFLIGHT, MqttSession};
 
 impl MqttSession {
-    pub(super) async fn handle_puback(&mut self, client: &AuthenticatedMqttClient, pkid: u16) {
+    pub(super) async fn handle_puback(&mut self, client: &AuthenticatedMqttClient, puback: PubAck) {
         let Some(device_id) = client.device_id else {
             self.runtime.private.metrics.mark_ack_non_ok();
             return;
         };
-        if let Some(delivery_id) = self.inflight.remove(&pkid) {
+        if let Some(delivery_id) = self.inflight.remove(&puback.pkid) {
+            if puback.reason != PubAckReason::Success {
+                self.runtime.private.metrics.mark_ack_non_ok();
+                self.runtime.private.metrics.mark_mqtt_downlink_failure();
+                self.log_failure(
+                    "mqtt.puback_rejected",
+                    format!("puback_rejected_{:?}", puback.reason).as_str(),
+                );
+                self.runtime.private.request_fallback_resync();
+                return;
+            }
             match self
                 .runtime
                 .private

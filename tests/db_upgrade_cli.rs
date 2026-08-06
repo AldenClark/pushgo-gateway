@@ -2,7 +2,8 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-const STORAGE_SCHEMA_VERSION: &str = "2026-04-22-gateway-v9";
+const STORAGE_SCHEMA_VERSION: &str = "2026-08-05-gateway-v10";
+const STORAGE_SCHEMA_VERSION_BETA1: &str = "2026-04-22-gateway-v9";
 const STORAGE_SCHEMA_VERSION_MIGRATABLE: &str = "2026-04-17-gateway-v8";
 const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-04-16-gateway-v7";
 const STORAGE_SCHEMA_VERSION_LEGACY: &str = "2026-04-13-gateway-v6";
@@ -14,6 +15,11 @@ const DEVICE_IDENTITY_V8_CHECKSUM: &str =
 const OBSERVABILITY_V9_MIGRATION_ID: &str = "20260422_001_observability_v9";
 const OBSERVABILITY_V9_CHECKSUM: &str =
     "sha256:8f4cb15c7dc5a328a88f596f59eaec157045a78287cf27a52f88f0a5518f5e47";
+const FORMAL_RELEASE_V10_MIGRATION_ID: &str = "20260805_001_release_v10";
+const FORMAL_RELEASE_V10_CHECKSUM: &str =
+    "sha256:f526ca103e36ed4ca6a0e0bddb6ebe2aff757a4c11417ff7d26500e2513b0bb1";
+const BETA1_TAG: &str = "v1.3.0-beta.1";
+const BETA1_COMMIT: &str = "a84a937ccc7cbcce99c5a0e37f35ed2d0fe55906";
 
 #[test]
 fn db_upgrade_plan_and_run_are_explicit_cli_paths() {
@@ -123,8 +129,8 @@ fn db_upgrade_run_accepts_multiple_legacy_sqlite_versions_with_data() {
         );
         assert_eq!(
             completed_upgrade_runs(db_path.to_string_lossy().as_ref()),
-            2,
-            "explicit rerun should record a completed no-op run for {version}"
+            1,
+            "explicit no-op rerun must not create another upgrade-run record for {version}"
         );
     }
 }
@@ -173,8 +179,8 @@ fn db_upgrade_run_accepts_v8_sqlite_with_observability_data() {
         "v8 should use in-place backfill: {stdout}"
     );
     assert!(
-        !stdout.contains("[upgrade] backup completed"),
-        "v8 recommended backup path should not force sqlite backup: {stdout}"
+        stdout.contains("[upgrade] backup completed"),
+        "v8 to formal v10 includes a required backup migration: {stdout}"
     );
     assert_upgraded_sqlite(db_path.to_string_lossy().as_ref());
     assert!(
@@ -193,6 +199,48 @@ fn db_upgrade_run_accepts_v8_sqlite_with_observability_data() {
         ),
         1,
         "v8 upgrade should record the v9 migration"
+    );
+    assert_eq!(
+        migration_count(
+            db_path.to_string_lossy().as_ref(),
+            FORMAL_RELEASE_V10_MIGRATION_ID
+        ),
+        1,
+        "v8 upgrade should record the formal v10 migration"
+    );
+}
+
+#[test]
+fn db_upgrade_run_migrates_beta1_v9_to_formal_v10() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("cli-upgrade-v9-to-v10.sqlite");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    seed_v9_sqlite(db_path.to_string_lossy().as_ref());
+
+    let plan = run_gateway(&["--db-url", db_url.as_str(), "--db-upgrade", "plan"]);
+    assert!(plan.status.success());
+    let plan_stdout = String::from_utf8_lossy(&plan.stdout);
+    assert!(
+        plan_stdout
+            .contains("current schema=2026-04-22-gateway-v9 action=backfill_current pending=1"),
+        "beta1 must expose one real formal migration: {plan_stdout}"
+    );
+
+    let run = run_gateway(&["--db-url", db_url.as_str(), "--db-upgrade", "run"]);
+    assert!(
+        run.status.success(),
+        "v9 to v10 upgrade failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("migration=20260805_001_release_v10"));
+    assert!(stdout.contains("[upgrade] backup completed"));
+    assert_upgraded_sqlite(db_path.to_string_lossy().as_ref());
+    assert_eq!(
+        table_row_count(db_path.to_string_lossy().as_ref(), "private_bindings"),
+        1,
+        "v9 to v10 must preserve runtime bindings"
     );
 }
 
@@ -247,6 +295,76 @@ fn seed_v8_sqlite(path: &str) {
     );
 }
 
+fn seed_v9_sqlite(path: &str) {
+    let source = beta1_bootstrap_source("sqlite");
+    for array in [
+        "SQLITE_BASE_TABLE_STATEMENTS",
+        "SQLITE_RUNTIME_TABLE_STATEMENTS",
+        "SQLITE_BASE_INDEX_STATEMENTS",
+        "SQLITE_RUNTIME_INDEX_STATEMENTS",
+    ] {
+        for statement in rust_string_array(&source, array) {
+            run_sqlite3(path, format!("{statement};").as_str());
+        }
+    }
+    run_sqlite3(
+        path,
+        format!(
+            "CREATE TABLE IF NOT EXISTS pushgo_schema_migrations (migration_id TEXT PRIMARY KEY, description TEXT NOT NULL, checksum TEXT NOT NULL, target_schema_version TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, execution_ms INTEGER NOT NULL, success INTEGER NOT NULL, error TEXT);
+             INSERT OR REPLACE INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '{STORAGE_SCHEMA_VERSION_BETA1}');
+             INSERT OR REPLACE INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error)
+             VALUES ('{DEVICE_IDENTITY_V8_MIGRATION_ID}', 'beta1 exact v8 ledger', '{DEVICE_IDENTITY_V8_CHECKSUM}', '{STORAGE_SCHEMA_VERSION_MIGRATABLE}', 1, 1, 0, 1, NULL);
+             INSERT OR REPLACE INTO pushgo_schema_migrations (migration_id, description, checksum, target_schema_version, started_at, finished_at, execution_ms, success, error)
+             VALUES ('{OBSERVABILITY_V9_MIGRATION_ID}', 'beta1 exact v9 ledger', '{OBSERVABILITY_V9_CHECKSUM}', '{STORAGE_SCHEMA_VERSION_BETA1}', 2, 2, 0, 1, NULL);
+             INSERT INTO private_bindings (platform, token_hash, device_id, provider_token, created_at, updated_at)
+             VALUES (1, X'0202020202020202020202020202020202020202020202020202020202020202', X'03030303030303030303030303030303', 'fixture-provider-token', 1700000000000, 1700000000001);"
+        )
+        .as_str(),
+    );
+}
+
+fn beta1_bootstrap_source(backend: &str) -> String {
+    let resolved = Command::new("git")
+        .args(["rev-parse", &format!("{BETA1_TAG}^{{commit}}")])
+        .output()
+        .expect("git rev-parse for beta1 tag should execute");
+    assert!(
+        resolved.status.success(),
+        "the exact beta1 tag is required for upgrade fixtures"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&resolved.stdout).trim(),
+        BETA1_COMMIT,
+        "beta1 fixture tag must resolve to the audited commit"
+    );
+    let object = format!("{BETA1_TAG}:src/storage/database/{backend}/bootstrap.rs");
+    let output = Command::new("git")
+        .args(["show", object.as_str()])
+        .output()
+        .expect("git show for beta1 bootstrap should execute");
+    assert!(output.status.success(), "beta1 bootstrap source must exist");
+    String::from_utf8(output.stdout).expect("beta1 bootstrap source must be utf8")
+}
+
+fn rust_string_array(source: &str, name: &str) -> Vec<String> {
+    let marker = format!("const {name}: &[&str] = &[");
+    let (_, tail) = source
+        .split_once(marker.as_str())
+        .unwrap_or_else(|| panic!("missing beta1 SQL array {name}"));
+    let (body, _) = tail
+        .split_once("\n];")
+        .unwrap_or_else(|| panic!("unterminated beta1 SQL array {name}"));
+    body.lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('"'))
+        .map(|line| {
+            let literal = line.strip_suffix(',').unwrap_or(line);
+            serde_json::from_str::<String>(literal)
+                .unwrap_or_else(|err| panic!("invalid Rust SQL literal in {name}: {err}"))
+        })
+        .collect()
+}
+
 fn run_gateway(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_pushgo-gateway"))
         .args(args)
@@ -266,6 +384,17 @@ fn assert_upgraded_sqlite(path: &str) {
             .as_str(),
         ),
         OBSERVABILITY_V9_CHECKSUM
+    );
+    assert_eq!(migration_count(path, FORMAL_RELEASE_V10_MIGRATION_ID), 1);
+    assert_eq!(
+        sqlite3_scalar(
+            path,
+            format!(
+                "SELECT checksum FROM pushgo_schema_migrations WHERE migration_id='{FORMAL_RELEASE_V10_MIGRATION_ID}';"
+            )
+            .as_str(),
+        ),
+        FORMAL_RELEASE_V10_CHECKSUM
     );
     assert_eq!(
         completed_upgrade_runs(path),

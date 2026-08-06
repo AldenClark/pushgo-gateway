@@ -28,6 +28,10 @@ pub enum StoreError {
     ChannelAliasMissing,
     #[error("Channel subscriber limit exceeded")]
     ChannelSubscriberLimitExceeded,
+    #[error(
+        "Device route migration requires {pending} pending slots, but only {capacity} are available"
+    )]
+    RouteMigrationCapacityExceeded { pending: usize, capacity: usize },
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
     #[error("Password hash error: {0}")]

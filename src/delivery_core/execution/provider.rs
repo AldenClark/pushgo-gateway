@@ -5,7 +5,11 @@ use crate::{
     delivery_core::error::CoreError,
     dispatch::{ApnsJob, DispatchChannels, DispatchError, FcmJob, ProviderDeliveryPath, WnsJob},
     private::PrivateState,
-    providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
+    providers::{
+        apns::{ApnsExpirationEpochSeconds, ApnsPayload},
+        fcm::FcmPayload,
+        wns::WnsPayload,
+    },
     runtime_counters::{
         OPS_METRIC_DISPATCH_INVALID_TOKEN_CLEANUP_LOOKUP_FAILED,
         OPS_METRIC_DISPATCH_INVALID_TOKEN_CLEANUP_OUTBOX_CLEAR_FAILED, RuntimeCounterCollector,
@@ -26,6 +30,7 @@ use super::super::{
 pub(crate) struct ProviderDispatchDevice {
     pub(crate) info: DeviceInfo,
     pub(crate) device_key: String,
+    pub(crate) route_updated_at: i64,
 }
 
 fn wakeup_data_with_delivery_id(
@@ -35,6 +40,22 @@ fn wakeup_data_with_delivery_id(
     let mut data = wakeup_template.clone();
     data.insert("delivery_id".to_string(), delivery_id.to_string());
     data
+}
+
+pub(crate) fn direct_data_with_provider_ack_source(
+    custom_data: &HashMap<String, String>,
+    provider_device_key: &str,
+) -> Arc<HashMap<String, String>> {
+    let mut data = custom_data.clone();
+    data.remove("provider_device_key");
+    let provider_device_key = provider_device_key.trim();
+    if !provider_device_key.is_empty() {
+        data.insert(
+            "provider_device_key".to_string(),
+            provider_device_key.to_string(),
+        );
+    }
+    Arc::new(data)
 }
 
 pub(crate) struct ProviderExecutionTarget {
@@ -55,6 +76,7 @@ pub(crate) trait ProviderRouteResolver {
 pub(crate) struct ResolvedProviderTarget {
     pub(crate) device: DeviceInfo,
     pub(crate) device_key: Arc<str>,
+    pub(crate) route_updated_at: i64,
     pub(crate) provider_stats_key: Arc<str>,
     pub(crate) wakeup_data_for_device: Arc<HashMap<String, String>>,
     pub(crate) allow_inline: bool,
@@ -100,6 +122,9 @@ pub(crate) fn build_provider_payload_set(input: ProviderPayloadSetInput<'_>) -> 
         }
     }
 
+    let apns_expiration = input
+        .effective_ttl
+        .map(ApnsExpirationEpochSeconds::from_epoch_millis);
     let apns_payload = has_apns.then(|| {
         Arc::new(ApnsPayload::new(
             input.resolved_title.clone(),
@@ -107,7 +132,7 @@ pub(crate) fn build_provider_payload_set(input: ProviderPayloadSetInput<'_>) -> 
             input.fallback_body.clone(),
             Some(input.apple_thread_id.clone()),
             input.severity.as_str().to_string(),
-            input.effective_ttl,
+            apns_expiration,
             crate::util::SharedStringMap::from(Arc::clone(&input.custom_data)),
         ))
     });
@@ -118,7 +143,7 @@ pub(crate) fn build_provider_payload_set(input: ProviderPayloadSetInput<'_>) -> 
             input.fallback_body.clone(),
             Some(input.apple_thread_id.clone()),
             input.severity.as_str().to_string(),
-            input.effective_ttl,
+            apns_expiration,
             quantize_watch_payload(input.custom_data.as_ref()),
         ))
     });
@@ -182,6 +207,7 @@ pub(crate) fn prepare_provider_target(
     ResolvedProviderTarget {
         device: device.info.clone(),
         device_key: Arc::<str>::from(provider_device_key.into_boxed_str()),
+        route_updated_at: device.route_updated_at,
         provider_stats_key,
         wakeup_data_for_device,
         allow_inline: input.execution_target.allow_inline,
@@ -246,6 +272,8 @@ pub(crate) struct ProviderDispatchContext<'a> {
     pub(crate) delivery_id: Arc<str>,
     pub(crate) device_key: Arc<str>,
     pub(crate) device_token: Arc<str>,
+    pub(crate) route_updated_at: i64,
+    pub(crate) outcome: Arc<crate::dispatch::ProviderDispatchOutcome>,
 }
 
 pub(crate) enum ProviderDispatchPayload {
@@ -470,11 +498,13 @@ pub(crate) fn enqueue_provider_dispatch(
             delivery_id: Arc::clone(&context.delivery_id),
             device_key: Arc::clone(&context.device_key),
             device_token: Arc::clone(&context.device_token),
+            route_updated_at: context.route_updated_at,
             platform,
             direct_payload,
             wakeup_payload: Some(wakeup_payload),
             initial_path,
             wakeup_payload_within_limit,
+            outcome: Some(context.outcome),
             collapse_id,
         }),
         ProviderDispatchPayload::Fcm {
@@ -490,12 +520,14 @@ pub(crate) fn enqueue_provider_dispatch(
             delivery_id: Arc::clone(&context.delivery_id),
             device_key: Arc::clone(&context.device_key),
             device_token: Arc::clone(&context.device_token),
+            route_updated_at: context.route_updated_at,
             direct_payload,
             direct_body,
             wakeup_payload: Some(wakeup_payload),
             wakeup_body,
             initial_path,
             wakeup_payload_within_limit,
+            outcome: Some(context.outcome),
         }),
         ProviderDispatchPayload::Wns {
             direct_payload,
@@ -508,10 +540,12 @@ pub(crate) fn enqueue_provider_dispatch(
             delivery_id: context.delivery_id,
             device_key: context.device_key,
             device_token: context.device_token,
+            route_updated_at: context.route_updated_at,
             direct_payload,
             wakeup_payload: Some(wakeup_payload),
             initial_path,
             wakeup_payload_within_limit,
+            outcome: Some(context.outcome),
         }),
     }
 }
@@ -549,15 +583,51 @@ pub(crate) struct ProviderInvalidTokenCleanup<'a> {
     pub(crate) device_key: &'a str,
     pub(crate) platform: Platform,
     pub(crate) device_token: &'a str,
+    pub(crate) route_updated_at: i64,
     pub(crate) provider: &'static str,
     pub(crate) correlation_id: &'a str,
 }
 
 pub(crate) async fn cleanup_invalid_provider_token(request: ProviderInvalidTokenCleanup<'_>) {
-    let _ = request
+    let invalidated = match request
         .store
-        .unsubscribe_channel_for_device_key(request.channel_id, request.device_key)
-        .await;
+        .unsubscribe_channel_if_provider_route_current(
+            request.channel_id,
+            request.device_key,
+            request.platform,
+            request.device_token,
+            request.route_updated_at,
+        )
+        .await
+    {
+        Ok(invalidated) => invalidated,
+        Err(err) => {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "dispatch.invalid_token_cleanup_guard_failed",
+                provider = %(request.provider),
+                correlation_id = %(crate::util::redact_text(request.correlation_id)),
+                channel_id = %(crate::util::redact_text(request.channel_id_text)),
+                platform = %(request.platform.name()),
+                error = %(err.to_string())
+            );
+            return;
+        }
+    };
+    if !invalidated {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "dispatch.invalid_token_cleanup_stale_ignored",
+            provider = %(request.provider),
+            correlation_id = %(crate::util::redact_text(request.correlation_id)),
+            channel_id = %(crate::util::redact_text(request.channel_id_text)),
+            platform = %(request.platform.name()),
+            route_updated_at = request.route_updated_at
+        );
+        return;
+    }
 
     let device_id = match request
         .store
@@ -620,4 +690,47 @@ pub(crate) async fn cleanup_invalid_provider_token(request: ProviderInvalidToken
 fn redact_device_token(token: &str) -> String {
     let visible = 8usize.min(token.len());
     format!("...{}", &token[token.len().saturating_sub(visible)..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::direct_data_with_provider_ack_source;
+    use hashbrown::HashMap;
+
+    #[test]
+    fn direct_ack_source_overrides_untrusted_provider_device_key() {
+        let custom_data = HashMap::from([
+            (
+                "base_url".to_string(),
+                "https://gateway.example".to_string(),
+            ),
+            (
+                "provider_device_key".to_string(),
+                "attacker-key".to_string(),
+            ),
+        ]);
+
+        let data = direct_data_with_provider_ack_source(&custom_data, " target-device-key ");
+
+        assert_eq!(
+            data.get("provider_device_key").map(String::as_str),
+            Some("target-device-key")
+        );
+        assert_eq!(
+            data.get("base_url").map(String::as_str),
+            Some("https://gateway.example")
+        );
+    }
+
+    #[test]
+    fn direct_ack_source_omits_empty_provider_device_key() {
+        let custom_data = HashMap::from([(
+            "provider_device_key".to_string(),
+            "attacker-key".to_string(),
+        )]);
+
+        let data = direct_data_with_provider_ack_source(&custom_data, "   ");
+
+        assert!(!data.contains_key("provider_device_key"));
+    }
 }

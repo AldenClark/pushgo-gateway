@@ -15,7 +15,7 @@ fn event_create_rejects_event_id_field() {
     let parsed = serde_json::from_str::<EventCreateRequest>(raw);
     assert!(
         parsed.is_err(),
-        "event create should reject event_id in payload"
+        "event create should reject the known forbidden event_id field"
     );
 }
 
@@ -99,6 +99,17 @@ fn event_create_rejects_ended_at_field() {
     }"#;
     let parsed = serde_json::from_str::<EventCreateRequest>(raw);
     assert!(parsed.is_err(), "event create should reject ended_at");
+}
+
+#[test]
+fn event_create_ignores_unknown_extension_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "event_time":1710000000789,
+        "future_extension":{"version":2}
+    }"#;
+    assert!(serde_json::from_str::<EventCreateRequest>(raw).is_ok());
 }
 
 #[test]

@@ -44,6 +44,8 @@ pub(crate) struct MqttReceiverDeliveryExecution<'a> {
     pub(crate) correlation_id: &'a str,
     pub(crate) delivery_id: &'a str,
     pub(crate) channel_id: &'a str,
+    pub(crate) sent_at: i64,
+    pub(crate) expires_at: i64,
     pub(crate) targets: &'a [MqttReceiverExecutionTarget],
     pub(crate) payload: Arc<[u8]>,
 }
@@ -53,38 +55,61 @@ pub(crate) async fn execute_mqtt_receiver_deliveries(
     progress: &mut DispatchProgress,
 ) {
     for target in execution.targets {
-        if execution.private_state.hub.try_deliver_to_mqtt_device(
+        if let Err(err) = execution
+            .private_state
+            .enqueue_private_delivery(
+                target.device_id,
+                execution.delivery_id,
+                Arc::clone(&execution.payload),
+                execution.sent_at,
+                execution.expires_at,
+            )
+            .await
+        {
+            progress.record_mqtt_failure();
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "dispatch.mqtt_receiver_outbox_enqueue_failed",
+                correlation_id = %(crate::util::redact_text(execution.correlation_id)),
+                delivery_id = %(crate::util::redact_text(execution.delivery_id)),
+                channel_id = %(crate::util::redact_text(execution.channel_id)),
+                device_id = %(crate::util::redact_text(crate::util::encode_lower_hex_128(&target.device_id))),
+                error = %(err.to_string())
+            );
+            continue;
+        }
+
+        let realtime_delivered = execution.private_state.hub.try_deliver_to_mqtt_device(
             target.device_id,
             crate::private::protocol::DeliverEnvelope {
                 delivery_id: execution.delivery_id.to_string(),
                 payload: Arc::clone(&execution.payload),
             },
-        ) {
-            progress.record_mqtt_success(target.device_id);
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::INFO,
-                event = "dispatch.mqtt_receiver_delivered",
-                correlation_id = %(crate::util::redact_text(execution.correlation_id)),
-                delivery_id = %(crate::util::redact_text(execution.delivery_id)),
-                channel_id = %(crate::util::redact_text(execution.channel_id)),
-                device_id = %(crate::util::redact_text(crate::util::encode_lower_hex_128(&target.device_id))),
-                topic = %(crate::util::redact_text(target.topic.as_str())),
-                qos = (target.qos as u64)
-            );
-            let store = execution.store.clone();
-            let device_id = target.device_id;
-            tokio::spawn(async move {
-                store
-                    .record_device_activity_best_effort(
-                        device_id,
-                        chrono::Utc::now().timestamp_millis(),
-                        "mqtt_receiver_delivery",
-                    )
-                    .await;
-            });
-        } else {
-            progress.record_mqtt_failure();
-        }
+        );
+        progress.record_mqtt_success(target.device_id);
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "dispatch.mqtt_receiver_outbox_enqueued",
+            correlation_id = %(crate::util::redact_text(execution.correlation_id)),
+            delivery_id = %(crate::util::redact_text(execution.delivery_id)),
+            channel_id = %(crate::util::redact_text(execution.channel_id)),
+            device_id = %(crate::util::redact_text(crate::util::encode_lower_hex_128(&target.device_id))),
+            topic = %(crate::util::redact_text(target.topic.as_str())),
+            qos = (target.qos as u64),
+            realtime_delivered = (realtime_delivered)
+        );
+        let store = execution.store.clone();
+        let device_id = target.device_id;
+        tokio::spawn(async move {
+            store
+                .record_device_activity_best_effort(
+                    device_id,
+                    chrono::Utc::now().timestamp_millis(),
+                    "mqtt_receiver_delivery",
+                )
+                .await;
+        });
     }
 }

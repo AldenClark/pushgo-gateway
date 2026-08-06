@@ -38,6 +38,14 @@ pub trait ProviderSubscriptionDatabaseAccess: Send + Sync {
         channel_id: [u8; 16],
         device_key: &str,
     ) -> StoreResult<bool>;
+    async fn unsubscribe_channel_if_provider_route_current(
+        &self,
+        channel_id: [u8; 16],
+        device_key: &str,
+        platform: Platform,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool>;
     async fn list_subscribed_channels_for_device_key(
         &self,
         device_key: &str,
@@ -198,6 +206,13 @@ pub trait DeviceRouteDatabaseAccess: Send + Sync {
     async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()>;
     async fn touch_device_activity(&self, device_id: DeviceId, at_ts: i64) -> StoreResult<()>;
     async fn persist_device_route_change(&self, route: &DeviceRouteRecordRow) -> StoreResult<()>;
+    async fn transition_device_route(
+        &self,
+        route: &DeviceRouteRecordRow,
+        previous_channel_type: RouteChannelType,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<usize>;
     async fn replace_device_identity(
         &self,
         route: &DeviceRouteRecordRow,
@@ -233,12 +248,48 @@ pub trait ProviderPullDatabaseAccess: Send + Sync {
         now: i64,
         limit: usize,
     ) -> StoreResult<Vec<ProviderPullItem>>;
+    async fn peek_provider_item(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullItem>>;
+    async fn peek_provider_items(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullItem>>;
+    async fn peek_provider_candidate(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullCandidate>>;
+    async fn peek_provider_candidates(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullCandidate>>;
     async fn ack_provider_item(
         &self,
         device_id: DeviceId,
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>>;
+    async fn ack_provider_items(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<Vec<ProviderPullItem>>;
+    async fn discard_provider_items_by_outer_ids(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<usize>;
 }
 
 #[async_trait]
@@ -262,6 +313,7 @@ pub trait DedupeDatabaseAccess: Send + Sync {
         &self,
         dedupe_key: &str,
         delivery_id: &str,
+        request_fingerprint: Option<&str>,
         created_at: i64,
     ) -> StoreResult<OpDedupeReservation>;
     async fn mark_op_dedupe_sent(
@@ -308,10 +360,10 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
         &self,
         channel_id: [u8; 16],
     ) -> StoreResult<Vec<WidgetPushSubscriptionRecord>>;
-    async fn upsert_sender_submit_status(
+    async fn insert_sender_submit_status_if_absent(
         &self,
         record: &SenderSubmitStatusRecord,
-    ) -> StoreResult<()>;
+    ) -> StoreResult<bool>;
     async fn update_sender_submit_status(
         &self,
         op_id: &str,
@@ -319,6 +371,13 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
         dispatch_status: Option<&str>,
         updated_at: i64,
     ) -> StoreResult<()>;
+    async fn finalize_provider_dispatch_outcome(
+        &self,
+        op_id: &str,
+        delivery_id: &str,
+        success: bool,
+    ) -> StoreResult<()>;
+    async fn recover_interrupted_provider_dispatches(&self, updated_at: i64) -> StoreResult<usize>;
     async fn load_sender_submit_status(
         &self,
         op_id: &str,

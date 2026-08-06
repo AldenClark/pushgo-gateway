@@ -7,25 +7,25 @@ use crate::storage::database::migration::{
 
 const MYSQL_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS channels (channel_id BINARY(16) PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) NOT NULL, payload_blob BLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (delivery_id)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) NOT NULL, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) NOT NULL, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) NOT NULL, semantic_id VARCHAR(128) NOT NULL, source VARCHAR(64) NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key), UNIQUE KEY semantic_id_registry_semantic_idx (semantic_id)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) NOT NULL, channel_id BINARY(16) NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64) NULL, accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (op_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, payload_blob BLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (delivery_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, request_fingerprint VARCHAR(64) NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, semantic_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, source VARCHAR(64) NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key), UNIQUE KEY semantic_id_registry_semantic_idx (semantic_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, channel_id BINARY(16) NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64) NULL, accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (op_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token VARCHAR(512) NOT NULL, channel_id BINARY(16) NULL, platform VARCHAR(32) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (activity_key, token)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS mcp_state (state_key VARCHAR(64) PRIMARY KEY, state_json LONGTEXT NOT NULL, updated_at BIGINT NOT NULL) ENGINE=InnoDB",
 ];
 
 const MYSQL_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BINARY(32) PRIMARY KEY, token_raw BLOB NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255) NULL, platform VARCHAR(32) NULL, channel_type VARCHAR(32) NULL, provider_token TEXT NULL, route_updated_at BIGINT NULL) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BINARY(32) PRIMARY KEY, token_raw BLOB NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, platform VARCHAR(32) NULL, channel_type VARCHAR(32) NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, route_updated_at BIGINT NULL) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BINARY(16) NOT NULL, key_id INT NOT NULL, key_hash BLOB NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT NULL, PRIMARY KEY (device_id, key_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BINARY(16) NOT NULL, expires_at BIGINT NOT NULL) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL, attempts INT NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT NULL, claimed_by VARCHAR(128) NULL, first_sent_at BIGINT NULL, last_attempt_at BIGINT NULL, acked_at BIGINT NULL, fallback_sent_at BIGINT NULL, next_attempt_at BIGINT NOT NULL, last_error_code VARCHAR(64) NULL, last_error_detail TEXT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS private_bindings (platform SMALLINT NOT NULL, token_hash BINARY(32) NOT NULL, device_id BINARY(16) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (platform, token_hash)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, status VARCHAR(16) NOT NULL, attempts INT NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT NULL, claimed_by VARCHAR(128) NULL, first_sent_at BIGINT NULL, last_attempt_at BIGINT NULL, acked_at BIGINT NULL, fallback_sent_at BIGINT NULL, next_attempt_at BIGINT NOT NULL, last_error_code VARCHAR(64) NULL, last_error_detail TEXT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS private_bindings (platform SMALLINT NOT NULL, token_hash BINARY(32) NOT NULL, device_id BINARY(16) NOT NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (platform, token_hash)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BINARY(16) NOT NULL, device_id BINARY(32) NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'active', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (channel_id, device_id)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) NOT NULL, payload_blob LONGBLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, payload_blob LONGBLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
 ];
 
 const MYSQL_BASE_INDEX_STATEMENTS: &[&str] = &[
@@ -84,6 +84,7 @@ const MYSQL_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS: &[&str] = &[
 ];
 const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
 const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
+const PROVIDER_TOKEN_NORMALIZATION_META_KEY: &str = "provider_token_semantics_v1";
 
 impl MySqlDb {
     pub async fn new(db_url: &str, runtime_profile: GatewayRuntimeProfile) -> StoreResult<Self> {
@@ -171,6 +172,13 @@ impl MySqlDb {
         }
 
         self.ensure_mysql_column(
+            "dispatch_op_dedupe",
+            "request_fingerprint",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN request_fingerprint VARCHAR(64) NULL",
+        )
+        .await?;
+
+        self.ensure_mysql_column(
             "devices",
             "token_raw",
             "ALTER TABLE devices ADD COLUMN token_raw BLOB NULL",
@@ -203,7 +211,7 @@ impl MySqlDb {
         self.ensure_mysql_column(
             "devices",
             "provider_token",
-            "ALTER TABLE devices ADD COLUMN provider_token TEXT NULL",
+            "ALTER TABLE devices ADD COLUMN provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL",
         )
         .await?;
         self.ensure_mysql_column(
@@ -221,7 +229,7 @@ impl MySqlDb {
         self.ensure_mysql_column(
             "private_bindings",
             "provider_token",
-            "ALTER TABLE private_bindings ADD COLUMN provider_token TEXT NULL",
+            "ALTER TABLE private_bindings ADD COLUMN provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL",
         )
         .await?;
         self.ensure_mysql_column(
@@ -341,9 +349,33 @@ impl MySqlDb {
         self.ensure_mysql_column(
             "provider_pull_queue",
             "provider_token",
-            "ALTER TABLE provider_pull_queue ADD COLUMN provider_token TEXT NULL",
+            "ALTER TABLE provider_pull_queue ADD COLUMN provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL",
         )
         .await?;
+        self.ensure_mysql_binary_text_column("devices", "provider_token")
+            .await?;
+        self.ensure_mysql_binary_text_column("private_bindings", "provider_token")
+            .await?;
+        self.ensure_mysql_binary_text_column("provider_pull_queue", "provider_token")
+            .await?;
+        self.repair_mysql_device_key_identities().await?;
+        for (table, column, length) in [
+            ("dispatch_delivery_dedupe", "dedupe_key", 255_u16),
+            ("dispatch_delivery_dedupe", "delivery_id", 128_u16),
+            ("dispatch_op_dedupe", "dedupe_key", 255_u16),
+            ("dispatch_op_dedupe", "delivery_id", 128_u16),
+            ("semantic_id_registry", "dedupe_key", 255_u16),
+            ("semantic_id_registry", "semantic_id", 128_u16),
+            ("sender_submit_status", "op_id", 128_u16),
+            ("private_payloads", "delivery_id", 128_u16),
+            ("private_outbox", "delivery_id", 128_u16),
+            ("provider_pull_queue", "delivery_id", 128_u16),
+            ("devices", "device_key", 255_u16),
+            ("widget_push_subscriptions", "device_key", 128_u16),
+        ] {
+            self.ensure_mysql_binary_varchar_column(table, column, length)
+                .await?;
+        }
         self.ensure_mysql_column(
             "provider_pull_queue",
             "created_at",
@@ -376,6 +408,7 @@ impl MySqlDb {
         .await?;
         self.ensure_mysql_provider_pull_queue_primary_key().await?;
         self.normalize_mysql_epoch_columns_to_millis_once().await?;
+        self.normalize_mysql_provider_tokens_once().await?;
 
         self.store_mysql_schema_version(STORAGE_SCHEMA_VERSION)
             .await?;
@@ -505,6 +538,134 @@ impl MySqlDb {
         Ok(())
     }
 
+    async fn normalize_mysql_provider_tokens_once(&self) -> StoreResult<()> {
+        let normalized: Option<String> =
+            sqlx::query_scalar("SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = ?")
+                .bind(PROVIDER_TOKEN_NORMALIZATION_META_KEY)
+                .fetch_optional(&self.pool)
+                .await?;
+        if normalized.as_deref() == Some("complete") {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let bindings = sqlx::query(
+            "SELECT platform, token_hash, device_id, provider_token, created_at, updated_at \
+             FROM private_bindings WHERE platform IN (1, 2, 4) \
+               AND provider_token IS NOT NULL AND token_hash IS NOT NULL \
+             ORDER BY updated_at ASC, created_at ASC, token_hash ASC",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let routes = sqlx::query(
+            "SELECT device_id, device_key, platform, channel_type, provider_token, route_updated_at \
+             FROM devices \
+             WHERE platform IN ('ios', 'macos', 'watchos') \
+               AND provider_token IS NOT NULL AND device_key IS NOT NULL \
+               AND channel_type IS NOT NULL AND route_updated_at IS NOT NULL \
+             ORDER BY LOWER(TRIM(provider_token)), platform, route_updated_at DESC, device_key DESC",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE devices SET provider_token = LOWER(TRIM(provider_token)) \
+             WHERE platform IN ('ios', 'macos', 'watchos') AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        for row in bindings {
+            let platform: i16 = row.get("platform");
+            let old_hash: Vec<u8> = row.get("token_hash");
+            let device_id: Vec<u8> = row.get("device_id");
+            let provider_token = super::access::decode_mysql_text(&row, "provider_token")?;
+            let canonical = provider_token.trim().to_ascii_lowercase();
+            let (new_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
+            let new_hash = new_hash.ok_or(StoreError::InvalidDeviceToken)?;
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (platform, token_hash, device_id, provider_token, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON DUPLICATE KEY UPDATE device_id = VALUES(device_id), \
+                   provider_token = VALUES(provider_token), updated_at = GREATEST(updated_at, VALUES(updated_at))",
+            )
+            .bind(platform)
+            .bind(new_hash.as_slice())
+            .bind(device_id.as_slice())
+            .bind(&canonical)
+            .bind(row.get::<i64, _>("created_at"))
+            .bind(row.get::<i64, _>("updated_at"))
+            .execute(&mut *tx)
+            .await?;
+            if old_hash != new_hash {
+                sqlx::query("DELETE FROM private_bindings WHERE platform = ? AND token_hash = ?")
+                    .bind(platform)
+                    .bind(old_hash.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        sqlx::query(
+            "UPDATE provider_pull_queue SET provider_token = LOWER(TRIM(provider_token)) \
+             WHERE platform IN ('ios', 'macos', 'watchos') AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let mut merged_routes = std::collections::HashSet::new();
+        for row in routes {
+            let platform: String = row.get("platform");
+            let provider_token = super::access::decode_mysql_text(&row, "provider_token")?;
+            let canonical = provider_token.trim().to_ascii_lowercase();
+            if !merged_routes.insert((platform.clone(), canonical.clone())) {
+                continue;
+            }
+            let route = DeviceRouteRecordRow {
+                device_key: super::access::decode_mysql_text(&row, "device_key")?,
+                platform,
+                channel_type: super::access::decode_mysql_text(&row, "channel_type")?,
+                provider_token: Some(canonical.clone()),
+                updated_at: row.get("route_updated_at"),
+            };
+            let values = route.persistence_values()?;
+            let old_device_id: Vec<u8> = row.get("device_id");
+            if PrivateDeviceId::parse_compat(old_device_id.as_slice())
+                .is_none_or(|id| id.into_inner().as_slice() != values.device_id.as_slice())
+            {
+                sqlx::query("UPDATE devices SET device_key = NULL WHERE device_id = ?")
+                    .bind(old_device_id.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            super::access::routes::upsert_device_route_in_tx(&mut tx, &route).await?;
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (platform, token_hash, device_id, provider_token, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON DUPLICATE KEY UPDATE device_id = VALUES(device_id), \
+                   provider_token = VALUES(provider_token), updated_at = GREATEST(updated_at, VALUES(updated_at))",
+            )
+            .bind(values.platform_code)
+            .bind(token_hash.as_deref())
+            .bind(values.device_id.as_slice())
+            .bind(&canonical)
+            .bind(values.updated_at)
+            .bind(values.updated_at)
+            .execute(&mut *tx)
+            .await?;
+            super::access::routes::coalesce_duplicate_provider_routes_in_tx(&mut tx, &values)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES (?, 'complete') \
+             ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)",
+        )
+        .bind(PROVIDER_TOKEN_NORMALIZATION_META_KEY)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn ensure_mysql_schema_migrations_table(&self) -> StoreResult<()> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS pushgo_schema_migrations (\
@@ -625,9 +786,194 @@ impl MySqlDb {
         Ok(())
     }
 
+    async fn ensure_mysql_binary_text_column(&self, table: &str, column: &str) -> StoreResult<()> {
+        self.ensure_mysql_binary_varchar_column(table, column, 4096)
+            .await
+    }
+
+    async fn repair_mysql_device_key_identities(&self) -> StoreResult<()> {
+        let rows = sqlx::query(
+            "SELECT device_id, device_key FROM devices \
+             WHERE device_key IS NOT NULL ORDER BY device_key ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        for row in rows {
+            let route_device_id: Vec<u8> = row.get("device_id");
+            let device_key = super::access::decode_mysql_text(&row, "device_key")?;
+            let device_key = crate::value::DeviceKeyRef::parse(&device_key)
+                .map_err(|_| StoreError::InvalidDeviceToken)?;
+            let current_private_id = PrivateDeviceId::parse_compat(route_device_id.as_slice())
+                .ok_or(StoreError::BinaryError)?
+                .into_inner();
+            let expected_private_id = PrivateDeviceId::derive(device_key.as_str()).into_inner();
+            if current_private_id == expected_private_id {
+                continue;
+            }
+
+            let mut tx = self.pool.begin().await?;
+            let conflicting_device_id: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT device_id FROM devices WHERE device_id = ? AND device_id <> ? LIMIT 1 FOR UPDATE",
+            )
+            .bind(expected_private_id.as_slice())
+            .bind(route_device_id.as_slice())
+            .fetch_optional(&mut *tx)
+            .await?;
+            if conflicting_device_id.is_some() {
+                return Err(StoreError::Upgrade(format!(
+                    "cannot repair MySQL device identity for key {} because the derived device_id already exists",
+                    crate::util::redact_text(device_key.as_str())
+                )));
+            }
+
+            sqlx::query(
+                "INSERT INTO channel_subscriptions \
+                 (channel_id, device_id, status, created_at, updated_at) \
+                 SELECT source_subscriptions.channel_id, ?, source_subscriptions.status, \
+                        source_subscriptions.created_at, source_subscriptions.updated_at \
+                 FROM (SELECT channel_id, status, created_at, updated_at \
+                       FROM channel_subscriptions WHERE device_id = ?) AS source_subscriptions \
+                 ON DUPLICATE KEY UPDATE \
+                   status = IF(channel_subscriptions.status = 'active' OR VALUES(status) = 'active', 'active', VALUES(status)), \
+                   created_at = LEAST(channel_subscriptions.created_at, VALUES(created_at)), \
+                   updated_at = GREATEST(channel_subscriptions.updated_at, VALUES(updated_at))",
+            )
+            .bind(expected_private_id.as_slice())
+            .bind(route_device_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM channel_subscriptions WHERE device_id = ?")
+                .bind(route_device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query(
+                "INSERT INTO provider_pull_queue \
+                 (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+                 SELECT ?, source_pull.delivery_id, source_pull.payload_blob, source_pull.payload_size, \
+                        source_pull.sent_at, source_pull.expires_at, source_pull.platform, \
+                        source_pull.provider_token, source_pull.created_at, source_pull.updated_at \
+                 FROM (SELECT delivery_id, payload_blob, payload_size, sent_at, expires_at, \
+                              platform, provider_token, created_at, updated_at \
+                       FROM provider_pull_queue WHERE device_id = ?) AS source_pull \
+                 ON DUPLICATE KEY UPDATE \
+                   payload_blob = VALUES(payload_blob), payload_size = VALUES(payload_size), \
+                   sent_at = LEAST(provider_pull_queue.sent_at, VALUES(sent_at)), \
+                   expires_at = GREATEST(provider_pull_queue.expires_at, VALUES(expires_at)), \
+                   platform = VALUES(platform), provider_token = VALUES(provider_token), \
+                   created_at = LEAST(provider_pull_queue.created_at, VALUES(created_at)), \
+                   updated_at = GREATEST(provider_pull_queue.updated_at, VALUES(updated_at))",
+            )
+            .bind(expected_private_id.as_slice())
+            .bind(current_private_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ?")
+                .bind(current_private_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query(
+                "INSERT IGNORE INTO private_outbox \
+                 (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
+                 SELECT ?, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+                 FROM private_outbox WHERE device_id = ?",
+            )
+            .bind(expected_private_id.as_slice())
+            .bind(current_private_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
+                .bind(current_private_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query(
+                "INSERT IGNORE INTO private_device_keys \
+                 (device_id, key_id, key_hash, issued_at, valid_until) \
+                 SELECT ?, key_id, key_hash, issued_at, valid_until \
+                 FROM private_device_keys WHERE device_id = ?",
+            )
+            .bind(expected_private_id.as_slice())
+            .bind(current_private_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM private_device_keys WHERE device_id = ?")
+                .bind(current_private_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE private_sessions SET device_id = ? WHERE device_id = ?")
+                .bind(expected_private_id.as_slice())
+                .bind(current_private_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE private_bindings SET device_id = ? WHERE device_id = ?")
+                .bind(expected_private_id.as_slice())
+                .bind(current_private_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE devices SET device_id = ? WHERE device_id = ?")
+                .bind(expected_private_id.as_slice())
+                .bind(route_device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "db.mysql_device_identity_repaired",
+                device_key = %(crate::util::redact_text(device_key.as_str()))
+            );
+        }
+        Ok(())
+    }
+
+    async fn ensure_mysql_binary_varchar_column(
+        &self,
+        table: &str,
+        column: &str,
+        length: u16,
+    ) -> StoreResult<()> {
+        // MySQL 8.4 exposes some information_schema string columns with the
+        // binary protocol BLOB type. Cast them explicitly so sqlx can decode
+        // the metadata consistently across MySQL patch releases.
+        let metadata: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT CAST(COLUMN_TYPE AS CHAR), CAST(IS_NULLABLE AS CHAR), \
+                    CAST(COLLATION_NAME AS CHAR) \
+             FROM information_schema.columns \
+             WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((column_type, is_nullable, collation)) = metadata else {
+            return Err(StoreError::Upgrade(format!(
+                "missing MySQL column {table}.{column}"
+            )));
+        };
+        if column_type.eq_ignore_ascii_case(format!("varchar({length})").as_str())
+            && collation.as_deref() == Some("utf8mb4_bin")
+        {
+            return Ok(());
+        }
+        let nullability = if is_nullable == "YES" {
+            "NULL"
+        } else {
+            "NOT NULL"
+        };
+        let ddl = format!(
+            "ALTER TABLE `{table}` MODIFY COLUMN `{column}` VARCHAR({length}) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin {nullability}"
+        );
+        sqlx::query(&ddl).execute(&self.pool).await?;
+        Ok(())
+    }
+
     async fn ensure_mysql_provider_pull_queue_primary_key(&self) -> StoreResult<()> {
         let pk_columns: Vec<String> = sqlx::query_scalar(
-            "SELECT COLUMN_NAME \
+            "SELECT CAST(COLUMN_NAME AS CHAR) \
              FROM information_schema.KEY_COLUMN_USAGE \
              WHERE TABLE_SCHEMA = DATABASE() \
                AND TABLE_NAME = 'provider_pull_queue' \
@@ -652,7 +998,7 @@ impl MySqlDb {
         .await?;
         let mut clauses = vec![
             "MODIFY COLUMN device_id BINARY(16) NOT NULL",
-            "MODIFY COLUMN delivery_id VARCHAR(128) NOT NULL",
+            "MODIFY COLUMN delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL",
         ];
         if has_primary.is_some() {
             clauses.push("DROP PRIMARY KEY");
@@ -922,8 +1268,8 @@ impl crate::storage::database::upgrade::state::UpgradeStateAccess for MySqlDb {
 impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for MySqlDb {
     async fn create_upgrade_backup(
         &self,
-        _db_url: &str,
-        _driver: crate::storage::types::DatabaseKind,
+        db_url: &str,
+        driver: crate::storage::types::DatabaseKind,
         policy: crate::storage::database::migration::BackupPolicy,
         run_id: &str,
     ) -> crate::storage::database::upgrade::UpgradeResult<
@@ -935,13 +1281,20 @@ impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for MySqlDb 
         ) {
             return Ok(None);
         }
-        let snapshot = external_snapshot_or_test_default("MySQL")?;
+        #[cfg(test)]
+        if std::env::var_os("PUSHGO_DB_UPGRADE_BACKUP_MANIFEST").is_none() {
+            return Ok(Some(
+                crate::storage::database::upgrade::backup::test_external_backup_artifact(
+                    driver, run_id,
+                ),
+            ));
+        }
+        #[cfg(not(test))]
+        let _ = run_id;
         Ok(Some(
-            crate::storage::database::upgrade::backup::BackupArtifact {
-                uri: format!("mysql-external-snapshot:{snapshot}:{run_id}"),
-                sha256: "external".to_string(),
-                bytes: 0,
-            },
+            crate::storage::database::upgrade::backup::load_external_backup_manifest(
+                db_url, driver,
+            )?,
         ))
     }
 
@@ -955,28 +1308,6 @@ impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for MySqlDb 
                 "MySQL rollback requires manual restore from the recorded external snapshot or mysqldump artifact".to_string(),
             ),
         ))
-    }
-}
-
-fn external_snapshot_or_test_default(
-    driver: &str,
-) -> crate::storage::database::upgrade::UpgradeResult<String> {
-    match std::env::var("PUSHGO_DB_UPGRADE_EXTERNAL_SNAPSHOT") {
-        Ok(value) => Ok(value),
-        Err(_) => {
-            #[cfg(test)]
-            {
-                Ok(format!("{}-test-snapshot", driver.to_ascii_lowercase()))
-            }
-            #[cfg(not(test))]
-            {
-                Err(crate::storage::database::upgrade::UpgradeError::Store(
-                    StoreError::Upgrade(format!(
-                        "{driver} upgrade requires PUSHGO_DB_UPGRADE_EXTERNAL_SNAPSHOT or an operator-run dump before destructive/runtime-reset migrations"
-                    )),
-                ))
-            }
-        }
     }
 }
 
@@ -1001,8 +1332,6 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for MySqlDb 
             "channel_subscriptions",
             "private_payloads",
             "sender_submit_status",
-            "pushgo_upgrade_runs",
-            "pushgo_upgrade_steps",
         ] {
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1",
@@ -1013,6 +1342,39 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for MySqlDb 
             if exists.is_none() {
                 return Err(crate::storage::database::upgrade::UpgradeError::Store(
                     StoreError::Upgrade(format!("required table missing after upgrade: {table}")),
+                ));
+            }
+        }
+        for (table, column) in [
+            ("dispatch_delivery_dedupe", "dedupe_key"),
+            ("dispatch_delivery_dedupe", "delivery_id"),
+            ("dispatch_op_dedupe", "dedupe_key"),
+            ("dispatch_op_dedupe", "delivery_id"),
+            ("semantic_id_registry", "dedupe_key"),
+            ("semantic_id_registry", "semantic_id"),
+            ("sender_submit_status", "op_id"),
+            ("private_payloads", "delivery_id"),
+            ("private_outbox", "delivery_id"),
+            ("provider_pull_queue", "delivery_id"),
+            ("devices", "device_key"),
+            ("widget_push_subscriptions", "device_key"),
+            ("devices", "provider_token"),
+            ("private_bindings", "provider_token"),
+            ("provider_pull_queue", "provider_token"),
+        ] {
+            let collation: Option<String> = sqlx::query_scalar(
+                "SELECT CAST(COLLATION_NAME AS CHAR) FROM information_schema.columns \
+                 WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1",
+            )
+            .bind(table)
+            .bind(column)
+            .fetch_optional(&self.pool)
+            .await?;
+            if collation.as_deref() != Some("utf8mb4_bin") {
+                return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!(
+                        "required binary collation missing after upgrade: {table}.{column}"
+                    )),
                 ));
             }
         }

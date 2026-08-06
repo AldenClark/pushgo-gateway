@@ -32,6 +32,7 @@ fn message_intent_accepts_markdown_link_body() {
         channel_id: "06J0FZG1Y8XGG14VTQ4Y3G10MR".to_string(),
         password: "pass-123".to_string(),
         op_id: Some("op-123".to_string()),
+        _message_id: None,
         thing_id: None,
         occurred_at: Some(1_710_000_000),
         title: "sample".to_string(),
@@ -238,4 +239,26 @@ fn message_intent_normalizes_ttl_to_millis_like_legacy_gateway() {
     }"#;
     let parsed = serde_json::from_str::<MessageIntent>(raw).expect("message intent should parse");
     assert_eq!(parsed.ttl, Some(1_710_000_000_000));
+}
+
+#[test]
+fn message_intent_rejects_gateway_generated_message_id() {
+    let raw = r#"{
+        "channel_id":"06J0FZG1Y8XGG14VTQ4Y3G10MR",
+        "password":"pass-123",
+        "title":"sample",
+        "message_id":"client-supplied"
+    }"#;
+    assert!(serde_json::from_str::<MessageIntent>(raw).is_err());
+}
+
+#[test]
+fn message_intent_ignores_unknown_extension_field() {
+    let raw = r#"{
+        "channel_id":"06J0FZG1Y8XGG14VTQ4Y3G10MR",
+        "password":"pass-123",
+        "title":"sample",
+        "future_extension":{"version":2}
+    }"#;
+    assert!(serde_json::from_str::<MessageIntent>(raw).is_ok());
 }

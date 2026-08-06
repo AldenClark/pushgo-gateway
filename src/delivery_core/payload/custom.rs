@@ -41,6 +41,7 @@ impl CustomPayloadData {
     }
 
     pub(crate) fn apply_gateway_base_url(&mut self, base_url: Option<&str>) {
+        self.data.remove("base_url");
         let normalized = base_url
             .map(str::trim)
             .map(|value| value.trim_end_matches('/'))
@@ -91,6 +92,39 @@ impl CustomPayloadData {
 #[cfg(test)]
 mod tests {
     use hashbrown::HashMap;
+
+    #[test]
+    fn gateway_base_url_cannot_be_spoofed_when_runtime_source_is_missing() {
+        let mut payload = super::CustomPayloadData::new(HashMap::from([(
+            "base_url".to_string(),
+            "https://attacker.invalid".to_string(),
+        )]));
+
+        payload.apply_gateway_base_url(None);
+
+        let prepared = payload
+            .prepare_dispatch("channel-1", super::EntityKind::Message)
+            .expect("payload should encode");
+        assert!(!prepared.custom_data.contains_key("base_url"));
+    }
+
+    #[test]
+    fn gateway_base_url_overrides_untrusted_custom_value() {
+        let mut payload = super::CustomPayloadData::new(HashMap::from([(
+            "base_url".to_string(),
+            "https://attacker.invalid".to_string(),
+        )]));
+
+        payload.apply_gateway_base_url(Some(" https://gateway.example/ "));
+
+        let prepared = payload
+            .prepare_dispatch("channel-1", super::EntityKind::Message)
+            .expect("payload should encode");
+        assert_eq!(
+            prepared.custom_data.get("base_url").map(String::as_str),
+            Some("https://gateway.example")
+        );
+    }
 
     #[test]
     fn ensure_notification_title_promotes_derived_title_into_payload() {

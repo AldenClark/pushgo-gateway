@@ -69,8 +69,7 @@ impl DeviceRouteRecordRow {
     pub fn persistence_values(&self) -> StoreResult<DeviceRoutePersistenceValues> {
         let channel_type = self.channel_type_kind()?;
         let platform = self.platform_kind()?;
-        let provider_token = ProviderTokenRef::optional(self.provider_token.as_deref())
-            .map(ProviderTokenRef::into_owned);
+        let provider_token = ProviderTokenRef::optional(self.provider_token.as_deref());
         let device_id = self.device_id_bytes()?;
         if channel_type.is_private() {
             if provider_token.is_some() {
@@ -81,10 +80,14 @@ impl DeviceRouteRecordRow {
         }
         let device_key =
             DeviceKeyRef::parse(&self.device_key).map_err(|_| StoreError::InvalidDeviceToken)?;
-        let token_raw = if let Some(token) = provider_token.as_deref() {
-            DeviceInfo::from_token(platform, token)?.token_raw.to_vec()
+        let (provider_token, token_raw) = if let Some(token) = provider_token {
+            let device = DeviceInfo::from_token(platform, token.as_str())?;
+            (
+                Some(device.token_str().to_string()),
+                device.token_raw.to_vec(),
+            )
         } else {
-            device_key.as_str().as_bytes().to_vec()
+            (None, device_key.as_str().as_bytes().to_vec())
         };
 
         Ok(DeviceRoutePersistenceValues {
@@ -139,6 +142,7 @@ pub enum DispatchTarget {
         platform: Platform,
         provider_token: String,
         device_key: String,
+        route_updated_at: i64,
     },
     Private {
         device_id: DeviceId,
@@ -219,5 +223,35 @@ mod tests {
             route.persistence_values().is_err(),
             "mqtt must not be persisted as a provider push route"
         );
+    }
+
+    #[test]
+    fn provider_route_persists_platform_canonical_token() {
+        let apple_upper = "A1".repeat(32);
+        let apple = DeviceRouteRecordRow {
+            device_key: "apple-device-key".to_string(),
+            platform: "ios".to_string(),
+            channel_type: "apns".to_string(),
+            provider_token: Some(apple_upper),
+            updated_at: 1,
+        }
+        .persistence_values()
+        .expect("valid APNs route");
+        assert_eq!(
+            apple.provider_token.as_deref(),
+            Some("a1".repeat(32).as_str())
+        );
+
+        let fcm_token = "AbCdEfGhIjKlMnOp";
+        let android = DeviceRouteRecordRow {
+            device_key: "android-device-key".to_string(),
+            platform: "android".to_string(),
+            channel_type: "fcm".to_string(),
+            provider_token: Some(fcm_token.to_string()),
+            updated_at: 1,
+        }
+        .persistence_values()
+        .expect("valid FCM route");
+        assert_eq!(android.provider_token.as_deref(), Some(fcm_token));
     }
 }

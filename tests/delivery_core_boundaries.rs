@@ -1062,7 +1062,7 @@ fn submit_runtime_dispatch_execution_consumes_plan_derived_targets() {
         ".enqueue_provider_pull_item(",
         "cleanup_invalid_provider_token",
         "ProviderInvalidTokenCleanup",
-        ".unsubscribe_channel_for_device_key(",
+        ".unsubscribe_channel_if_provider_route_current(",
         ".clear_private_outbox_for_device(",
         ".clear_device_outbox(",
     ] {
@@ -1074,6 +1074,14 @@ fn submit_runtime_dispatch_execution_consumes_plan_derived_targets() {
                 "provider execution boundary is missing provider-pull cache marker `{required}`"
             ));
         }
+    }
+    let provider_execution =
+        fs::read_to_string(manifest_dir.join("src/delivery_core/execution/provider.rs"))
+            .expect("provider execution source should be readable");
+    if provider_execution.contains(".unsubscribe_channel_for_device_key(") {
+        violations.push(
+            "provider invalid-token cleanup must not use unconditional unsubscribe".to_string(),
+        );
     }
     let dispatch_worker_source = fs::read_to_string(manifest_dir.join("src/dispatch/workers.rs"))
         .expect("dispatch worker source should be readable");
@@ -1266,7 +1274,7 @@ fn dispatch_progress_semantics_are_owned_by_delivery_core() {
         "pub(crate) struct DispatchProgress",
         "pub(crate) struct PrivateEnqueueProgress",
         "fn record_private_success",
-        "fn record_provider_success",
+        "fn record_provider_queued",
         "fn record_provider_failure",
         "pub(crate) enum BusyKind",
         "BusyKind::PrivateEnqueueBackpressure",
@@ -2059,6 +2067,26 @@ fn delivery_core_store_contracts_are_narrow_and_explicit() {
         "delivery core store contracts must stay explicit and narrow:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn provider_outcome_callers_cannot_bypass_durable_finalization_retry() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative_file in [
+        "src/api/handlers/message/dispatch/mod.rs",
+        "src/dispatch/runtime.rs",
+    ] {
+        let source = fs::read_to_string(manifest_dir.join(relative_file))
+            .expect("provider outcome caller source should be readable");
+        assert!(
+            source.contains(".finalize_provider_dispatch_outcome_durably("),
+            "{relative_file} must use the durable provider outcome finalizer"
+        );
+        assert!(
+            !source.contains(".finalize_provider_dispatch_outcome("),
+            "{relative_file} must not bypass the durable provider outcome finalizer"
+        );
+    }
 }
 
 fn is_test_source(path: &Path) -> bool {

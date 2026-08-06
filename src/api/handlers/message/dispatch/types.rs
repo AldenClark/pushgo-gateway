@@ -8,6 +8,7 @@ use crate::delivery_core::execution::provider::ResolvedProviderTarget as CoreRes
 pub(super) struct ResolvedProviderTarget {
     pub(super) device: DeviceInfo,
     pub(super) device_key: Arc<str>,
+    pub(super) route_updated_at: i64,
     pub(super) provider_stats_key: Arc<str>,
     pub(super) wakeup_data_for_device: Arc<HashMap<String, String>>,
     pub(super) allow_inline: bool,
@@ -19,6 +20,7 @@ impl From<CoreResolvedProviderTarget> for ResolvedProviderTarget {
         Self {
             device: value.device,
             device_key: value.device_key,
+            route_updated_at: value.route_updated_at,
             provider_stats_key: value.provider_stats_key,
             wakeup_data_for_device: value.wakeup_data_for_device,
             allow_inline: value.allow_inline,

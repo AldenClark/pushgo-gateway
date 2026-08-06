@@ -12,13 +12,26 @@ pub(crate) type DispatchDedupeResult<T> = Result<T, DispatchDedupeError>;
 #[derive(Debug)]
 pub(crate) struct DispatchDedupeError {
     message: String,
+    fingerprint_conflict: bool,
 }
 
 impl DispatchDedupeError {
     pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            fingerprint_conflict: false,
         }
+    }
+
+    fn fingerprint_conflict(delivery_id: &str) -> Self {
+        Self {
+            message: format!("op_id payload conflicts with delivery {delivery_id}"),
+            fingerprint_conflict: true,
+        }
+    }
+
+    pub(crate) fn is_fingerprint_conflict(&self) -> bool {
+        self.fingerprint_conflict
     }
 
     pub(crate) fn into_message(self) -> String {
@@ -38,6 +51,7 @@ pub(crate) trait DispatchDedupeStore: Send + Sync {
         &self,
         dedupe_key: &str,
         delivery_id: &str,
+        request_fingerprint: Option<&str>,
         created_at: i64,
     ) -> DispatchDedupeResult<OpDedupeReservation>;
 
@@ -108,12 +122,14 @@ impl DispatchOpGuard {
         store: &(dyn DispatchDedupeStore + Send + Sync),
         dedupe_key: String,
         reserved_delivery_id: String,
+        request_fingerprint: Option<&str>,
         created_at: i64,
     ) -> DispatchDedupeResult<DispatchOpGuardDecision> {
         let reservation = store
             .reserve_op_pending(
                 dedupe_key.as_str(),
                 reserved_delivery_id.as_str(),
+                request_fingerprint,
                 created_at,
             )
             .await
@@ -135,6 +151,12 @@ impl DispatchOpGuard {
                     dispatch_status: DeliveryDispatchStatus::AttemptedAccepted,
                 }
             }
+            OpDedupeReservation::ProviderQueued { delivery_id } => {
+                DispatchOpGuardDecision::AlreadyFinalized {
+                    delivery_id,
+                    dispatch_status: DeliveryDispatchStatus::ProviderQueued,
+                }
+            }
             OpDedupeReservation::PartialFailure { delivery_id } => {
                 DispatchOpGuardDecision::AlreadyFinalized {
                     delivery_id,
@@ -143,6 +165,9 @@ impl DispatchOpGuard {
             }
             OpDedupeReservation::Pending { delivery_id } => {
                 DispatchOpGuardDecision::Pending { delivery_id }
+            }
+            OpDedupeReservation::FingerprintConflict { delivery_id } => {
+                return Err(DispatchDedupeError::fingerprint_conflict(&delivery_id));
             }
             OpDedupeReservation::Reserved => DispatchOpGuardDecision::Proceed(Self {
                 dedupe_key,
@@ -158,11 +183,20 @@ impl DispatchOpGuard {
         store: &(dyn DispatchDedupeStore + Send + Sync),
         dedupe_key: String,
         reserved_delivery_id: String,
+        request_fingerprint: Option<&str>,
         created_at: i64,
         channel_id: String,
         op_id: String,
     ) -> DispatchDedupeResult<DispatchOpGuardStart> {
-        match Self::reserve(store, dedupe_key, reserved_delivery_id, created_at).await? {
+        match Self::reserve(
+            store,
+            dedupe_key,
+            reserved_delivery_id,
+            request_fingerprint,
+            created_at,
+        )
+        .await?
+        {
             DispatchOpGuardDecision::AlreadyFinalized {
                 delivery_id,
                 dispatch_status,

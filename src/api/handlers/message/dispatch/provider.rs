@@ -3,9 +3,10 @@ use crate::{
     delivery_core::execution::provider::{
         ApnsPayloadPreparation, FcmPayloadPreparation, ProviderPayloadPreparationError,
         ProviderPullCacheRequest, ProviderRouteResolver, ProviderTargetPreparation,
-        WnsPayloadPreparation, cache_provider_pull_delivery, prepare_apns_payload,
-        prepare_fcm_payload, prepare_provider_target, prepare_wns_payload,
+        WnsPayloadPreparation, cache_provider_pull_delivery, direct_data_with_provider_ack_source,
+        prepare_apns_payload, prepare_fcm_payload, prepare_provider_target, prepare_wns_payload,
     },
+    delivery_core::payload::quantize_watch_payload,
     storage::PrivateMessage,
     util::{SharedStringMap, encode_crockford_base32_128},
 };
@@ -56,12 +57,14 @@ pub(super) async fn dispatch_provider_targets(
             && !ensure_provider_pull_cached(prepared, &target, &provider_pull_message, progress)
                 .await
         {
+            prepared.provider_outcome.record_failure();
             continue;
         }
 
         let Some(provider_payload) =
             prepare_provider_payload(prepared, payloads, &target, progress).await?
         else {
+            prepared.provider_outcome.record_failure();
             continue;
         };
 
@@ -76,6 +79,7 @@ pub(super) async fn dispatch_provider_targets(
                 apple::dispatch(prepared, payloads, &target, provider_payload, progress).await?
             }
             Platform::MQTT => {
+                prepared.provider_outcome.record_failure();
                 record_provider_path_rejected(
                     prepared,
                     &target,
@@ -87,7 +91,9 @@ pub(super) async fn dispatch_provider_targets(
         }
 
         if progress.dispatch_closed {
-            progress.rejected += total.saturating_sub(index + 1);
+            let remaining = total.saturating_sub(index + 1);
+            progress.rejected += remaining;
+            prepared.provider_outcome.record_failures(remaining);
             break;
         }
     }
@@ -118,17 +124,27 @@ async fn prepare_apns_provider_payload(
     target: &ResolvedProviderTarget,
     progress: &mut DispatchProgress,
 ) -> Result<Option<PreparedProviderPayload>, Error> {
-    let direct_payload = if target.device.platform == Platform::WATCHOS {
+    let direct_template = if target.device.platform == Platform::WATCHOS {
         payloads.watchos_apns_payload.clone()
     } else {
         payloads.apns_payload.clone()
     }
     .ok_or(Error::Internal("missing APNs payload".to_string()))?;
+    let direct_data =
+        direct_data_with_provider_ack_source(prepared.custom_data.as_ref(), &target.device_key);
+    let direct_data = if target.device.platform == Platform::WATCHOS {
+        SharedStringMap::from(quantize_watch_payload(direct_data.as_ref()))
+    } else {
+        SharedStringMap::from(direct_data)
+    };
+    let direct_payload = Arc::new(direct_template.with_data(direct_data));
     let wakeup_payload = Arc::new(ApnsPayload::wakeup(
         payloads.apns_wakeup_title.clone(),
         payloads.apns_wakeup_body.clone(),
         Some(prepared.channel_id_value.clone()),
-        prepared.effective_ttl,
+        prepared
+            .effective_ttl
+            .map(crate::providers::apns::ApnsExpirationEpochSeconds::from_epoch_millis),
         SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
     ));
     prepare_core_provider_payload(
@@ -171,7 +187,10 @@ async fn prepare_fcm_provider_payload(
     progress: &mut DispatchProgress,
 ) -> Result<Option<PreparedProviderPayload>, Error> {
     let direct_payload = Arc::new(FcmPayload::new(
-        SharedStringMap::from(Arc::clone(&prepared.custom_data)),
+        SharedStringMap::from(direct_data_with_provider_ack_source(
+            prepared.custom_data.as_ref(),
+            &target.device_key,
+        )),
         prepared.severity.fcm_priority(),
         prepared.ttl_seconds,
     ));
@@ -202,10 +221,13 @@ async fn prepare_wns_provider_payload(
     target: &ResolvedProviderTarget,
     progress: &mut DispatchProgress,
 ) -> Result<Option<PreparedProviderPayload>, Error> {
-    let direct_payload = payloads
+    let direct_template = payloads
         .wns_payload
         .clone()
         .ok_or(Error::Internal("missing WNS payload".to_string()))?;
+    let direct_payload = Arc::new(direct_template.with_data(SharedStringMap::from(
+        direct_data_with_provider_ack_source(prepared.custom_data.as_ref(), &target.device_key),
+    )));
     let wakeup_payload = Arc::new(WnsPayload::new(
         SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
         "high",
@@ -289,5 +311,82 @@ async fn ensure_provider_pull_cached(
             .await;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn direct_source_data(device_key: &str) -> Arc<HashMap<String, String>> {
+        direct_data_with_provider_ack_source(
+            &HashMap::from([(
+                "base_url".to_string(),
+                "https://gateway.example".to_string(),
+            )]),
+            device_key,
+        )
+    }
+
+    #[test]
+    fn apns_direct_payload_contains_immutable_ack_source() {
+        let payload = ApnsPayload::new(
+            Some("Title".to_string()),
+            Some("Body".to_string()),
+            None,
+            None,
+            "normal".to_string(),
+            None,
+            SharedStringMap::from(direct_source_data("apple-device")),
+        );
+
+        let json = serde_json::to_value(payload).expect("serialize APNs payload");
+        assert_eq!(
+            (
+                json["base_url"].as_str(),
+                json["provider_device_key"].as_str()
+            ),
+            (Some("https://gateway.example"), Some("apple-device"))
+        );
+    }
+
+    #[test]
+    fn fcm_direct_payload_contains_immutable_ack_source() {
+        let payload = FcmPayload::new(
+            SharedStringMap::from(direct_source_data("android-device")),
+            "HIGH",
+            None,
+        );
+
+        assert_eq!(
+            (
+                payload.data().get("base_url").map(String::as_str),
+                payload
+                    .data()
+                    .get("provider_device_key")
+                    .map(String::as_str),
+            ),
+            (Some("https://gateway.example"), Some("android-device"))
+        );
+    }
+
+    #[test]
+    fn wns_direct_payload_contains_immutable_ack_source() {
+        let payload = WnsPayload::new(
+            SharedStringMap::from(direct_source_data("windows-device")),
+            "high",
+            None,
+        );
+
+        assert_eq!(
+            (
+                payload.data().get("base_url").map(String::as_str),
+                payload
+                    .data()
+                    .get("provider_device_key")
+                    .map(String::as_str),
+            ),
+            (Some("https://gateway.example"), Some("windows-device"))
+        );
     }
 }

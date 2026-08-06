@@ -19,6 +19,24 @@ impl DeviceRouteDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, persist_device_route_change(route))
     }
 
+    async fn transition_device_route(
+        &self,
+        route: &DeviceRouteRecordRow,
+        previous_channel_type: RouteChannelType,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<usize> {
+        delegate_db_async!(
+            self,
+            transition_device_route(
+                route,
+                previous_channel_type,
+                ack_timeout_secs,
+                max_pending_per_device
+            )
+        )
+    }
+
     async fn replace_device_identity(
         &self,
         route: &DeviceRouteRecordRow,

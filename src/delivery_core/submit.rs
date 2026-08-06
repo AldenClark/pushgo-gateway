@@ -197,11 +197,12 @@ async fn submit_message(
             "message normalization returned non-message projection",
         ));
     };
+    let fingerprint_occurred_at = normalized.command.fingerprint_occurred_at;
     let alert = projection.alert;
     let delivery_policy = projection.delivery_policy;
     let op_id = normalized.op_id.clone();
     let entity_id = message_id.clone();
-    record_sender_status_accepted(
+    let owns_sender_status = record_sender_status_accepted(
         runtime,
         now_millis,
         &op_id,
@@ -210,13 +211,16 @@ async fn submit_message(
         &entity_id,
     )
     .await?;
-    record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    if owns_sender_status {
+        record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    }
     let output = match runtime
         .dispatch_message(DispatchMessageInput {
             authorized_channel: authorized_channel.clone(),
             op_id: Some(op_id.clone()),
             thing_id: scoped_thing_id.clone(),
             occurred_at: Some(normalized.occurred_at),
+            fingerprint_occurred_at,
             title: alert.title.unwrap_or_default(),
             body: alert.body,
             severity: alert.severity,
@@ -230,12 +234,16 @@ async fn submit_message(
     {
         Ok(delivery) => delivery,
         Err(err) => {
-            record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            if owns_sender_status {
+                record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            }
             return Err(err);
         }
     };
     let delivery = output;
-    record_sender_status_finished(runtime, now_millis, &delivery).await?;
+    if owns_sender_status {
+        record_sender_status_finished(runtime, now_millis, &delivery).await?;
+    }
     let delivery_id = delivery.delivery_id.clone();
     let acceptance = delivery.submit_acceptance();
     let result = SubmitResult {
@@ -279,7 +287,7 @@ async fn submit_event(
     let delivery_policy = projection.delivery_policy;
     let op_id = normalized.op_id.clone();
     let entity_id = event_id.clone();
-    record_sender_status_accepted(
+    let owns_sender_status = record_sender_status_accepted(
         runtime,
         now_millis,
         &op_id,
@@ -288,7 +296,9 @@ async fn submit_event(
         &entity_id,
     )
     .await?;
-    record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    if owns_sender_status {
+        record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    }
     let delivery = match runtime
         .dispatch_event(DispatchEventInput {
             authorized_channel: authorized_channel.clone(),
@@ -305,11 +315,15 @@ async fn submit_event(
     {
         Ok(delivery) => delivery,
         Err(err) => {
-            record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            if owns_sender_status {
+                record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            }
             return Err(err);
         }
     };
-    record_sender_status_finished(runtime, now_millis, &delivery).await?;
+    if owns_sender_status {
+        record_sender_status_finished(runtime, now_millis, &delivery).await?;
+    }
     let delivery_id = delivery.delivery_id.clone();
     let acceptance = delivery.submit_acceptance();
     Ok(SubmitResult {
@@ -349,7 +363,7 @@ async fn submit_thing(
     let delivery_policy = projection.delivery_policy;
     let op_id = normalized.op_id.clone();
     let entity_id = thing_id.clone();
-    record_sender_status_accepted(
+    let owns_sender_status = record_sender_status_accepted(
         runtime,
         now_millis,
         &op_id,
@@ -358,7 +372,9 @@ async fn submit_thing(
         &entity_id,
     )
     .await?;
-    record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    if owns_sender_status {
+        record_sender_status_processing(runtime, now_millis, &op_id).await?;
+    }
     let delivery = match runtime
         .dispatch_thing(DispatchThingInput {
             authorized_channel: authorized_channel.clone(),
@@ -375,11 +391,15 @@ async fn submit_thing(
     {
         Ok(delivery) => delivery,
         Err(err) => {
-            record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            if owns_sender_status {
+                record_sender_status_failed(runtime, now_millis, &op_id).await?;
+            }
             return Err(err);
         }
     };
-    record_sender_status_finished(runtime, now_millis, &delivery).await?;
+    if owns_sender_status {
+        record_sender_status_finished(runtime, now_millis, &delivery).await?;
+    }
     let delivery_id = delivery.delivery_id.clone();
     let acceptance = delivery.submit_acceptance();
     Ok(SubmitResult {
@@ -399,7 +419,7 @@ async fn record_sender_status_accepted(
     channel_id: [u8; 16],
     model: &'static str,
     entity_id: &str,
-) -> Result<(), CoreError> {
+) -> Result<bool, CoreError> {
     let retention = runtime.sender_status_retention_millis().max(1);
     let record = SenderSubmitStatusRecord {
         op_id: op_id.to_string(),
@@ -412,11 +432,45 @@ async fn record_sender_status_accepted(
         updated_at: now_millis,
         expires_at: now_millis.saturating_add(retention),
     };
-    runtime
+    let inserted = runtime
         .sender_status_store()
-        .upsert_sender_submit_status(&record)
+        .insert_sender_submit_status_if_absent(&record)
         .await
-        .map_err(|err| CoreError::Store(err.to_string()))
+        .map_err(|err| CoreError::Store(err.to_string()))?;
+    if inserted {
+        return Ok(true);
+    }
+    let existing = runtime
+        .sender_status_store()
+        .load_sender_submit_status(op_id)
+        .await
+        .map_err(|err| CoreError::Store(err.to_string()))?
+        .ok_or_else(|| {
+            CoreError::Store("sender status disappeared after insert conflict".into())
+        })?;
+    if existing.channel_id != channel_id
+        || existing.model != model
+        || existing.entity_id != entity_id
+    {
+        return Err(CoreError::conflict(
+            "op_id is already used by a different operation",
+            "op_id_scope_conflict",
+        ));
+    }
+    if matches!(
+        existing.status,
+        SenderSubmitStatusKind::Accepted
+            | SenderSubmitStatusKind::Processing
+            | SenderSubmitStatusKind::Failed
+    ) {
+        runtime
+            .sender_status_store()
+            .update_sender_submit_status(op_id, SenderSubmitStatusKind::Accepted, None, now_millis)
+            .await
+            .map_err(|err| CoreError::Store(err.to_string()))?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 async fn record_sender_status_processing(
@@ -463,6 +517,7 @@ async fn record_sender_status_failed(
 
 fn sender_status_from_dispatch(status: DeliveryDispatchStatus) -> SenderSubmitStatusKind {
     match status {
+        DeliveryDispatchStatus::ProviderQueued => SenderSubmitStatusKind::ProviderQueued,
         DeliveryDispatchStatus::AttemptedAccepted => SenderSubmitStatusKind::Sent,
         DeliveryDispatchStatus::AttemptedPartialFailure => SenderSubmitStatusKind::PartiallyFailed,
         DeliveryDispatchStatus::NotAttempted | DeliveryDispatchStatus::PrivateQueueTooBusy => {
@@ -510,6 +565,7 @@ async fn resolve_authorized_channel(
 mod tests {
     use async_trait::async_trait;
     use serde_json::Map as JsonMap;
+    use std::sync::Mutex;
 
     use super::*;
     use crate::{
@@ -693,11 +749,11 @@ mod tests {
 
     #[async_trait]
     impl SenderStatusStore for FakeSenderStatusStore {
-        async fn upsert_sender_submit_status(
+        async fn insert_sender_submit_status_if_absent(
             &self,
             _record: &SenderSubmitStatusRecord,
-        ) -> StoreResult<()> {
-            Ok(())
+        ) -> StoreResult<bool> {
+            Ok(true)
         }
 
         async fn update_sender_submit_status(
@@ -708,6 +764,166 @@ mod tests {
             _updated_at: i64,
         ) -> StoreResult<()> {
             Ok(())
+        }
+
+        async fn load_sender_submit_status(
+            &self,
+            _op_id: &str,
+        ) -> StoreResult<Option<SenderSubmitStatusRecord>> {
+            Ok(None)
+        }
+    }
+
+    struct RetrySenderStatusStore {
+        record: Mutex<SenderSubmitStatusRecord>,
+    }
+
+    #[async_trait]
+    impl SenderStatusStore for RetrySenderStatusStore {
+        async fn insert_sender_submit_status_if_absent(
+            &self,
+            _record: &SenderSubmitStatusRecord,
+        ) -> StoreResult<bool> {
+            Ok(false)
+        }
+
+        async fn update_sender_submit_status(
+            &self,
+            op_id: &str,
+            status: SenderSubmitStatusKind,
+            dispatch_status: Option<&str>,
+            updated_at: i64,
+        ) -> StoreResult<()> {
+            let mut record = self.record.lock().expect("retry status lock");
+            assert_eq!(record.op_id, op_id);
+            record.status = status;
+            record.dispatch_status = dispatch_status.map(ToString::to_string);
+            record.updated_at = updated_at;
+            Ok(())
+        }
+
+        async fn load_sender_submit_status(
+            &self,
+            op_id: &str,
+        ) -> StoreResult<Option<SenderSubmitStatusRecord>> {
+            let record = self.record.lock().expect("retry status lock").clone();
+            Ok((record.op_id == op_id).then_some(record))
+        }
+    }
+
+    struct RetryStatusRuntime {
+        sender: RetrySenderStatusStore,
+    }
+
+    #[async_trait]
+    impl SubmitRuntime for RetryStatusRuntime {
+        fn idempotency_store(&self) -> &(dyn IdempotencyStore + Send + Sync) {
+            &FakeIdempotencyStore
+        }
+
+        fn sender_status_store(&self) -> &(dyn SenderStatusStore + Send + Sync) {
+            &self.sender
+        }
+
+        fn sender_status_retention_millis(&self) -> i64 {
+            60_000
+        }
+
+        async fn authorize_channel_by_password(
+            &self,
+            _channel_id: &str,
+            _password: &str,
+        ) -> Result<AuthorizedSubmitChannel, CoreError> {
+            unreachable!("status transition test does not authorize")
+        }
+
+        async fn dispatch_message(
+            &self,
+            _input: DispatchMessageInput,
+        ) -> Result<DeliverySummary, CoreError> {
+            unreachable!("status transition test does not dispatch")
+        }
+
+        async fn dispatch_event(
+            &self,
+            _input: DispatchEventInput,
+        ) -> Result<DeliverySummary, CoreError> {
+            unreachable!("status transition test does not dispatch")
+        }
+
+        async fn dispatch_thing(
+            &self,
+            _input: DispatchThingInput,
+        ) -> Result<DeliverySummary, CoreError> {
+            unreachable!("status transition test does not dispatch")
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_processing_and_failed_sender_statuses_can_retry_to_final_state() {
+        for initial in [
+            SenderSubmitStatusKind::Accepted,
+            SenderSubmitStatusKind::Processing,
+            SenderSubmitStatusKind::Failed,
+        ] {
+            let op_id = format!("retry-status-{}", initial.as_str());
+            let runtime = RetryStatusRuntime {
+                sender: RetrySenderStatusStore {
+                    record: Mutex::new(SenderSubmitStatusRecord {
+                        op_id: op_id.clone(),
+                        channel_id: [9; 16],
+                        model: "message".to_string(),
+                        entity_id: "retry-status-entity".to_string(),
+                        status: initial,
+                        dispatch_status: Some("stale-attempt".to_string()),
+                        accepted_at: 10,
+                        updated_at: 10,
+                        expires_at: 100_000,
+                    }),
+                },
+            };
+
+            assert!(
+                record_sender_status_accepted(
+                    &runtime,
+                    20,
+                    &op_id,
+                    [9; 16],
+                    "message",
+                    "retry-status-entity",
+                )
+                .await
+                .expect("legal retry should reacquire sender status ownership"),
+                "{} must be a retryable sender status",
+                initial.as_str()
+            );
+            record_sender_status_processing(&runtime, 21, &op_id)
+                .await
+                .expect("retry should reach processing");
+            record_sender_status_finished(
+                &runtime,
+                22,
+                &DeliverySummary::new(
+                    "channel".to_string(),
+                    op_id.clone(),
+                    "retry-delivery".to_string(),
+                    DeliveryDedupeStatus::New,
+                    DeliveryDispatchStatus::AttemptedAccepted,
+                ),
+            )
+            .await
+            .expect("retry should persist a final sender state");
+            let record = runtime
+                .sender
+                .load_sender_submit_status(&op_id)
+                .await
+                .expect("retry final status lookup")
+                .expect("retry final status should exist");
+            assert_eq!(record.status, SenderSubmitStatusKind::Sent);
+            assert_eq!(
+                record.dispatch_status.as_deref(),
+                Some("attempted_accepted")
+            );
         }
     }
 }

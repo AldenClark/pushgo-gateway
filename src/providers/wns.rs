@@ -44,6 +44,15 @@ impl WnsPayload {
         )
     }
 
+    pub(crate) fn with_data(&self, data: impl Into<SharedStringMap>) -> Self {
+        Self {
+            data: data.into(),
+            priority: self.priority,
+            ttl_seconds: self.ttl_seconds,
+            encoded_body_cache: Mutex::new(None),
+        }
+    }
+
     pub fn encoded_body(&self) -> Result<Arc<[u8]>, postcard::Error> {
         if let Some(body) = self.encoded_body_cache.lock().as_ref() {
             return Ok(Arc::clone(body));

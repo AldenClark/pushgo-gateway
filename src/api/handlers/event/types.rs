@@ -1,10 +1,9 @@
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::IgnoredAny};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::api::{deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct EventCommonFields {
     pub(super) channel_id: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
@@ -14,7 +13,6 @@ pub(super) struct EventCommonFields {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct EventPatchFields {
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
@@ -45,8 +43,17 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+fn reject_forbidden_event_field<'de, D>(deserializer: D) -> Result<Option<JsonValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let _ = IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "field is not allowed for this event action",
+    ))
+}
+
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct EventCreateRequest {
     #[serde(flatten)]
     pub(super) common: EventCommonFields,
@@ -58,10 +65,21 @@ pub(crate) struct EventCreateRequest {
     pub(super) started_at: Option<i64>,
     #[serde(flatten)]
     pub(super) patch: EventPatchFields,
+    #[serde(
+        default,
+        rename = "event_id",
+        deserialize_with = "reject_forbidden_event_field"
+    )]
+    pub(super) _event_id: Option<JsonValue>,
+    #[serde(
+        default,
+        rename = "ended_at",
+        deserialize_with = "reject_forbidden_event_field"
+    )]
+    pub(super) _ended_at: Option<JsonValue>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct EventUpdateRequest {
     #[serde(flatten)]
     pub(super) common: EventCommonFields,
@@ -72,10 +90,15 @@ pub(crate) struct EventUpdateRequest {
     pub(super) event_time: Option<i64>,
     #[serde(flatten)]
     pub(super) patch: EventPatchFields,
+    #[serde(
+        default,
+        rename = "ended_at",
+        deserialize_with = "reject_forbidden_event_field"
+    )]
+    pub(super) _ended_at: Option<JsonValue>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct EventCloseRequest {
     #[serde(flatten)]
     pub(super) common: EventCommonFields,

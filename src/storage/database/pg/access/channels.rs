@@ -1,5 +1,5 @@
 use super::*;
-use crate::value::DeviceKeyRef;
+use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
 impl PostgresDb {
     pub(super) async fn load_private_outbox_entry(
@@ -158,6 +158,33 @@ impl PostgresDb {
         )
         .bind(&channel_id[..])
         .bind(device_id.as_slice())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub(super) async fn unsubscribe_channel_if_provider_route_current(
+        &self,
+        channel_id: [u8; 16],
+        device_key: &str,
+        platform: Platform,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        let canonical = ProviderTokenRef::canonicalize_for_platform(provider_token, platform)
+            .map_err(|_| StoreError::InvalidDeviceToken)?;
+        let result = sqlx::query(
+            "DELETE FROM channel_subscriptions \
+             WHERE channel_id = $1 AND device_id IN ( \
+               SELECT device_id FROM devices \
+               WHERE device_key = $2 AND platform = $3 AND provider_token = $4 AND route_updated_at = $5 \
+             )",
+        )
+        .bind(channel_id.as_slice())
+        .bind(device_key)
+        .bind(platform.name())
+        .bind(canonical)
+        .bind(route_updated_at)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)

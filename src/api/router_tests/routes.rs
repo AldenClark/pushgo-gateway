@@ -57,7 +57,7 @@ async fn thing_scoped_message_route_returns_not_found() {
 }
 
 #[tokio::test]
-async fn mqtt_private_device_without_active_receiver_is_accepted_without_private_outbox() {
+async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
     let state = build_private_test_state().await;
     let device_key = "mqtt-router-outbox-device";
     let password = "mqtt-router-password";
@@ -110,7 +110,7 @@ async fn mqtt_private_device_without_active_receiver_is_accepted_without_private
             .await
             .expect("outbox should list")
             .len(),
-        0
+        1
     );
 
     for (path, payload) in [
@@ -180,8 +180,8 @@ async fn mqtt_private_device_without_active_receiver_is_accepted_without_private
         .expect("outbox should list after non-message dispatches");
     assert_eq!(
         outbox.len(),
-        0,
-        "mqtt receiver deliveries must not be persisted through private outbox"
+        5,
+        "each MQTT receiver delivery must remain durable until PUBACK"
     );
 }
 
@@ -245,14 +245,14 @@ async fn message_route_generates_new_op_and_entity_for_repeated_submit() {
 }
 
 #[tokio::test]
-async fn message_route_rejects_sender_provided_op_id() {
+async fn message_route_client_op_id_is_idempotent_and_payload_bound() {
     let state = build_test_state().await;
     let channel_id = seed_provider_channel_for_router_test(
         &state,
-        "router-op-id-rejected-device",
-        "router-op-id-rejected",
+        "router-op-id-idempotent-device",
+        "router-op-id-idempotent",
         "password-1234",
-        "router-op-id-rejected-provider-token",
+        "router-op-id-idempotent-provider-token",
         Platform::ANDROID,
     )
     .await
@@ -262,15 +262,141 @@ async fn message_route_rejects_sender_provided_op_id() {
         "channel_id": channel_id,
         "password": "password-1234",
         "op_id": "sender-provided-op",
-        "title": "must reject"
+        "title": "same payload"
     });
 
-    let (status, body) = post_json(app, "/message", payload).await;
+    let (first_status, first_body) = post_json(app.clone(), "/message", payload.clone()).await;
+    let (_, status_after_first) = get_json(app.clone(), "/send_status/sender-provided-op").await;
+    let (second_status, second_body) = post_json(app.clone(), "/message", payload).await;
+    let (_, status_after_duplicate) =
+        get_json(app.clone(), "/send_status/sender-provided-op").await;
+    let (conflict_status, conflict_body) = post_json(
+        app.clone(),
+        "/message",
+        json!({
+            "channel_id": channel_id,
+            "password": "password-1234",
+            "op_id": "sender-provided-op",
+            "title": "different payload"
+        }),
+    )
+    .await;
+    let (_, status_after_conflict) = get_json(app, "/send_status/sender-provided-op").await;
 
-    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body:?}");
+    assert_eq!(first_status, StatusCode::OK, "body: {first_body:?}");
+    assert_eq!(second_status, StatusCode::OK, "body: {second_body:?}");
     assert_eq!(
-        body.get("error_code").and_then(Value::as_str),
-        Some("op_id_not_allowed")
+        response_data(&first_body).get("message_id"),
+        response_data(&second_body).get("message_id"),
+        "same op_id and payload must reuse the semantic message"
+    );
+    assert_eq!(
+        conflict_status,
+        StatusCode::CONFLICT,
+        "body: {conflict_body:?}"
+    );
+    assert_eq!(
+        conflict_body.get("error_code").and_then(Value::as_str),
+        Some("op_id_payload_conflict")
+    );
+    assert_eq!(
+        conflict_body
+            .get("problem")
+            .and_then(|problem| problem.get("category"))
+            .and_then(Value::as_str),
+        Some("conflict")
+    );
+    assert_eq!(
+        status_after_first.get("data"),
+        status_after_duplicate.get("data"),
+        "same-payload replay must not rewrite sender status ownership or timestamps"
+    );
+    assert_eq!(
+        status_after_first.get("data"),
+        status_after_conflict.get("data"),
+        "payload conflict must not overwrite the original sender status"
+    );
+}
+
+#[tokio::test]
+async fn bark_v2_same_payload_and_op_id_replays_first_result() {
+    let (state, _receivers) = build_test_state_with_receivers().await;
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "router-bark-replay-device",
+        "router-bark-replay",
+        "password-1234",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        Platform::IOS,
+    )
+    .await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let payload = json!({
+        "device_key": format!("{channel_id}:password-1234"),
+        "op_id": "bark-stable-replay-op",
+        "title": "same Bark title",
+        "body": "same Bark body"
+    });
+
+    let (first_status, first_body) = post_json(app.clone(), "/bark/push", payload.clone()).await;
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    let (second_status, second_body) = post_json(app, "/bark/push", payload).await;
+
+    assert_eq!(
+        first_status,
+        StatusCode::OK,
+        "first Bark response: {first_body:?}"
+    );
+    assert_eq!(
+        second_status,
+        StatusCode::OK,
+        "Bark replay: {second_body:?}"
+    );
+    assert_eq!(
+        response_data(&first_body),
+        response_data(&second_body),
+        "server time must not change the Bark request fingerprint or replay result"
+    );
+}
+
+#[tokio::test]
+async fn serverchan_same_payload_and_op_id_replays_first_result() {
+    let (state, _receivers) = build_test_state_with_receivers().await;
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "router-serverchan-replay-device",
+        "router-serverchan-replay",
+        "password-1234",
+        "serverchan-replay-provider-token",
+        Platform::ANDROID,
+    )
+    .await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let path = format!("/serverchan/{channel_id}:password-1234");
+    let form = "text=same+ServerChan+title&desp=same+body&op_id=serverchan-stable-replay-op";
+
+    let (first_status, _, first_raw) = post_form(app.clone(), &path, form).await;
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    let (second_status, _, second_raw) = post_form(app, &path, form).await;
+    let first_body: Value =
+        serde_json::from_slice(&first_raw).expect("first ServerChan response should be JSON");
+    let second_body: Value =
+        serde_json::from_slice(&second_raw).expect("second ServerChan response should be JSON");
+
+    assert_eq!(
+        first_status,
+        StatusCode::OK,
+        "first ServerChan response: {first_body:?}"
+    );
+    assert_eq!(
+        second_status,
+        StatusCode::OK,
+        "ServerChan replay: {second_body:?}"
+    );
+    assert_eq!(
+        response_data(&first_body),
+        response_data(&second_body),
+        "server time must not change the ServerChan request fingerprint or replay result"
     );
 }
 

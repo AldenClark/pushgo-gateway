@@ -68,7 +68,7 @@ pub(crate) struct DispatchProgress {
     pub(crate) mqtt_failed: usize,
     pub(crate) private_enqueue_stats: PrivateEnqueueProgress,
     pub(crate) provider_attempted: i64,
-    pub(crate) provider_success: i64,
+    pub(crate) provider_queued: i64,
     pub(crate) provider_failed: i64,
     pub(crate) rejected: usize,
     pub(crate) dispatch_closed: bool,
@@ -92,18 +92,9 @@ impl DispatchProgress {
         );
     }
 
-    pub(crate) fn record_provider_success(&mut self, provider_stats_key: Arc<str>) {
+    pub(crate) fn record_provider_queued(&mut self) {
         self.provider_attempted += 1;
-        self.provider_success += 1;
-        merge_device_counter_delta(
-            &mut self.device_stats,
-            provider_stats_key,
-            DeviceRuntimeCounterDelta {
-                messages_received: 1,
-                provider_success_count: 1,
-                ..DeviceRuntimeCounterDelta::default()
-            },
-        );
+        self.provider_queued += 1;
     }
 
     pub(crate) fn record_mqtt_success(&mut self, device_id: DeviceId) {
@@ -158,7 +149,21 @@ pub(crate) fn merge_device_counter_delta(
 
 #[cfg(test)]
 mod tests {
-    use super::{BusyKind, PrivateEnqueueProgress};
+    use super::{BusyKind, DispatchProgress, PrivateEnqueueProgress};
+
+    #[test]
+    fn provider_queue_acceptance_does_not_record_provider_success() {
+        let mut progress = DispatchProgress::default();
+        progress.record_provider_queued();
+
+        assert_eq!(progress.provider_attempted, 1);
+        assert_eq!(progress.provider_queued, 1);
+        assert_eq!(progress.provider_failed, 0);
+        assert!(
+            progress.device_stats.is_empty(),
+            "provider success/failure counters are worker-send outcomes"
+        );
+    }
 
     #[test]
     fn too_busy_threshold_ignores_non_too_busy_failures() {

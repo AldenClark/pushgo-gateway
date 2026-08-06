@@ -201,6 +201,32 @@ impl RuntimeCounterCollector {
         });
     }
 
+    pub fn record_provider_send_result(
+        &self,
+        channel_id: [u8; 16],
+        device_key: &str,
+        success: bool,
+    ) {
+        let Ok(device_key) = DeviceKeyRef::parse(device_key) else {
+            return;
+        };
+        let (provider_success, provider_failed) = if success { (1, 0) } else { (0, 1) };
+        self.record_dispatch(DispatchCounterEvent {
+            channel_id,
+            occurred_at: Utc::now().timestamp_millis(),
+            provider_success,
+            provider_failed,
+            device_deltas: vec![DeviceRuntimeCounterDelta {
+                device_key: device_key.into_owned(),
+                messages_received: provider_success,
+                provider_success_count: provider_success,
+                provider_failure_count: provider_failed,
+                ..DeviceRuntimeCounterDelta::default()
+            }],
+            ..DispatchCounterEvent::default()
+        });
+    }
+
     pub fn record_ops_counter(&self, metric_key: &str, metric_value: i64, occurred_at: i64) {
         let metric_key = metric_key.trim();
         if metric_key.is_empty() || metric_value == 0 {

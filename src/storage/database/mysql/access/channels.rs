@@ -1,5 +1,5 @@
 use super::*;
-use crate::value::DeviceKeyRef;
+use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
 impl MySqlDb {
     pub(super) async fn load_private_outbox_entry(
@@ -16,23 +16,8 @@ impl MySqlDb {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|r| PrivateOutboxEntry {
-            delivery_id: r.get("delivery_id"),
-            status: r.get("status"),
-            attempts: decode_mysql_attempts(&r),
-            occurred_at: r.get("occurred_at"),
-            created_at: r.get("created_at"),
-            claimed_at: r.get("claimed_at"),
-            claimed_by: r.get("claimed_by"),
-            first_sent_at: r.get("first_sent_at"),
-            last_attempt_at: r.get("last_attempt_at"),
-            acked_at: r.get("acked_at"),
-            fallback_sent_at: r.get("fallback_sent_at"),
-            next_attempt_at: r.get("next_attempt_at"),
-            last_error_code: r.get("last_error_code"),
-            last_error_detail: r.get("last_error_detail"),
-            updated_at: r.get("updated_at"),
-        }))
+        row.map(|r| decode_mysql_private_outbox_entry(&r))
+            .transpose()
     }
 
     pub(super) async fn channel_info(
@@ -160,6 +145,33 @@ impl MySqlDb {
                 .bind(device_id.as_slice())
                 .execute(&self.pool)
                 .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub(super) async fn unsubscribe_channel_if_provider_route_current(
+        &self,
+        channel_id: [u8; 16],
+        device_key: &str,
+        platform: Platform,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        let canonical = ProviderTokenRef::canonicalize_for_platform(provider_token, platform)
+            .map_err(|_| StoreError::InvalidDeviceToken)?;
+        let result = sqlx::query(
+            "DELETE subscriptions FROM channel_subscriptions AS subscriptions \
+             INNER JOIN devices ON devices.device_id = subscriptions.device_id \
+             WHERE subscriptions.channel_id = ? AND devices.device_key = ? \
+               AND devices.platform = ? AND devices.provider_token = ? \
+               AND devices.route_updated_at = ?",
+        )
+        .bind(channel_id.as_slice())
+        .bind(device_key)
+        .bind(platform.name())
+        .bind(canonical)
+        .bind(route_updated_at)
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 }

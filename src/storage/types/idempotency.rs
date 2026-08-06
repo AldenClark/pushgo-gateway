@@ -11,6 +11,7 @@ pub struct DeliveryDedupeRecord {
 #[serde(rename_all = "snake_case")]
 pub enum DedupeState {
     Pending,
+    ProviderQueued,
     Sent,
     PartialFailure,
 }
@@ -19,6 +20,7 @@ impl DedupeState {
     pub fn as_str(self) -> &'static str {
         match self {
             DedupeState::Pending => "pending",
+            DedupeState::ProviderQueued => "provider_queued",
             DedupeState::Sent => "sent",
             DedupeState::PartialFailure => "partial_failure",
         }
@@ -28,6 +30,7 @@ impl DedupeState {
     pub fn from_str(value: &str) -> Result<Self, super::StoreError> {
         match value {
             "pending" => Ok(DedupeState::Pending),
+            "provider_queued" => Ok(DedupeState::ProviderQueued),
             "sent" => Ok(DedupeState::Sent),
             "partial_failure" => Ok(DedupeState::PartialFailure),
             _ => Err(super::StoreError::BinaryError),
@@ -38,7 +41,9 @@ impl DedupeState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpDedupeReservation {
     Reserved,
+    FingerprintConflict { delivery_id: String },
     Pending { delivery_id: String },
+    ProviderQueued { delivery_id: String },
     Sent { delivery_id: String },
     PartialFailure { delivery_id: String },
 }

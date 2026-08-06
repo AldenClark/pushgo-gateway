@@ -7,14 +7,12 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ChannelSyncRequest {
     pub(super) device_key: String,
     pub(super) channels: Vec<ChannelSyncItem>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct ChannelSyncItem {
     pub(super) channel_id: String,
     pub(super) password: String,
@@ -44,7 +42,6 @@ pub(super) struct ChannelSyncResult {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ChannelSubscribeRequest {
     pub(super) device_key: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
@@ -63,7 +60,6 @@ pub(super) struct ChannelSubscribeResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ChannelUnsubscribeRequest {
     pub(super) device_key: String,
     pub(super) channel_id: String,

@@ -14,6 +14,7 @@ mod bootstrap;
 
 #[derive(Debug, Clone)]
 pub struct SqliteDb {
+    core_db_path: Option<String>,
     core_read_pool: SqlitePool,
     delivery_pool: SqlitePool,
     dispatch_pool: SqlitePool,

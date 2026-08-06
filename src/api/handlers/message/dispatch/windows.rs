@@ -29,6 +29,8 @@ pub(super) async fn dispatch(
             delivery_id: Arc::clone(&prepared.delivery_id_ref),
             device_key: Arc::clone(&target.device_key),
             device_token: Arc::from(target.device.token_str()),
+            route_updated_at: target.route_updated_at,
+            outcome: Arc::clone(&prepared.provider_outcome),
         },
         ProviderDispatchPayload::Wns {
             direct_payload: Arc::clone(&direct_payload),
@@ -41,6 +43,7 @@ pub(super) async fn dispatch(
             record_provider_enqueued(prepared, target, progress, path).await;
         }
         Err(err) => {
+            prepared.provider_outcome.record_failure();
             record_provider_enqueue_failed(prepared, target, progress, path, &err).await;
         }
     }

@@ -27,7 +27,7 @@ pub(super) async fn record_provider_enqueued(
     progress: &mut DispatchProgress,
     path: ProviderDeliveryPath,
 ) {
-    progress.record_provider_success(Arc::clone(&target.provider_stats_key));
+    progress.record_provider_queued();
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,

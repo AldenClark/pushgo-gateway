@@ -12,7 +12,7 @@ fn thing_create_rejects_thing_id_field() {
     let parsed = serde_json::from_str::<ThingCreateRequest>(raw);
     assert!(
         parsed.is_err(),
-        "thing create should reject thing_id in payload"
+        "thing create should reject the known forbidden thing_id field"
     );
 }
 
@@ -83,6 +83,17 @@ fn thing_update_rejects_deleted_at_field() {
         parsed.is_err(),
         "thing update should reject deleted_at field"
     );
+}
+
+#[test]
+fn thing_create_ignores_unknown_extension_field() {
+    let raw = r#"{
+        "channel_id":"AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "password":"12345678",
+        "observed_at":1710000000789,
+        "future_extension":{"version":2}
+    }"#;
+    assert!(serde_json::from_str::<ThingCreateRequest>(raw).is_ok());
 }
 
 #[test]

@@ -80,6 +80,26 @@ impl ProviderSubscriptionDatabaseAccess for DatabaseDriver {
         )
     }
 
+    async fn unsubscribe_channel_if_provider_route_current(
+        &self,
+        channel_id: [u8; 16],
+        device_key: &str,
+        platform: Platform,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            unsubscribe_channel_if_provider_route_current(
+                channel_id,
+                device_key,
+                platform,
+                provider_token,
+                route_updated_at
+            )
+        )
+    }
+
     async fn list_subscribed_channels_for_device_key(
         &self,
         device_key: &str,

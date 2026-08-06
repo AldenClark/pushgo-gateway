@@ -28,6 +28,7 @@ pub struct WidgetPushSubscriptionRecord {
 pub enum SenderSubmitStatusKind {
     Accepted,
     Processing,
+    ProviderQueued,
     Sent,
     PartiallyFailed,
     Failed,
@@ -38,6 +39,7 @@ impl SenderSubmitStatusKind {
         match self {
             Self::Accepted => "accepted",
             Self::Processing => "processing",
+            Self::ProviderQueued => "provider_queued",
             Self::Sent => "sent",
             Self::PartiallyFailed => "partially_failed",
             Self::Failed => "failed",
@@ -48,6 +50,7 @@ impl SenderSubmitStatusKind {
         match value {
             "accepted" => Some(Self::Accepted),
             "processing" => Some(Self::Processing),
+            "provider_queued" => Some(Self::ProviderQueued),
             "sent" => Some(Self::Sent),
             "partially_failed" => Some(Self::PartiallyFailed),
             "failed" => Some(Self::Failed),

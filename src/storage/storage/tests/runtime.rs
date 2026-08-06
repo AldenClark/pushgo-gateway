@@ -893,12 +893,21 @@ async fn provider_pull_drains_queue_and_orphan_payloads_on_read() {
 }
 
 #[tokio::test]
-async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
+async fn migrate_provider_pending_to_private_outbox_rejects_partial_migration() {
     let ctx = setup_sqlite_storage("provider-to-private-migration-capacity").await;
 
     let now = chrono::Utc::now().timestamp_millis();
-    let device_id: DeviceId = [6; 16];
+    let device_key = "provider-to-private-capacity-device";
+    let device_id = derive_private_device_id(device_key);
     let provider_token = "fcm-token-migration-capacity-001";
+    seed_provider_route(
+        &ctx.storage,
+        device_key,
+        Platform::ANDROID,
+        provider_token,
+        now,
+    )
+    .await;
 
     let existing_delivery = "delivery-private-existing-capacity-001";
     let existing_message = PrivateMessage {
@@ -978,14 +987,31 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
     assert_eq!(provider_pending_before, 3);
     drop(conn);
 
-    let migrated = ctx
+    let err = ctx
         .storage
-        .migrate_provider_pending_to_private_outbox(device_id, 30, 2)
+        .transition_device_route(
+            &DeviceRouteRecordRow {
+                device_key: device_key.to_string(),
+                platform: Platform::ANDROID.name().to_string(),
+                channel_type: "private".to_string(),
+                provider_token: None,
+                updated_at: now + 1,
+            },
+            RouteChannelType::Fcm,
+            30,
+            2,
+        )
         .await
-        .expect("provider->private migration should succeed");
-    assert_eq!(
-        migrated, 1,
-        "migration should only fill remaining private capacity"
+        .expect_err("provider->private migration must not partially switch at capacity");
+    assert!(
+        matches!(
+            err,
+            StoreError::RouteMigrationCapacityExceeded {
+                pending: 3,
+                capacity: 1
+            }
+        ),
+        "unexpected capacity error: {err:?}"
     );
 
     let private_pending = ctx
@@ -993,7 +1019,7 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
         .count_private_outbox_for_device(device_id)
         .await
         .expect("private pending count should succeed");
-    assert_eq!(private_pending, 2);
+    assert_eq!(private_pending, 1);
 
     let mut migrated_provider_count = 0usize;
     for delivery_id in provider_deliveries {
@@ -1007,7 +1033,21 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
             migrated_provider_count = migrated_provider_count.saturating_add(1);
         }
     }
-    assert_eq!(migrated_provider_count, 1);
+    assert_eq!(migrated_provider_count, 0);
+
+    let route = ctx
+        .storage
+        .load_device_routes()
+        .await
+        .expect("route should remain queryable")
+        .into_iter()
+        .find(|route| route.device_key == device_key)
+        .expect("route should remain present");
+    assert_eq!(
+        route.channel_type,
+        Platform::ANDROID.channel_type(),
+        "failed migration must not commit the private route"
+    );
 
     let remaining_provider_items = ctx
         .storage
@@ -1016,8 +1056,8 @@ async fn migrate_provider_pending_to_private_outbox_respects_device_capacity() {
         .expect("provider pull remaining items should succeed");
     assert_eq!(
         remaining_provider_items.len(),
-        2,
-        "provider queue should retain non-migrated items"
+        3,
+        "provider queue must remain intact when the migration cannot fit atomically"
     );
 }
 
@@ -1868,11 +1908,11 @@ async fn maintenance_cleanup_prunes_expired_sender_submit_status() {
         expires_at: now + 60_000,
     };
     ctx.storage
-        .upsert_sender_submit_status(&expired)
+        .insert_sender_submit_status_if_absent(&expired)
         .await
         .expect("expired sender status should insert");
     ctx.storage
-        .upsert_sender_submit_status(&live)
+        .insert_sender_submit_status_if_absent(&live)
         .await
         .expect("live sender status should insert");
 
@@ -1899,6 +1939,66 @@ async fn maintenance_cleanup_prunes_expired_sender_submit_status() {
             .status,
         SenderSubmitStatusKind::Processing
     );
+}
+
+#[tokio::test]
+async fn interrupted_provider_dispatch_recovery_releases_op_for_retry() {
+    let ctx = setup_sqlite_storage("provider-dispatch-interrupted-recovery").await;
+    let now = 1_700_000_000_000_i64;
+    let op_id = "provider-interrupted-retry-op";
+    let delivery_id = "provider-interrupted-retry-delivery";
+    assert!(matches!(
+        ctx.storage
+            .reserve_op_dedupe_pending(op_id, delivery_id, now)
+            .await
+            .expect("reserve interrupted op"),
+        OpDedupeReservation::Reserved
+    ));
+    assert!(
+        ctx.storage
+            .mark_op_dedupe_finalized(op_id, delivery_id, DedupeState::ProviderQueued)
+            .await
+            .expect("mark interrupted op provider queued")
+    );
+    ctx.storage
+        .insert_sender_submit_status_if_absent(&SenderSubmitStatusRecord {
+            op_id: op_id.to_string(),
+            channel_id: [8; 16],
+            model: "message".to_string(),
+            entity_id: "provider-interrupted-entity".to_string(),
+            status: SenderSubmitStatusKind::ProviderQueued,
+            dispatch_status: Some("provider_queued".to_string()),
+            accepted_at: now,
+            updated_at: now,
+            expires_at: now + 60_000,
+        })
+        .await
+        .expect("insert interrupted sender status");
+
+    let recovered = ctx
+        .storage
+        .recover_interrupted_provider_dispatches(now + 1)
+        .await
+        .expect("recover interrupted provider dispatch");
+    assert_eq!(recovered, 1);
+    let status = ctx
+        .storage
+        .load_sender_submit_status(op_id)
+        .await
+        .expect("load recovered sender status")
+        .expect("recovered sender status should exist");
+    assert_eq!(status.status, SenderSubmitStatusKind::Failed);
+    assert_eq!(
+        status.dispatch_status.as_deref(),
+        Some("provider_interrupted")
+    );
+    assert!(matches!(
+        ctx.storage
+            .reserve_op_dedupe_pending(op_id, "provider-interrupted-retry-delivery-2", now + 2)
+            .await
+            .expect("retry should be reservable after recovery"),
+        OpDedupeReservation::Reserved
+    ));
 }
 
 #[tokio::test]
@@ -2560,6 +2660,295 @@ async fn provider_pull_clears_original_private_outbox_delivery() {
 }
 
 #[tokio::test]
+async fn provider_pull_candidate_ignores_historical_invalid_platform_metadata() {
+    let ctx = setup_sqlite_storage("provider-candidate-invalid-platform").await;
+    let device_id: DeviceId = [35; 16];
+    let delivery_id = "provider-candidate-invalid-platform-delivery";
+    let now = chrono::Utc::now().timestamp_millis();
+    let message = PrivateMessage {
+        payload: vec![0xff, 0x00, 0x7f].into(),
+        size: 3,
+        sent_at: now,
+        expires_at: now + 60_000,
+    };
+    ctx.storage
+        .enqueue_provider_pull_item(
+            device_id,
+            delivery_id,
+            &message,
+            Platform::ANDROID,
+            "candidate-invalid-platform-token",
+        )
+        .await
+        .expect("provider candidate fixture should enqueue");
+    let mut delivery = SqliteConnection::connect(&ctx.delivery_db_url)
+        .await
+        .expect("delivery sidecar mutation connection should succeed");
+    sqlx::query(
+        "UPDATE provider_pull_queue SET platform = 'future-unsupported-platform' \
+         WHERE device_id = ? AND delivery_id = ?",
+    )
+    .bind(device_id.as_slice())
+    .bind(delivery_id)
+    .execute(&mut delivery)
+    .await
+    .expect("historical invalid platform should seed");
+
+    let candidate = ctx
+        .storage
+        .peek_provider_candidate(device_id, delivery_id, now)
+        .await
+        .expect("raw candidate lookup must not parse unrelated platform metadata")
+        .expect("raw candidate should remain visible");
+    assert_eq!(candidate.delivery_id, delivery_id);
+    assert_eq!(candidate.payload.as_ref(), message.payload.as_ref());
+    assert_eq!(
+        ctx.storage
+            .discard_invalid_provider_items(device_id, &[delivery_id.to_string()], now)
+            .await
+            .expect("invalid candidate should delete by outer id only"),
+        1
+    );
+    assert!(
+        ctx.storage
+            .peek_provider_candidate(device_id, delivery_id, now)
+            .await
+            .expect("discarded candidate lookup should succeed")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn sqlite_provider_finalization_rolls_back_dedupe_when_sender_update_fails() {
+    let ctx = setup_sqlite_storage("provider-finalize-mid-transaction-rollback").await;
+    let op_id = "provider-finalize-rollback-op";
+    let delivery_id = "provider-finalize-rollback-delivery";
+    let now = chrono::Utc::now().timestamp_millis();
+    assert!(matches!(
+        ctx.storage
+            .reserve_op_dedupe_pending(op_id, delivery_id, now)
+            .await
+            .expect("reserve provider finalization dedupe"),
+        OpDedupeReservation::Reserved
+    ));
+    assert!(
+        ctx.storage
+            .mark_op_dedupe_finalized(op_id, delivery_id, DedupeState::ProviderQueued)
+            .await
+            .expect("mark provider queued before finalization")
+    );
+    ctx.storage
+        .insert_sender_submit_status_if_absent(&SenderSubmitStatusRecord {
+            op_id: op_id.to_string(),
+            channel_id: [33; 16],
+            model: "message".to_string(),
+            entity_id: "provider-finalize-rollback-entity".to_string(),
+            status: SenderSubmitStatusKind::ProviderQueued,
+            dispatch_status: Some("provider_queued".to_string()),
+            accepted_at: now,
+            updated_at: now,
+            expires_at: now + 60_000,
+        })
+        .await
+        .expect("insert provider queued sender status");
+
+    let mut core = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite core trigger connection should succeed");
+    sqlx::query(
+        "CREATE TRIGGER fail_provider_sender_finalize \
+         BEFORE UPDATE ON sender_submit_status \
+         WHEN NEW.dispatch_status IN ('provider_success', 'provider_failed') \
+         BEGIN SELECT RAISE(ABORT, 'injected sender finalization failure'); END",
+    )
+    .execute(&mut core)
+    .await
+    .expect("provider finalization failure trigger should install");
+
+    assert!(
+        ctx.storage
+            .finalize_provider_dispatch_outcome(op_id, delivery_id, true)
+            .await
+            .is_err(),
+        "injected sender update failure must fail the whole finalization"
+    );
+    let mut dispatch = SqliteConnection::connect(&ctx.dispatch_db_url)
+        .await
+        .expect("sqlite dispatch verification connection should succeed");
+    let dedupe_state: String =
+        sqlx::query_scalar("SELECT state FROM dispatch_op_dedupe WHERE delivery_id = ?")
+            .bind(delivery_id)
+            .fetch_one(&mut dispatch)
+            .await
+            .expect("dedupe state should remain readable after rollback");
+    assert_eq!(dedupe_state, DedupeState::ProviderQueued.as_str());
+    let sender_status: String =
+        sqlx::query_scalar("SELECT status FROM sender_submit_status WHERE op_id = ?")
+            .bind(op_id)
+            .fetch_one(&mut core)
+            .await
+            .expect("sender status should remain readable after rollback");
+    assert_eq!(
+        sender_status,
+        SenderSubmitStatusKind::ProviderQueued.as_str()
+    );
+
+    sqlx::query("DROP TRIGGER fail_provider_sender_finalize")
+        .execute(&mut core)
+        .await
+        .expect("provider finalization failure trigger should drop");
+    ctx.storage
+        .finalize_provider_dispatch_outcome(op_id, delivery_id, true)
+        .await
+        .expect("provider finalization should succeed after failure is removed");
+    let final_dedupe_state: String =
+        sqlx::query_scalar("SELECT state FROM dispatch_op_dedupe WHERE delivery_id = ?")
+            .bind(delivery_id)
+            .fetch_one(&mut dispatch)
+            .await
+            .expect("final dedupe state should be readable");
+    assert_eq!(final_dedupe_state, DedupeState::Sent.as_str());
+}
+
+#[tokio::test]
+async fn provider_batch_ack_atomically_clears_linked_private_deliveries() {
+    let ctx = setup_sqlite_storage("provider-batch-ack-linked-private-cleanup").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [27; 16];
+    let pairs = [
+        ("provider-batch-ack-001", "private-original-batch-ack-001"),
+        ("provider-batch-ack-002", "private-original-batch-ack-002"),
+    ];
+
+    for (provider_delivery_id, original_delivery_id) in pairs {
+        let mut data = hashbrown::HashMap::new();
+        data.insert("delivery_id", original_delivery_id);
+        let envelope = postcard::to_allocvec(&TestPrivatePayloadEnvelope {
+            payload_version: 1,
+            data,
+        })
+        .expect("provider pull envelope should encode");
+        let message = PrivateMessage {
+            payload: envelope.clone().into(),
+            size: envelope.len(),
+            sent_at: now,
+            expires_at: now + 300_000,
+        };
+        ctx.storage
+            .insert_private_message(original_delivery_id, &message)
+            .await
+            .expect("insert original private payload should succeed");
+        ctx.storage
+            .enqueue_private_outbox(
+                device_id,
+                &PrivateOutboxEntry {
+                    delivery_id: original_delivery_id.to_string(),
+                    status: OUTBOX_STATUS_PENDING.to_string(),
+                    attempts: 0,
+                    occurred_at: now,
+                    created_at: now,
+                    claimed_at: None,
+                    claimed_by: None,
+                    first_sent_at: None,
+                    last_attempt_at: None,
+                    acked_at: None,
+                    fallback_sent_at: None,
+                    next_attempt_at: now,
+                    last_error_code: None,
+                    last_error_detail: None,
+                    updated_at: now,
+                },
+            )
+            .await
+            .expect("enqueue original private outbox should succeed");
+        ctx.storage
+            .enqueue_provider_pull_item(
+                device_id,
+                provider_delivery_id,
+                &message,
+                Platform::ANDROID,
+                "fcm-token-batch-ack-linked-001",
+            )
+            .await
+            .expect("enqueue provider pull item should succeed");
+    }
+
+    let ids = pairs
+        .iter()
+        .map(|(provider_delivery_id, _)| (*provider_delivery_id).to_string())
+        .collect::<Vec<_>>();
+    let acknowledged = ctx
+        .storage
+        .ack_provider_items(device_id, &ids, now + 1)
+        .await
+        .expect("batch ACK should succeed atomically");
+    assert_eq!(acknowledged.len(), 2);
+
+    for (provider_delivery_id, original_delivery_id) in pairs {
+        assert!(
+            ctx.storage
+                .peek_provider_item(device_id, provider_delivery_id, now + 2)
+                .await
+                .expect("provider item lookup should succeed")
+                .is_none()
+        );
+        assert!(
+            ctx.storage
+                .load_private_outbox_entry(device_id, original_delivery_id)
+                .await
+                .expect("private outbox lookup should succeed")
+                .is_none()
+        );
+        assert!(
+            ctx.storage
+                .load_private_message(original_delivery_id)
+                .await
+                .expect("private payload lookup should succeed")
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn provider_ack_discards_expired_item_consistently() {
+    let ctx = setup_sqlite_storage("provider-ack-expired-consistency").await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_id: DeviceId = [28; 16];
+    let delivery_id = "provider-ack-expired-001";
+    let message = PrivateMessage {
+        payload: vec![1, 2, 3].into(),
+        size: 3,
+        sent_at: now - 2_000,
+        expires_at: now - 1,
+    };
+    ctx.storage
+        .enqueue_provider_pull_item(
+            device_id,
+            delivery_id,
+            &message,
+            Platform::ANDROID,
+            "fcm-token-expired-ack-001",
+        )
+        .await
+        .expect("expired fixture should seed");
+
+    let acknowledged = ctx
+        .storage
+        .ack_provider_item(device_id, delivery_id, now)
+        .await
+        .expect("expired ACK should succeed idempotently");
+    assert!(acknowledged.is_none());
+    assert!(
+        ctx.storage
+            .peek_provider_item(device_id, delivery_id, now + 1)
+            .await
+            .expect("expired provider item lookup should succeed")
+            .is_none(),
+        "expired ACK must remove the stale row across every backend"
+    );
+}
+
+#[tokio::test]
 async fn provider_invalid_token_cleanup_unsubscribes_and_clears_private_outbox() {
     let ctx = setup_sqlite_storage("provider-invalid-token-cleanup").await;
     let now = chrono::Utc::now().timestamp_millis();
@@ -2627,6 +3016,15 @@ async fn provider_invalid_token_cleanup_unsubscribes_and_clears_private_outbox()
         false,
         crate::runtime_config::GatewayRuntimeProfile::Small,
     );
+    let route_updated_at = ctx
+        .storage
+        .load_device_routes()
+        .await
+        .expect("provider routes should load")
+        .into_iter()
+        .find(|route| route.device_key == device_key)
+        .expect("provider route should exist")
+        .updated_at;
     crate::delivery_core::execution::provider::cleanup_invalid_provider_token(
         crate::delivery_core::execution::provider::ProviderInvalidTokenCleanup {
             store: &ctx.storage,
@@ -2637,6 +3035,7 @@ async fn provider_invalid_token_cleanup_unsubscribes_and_clears_private_outbox()
             device_key,
             platform: Platform::ANDROID,
             device_token: provider_token,
+            route_updated_at,
             provider: "FCM",
             correlation_id: "provider-invalid-token-cleanup-test",
         },
@@ -2660,6 +3059,91 @@ async fn provider_invalid_token_cleanup_unsubscribes_and_clears_private_outbox()
     assert!(
         outbox.is_empty(),
         "invalid provider token cleanup must clear linked private outbox rows"
+    );
+}
+
+#[tokio::test]
+async fn delayed_invalid_token_from_old_a_generation_cannot_retire_new_a_generation() {
+    let ctx = setup_sqlite_storage("provider-invalid-token-generation-guard").await;
+    let device_key = "provider-invalid-token-generation-device";
+    let token_a = "android-provider-token-generation-A-000000000001";
+    let token_b = "android-provider-token-generation-B-000000000001";
+    let subscribe = subscribe_provider_channel_for_test(
+        &ctx.storage,
+        device_key,
+        token_a,
+        "invalid-token-generation",
+        "pw123456",
+        Platform::ANDROID,
+    )
+    .await;
+    let initial_updated_at = ctx
+        .storage
+        .load_device_routes()
+        .await
+        .expect("initial routes should load")
+        .into_iter()
+        .find(|route| route.device_key == device_key)
+        .expect("initial provider route should exist")
+        .updated_at;
+    ctx.storage
+        .persist_device_route_change(&DeviceRouteRecordRow {
+            device_key: device_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some(token_b.to_string()),
+            updated_at: initial_updated_at + 1,
+        })
+        .await
+        .expect("A to B route rotation should succeed");
+    ctx.storage
+        .persist_device_route_change(&DeviceRouteRecordRow {
+            device_key: device_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some(token_a.to_string()),
+            updated_at: initial_updated_at + 2,
+        })
+        .await
+        .expect("B to new A route rotation should succeed");
+
+    let runtime_counters = crate::runtime_counters::RuntimeCounterCollector::spawn_with_mode(
+        ctx.storage.clone(),
+        false,
+        crate::runtime_config::GatewayRuntimeProfile::Small,
+    );
+    crate::delivery_core::execution::provider::cleanup_invalid_provider_token(
+        crate::delivery_core::execution::provider::ProviderInvalidTokenCleanup {
+            store: &ctx.storage,
+            private: None,
+            runtime_counters: runtime_counters.as_ref(),
+            channel_id: subscribe.channel_id,
+            channel_id_text: &crate::value::ChannelId::from(subscribe.channel_id).to_string(),
+            device_key,
+            platform: Platform::ANDROID,
+            device_token: token_a,
+            route_updated_at: initial_updated_at,
+            provider: "FCM",
+            correlation_id: "provider-invalid-token-stale-a-generation",
+        },
+    )
+    .await;
+
+    let targets = ctx
+        .storage
+        .list_channel_dispatch_targets(
+            subscribe.channel_id,
+            chrono::Utc::now().timestamp_millis() + 1,
+        )
+        .await
+        .expect("dispatch targets should load after stale invalid response");
+    assert!(
+        targets.iter().any(|target| matches!(
+            target,
+            DispatchTarget::Provider { provider_token, route_updated_at, .. }
+                if provider_token == token_a && *route_updated_at == initial_updated_at + 2
+        )),
+        "a delayed invalid response for the old A generation must not retire the new A generation; targets={targets:?}"
     );
 }
 

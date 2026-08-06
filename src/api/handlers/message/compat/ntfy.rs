@@ -27,6 +27,7 @@ impl CompatNtfyQuery {
             channel_id: key.channel_id,
             password: key.password,
             op_id: self.op_id,
+            _message_id: None,
             thing_id: None,
             occurred_at: self.occurred_at,
             title: self

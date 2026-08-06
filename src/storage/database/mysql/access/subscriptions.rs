@@ -68,7 +68,7 @@ impl MySqlDb {
         let mut seen_provider_targets = HashSet::new();
         for row in rows {
             let channel_type: String = row.get("channel_type");
-            let route_provider_token: Option<String> = row.get("route_provider_token");
+            let route_provider_token = decode_mysql_optional_text(&row, "route_provider_token")?;
             let route_updated_at: Option<i64> = row.get("route_updated_at");
             if !route_matches_dispatch_target(
                 channel_type.as_str(),
@@ -78,8 +78,7 @@ impl MySqlDb {
                 continue;
             }
             let raw_device_id: Vec<u8> = row.get("device_id");
-            let device_key: Option<String> = row
-                .get::<Option<String>, _>("route_device_key")
+            let device_key: Option<String> = decode_mysql_optional_text(&row, "route_device_key")?
                 .and_then(|value| {
                     DeviceKeyRef::optional(Some(value.as_str())).map(DeviceKeyRef::into_owned)
                 });
@@ -114,6 +113,7 @@ impl MySqlDb {
                     platform,
                     provider_token: token.into_owned(),
                     device_key,
+                    route_updated_at: route_updated_at.expect("route timestamp validated above"),
                 });
             }
         }

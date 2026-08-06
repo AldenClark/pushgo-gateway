@@ -58,6 +58,7 @@ pub(crate) enum DeliveryDedupeSettleAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeliveryDispatchStatus {
     NotAttempted,
+    ProviderQueued,
     AttemptedAccepted,
     AttemptedPartialFailure,
     PrivateQueueTooBusy,
@@ -66,6 +67,7 @@ pub(crate) enum DeliveryDispatchStatus {
 impl DeliveryDispatchStatus {
     pub(crate) fn from_execution(
         has_dispatch_attempt: bool,
+        provider_queued: bool,
         partial_failure: bool,
         private_enqueue_too_busy: bool,
     ) -> Self {
@@ -75,6 +77,8 @@ impl DeliveryDispatchStatus {
             Self::NotAttempted
         } else if partial_failure {
             Self::AttemptedPartialFailure
+        } else if provider_queued {
+            Self::ProviderQueued
         } else {
             Self::AttemptedAccepted
         }
@@ -94,6 +98,7 @@ impl DeliveryDispatchStatus {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::NotAttempted => "not_attempted",
+            Self::ProviderQueued => "provider_queued",
             Self::AttemptedAccepted => "attempted_accepted",
             Self::AttemptedPartialFailure => "attempted_partial_failure",
             Self::PrivateQueueTooBusy => "private_queue_too_busy",
@@ -133,6 +138,7 @@ impl DeliverySummary {
             return Some("notification dispatch is already pending");
         }
         match self.dispatch_status {
+            DeliveryDispatchStatus::ProviderQueued => None,
             DeliveryDispatchStatus::AttemptedAccepted => None,
             DeliveryDispatchStatus::AttemptedPartialFailure => {
                 Some("notification dispatch completed with partial failure")
@@ -157,7 +163,8 @@ impl DeliverySummary {
             DeliveryDispatchStatus::NotAttempted | DeliveryDispatchStatus::PrivateQueueTooBusy => {
                 DeliveryDedupeSettleAction::ClearPending
             }
-            DeliveryDispatchStatus::AttemptedAccepted
+            DeliveryDispatchStatus::ProviderQueued
+            | DeliveryDispatchStatus::AttemptedAccepted
             | DeliveryDispatchStatus::AttemptedPartialFailure => {
                 DeliveryDedupeSettleAction::FinalizeSent
             }

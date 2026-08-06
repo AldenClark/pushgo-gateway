@@ -1,7 +1,7 @@
 use super::*;
 use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
-async fn upsert_device_route_in_tx(
+pub(in crate::storage::database::pg) async fn upsert_device_route_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     route: &DeviceRouteRecordRow,
 ) -> StoreResult<()> {
@@ -94,7 +94,7 @@ async fn cleanup_orphan_private_payloads_in_tx(
     Ok(())
 }
 
-async fn coalesce_duplicate_provider_routes_in_tx(
+pub(in crate::storage::database::pg) async fn coalesce_duplicate_provider_routes_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     route: &DeviceRoutePersistenceValues,
 ) -> StoreResult<()> {
@@ -142,6 +142,25 @@ async fn coalesce_duplicate_provider_routes_in_tx(
                updated_at = GREATEST(provider_pull_queue.updated_at, EXCLUDED.updated_at)",
         )
         .bind(route.device_id.as_slice())
+        .bind(duplicate.device_id.as_slice())
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO provider_pull_queue \
+             (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+             SELECT $1, o.delivery_id, ''::bytea, 0, p.sent_at, p.expires_at, $2, $3, p.created_at, p.updated_at \
+             FROM private_outbox o JOIN private_payloads p ON p.delivery_id = o.delivery_id \
+             WHERE o.device_id = $4 \
+             ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
+               sent_at = LEAST(provider_pull_queue.sent_at, EXCLUDED.sent_at), \
+               expires_at = GREATEST(provider_pull_queue.expires_at, EXCLUDED.expires_at), \
+               platform = EXCLUDED.platform, provider_token = EXCLUDED.provider_token, \
+               updated_at = GREATEST(provider_pull_queue.updated_at, EXCLUDED.updated_at)",
+        )
+        .bind(route.device_id.as_slice())
+        .bind(route.platform.as_str())
+        .bind(route.provider_token.as_deref())
         .bind(duplicate.device_id.as_slice())
         .execute(&mut **tx)
         .await?;
@@ -202,7 +221,26 @@ impl PostgresDb {
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
         let values = route.persistence_values()?;
+        let now = values.updated_at;
         upsert_device_route_in_tx(&mut tx, route).await?;
+        if let Some(provider_token) = values.provider_token.as_deref() {
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (device_id, platform, provider_token, token_hash, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $5) \
+                 ON CONFLICT (platform, token_hash) DO UPDATE SET \
+                   device_id = EXCLUDED.device_id, provider_token = EXCLUDED.provider_token, \
+                   updated_at = EXCLUDED.updated_at",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(values.platform_code)
+            .bind(provider_token)
+            .bind(token_hash.as_deref())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         tx.commit().await?;
         Ok(())
@@ -234,10 +272,177 @@ impl PostgresDb {
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
         let values = route.persistence_values()?;
+        let now = values.updated_at;
         upsert_device_route_in_tx(&mut tx, route).await?;
+        if let Some(provider_token) = values.provider_token.as_deref() {
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (device_id, platform, provider_token, token_hash, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $5) \
+                 ON CONFLICT (platform, token_hash) DO UPDATE SET \
+                   device_id = EXCLUDED.device_id, provider_token = EXCLUDED.provider_token, \
+                   updated_at = EXCLUDED.updated_at",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(values.platform_code)
+            .bind(provider_token)
+            .bind(token_hash.as_deref())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    pub(super) async fn transition_device_route(
+        &self,
+        route: &DeviceRouteRecordRow,
+        previous_channel_type: RouteChannelType,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<usize> {
+        let values = route.persistence_values()?;
+        let next_channel_type = route.channel_type_kind()?;
+        let now = Utc::now().timestamp_millis();
+        let mut tx = self.pool.begin().await?;
+        let migrated = if previous_channel_type.is_private() && !next_channel_type.is_private() {
+            let provider_token = values
+                .provider_token
+                .as_deref()
+                .ok_or(StoreError::InvalidDeviceToken)?;
+            let pending: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM private_outbox o \
+                 JOIN private_payloads p ON p.delivery_id = o.delivery_id \
+                 WHERE o.device_id = $1",
+            )
+            .bind(values.device_id.as_slice())
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO provider_pull_queue \
+                 (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+                 SELECT o.device_id, o.delivery_id, ''::bytea, 0, p.sent_at, p.expires_at, $1, $2, $3, $3 \
+                 FROM private_outbox o JOIN private_payloads p ON p.delivery_id = o.delivery_id \
+                 WHERE o.device_id = $4 \
+                 ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
+                   sent_at = EXCLUDED.sent_at, expires_at = EXCLUDED.expires_at, \
+                   platform = EXCLUDED.platform, provider_token = EXCLUDED.provider_token, \
+                   updated_at = EXCLUDED.updated_at",
+            )
+            .bind(values.platform.as_str())
+            .bind(provider_token)
+            .bind(now)
+            .bind(values.device_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM private_outbox WHERE device_id = $1")
+                .bind(values.device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            pending.max(0) as usize
+        } else if !previous_channel_type.is_private() && next_channel_type.is_private() {
+            let existing: i64 =
+                sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox WHERE device_id = $1")
+                    .bind(values.device_id.as_slice())
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let capacity = max_pending_per_device.saturating_sub(existing.max(0) as usize);
+            let provider_pending: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM provider_pull_queue WHERE device_id = $1 AND expires_at > $2",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(now)
+            .fetch_one(&mut *tx)
+            .await?;
+            let provider_pending = provider_pending.max(0) as usize;
+            if provider_pending > capacity {
+                return Err(StoreError::RouteMigrationCapacityExceeded {
+                    pending: provider_pending,
+                    capacity,
+                });
+            }
+            let capacity = capacity.min(i64::MAX as usize) as i64;
+            let rows = sqlx::query(
+                "SELECT delivery_id, sent_at FROM provider_pull_queue \
+                 WHERE device_id = $1 AND expires_at > $2 \
+                 ORDER BY created_at ASC, delivery_id ASC LIMIT $3 FOR UPDATE",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(now)
+            .bind(capacity)
+            .fetch_all(&mut *tx)
+            .await?;
+            let next_attempt_at = now.saturating_add(ack_timeout_secs.max(1) as i64 * 1000);
+            for row in &rows {
+                let delivery_id: String = row.get("delivery_id");
+                let sent_at: i64 = row.get("sent_at");
+                sqlx::query(
+                    "INSERT INTO private_payloads \
+                     (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) \
+                     SELECT delivery_id, payload_blob, payload_size, sent_at, expires_at, $1, $1 \
+                     FROM provider_pull_queue WHERE device_id = $2 AND delivery_id = $3 \
+                     ON CONFLICT (delivery_id) DO NOTHING",
+                )
+                .bind(now)
+                .bind(values.device_id.as_slice())
+                .bind(&delivery_id)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "INSERT INTO private_outbox \
+                     (device_id, delivery_id, status, attempts, occurred_at, created_at, next_attempt_at, updated_at) \
+                     VALUES ($1, $2, 'pending', 0, $3, $4, $5, $4) \
+                     ON CONFLICT (device_id, delivery_id) DO NOTHING",
+                )
+                .bind(values.device_id.as_slice())
+                .bind(&delivery_id)
+                .bind(sent_at)
+                .bind(now)
+                .bind(next_attempt_at)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "DELETE FROM provider_pull_queue WHERE device_id = $1 AND delivery_id = $2",
+                )
+                .bind(values.device_id.as_slice())
+                .bind(&delivery_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            rows.len()
+        } else {
+            0
+        };
+        upsert_device_route_in_tx(&mut tx, route).await?;
+        if let Some(provider_token) = values.provider_token.as_deref() {
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (device_id, platform, provider_token, token_hash, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $5) \
+                 ON CONFLICT (platform, token_hash) DO UPDATE SET \
+                   device_id = EXCLUDED.device_id, provider_token = EXCLUDED.provider_token, \
+                   updated_at = EXCLUDED.updated_at",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(values.platform_code)
+            .bind(provider_token)
+            .bind(token_hash.as_deref())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query("DELETE FROM private_bindings WHERE device_id = $1")
+                .bind(values.device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+        }
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        tx.commit().await?;
+        Ok(migrated)
     }
 
     pub(super) async fn replace_device_identity(

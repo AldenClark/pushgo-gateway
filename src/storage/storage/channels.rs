@@ -72,6 +72,30 @@ impl Storage {
         Ok(removed)
     }
 
+    pub async fn unsubscribe_channel_if_provider_route_current(
+        &self,
+        channel_id: [u8; 16],
+        device_key: &str,
+        platform: Platform,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        let removed = self
+            .db
+            .unsubscribe_channel_if_provider_route_current(
+                channel_id,
+                device_key,
+                platform,
+                provider_token,
+                route_updated_at,
+            )
+            .await?;
+        if removed {
+            self.cache.invalidate_channel_devices(channel_id);
+        }
+        Ok(removed)
+    }
+
     pub async fn channel_info(&self, channel_id: [u8; 16]) -> StoreResult<Option<ChannelInfo>> {
         if let Some(info) = self.cache.get_channel_info(channel_id) {
             return Ok(Some(info));

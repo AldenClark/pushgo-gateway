@@ -8,8 +8,9 @@ impl CompatServerChanPayload {
             channel_id: key.channel_id,
             password: key.password,
             op_id: self.op_id,
+            _message_id: None,
             thing_id: None,
-            occurred_at: Some(Utc::now().timestamp_millis()),
+            occurred_at: None,
             title: self
                 .title
                 .or(self.text)

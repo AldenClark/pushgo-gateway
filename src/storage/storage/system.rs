@@ -2,7 +2,18 @@ use super::*;
 use crate::storage::database::{
     DeviceRouteDatabaseAccess, PrivateMessageDatabaseAccess, SystemStateDatabaseAccess,
 };
-use std::time::Instant;
+use crate::value::ProviderTokenRef;
+use std::time::{Duration, Instant};
+
+const PROVIDER_FINALIZE_RETRY_DELAYS: [Duration; 7] = [
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+];
 
 impl Storage {
     pub async fn automation_counts(&self) -> StoreResult<AutomationCounts> {
@@ -85,11 +96,11 @@ impl Storage {
         self.db.automation_reset().await
     }
 
-    pub async fn upsert_sender_submit_status(
+    pub async fn insert_sender_submit_status_if_absent(
         &self,
         record: &SenderSubmitStatusRecord,
-    ) -> StoreResult<()> {
-        self.db.upsert_sender_submit_status(record).await
+    ) -> StoreResult<bool> {
+        self.db.insert_sender_submit_status_if_absent(record).await
     }
 
     pub async fn update_sender_submit_status(
@@ -101,6 +112,80 @@ impl Storage {
     ) -> StoreResult<()> {
         self.db
             .update_sender_submit_status(op_id, status, dispatch_status, updated_at)
+            .await
+    }
+
+    pub async fn finalize_provider_dispatch_outcome(
+        &self,
+        op_id: &str,
+        delivery_id: &str,
+        success: bool,
+    ) -> StoreResult<()> {
+        #[cfg(test)]
+        if self.consume_provider_finalize_failure() {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected provider outcome finalization failure",
+            )));
+        }
+        self.db
+            .finalize_provider_dispatch_outcome(op_id, delivery_id, success)
+            .await
+    }
+
+    pub(crate) async fn finalize_provider_dispatch_outcome_durably(
+        &self,
+        op_id: &str,
+        delivery_id: &str,
+        success: bool,
+    ) {
+        let mut failures = 0usize;
+        loop {
+            match self
+                .finalize_provider_dispatch_outcome(op_id, delivery_id, success)
+                .await
+            {
+                Ok(()) => {
+                    if failures > 0 {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::INFO,
+                            event = "dispatch.provider_outcome_finalize_recovered",
+                            op_id = %(crate::util::redact_text(op_id)),
+                            delivery_id = %(crate::util::redact_text(delivery_id)),
+                            success = success,
+                            failed_attempts = (failures as u64)
+                        );
+                    }
+                    return;
+                }
+                Err(err) => {
+                    failures = failures.saturating_add(1);
+                    let retry_delay = PROVIDER_FINALIZE_RETRY_DELAYS[failures
+                        .saturating_sub(1)
+                        .min(PROVIDER_FINALIZE_RETRY_DELAYS.len() - 1)];
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::ERROR,
+                        event = "dispatch.provider_outcome_finalize_failed",
+                        op_id = %(crate::util::redact_text(op_id)),
+                        delivery_id = %(crate::util::redact_text(delivery_id)),
+                        success = success,
+                        failed_attempts = (failures as u64),
+                        retry_delay_ms = (retry_delay.as_millis() as u64),
+                        error = %(err.to_string())
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                }
+            }
+        }
+    }
+
+    pub async fn recover_interrupted_provider_dispatches(
+        &self,
+        updated_at: i64,
+    ) -> StoreResult<usize> {
+        self.db
+            .recover_interrupted_provider_dispatches(updated_at)
             .await
     }
 
@@ -172,6 +257,27 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn transition_device_route(
+        &self,
+        route: &DeviceRouteRecordRow,
+        previous_channel_type: RouteChannelType,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<usize> {
+        let migrated = self
+            .db
+            .transition_device_route(
+                route,
+                previous_channel_type,
+                ack_timeout_secs,
+                max_pending_per_device,
+            )
+            .await?;
+        self.cache.clear_devices();
+        self.cache.invalidate_all_channel_devices();
+        Ok(migrated)
+    }
+
     pub async fn replace_device_identity(
         &self,
         route: &DeviceRouteRecordRow,
@@ -197,8 +303,10 @@ impl Storage {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()> {
+        let provider_token = ProviderTokenRef::canonicalize_for_platform(provider_token, platform)
+            .map_err(|_| StoreError::InvalidDeviceToken)?;
         self.db
-            .retire_provider_token(platform, provider_token)
+            .retire_provider_token(platform, &provider_token)
             .await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();

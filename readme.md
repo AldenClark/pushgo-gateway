@@ -44,9 +44,9 @@ In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_UR
 - MQTT is plain by default. Set `--mqtt-tls-enabled=true` only when gateway should terminate MQTT/TLS itself.
 - MQTT accepts only MQTT 5 and QoS 1. CONNECT must include MQTT 5 User Property `device_type=publish` or `device_type=subscribe`.
 - `device_type=publish` creates a temporary publish-only connection and is not persisted as a device route; any CONNECT client id on publish-only connections is ignored. `device_type=subscribe` is a persistent MQTT device identity; use an existing `client_id=<device_key>` or leave `client_id` empty. If the supplied subscribe client id is missing, unknown, or replaced because it belongs to another platform, gateway issues a new device key and returns it in the MQTT 5 CONNACK Assigned Client Identifier; clients must persist that returned value as the next `client_id`.
-- MQTT does not expose broker-style session persistence: CONNACK advertises `session_expiry_interval=0`, no retained messages, no topic aliases, no subscription identifiers, no wildcard/shared subscriptions. PushGo channel subscriptions are persisted by gateway and outlive the TCP connection.
+- MQTT does not expose broker-style broker-session persistence: CONNACK advertises `session_expiry_interval=0`, no retained messages, no topic aliases, no subscription identifiers, no wildcard/shared subscriptions. PushGo channel subscriptions and application deliveries are persisted by gateway; a QoS 1 downlink remains in the application outbox until PUBACK and is replayed after reconnect.
 - MQTT topic is the raw `{channel_id}`. Channel password is passed as MQTT 5 User Property `pushgo-password`; gateway token, when configured, is passed as MQTT username. Each SUBSCRIBE packet may contain only one topic filter.
-- MQTT payload uses an envelope: publish `{"type":"message","data":{...}}`, downlink `{"schema":"pushgo.mqtt.delivery.v1","type":"message|event|thing","delivery_id":"...","channel_id":"...","data":{...}}`. Topic identifies the channel; payload `type` identifies the business model. MQTT ingress currently accepts message publishes, including thing-scoped messages. MQTT downlink is a first-class realtime outlet for message, event, and thing payloads, and does not persist deliveries through the private outbox when the MQTT receiver is offline.
+- MQTT payload uses an envelope: publish `{"type":"message","data":{...}}`, downlink `{"schema":"pushgo.mqtt.delivery.v1","type":"message|event|thing","delivery_id":"...","channel_id":"...","data":{...}}`. Topic identifies the channel; payload `type` identifies the business model. MQTT ingress currently accepts message publishes, including thing-scoped messages. MQTT downlink is a first-class outlet for message, event, and thing payloads; delivery is persisted before live send and cleared only after PUBACK.
 - MQTT Will Message is accepted only from `device_type=subscribe` devices. Will Topic is raw `{channel_id}` and may target any channel. Will QoS must be 1, Will Retain must be false, Will Properties must include User Property `pushgo-password`, and Will payload uses the same publish envelope. Gateway validates the Will at CONNECT, publishes it on abnormal connection close or MQTT 5 `DisconnectWithWillMessage`, and suppresses it on normal DISCONNECT.
 
 ## MCP Runtime Model
@@ -434,12 +434,20 @@ container run -d --name pushgo-gateway \
 
 If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_CLIENTS`. For fixed clients, keep `PUSHGO_PUBLIC_BASE_URL` on the public HTTPS origin exposed by your reverse proxy or LB.
 
+## v1.3.0 Provider Pull and ACK Contract
+
+- `POST /messages/pull` is the beta-compatible destructive pull route. Returned rows are removed immediately and clients must not create ACK work for them.
+- `POST /v2/messages/pull` is non-destructive and returns at most 200 valid items plus `has_more`. Clients must keep pulling while `has_more=true`; an empty page can still have `has_more=true` when corrupt/unsupported rows were silently deleted.
+- The outer `items[].delivery_id` is authoritative. Missing or conflicting embedded IDs are corrupt data and are silently deleted by the outer ID.
+- `POST /messages/ack` remains the legacy single-item contract `{device_key, delivery_id}`. `POST /v2/messages/ack` is the separate batch contract `{device_key, delivery_ids}` with at most 200 unique IDs and returns both `requested_count` and `removed_count`.
+- `provider_queued` means the operation has entered this Gateway process's in-memory Provider worker queue; it is not Provider success. `sent/provider_success` or `partially_failed/provider_failed` is persisted only after the worker receives the actual Provider result.
+
 ## Upgrade Notes for v1.2.11
 
 1. Back up the database before the first start after upgrade. Legacy runtime schema versions may trigger a runtime-table hard reset; channel/base data is preserved by migration tests, but runtime queues and deprecated observability rows can be rebuilt or dropped.
 2. Replace legacy private-channel switches with `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`. Use `none`, `wss`, `quic,tcp,wss`, or `quic,tcp,wss,mqtt` explicitly.
 3. Replace removed per-queue private tuning environment variables with `PUSHGO_RUNTIME_PROFILE=small|public`. The profile controls queue, cache, dispatch, and DB-pool defaults.
-4. Sender clients must stop providing `op_id`. Gateway returns `400 op_id_not_allowed` when sender payloads contain `op_id`; use the returned `op_id` and `/send_status/{op_id}` for sender-facing status.
+4. Sender clients may provide a globally unique `op_id` for payload-bound idempotent retry. Reusing it for the same operation returns the original delivery; reusing it with a different payload or operation scope returns `409`. If omitted, the gateway generates one. Save the returned `op_id` and use `/send_status/{op_id}` for sender-facing status.
 5. MQTT deployments must publish `1883/tcp` for plain MQTT or terminate TLS at the edge on `8883/tcp`. If gateway terminates MQTT/TLS directly, set `PUSHGO_MQTT_TLS_ENABLED=true` and provide `PUSHGO_PRIVATE_TLS_CERT` / `PUSHGO_PRIVATE_TLS_KEY`.
 6. For cross-database upgrade validation, run `scripts/storage_crossdb_parity.sh`. The script uses Docker when available and falls back to Apple container when `CONTAINER_CLI=container` or Docker is absent.
 
@@ -843,12 +851,20 @@ container run -d --name pushgo-gateway \
 
 如果使用 Dynamic Client Registration，可以不传 `PUSHGO_MCP_PREDEFINED_CLIENTS`。如果是固定客户端，建议把 `PUSHGO_PUBLIC_BASE_URL` 设为反向代理或 LB 对外暴露的 HTTPS 域名。
 
+## v1.3.0 Provider Pull 与 ACK 合同
+
+- `POST /messages/pull` 是兼容 beta 客户端的破坏性 Pull；返回即删除，客户端不得为其创建 ACK 任务。
+- `POST /v2/messages/pull` 是非破坏性 Pull，每页最多返回 200 条有效数据和 `has_more`。客户端必须在 `has_more=true` 时继续拉取；当损坏/不支持数据被静默删除时，空页也可能返回 `has_more=true`。
+- `items[].delivery_id` 外层字段是唯一权威 ID。缺失或冲突的内层 ID 视为损坏数据，只按外层 ID 静默删除。
+- `POST /messages/ack` 保持 legacy 单条合同 `{device_key, delivery_id}`；独立的 `POST /v2/messages/ack` 才接受 `{device_key, delivery_ids}`，最多 200 个去重 ID，并同时返回 `requested_count` 与 `removed_count`。
+- `provider_queued` 只表示操作已进入当前 Gateway 进程的 Provider worker 内存队列，不代表 Provider 成功；worker 获得真实结果后才持久化 `sent/provider_success` 或 `partially_failed/provider_failed`。
+
 ## v1.2.11 升级说明
 
 1. 首次启动新版本前先备份数据库。旧 runtime schema 可能触发 runtime 表 hard reset；迁移测试覆盖了频道等基础数据保留，但 runtime 队列和废弃观测表可能被重建或清理。
 2. 将旧私有通道开关替换为 `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`，显式使用 `none`、`wss`、`quic,tcp,wss` 或 `quic,tcp,wss,mqtt`。
 3. 移除旧的私有队列调参环境变量，改用 `PUSHGO_RUNTIME_PROFILE=small|public`。队列、缓存、dispatch 和 DB pool 默认值由 profile 统一控制。
-4. 发送端不得再传 `op_id`。如果 payload 包含 `op_id`，gateway 会返回 `400 op_id_not_allowed`；发送端应保存响应里的 `op_id`，再通过 `/send_status/{op_id}` 查询发送状态。
+4. 发送端可以提供全局唯一的 `op_id` 用于与 payload 绑定的幂等重试；同一操作重试会复用原投递，不同 payload 或不同操作范围复用会返回 `409`。省略时由 gateway 生成。发送端应保存响应里的 `op_id`，并通过 `/send_status/{op_id}` 查询发送状态。
 5. MQTT 部署需要发布 `1883/tcp` 明文端口，或在边缘层终止 `8883/tcp` TLS。如果由 gateway 直接终止 MQTT/TLS，需要设置 `PUSHGO_MQTT_TLS_ENABLED=true` 并提供 `PUSHGO_PRIVATE_TLS_CERT` / `PUSHGO_PRIVATE_TLS_KEY`。
 6. 跨库升级验证可运行 `scripts/storage_crossdb_parity.sh`。脚本优先使用 Docker；没有 Docker 时可使用 Apple container，也可以显式设置 `CONTAINER_CLI=container`。
 

@@ -26,6 +26,7 @@ use config::DispatchRuntimeConfig;
 use runtime::DispatchWorkerRuntime;
 pub(crate) use types::{
     ApnsJob, DispatchChannels, DispatchError, DispatchWorkerReceivers, FcmJob,
-    ProviderDeliveryPath, ProviderPullDelivery, WidgetPushJob, WnsJob,
+    ProviderDeliveryPath, ProviderDispatchOutcome, ProviderDispatchOutcomeLease,
+    ProviderPullDelivery, WidgetPushJob, WnsJob,
 };
 pub(crate) use workers::DispatchWorkerDeps;

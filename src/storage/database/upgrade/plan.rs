@@ -57,9 +57,6 @@ impl UpgradePlan {
     }
 
     pub(crate) fn requires_backup(&self) -> bool {
-        if !matches!(self.action, UpgradeAction::HardResetRuntime) {
-            return false;
-        }
         self.pending_migrations.iter().any(|migration| {
             matches!(
                 migration.backup_policy,

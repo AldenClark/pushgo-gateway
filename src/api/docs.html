@@ -282,8 +282,8 @@
           部署需要显式发布 MQTT <code>1883/tcp</code> 或在边缘层终止
           <code>8883/tcp</code>。
           <br />
-          发送端不得传入 <code>op_id</code>；它由 gateway 生成并在响应中返回。
-          若旧客户端继续传入，gateway 返回 <code>400 op_id_not_allowed</code>。
+          发送端可传入全局唯一的 <code>op_id</code> 进行与 payload 绑定的幂等重试；
+          不同 payload 或不同操作范围复用会返回 <code>409</code>。省略时由 gateway 生成。
           <br />
           MQTT 客户端必须使用 MQTT 5 和 QoS 1。CONNECT 使用 User Property
           <code>device_type=publish</code> 表示临时只发送连接，或
@@ -314,9 +314,9 @@
           Docker/container deployments must publish MQTT <code>1883/tcp</code>,
           or terminate TLS at the edge on <code>8883/tcp</code>.
           <br />
-          Sender requests must not provide <code>op_id</code>; gateway generates
-          it and returns it in the response. Legacy clients that still provide
-          <code>op_id</code> receive <code>400 op_id_not_allowed</code>.
+          Sender requests may provide a globally unique <code>op_id</code> for
+          payload-bound idempotent retry. Reuse with a different payload or
+          operation scope returns <code>409</code>; when omitted, gateway generates it.
           <br />
           MQTT clients must use MQTT 5 and QoS 1. CONNECT uses User Property
           <code>device_type=publish</code> for temporary publish-only connections,
@@ -436,11 +436,11 @@
               <td>否，且禁止传入<br />No, forbidden</td>
               <td>string | null</td>
               <td>
-                <code>op_id</code> 是 Gateway 生成的发送流水号，发送端请求不得传入。
-                若传入，Gateway 返回 <code>400 op_id_not_allowed</code>。<br />
-                <code>op_id</code> is a gateway-generated send operation id.
-                Sender requests must not provide it; if provided, gateway
-                returns <code>400 op_id_not_allowed</code>.
+                <code>op_id</code> 是可选的全局唯一发送流水号，可用于 payload 绑定的幂等重试；
+                不同 payload 或操作范围复用返回 <code>409</code>，省略时由 Gateway 生成。<br />
+                <code>op_id</code> is an optional globally unique operation id for
+                payload-bound idempotent retry. Reuse with a different payload or scope
+                returns <code>409</code>; gateway generates it when omitted.
               </td>
             </tr>
           </tbody>
@@ -822,6 +822,39 @@
         </table>
       </section>
 
+      <section id="provider-pull-ack">
+        <h2>Provider Pull 与 ACK<br />Provider Pull and ACK</h2>
+        <p>
+          <strong>POST</strong> <code>/messages/pull</code> 是兼容 beta 客户端的破坏性 Pull：返回即删除，不需要 ACK。<br />
+          <strong>POST</strong> <code>/messages/pull</code> is the beta-compatible destructive pull route: returned rows are removed immediately and require no ACK.
+        </p>
+        <p>
+          <strong>POST</strong> <code>/v2/messages/pull</code> 是非破坏性 Pull。响应中的 <code>items</code> 最多包含 200 条有效数据，并返回 <code>has_more</code>；客户端必须在 <code>has_more=true</code> 时继续拉取。损坏或不支持的数据会被静默删除，因此空页仍可能返回 <code>has_more=true</code>。<br />
+          <strong>POST</strong> <code>/v2/messages/pull</code> is non-destructive. A response contains at most 200 valid <code>items</code> plus <code>has_more</code>; clients must continue while <code>has_more=true</code>. Corrupt or unsupported rows are silently deleted, so an empty page can still report <code>has_more=true</code>.
+        </p>
+        <p>
+          <code>items[].delivery_id</code> 外层字段是 ACK/删除的唯一权威 ID。缺失或冲突的内层 ID 视为损坏数据，只按外层 ID 删除。<br />
+          The outer <code>items[].delivery_id</code> is the only authoritative ACK/delete ID. Missing or conflicting embedded IDs are corrupt and are deleted only by the outer ID.
+        </p>
+        <table>
+          <thead>
+            <tr><th>接口<br />Endpoint</th><th>请求<br />Request</th><th>响应<br />Response</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>POST /messages/ack</code></td>
+              <td><code>{device_key, delivery_id}</code></td>
+              <td>Legacy 单条 ACK；返回 <code>removed</code>。<br />Legacy single ACK; returns <code>removed</code>.</td>
+            </tr>
+            <tr>
+              <td><code>POST /v2/messages/ack</code></td>
+              <td><code>{device_key, delivery_ids}</code>，最多 200 个去重 ID。<br />At most 200 unique IDs.</td>
+              <td>返回 <code>requested_count</code> 与 <code>removed_count</code>；客户端必须核对删除数量。<br />Returns <code>requested_count</code> and <code>removed_count</code>; clients must verify removal counts.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
       <section id="send-status">
         <h2>发送状态查询<br />Send Status Query</h2>
         <p>
@@ -851,10 +884,10 @@
               <td><code>status</code></td>
               <td>string</td>
               <td>
-                <code>accepted</code>, <code>processing</code>, <code>sent</code>,
+                <code>accepted</code>, <code>processing</code>, <code>provider_queued</code>, <code>sent</code>,
                 <code>partially_failed</code>, 或 <code>failed</code>。<br />
                 One of <code>accepted</code>, <code>processing</code>,
-                <code>sent</code>, <code>partially_failed</code>, or
+                <code>provider_queued</code>, <code>sent</code>, <code>partially_failed</code>, or
                 <code>failed</code>.
               </td>
             </tr>
@@ -876,6 +909,8 @@
           </tbody>
         </table>
         <p class="note">
+          <code>provider_queued</code> 只表示任务已进入当前进程的 Provider worker 内存队列，不代表 Provider 成功；真实发送完成后才持久化 <code>provider_success</code> 或 <code>provider_failed</code> 对应的最终状态。<br />
+          <code>provider_queued</code> means only in-memory Provider worker-queue admission in this process, not Provider success; after the actual send result, the worker persists the final state corresponding to <code>provider_success</code> or <code>provider_failed</code>.<br />
           状态记录会按维护清理策略自动过期；过期或不存在时返回
           <code>404 send_status_not_found</code>。<br />
           Status records expire through maintenance cleanup; expired or missing

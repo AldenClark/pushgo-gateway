@@ -29,10 +29,16 @@ impl DispatchDedupeStore for AppState {
         &self,
         dedupe_key: &str,
         delivery_id: &str,
+        request_fingerprint: Option<&str>,
         created_at: i64,
     ) -> DispatchDedupeResult<OpDedupeReservation> {
         self.store
-            .reserve_op_dedupe_pending(dedupe_key, delivery_id, created_at)
+            .reserve_op_dedupe_pending_with_fingerprint(
+                dedupe_key,
+                delivery_id,
+                request_fingerprint,
+                created_at,
+            )
             .await
             .map_err(DispatchDedupeError::from)
     }
@@ -44,6 +50,7 @@ impl DispatchDedupeStore for AppState {
         dispatch_status: DeliveryDispatchStatus,
     ) -> DispatchDedupeResult<bool> {
         let state = match dispatch_status {
+            DeliveryDispatchStatus::ProviderQueued => DedupeState::ProviderQueued,
             DeliveryDispatchStatus::AttemptedAccepted => DedupeState::Sent,
             DeliveryDispatchStatus::AttemptedPartialFailure => DedupeState::PartialFailure,
             DeliveryDispatchStatus::NotAttempted | DeliveryDispatchStatus::PrivateQueueTooBusy => {
@@ -75,6 +82,7 @@ impl DispatchOpGuard {
         state: &AppState,
         dedupe_key: String,
         reserved_delivery_id: String,
+        request_fingerprint: Option<&str>,
         created_at: i64,
         channel_id: String,
         op_id: String,
@@ -83,6 +91,7 @@ impl DispatchOpGuard {
             state,
             dedupe_key,
             reserved_delivery_id,
+            request_fingerprint,
             created_at,
             channel_id,
             op_id,
@@ -109,6 +118,12 @@ impl DispatchOpGuard {
 }
 
 fn api_error_from_dedupe(err: DispatchDedupeError) -> Error {
+    if err.is_fingerprint_conflict() {
+        return Error::Conflict {
+            message: err.into_message().into(),
+            code: "op_id_payload_conflict".into(),
+        };
+    }
     Error::Internal(err.into_message())
 }
 

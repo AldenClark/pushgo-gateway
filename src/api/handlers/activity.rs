@@ -10,6 +10,7 @@ use crate::{
     dispatch::{ApnsJob, ProviderDeliveryPath},
     providers::apns::ApnsPayload,
     storage::{LiveActivityTokenRecord, Platform},
+    value::ProviderTokenRef,
 };
 
 const ACTIVITY_KEY_MAX_LEN: usize = 255;
@@ -17,7 +18,6 @@ const ACTIVITY_TOKEN_MAX_LEN: usize = 512;
 const IOS_LIVE_ACTIVITY_TOPIC: &str = "io.ethan.pushgo.push-type.liveactivity";
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ActivityRegisterRequest {
     activity_key: String,
     #[serde(default)]
@@ -28,7 +28,6 @@ pub(crate) struct ActivityRegisterRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ActivityUnregisterRequest {
     activity_key: String,
     #[serde(default)]
@@ -60,10 +59,10 @@ pub(crate) async fn activity_unregister(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<ActivityUnregisterRequest>,
 ) -> HttpResult {
-    payload.validate()?;
+    let token = payload.normalized_token()?;
     let deleted = state
         .store
-        .delete_live_activity_token(&payload.activity_key, payload.token.as_deref())
+        .delete_live_activity_token(&payload.activity_key, token.as_deref())
         .await?;
     Ok(ok(ActivityUnregisterResponse { deleted }))
 }
@@ -128,7 +127,7 @@ impl ActivityRegisterRequest {
         validate_activity_key(&self.activity_key)?;
         validate_schema_version(self.schema_version)?;
         validate_platform(&self.platform)?;
-        validate_token(&self.token)?;
+        let token = normalize_token(&self.token)?;
         let channel_id = self
             .channel_id
             .as_deref()
@@ -137,8 +136,8 @@ impl ActivityRegisterRequest {
         Ok(LiveActivityTokenRecord {
             activity_key: self.activity_key,
             channel_id,
-            token: self.token,
-            platform: self.platform,
+            token,
+            platform: self.platform.trim().to_ascii_lowercase(),
             schema_version: self.schema_version,
             created_at: now_millis,
             updated_at: now_millis,
@@ -148,14 +147,11 @@ impl ActivityRegisterRequest {
 }
 
 impl ActivityUnregisterRequest {
-    fn validate(&self) -> Result<(), Error> {
+    fn normalized_token(&self) -> Result<Option<String>, Error> {
         validate_activity_key(&self.activity_key)?;
         validate_schema_version(self.schema_version)?;
         validate_platform(&self.platform)?;
-        if let Some(token) = self.token.as_deref() {
-            validate_token(token)?;
-        }
-        Ok(())
+        self.token.as_deref().map(normalize_token).transpose()
     }
 }
 
@@ -196,7 +192,7 @@ fn validate_platform(value: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_token(value: &str) -> Result<(), Error> {
+fn normalize_token(value: &str) -> Result<String, Error> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.len() > ACTIVITY_TOKEN_MAX_LEN {
         return Err(Error::validation_code(
@@ -204,13 +200,12 @@ fn validate_token(value: &str) -> Result<(), Error> {
             "activity_token_invalid",
         ));
     }
-    if !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(Error::validation_code(
-            "activity token must be hex encoded",
+    ProviderTokenRef::canonicalize_for_platform(trimmed, Platform::IOS).map_err(|_| {
+        Error::validation_code(
+            "activity token must be a valid APNs token",
             "activity_token_invalid",
-        ));
-    }
-    Ok(())
+        )
+    })
 }
 
 fn dispatch_activity_token(
@@ -237,12 +232,14 @@ fn dispatch_activity_token(
         delivery_id,
         device_key,
         device_token,
+        route_updated_at: record.updated_at,
         platform,
         direct_payload: payload,
         wakeup_payload: None,
         initial_path: ProviderDeliveryPath::Direct,
         wakeup_payload_within_limit: false,
         collapse_id: Some(Arc::from(activity_key.to_string())),
+        outcome: None,
     };
     if let Err(err) = state.dispatch.try_send_apns(job) {
         emit_activity_dispatch_skipped(activity_key, dispatch_error_reason(&err), None);

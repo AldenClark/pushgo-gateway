@@ -24,7 +24,7 @@ use crate::{
         response::{DeliveryDedupeStatus, DeliveryDispatchStatus, DeliverySummary},
         store::{channel::ChannelStore, counters::RuntimeCounterSink},
     },
-    dispatch::DispatchChannels,
+    dispatch::{DispatchChannels, ProviderDispatchOutcome},
     private::PrivateState,
     routing::DeviceRegistry,
     storage::{Storage, StoreError},
@@ -70,6 +70,7 @@ pub(crate) struct DispatchExecutionInput {
     pub(crate) entity_type: &'static str,
     pub(crate) entity_id: String,
     pub(crate) request: DispatchRequest,
+    pub(crate) provider_outcome: Arc<ProviderDispatchOutcome>,
 }
 
 pub(crate) struct PreparedDispatch<'a> {
@@ -93,6 +94,7 @@ pub(crate) struct PreparedDispatch<'a> {
     pub(crate) custom_data: Arc<HashMap<String, String>>,
     pub(crate) provider_targets: Vec<ProviderExecutionTarget>,
     pub(crate) provider_preparation_failed: i64,
+    pub(crate) provider_outcome: Arc<ProviderDispatchOutcome>,
     pub(crate) mqtt_receiver_targets: Vec<MqttReceiverExecutionTarget>,
     pub(crate) private_dispatch: Option<PrivateDispatchContext<'a>>,
     pub(crate) plan: DeliveryPlan,
@@ -115,6 +117,7 @@ impl<'a> PreparedDispatch<'a> {
     ) -> Result<Self, DispatchExecutionError> {
         let DispatchRequest {
             op_id,
+            request_fingerprint: _,
             occurred_at,
             alert,
             payload,
@@ -128,6 +131,7 @@ impl<'a> PreparedDispatch<'a> {
             correlation_id,
             delivery_id_ref,
             entity_type,
+            provider_outcome,
         } = context;
         let dispatch_targets = runtime
             .channel_store()
@@ -175,6 +179,14 @@ impl<'a> PreparedDispatch<'a> {
                     targets: prepared_core.private_targets,
                 });
 
+        provider_outcome.configure(
+            prepared_core
+                .provider_targets
+                .len()
+                .saturating_add(prepared_core.provider_preparation_failed.max(0) as usize),
+            prepared_core.provider_preparation_failed.max(0) as usize,
+        );
+
         Ok(Self {
             runtime,
             channel_id,
@@ -196,6 +208,7 @@ impl<'a> PreparedDispatch<'a> {
             custom_data: prepared_core.custom_data,
             provider_targets: prepared_core.provider_targets,
             provider_preparation_failed: prepared_core.provider_preparation_failed,
+            provider_outcome,
             mqtt_receiver_targets: prepared_core.mqtt_receiver_targets,
             private_dispatch,
             plan: prepared_core.plan,
@@ -229,7 +242,7 @@ impl<'a> PreparedDispatch<'a> {
             1,
             deliveries_attempted,
             provider_attempted,
-            progress.provider_success,
+            0,
             provider_failed,
             progress.private_realtime_delivered.len() as i64,
             progress.device_stats.clone(),
@@ -251,6 +264,7 @@ impl<'a> PreparedDispatch<'a> {
             DeliveryDedupeStatus::New,
             DeliveryDispatchStatus::from_execution(
                 has_dispatch_attempt,
+                progress.provider_queued > 0,
                 partial_failure,
                 progress.private_enqueue_stats.is_too_busy(),
             ),
@@ -266,28 +280,7 @@ struct DispatchBuildContext {
     correlation_id: Arc<str>,
     delivery_id_ref: Arc<str>,
     entity_type: &'static str,
-}
-
-impl DispatchBuildContext {
-    fn new(
-        channel_id: [u8; 16],
-        channel_id_value: String,
-        sent_at: i64,
-        delivery_id: String,
-        correlation_id: Arc<str>,
-        delivery_id_ref: Arc<str>,
-        entity_type: &'static str,
-    ) -> Self {
-        Self {
-            channel_id,
-            channel_id_value,
-            sent_at,
-            delivery_id,
-            correlation_id,
-            delivery_id_ref,
-            entity_type,
-        }
-    }
+    provider_outcome: Arc<ProviderDispatchOutcome>,
 }
 
 impl ProviderPayloads {
@@ -326,6 +319,7 @@ where
         entity_type,
         entity_id,
         request,
+        provider_outcome,
     } = input;
     let trace_id = generate_hex_id_128();
     let correlation_id = Arc::<str>::from(trace_id.into_boxed_str());
@@ -346,15 +340,16 @@ where
         let prepared = PreparedDispatch::build(
             runtime,
             request,
-            DispatchBuildContext::new(
+            DispatchBuildContext {
                 channel_id,
-                channel_id_text,
+                channel_id_value: channel_id_text,
                 sent_at,
                 delivery_id,
-                Arc::clone(&correlation_id),
-                Arc::clone(&delivery_id_ref),
+                correlation_id: Arc::clone(&correlation_id),
+                delivery_id_ref: Arc::clone(&delivery_id_ref),
                 entity_type,
-            ),
+                provider_outcome,
+            },
         )
         .await?;
         emit_dispatch_request_started(&prepared);

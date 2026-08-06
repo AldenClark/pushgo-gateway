@@ -5,7 +5,7 @@ use crate::storage::database::migration::BackupPolicy;
 use crate::storage::database::upgrade::backup::{BackupArtifact, UpgradeBackupAccess};
 use crate::storage::database::upgrade::error::{UpgradeError, UpgradeErrorContext, UpgradeResult};
 use crate::storage::database::upgrade::lock::UpgradeLockAccess;
-use crate::storage::database::upgrade::plan::UpgradePlan;
+use crate::storage::database::upgrade::plan::{UpgradeAction, UpgradePlan};
 use crate::storage::database::upgrade::reporter::UpgradeReporter;
 use crate::storage::database::upgrade::state::{UpgradeRunStatus, UpgradeStateAccess};
 use crate::storage::database::upgrade::verify::UpgradeVerifyAccess;
@@ -73,6 +73,15 @@ impl UpgradeManager {
         if matches!(mode, UpgradeMode::PlanOnly) {
             return Ok(Some(plan));
         }
+        if matches!(plan.action, UpgradeAction::Noop) {
+            self.reporter.verify_started();
+            db.verify_upgrade(plan.target_schema_version.as_str())
+                .await?;
+            self.reporter
+                .verify_completed(plan.target_schema_version.as_str());
+            self.reporter.completed();
+            return Ok(Some(plan));
+        }
         db.ensure_upgrade_state_tables().await?;
         let unfinished = db.unfinished_upgrade_runs().await?;
         if !unfinished.is_empty() {
@@ -118,9 +127,27 @@ impl UpgradeManager {
         .await?;
         self.reporter.status(UpgradeRunStatus::PreflightOk);
 
-        let backup = self
+        let backup = match self
             .run_backup(&db, driver, normalized.as_str(), &plan, run_id.as_str())
-            .await?;
+            .await
+        {
+            Ok(backup) => backup,
+            Err(err) => {
+                return Err(self
+                    .handle_failure(
+                        UpgradeFailureScope {
+                            db: &db,
+                            driver,
+                            db_url: normalized.as_str(),
+                            plan: &plan,
+                            run_id: run_id.as_str(),
+                            backup: None,
+                        },
+                        err,
+                    )
+                    .await);
+            }
+        };
         db.update_upgrade_run_status(
             run_id.as_str(),
             UpgradeRunStatus::Migrating,

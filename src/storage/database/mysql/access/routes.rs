@@ -1,7 +1,7 @@
 use super::*;
 use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
-async fn upsert_device_route_in_tx(
+pub(in crate::storage::database::mysql) async fn upsert_device_route_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     route: &DeviceRouteRecordRow,
 ) -> StoreResult<()> {
@@ -68,13 +68,14 @@ async fn collect_duplicate_provider_routes_in_tx(
     .bind(route.device_key.as_str())
     .fetch_all(&mut **tx)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| DuplicateProviderRouteRow {
-            device_id: row.get("device_id"),
-            device_key: row.get("device_key"),
+    rows.into_iter()
+        .map(|row| {
+            Ok(DuplicateProviderRouteRow {
+                device_id: row.get("device_id"),
+                device_key: decode_mysql_optional_text(&row, "device_key")?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 async fn load_device_delivery_ids_in_tx(
@@ -89,7 +90,9 @@ async fn load_device_delivery_ids_in_tx(
     .bind(private_device_id)
     .fetch_all(&mut **tx)
     .await?;
-    Ok(rows.into_iter().map(|row| row.get("delivery_id")).collect())
+    rows.into_iter()
+        .map(|row| decode_mysql_text(&row, "delivery_id"))
+        .collect()
 }
 
 async fn cleanup_orphan_private_payloads_in_tx(
@@ -110,7 +113,7 @@ async fn cleanup_orphan_private_payloads_in_tx(
     Ok(())
 }
 
-async fn coalesce_duplicate_provider_routes_in_tx(
+pub(in crate::storage::database::mysql) async fn coalesce_duplicate_provider_routes_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     route: &DeviceRoutePersistenceValues,
 ) -> StoreResult<()> {
@@ -126,13 +129,15 @@ async fn coalesce_duplicate_provider_routes_in_tx(
 
         sqlx::query(
             "INSERT INTO channel_subscriptions (channel_id, device_id, status, created_at, updated_at) \
-             SELECT channel_id, ?, status, created_at, updated_at \
-             FROM channel_subscriptions \
-             WHERE device_id = ? AND status = 'active' \
+             SELECT source_subscriptions.channel_id, ?, source_subscriptions.status, \
+                    source_subscriptions.created_at, source_subscriptions.updated_at \
+             FROM (SELECT channel_id, status, created_at, updated_at \
+                   FROM channel_subscriptions \
+                   WHERE device_id = ? AND status = 'active') AS source_subscriptions \
              ON DUPLICATE KEY UPDATE \
-               status = IF(status = 'active' OR VALUES(status) = 'active', 'active', VALUES(status)), \
-               created_at = LEAST(created_at, VALUES(created_at)), \
-               updated_at = GREATEST(updated_at, VALUES(updated_at))",
+               status = IF(channel_subscriptions.status = 'active' OR VALUES(status) = 'active', 'active', VALUES(status)), \
+               created_at = LEAST(channel_subscriptions.created_at, VALUES(created_at)), \
+               updated_at = GREATEST(channel_subscriptions.updated_at, VALUES(updated_at))",
         )
         .bind(route.device_id.as_slice())
         .bind(duplicate.device_id.as_slice())
@@ -142,20 +147,42 @@ async fn coalesce_duplicate_provider_routes_in_tx(
         sqlx::query(
             "INSERT INTO provider_pull_queue \
              (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
-             SELECT ?, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at \
-             FROM provider_pull_queue \
-             WHERE device_id = ? \
+             SELECT ?, source_pull.delivery_id, source_pull.payload_blob, source_pull.payload_size, \
+                    source_pull.sent_at, source_pull.expires_at, source_pull.platform, \
+                    source_pull.provider_token, source_pull.created_at, source_pull.updated_at \
+             FROM (SELECT delivery_id, payload_blob, payload_size, sent_at, expires_at, \
+                          platform, provider_token, created_at, updated_at \
+                   FROM provider_pull_queue WHERE device_id = ?) AS source_pull \
              ON DUPLICATE KEY UPDATE \
                payload_blob = VALUES(payload_blob), \
                payload_size = VALUES(payload_size), \
-               sent_at = LEAST(sent_at, VALUES(sent_at)), \
-               expires_at = GREATEST(expires_at, VALUES(expires_at)), \
+               sent_at = LEAST(provider_pull_queue.sent_at, VALUES(sent_at)), \
+               expires_at = GREATEST(provider_pull_queue.expires_at, VALUES(expires_at)), \
                platform = VALUES(platform), \
                provider_token = VALUES(provider_token), \
-               created_at = LEAST(created_at, VALUES(created_at)), \
-               updated_at = GREATEST(updated_at, VALUES(updated_at))",
+               created_at = LEAST(provider_pull_queue.created_at, VALUES(created_at)), \
+               updated_at = GREATEST(provider_pull_queue.updated_at, VALUES(updated_at))",
         )
         .bind(route.device_id.as_slice())
+        .bind(duplicate_private_device_id.as_slice())
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO provider_pull_queue \
+             (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+             SELECT ?, o.delivery_id, X'', 0, p.sent_at, p.expires_at, ?, ?, p.created_at, p.updated_at \
+             FROM private_outbox o JOIN private_payloads p ON p.delivery_id = o.delivery_id \
+             WHERE o.device_id = ? \
+             ON DUPLICATE KEY UPDATE \
+               sent_at = LEAST(provider_pull_queue.sent_at, VALUES(sent_at)), \
+               expires_at = GREATEST(provider_pull_queue.expires_at, VALUES(expires_at)), \
+               platform = VALUES(platform), provider_token = VALUES(provider_token), \
+               updated_at = GREATEST(provider_pull_queue.updated_at, VALUES(updated_at))",
+        )
+        .bind(route.device_id.as_slice())
+        .bind(route.platform.as_str())
+        .bind(route.provider_token.as_deref())
         .bind(duplicate_private_device_id.as_slice())
         .execute(&mut **tx)
         .await?;
@@ -203,10 +230,10 @@ impl MySqlDb {
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             out.push(DeviceRouteRecordRow {
-                device_key: r.get("device_key"),
+                device_key: decode_mysql_text(&r, "device_key")?,
                 platform: r.get("platform"),
                 channel_type: r.get("channel_type"),
-                provider_token: r.get("provider_token"),
+                provider_token: decode_mysql_optional_text(&r, "provider_token")?,
                 updated_at: r.get("route_updated_at"),
             });
         }
@@ -219,7 +246,27 @@ impl MySqlDb {
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
         let values = route.persistence_values()?;
+        let now = values.updated_at;
         upsert_device_route_in_tx(&mut tx, route).await?;
+        if let Some(provider_token) = values.provider_token.as_deref() {
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (device_id, platform, provider_token, token_hash, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON DUPLICATE KEY UPDATE \
+                   device_id = VALUES(device_id), provider_token = VALUES(provider_token), \
+                   updated_at = VALUES(updated_at)",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(values.platform_code)
+            .bind(provider_token)
+            .bind(token_hash.as_deref())
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         tx.commit().await?;
         Ok(())
@@ -252,10 +299,182 @@ impl MySqlDb {
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
         let values = route.persistence_values()?;
+        let now = values.updated_at;
         upsert_device_route_in_tx(&mut tx, route).await?;
+        if let Some(provider_token) = values.provider_token.as_deref() {
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (device_id, platform, provider_token, token_hash, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON DUPLICATE KEY UPDATE \
+                   device_id = VALUES(device_id), provider_token = VALUES(provider_token), \
+                   updated_at = VALUES(updated_at)",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(values.platform_code)
+            .bind(provider_token)
+            .bind(token_hash.as_deref())
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    pub(super) async fn transition_device_route(
+        &self,
+        route: &DeviceRouteRecordRow,
+        previous_channel_type: RouteChannelType,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<usize> {
+        let values = route.persistence_values()?;
+        let next_channel_type = route.channel_type_kind()?;
+        let now = Utc::now().timestamp_millis();
+        let mut tx = self.pool.begin().await?;
+        let migrated = if previous_channel_type.is_private() && !next_channel_type.is_private() {
+            let provider_token = values
+                .provider_token
+                .as_deref()
+                .ok_or(StoreError::InvalidDeviceToken)?;
+            let pending: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM private_outbox o \
+                 JOIN private_payloads p ON p.delivery_id = o.delivery_id \
+                 WHERE o.device_id = ?",
+            )
+            .bind(values.device_id.as_slice())
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO provider_pull_queue \
+                 (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+                 SELECT o.device_id, o.delivery_id, X'', 0, p.sent_at, p.expires_at, ?, ?, ?, ? \
+                 FROM private_outbox o JOIN private_payloads p ON p.delivery_id = o.delivery_id \
+                 WHERE o.device_id = ? \
+                 ON DUPLICATE KEY UPDATE \
+                   sent_at = VALUES(sent_at), expires_at = VALUES(expires_at), \
+                   platform = VALUES(platform), provider_token = VALUES(provider_token), \
+                   updated_at = VALUES(updated_at)",
+            )
+            .bind(values.platform.as_str())
+            .bind(provider_token)
+            .bind(now)
+            .bind(now)
+            .bind(values.device_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
+                .bind(values.device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            pending.max(0) as usize
+        } else if !previous_channel_type.is_private() && next_channel_type.is_private() {
+            let existing: i64 =
+                sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox WHERE device_id = ?")
+                    .bind(values.device_id.as_slice())
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let capacity = max_pending_per_device.saturating_sub(existing.max(0) as usize);
+            let provider_pending: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM provider_pull_queue WHERE device_id = ? AND expires_at > ?",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(now)
+            .fetch_one(&mut *tx)
+            .await?;
+            let provider_pending = provider_pending.max(0) as usize;
+            if provider_pending > capacity {
+                return Err(StoreError::RouteMigrationCapacityExceeded {
+                    pending: provider_pending,
+                    capacity,
+                });
+            }
+            let capacity = capacity.min(i64::MAX as usize) as i64;
+            let rows = sqlx::query(
+                "SELECT delivery_id, sent_at FROM provider_pull_queue \
+                 WHERE device_id = ? AND expires_at > ? \
+                 ORDER BY created_at ASC, delivery_id ASC LIMIT ? FOR UPDATE",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(now)
+            .bind(capacity)
+            .fetch_all(&mut *tx)
+            .await?;
+            let next_attempt_at = now.saturating_add(ack_timeout_secs.max(1) as i64 * 1000);
+            for row in &rows {
+                let delivery_id = decode_mysql_text(row, "delivery_id")?;
+                let sent_at: i64 = row.get("sent_at");
+                sqlx::query(
+                    "INSERT INTO private_payloads \
+                     (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) \
+                     SELECT delivery_id, payload_blob, payload_size, sent_at, expires_at, ?, ? \
+                     FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ? \
+                     ON DUPLICATE KEY UPDATE delivery_id = VALUES(delivery_id)",
+                )
+                .bind(now)
+                .bind(now)
+                .bind(values.device_id.as_slice())
+                .bind(&delivery_id)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "INSERT INTO private_outbox \
+                     (device_id, delivery_id, status, attempts, occurred_at, created_at, next_attempt_at, updated_at) \
+                     VALUES (?, ?, 'pending', 0, ?, ?, ?, ?) \
+                     ON DUPLICATE KEY UPDATE delivery_id = VALUES(delivery_id)",
+                )
+                .bind(values.device_id.as_slice())
+                .bind(&delivery_id)
+                .bind(sent_at)
+                .bind(now)
+                .bind(next_attempt_at)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?",
+                )
+                .bind(values.device_id.as_slice())
+                .bind(&delivery_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            rows.len()
+        } else {
+            0
+        };
+        upsert_device_route_in_tx(&mut tx, route).await?;
+        if let Some(provider_token) = values.provider_token.as_deref() {
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (device_id, platform, provider_token, token_hash, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON DUPLICATE KEY UPDATE \
+                   device_id = VALUES(device_id), provider_token = VALUES(provider_token), \
+                   updated_at = VALUES(updated_at)",
+            )
+            .bind(values.device_id.as_slice())
+            .bind(values.platform_code)
+            .bind(provider_token)
+            .bind(token_hash.as_deref())
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query("DELETE FROM private_bindings WHERE device_id = ?")
+                .bind(values.device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
+        }
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        tx.commit().await?;
+        Ok(migrated)
     }
 
     pub(super) async fn replace_device_identity(
@@ -280,8 +499,8 @@ impl MySqlDb {
             .fetch_all(&mut *tx)
             .await?;
             rows.into_iter()
-                .map(|row| row.get("delivery_id"))
-                .collect::<Vec<String>>()
+                .map(|row| decode_mysql_text(&row, "delivery_id"))
+                .collect::<StoreResult<Vec<_>>>()?
         } else {
             Vec::new()
         };
@@ -329,10 +548,10 @@ impl MySqlDb {
         .bind(device_id.as_slice())
         .fetch_all(&mut *tx)
         .await?;
-        let delivery_ids: Vec<String> = delivery_rows
+        let delivery_ids = delivery_rows
             .into_iter()
-            .map(|row| row.get("delivery_id"))
-            .collect();
+            .map(|row| decode_mysql_text(&row, "delivery_id"))
+            .collect::<StoreResult<Vec<_>>>()?;
 
         for statement in [
             "DELETE FROM channel_subscriptions WHERE device_id = ?",
@@ -380,10 +599,10 @@ impl MySqlDb {
         .bind(normalized_token.as_str())
         .fetch_all(&mut *tx)
         .await?;
-        let delivery_ids: Vec<String> = delivery_rows
+        let delivery_ids = delivery_rows
             .into_iter()
-            .map(|row| row.get("delivery_id"))
-            .collect();
+            .map(|row| decode_mysql_text(&row, "delivery_id"))
+            .collect::<StoreResult<Vec<_>>>()?;
 
         sqlx::query("DELETE FROM provider_pull_queue WHERE platform = ? AND provider_token = ?")
             .bind(platform_name)

@@ -75,6 +75,7 @@ impl PostgresDb {
         schema_version: i32,
         now: i64,
     ) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "DELETE FROM widget_push_subscriptions \
              WHERE device_key = $1 AND platform = $2 AND token = $3",
@@ -82,7 +83,7 @@ impl PostgresDb {
         .bind(device_key)
         .bind(platform.name())
         .bind(token)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
         for widget in widgets {
@@ -99,9 +100,10 @@ impl PostgresDb {
             .bind(schema_version)
             .bind(now)
             .bind(now)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -141,23 +143,15 @@ impl PostgresDb {
             .collect())
     }
 
-    pub(super) async fn upsert_sender_submit_status(
+    pub(super) async fn insert_sender_submit_status_if_absent(
         &self,
         record: &SenderSubmitStatusRecord,
-    ) -> StoreResult<()> {
-        sqlx::query(
+    ) -> StoreResult<bool> {
+        let result = sqlx::query(
             "INSERT INTO sender_submit_status \
              (op_id, channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT(op_id) DO UPDATE SET \
-               channel_id = EXCLUDED.channel_id, \
-               model = EXCLUDED.model, \
-               entity_id = EXCLUDED.entity_id, \
-               status = EXCLUDED.status, \
-               dispatch_status = EXCLUDED.dispatch_status, \
-               accepted_at = EXCLUDED.accepted_at, \
-               updated_at = EXCLUDED.updated_at, \
-               expires_at = EXCLUDED.expires_at",
+             ON CONFLICT(op_id) DO NOTHING",
         )
         .bind(record.op_id.as_str())
         .bind(record.channel_id.as_slice())
@@ -170,7 +164,7 @@ impl PostgresDb {
         .bind(record.expires_at)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     pub(super) async fn update_sender_submit_status(
@@ -180,18 +174,84 @@ impl PostgresDb {
         dispatch_status: Option<&str>,
         updated_at: i64,
     ) -> StoreResult<()> {
+        let protect_provider_final = status == SenderSubmitStatusKind::ProviderQueued;
         sqlx::query(
             "UPDATE sender_submit_status \
              SET status = $1, dispatch_status = $2, updated_at = $3 \
-             WHERE op_id = $4",
+             WHERE op_id = $4 \
+               AND NOT ($5 AND status IN ('sent', 'partially_failed', 'failed'))",
         )
         .bind(status.as_str())
         .bind(dispatch_status)
         .bind(updated_at)
         .bind(op_id)
+        .bind(protect_provider_final)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub(super) async fn finalize_provider_dispatch_outcome(
+        &self,
+        op_id: &str,
+        delivery_id: &str,
+        success: bool,
+    ) -> StoreResult<()> {
+        let now = Utc::now().timestamp_millis();
+        let sender_status = if success { "sent" } else { "partially_failed" };
+        let dispatch_status = if success {
+            "provider_success"
+        } else {
+            "provider_failed"
+        };
+        let dedupe_state = if success {
+            DedupeState::Sent
+        } else {
+            DedupeState::PartialFailure
+        };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE dispatch_op_dedupe SET state = $1, sent_at = $2, updated_at = $2 \
+             WHERE delivery_id = $3 AND state IN ('pending', 'provider_queued')",
+        )
+        .bind(dedupe_state.as_str())
+        .bind(now)
+        .bind(delivery_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE sender_submit_status SET status = $1, dispatch_status = $2, updated_at = $3 \
+             WHERE op_id = $4 AND status IN ('processing', 'provider_queued')",
+        )
+        .bind(sender_status)
+        .bind(dispatch_status)
+        .bind(now)
+        .bind(op_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(super) async fn recover_interrupted_provider_dispatches(
+        &self,
+        updated_at: i64,
+    ) -> StoreResult<usize> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM dispatch_op_dedupe WHERE state = 'provider_queued'")
+            .execute(&mut *tx)
+            .await?;
+        let recovered = sqlx::query(
+            "UPDATE sender_submit_status \
+             SET status = 'failed', dispatch_status = 'provider_interrupted', updated_at = $1 \
+             WHERE status = 'provider_queued'",
+        )
+        .bind(updated_at)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as usize;
+        tx.commit().await?;
+        Ok(recovered)
     }
 
     pub(super) async fn load_sender_submit_status(
@@ -543,16 +603,18 @@ impl PostgresDb {
         &self,
         dedupe_key: &str,
         delivery_id: &str,
+        request_fingerprint: Option<&str>,
         created_at: i64,
     ) -> StoreResult<OpDedupeReservation> {
         let mut tx = self.pool.begin().await?;
         let inserted = sqlx::query(
-            "INSERT INTO dispatch_op_dedupe (dedupe_key, delivery_id, state, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $4) \
+            "INSERT INTO dispatch_op_dedupe (dedupe_key, delivery_id, request_fingerprint, state, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $5) \
              ON CONFLICT (dedupe_key) DO NOTHING",
         )
         .bind(dedupe_key)
         .bind(delivery_id)
+        .bind(request_fingerprint)
         .bind(DedupeState::Pending.as_str())
         .bind(created_at)
         .execute(&mut *tx)
@@ -564,24 +626,37 @@ impl PostgresDb {
             OpDedupeReservation::Reserved
         } else {
             let existing = sqlx::query(
-                "SELECT delivery_id, state FROM dispatch_op_dedupe WHERE dedupe_key = $1 FOR UPDATE",
+                "SELECT delivery_id, request_fingerprint, state FROM dispatch_op_dedupe WHERE dedupe_key = $1 FOR UPDATE",
             )
             .bind(dedupe_key)
             .fetch_optional(&mut *tx)
             .await?;
             if let Some(row) = existing {
                 let existing_delivery_id: String = row.try_get("delivery_id")?;
+                let existing_fingerprint: Option<String> = row.try_get("request_fingerprint")?;
                 let state: String = row.try_get("state")?;
-                match DedupeState::from_str(state.as_str())? {
-                    DedupeState::Pending => OpDedupeReservation::Pending {
+                if matches!(
+                    (request_fingerprint, existing_fingerprint.as_deref()),
+                    (Some(requested), Some(existing)) if requested != existing
+                ) {
+                    OpDedupeReservation::FingerprintConflict {
                         delivery_id: existing_delivery_id,
-                    },
-                    DedupeState::Sent => OpDedupeReservation::Sent {
-                        delivery_id: existing_delivery_id,
-                    },
-                    DedupeState::PartialFailure => OpDedupeReservation::PartialFailure {
-                        delivery_id: existing_delivery_id,
-                    },
+                    }
+                } else {
+                    match DedupeState::from_str(state.as_str())? {
+                        DedupeState::Pending => OpDedupeReservation::Pending {
+                            delivery_id: existing_delivery_id,
+                        },
+                        DedupeState::ProviderQueued => OpDedupeReservation::ProviderQueued {
+                            delivery_id: existing_delivery_id,
+                        },
+                        DedupeState::Sent => OpDedupeReservation::Sent {
+                            delivery_id: existing_delivery_id,
+                        },
+                        DedupeState::PartialFailure => OpDedupeReservation::PartialFailure {
+                            delivery_id: existing_delivery_id,
+                        },
+                    }
                 }
             } else {
                 OpDedupeReservation::Pending {

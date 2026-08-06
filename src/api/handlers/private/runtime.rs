@@ -110,10 +110,9 @@ fn build_wss_url(
     let base_url = public_base_url?.trim_end_matches('/');
     let scheme_adjusted = if let Some(rest) = base_url.strip_prefix("https://") {
         format!("wss://{rest}")
-    } else if let Some(rest) = base_url.strip_prefix("http://") {
-        format!("ws://{rest}")
     } else {
-        return None;
+        let rest = base_url.strip_prefix("http://")?;
+        format!("ws://{rest}")
     };
     Some(format!("{scheme_adjusted}{wss_path}"))
 }

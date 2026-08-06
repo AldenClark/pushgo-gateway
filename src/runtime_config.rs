@@ -84,7 +84,6 @@ pub struct SqliteRuntimeTuning {
     pub idle_timeout: Duration,
     pub statement_cache_capacity: usize,
     pub page_cache_kib: i64,
-    pub wal_autocheckpoint: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -253,7 +252,6 @@ impl RuntimeTuning {
                 idle_timeout: Duration::from_secs(30),
                 statement_cache_capacity: 24,
                 page_cache_kib: 512,
-                wal_autocheckpoint: 128,
             },
             external_db: ExternalDbRuntimeTuning {
                 max_connections: 8,
@@ -359,7 +357,6 @@ impl RuntimeTuning {
                 idle_timeout: Duration::from_secs(60),
                 statement_cache_capacity: 64,
                 page_cache_kib: 4_096,
-                wal_autocheckpoint: 512,
             },
             external_db: ExternalDbRuntimeTuning {
                 max_connections: 64,

@@ -43,15 +43,14 @@ impl<'a> ProviderTokenRef<'a> {
         raw.and_then(|value| Self::parse(value).ok())
     }
 
-    pub(crate) fn parse_for_platform(raw: &'a str, platform: Platform) -> ValueResult<Self> {
+    pub(crate) fn canonicalize_for_platform(
+        raw: &'a str,
+        platform: Platform,
+    ) -> ValueResult<String> {
         let token = Self::parse(raw)?;
-        token.validate_for_platform(platform)
-    }
-
-    pub(crate) fn validate_for_platform(self, platform: Platform) -> ValueResult<Self> {
-        DeviceInfo::from_token(platform, self.0)
+        let device = DeviceInfo::from_token(platform, token.as_str())
             .map_err(|_| ValueError::new("invalid provider_token"))?;
-        Ok(self)
+        Ok(device.token_str().to_string())
     }
 
     pub(crate) fn as_str(self) -> &'a str {
@@ -60,5 +59,33 @@ impl<'a> ProviderTokenRef<'a> {
 
     pub(crate) fn into_owned(self) -> String {
         self.0.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderTokenRef;
+    use crate::storage::Platform;
+
+    #[test]
+    fn provider_token_canonicalization_is_platform_specific() {
+        let apple_upper = "A1".repeat(32);
+        assert_eq!(
+            ProviderTokenRef::canonicalize_for_platform(&apple_upper, Platform::IOS)
+                .expect("valid APNs token"),
+            "a1".repeat(32)
+        );
+
+        let mixed_case = "AbCdEfGhIjKlMnOp";
+        assert_eq!(
+            ProviderTokenRef::canonicalize_for_platform(mixed_case, Platform::ANDROID)
+                .expect("valid FCM token"),
+            mixed_case
+        );
+        assert_eq!(
+            ProviderTokenRef::canonicalize_for_platform(mixed_case, Platform::WINDOWS)
+                .expect("valid WNS token"),
+            mixed_case
+        );
     }
 }

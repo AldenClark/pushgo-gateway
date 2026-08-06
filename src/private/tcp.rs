@@ -261,7 +261,7 @@ impl ProxyProtocolV1 {
                         "proxy protocol header too long".to_string(),
                     ));
                 }
-                if line.len() >= 2 && line[line.len() - 2..] == [b'\r', b'\n'] {
+                if line.len() >= 2 && line[line.len() - 2..] == *b"\r\n" {
                     break;
                 }
             }

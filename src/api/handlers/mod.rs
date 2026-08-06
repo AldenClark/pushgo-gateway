@@ -108,7 +108,9 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route("/channel/subscribe", post(core::channel_subscribe))
         .route("/channel/unsubscribe", post(core::channel_unsubscribe))
         .route("/messages/pull", post(core::messages_pull))
+        .route("/v2/messages/pull", post(core::messages_pull_v2))
         .route("/messages/ack", post(core::messages_ack))
+        .route("/v2/messages/ack", post(core::messages_ack_v2))
         .route("/gateway/profile", get(private::gateway_profile))
         .route("/channel/exists", get(channel::channel_exists))
         .route("/channel/rename", post(channel::channel_rename))
@@ -116,4 +118,38 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
 
 pub(crate) fn private_router() -> Router<AppState> {
     Router::new().route("/private/ws", get(private::private_ws))
+}
+
+#[cfg(test)]
+mod documentation_contract_tests {
+    #[test]
+    fn provider_pull_ack_and_status_contract_is_documented() {
+        let docs = include_str!("../docs.html");
+        let readme = include_str!("../../../readme.md");
+        for (name, text) in [("API docs", docs), ("README", readme)] {
+            for required in [
+                "/messages/pull",
+                "/v2/messages/pull",
+                "has_more",
+                "/messages/ack",
+                "/v2/messages/ack",
+                "delivery_ids",
+                "provider_queued",
+                "provider_success",
+            ] {
+                assert!(
+                    text.contains(required),
+                    "{name} must describe the release contract token {required}"
+                );
+            }
+        }
+        assert!(
+            docs.contains("<code>{device_key, delivery_id}</code>"),
+            "legacy ACK must remain documented as a single-item request"
+        );
+        assert!(
+            docs.contains("<code>{device_key, delivery_ids}</code>"),
+            "batch ACK must remain documented on the separate v2 route"
+        );
+    }
 }

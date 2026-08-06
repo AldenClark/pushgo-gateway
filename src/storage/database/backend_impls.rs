@@ -84,6 +84,25 @@ macro_rules! impl_backend_provider_subscription_access {
                 <$backend>::unsubscribe_channel_for_device_key(self, channel_id, device_key).await
             }
 
+            async fn unsubscribe_channel_if_provider_route_current(
+                &self,
+                channel_id: [u8; 16],
+                device_key: &str,
+                platform: Platform,
+                provider_token: &str,
+                route_updated_at: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::unsubscribe_channel_if_provider_route_current(
+                    self,
+                    channel_id,
+                    device_key,
+                    platform,
+                    provider_token,
+                    route_updated_at,
+                )
+                .await
+            }
+
             async fn list_subscribed_channels_for_device_key(
                 &self,
                 device_key: &str,
@@ -373,6 +392,23 @@ macro_rules! impl_backend_device_route_access {
                 <$backend>::persist_device_route_change(self, route).await
             }
 
+            async fn transition_device_route(
+                &self,
+                route: &DeviceRouteRecordRow,
+                previous_channel_type: RouteChannelType,
+                ack_timeout_secs: u64,
+                max_pending_per_device: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::transition_device_route(
+                    self,
+                    route,
+                    previous_channel_type,
+                    ack_timeout_secs,
+                    max_pending_per_device,
+                )
+                .await
+            }
+
             async fn replace_device_identity(
                 &self,
                 route: &DeviceRouteRecordRow,
@@ -437,6 +473,42 @@ macro_rules! impl_backend_provider_pull_access {
                 <$backend>::pull_provider_items(self, device_id, now, limit).await
             }
 
+            async fn peek_provider_item(
+                &self,
+                device_id: DeviceId,
+                delivery_id: &str,
+                now: i64,
+            ) -> StoreResult<Option<ProviderPullItem>> {
+                <$backend>::peek_provider_item(self, device_id, delivery_id, now).await
+            }
+
+            async fn peek_provider_items(
+                &self,
+                device_id: DeviceId,
+                now: i64,
+                limit: usize,
+            ) -> StoreResult<Vec<ProviderPullItem>> {
+                <$backend>::peek_provider_items(self, device_id, now, limit).await
+            }
+
+            async fn peek_provider_candidate(
+                &self,
+                device_id: DeviceId,
+                delivery_id: &str,
+                now: i64,
+            ) -> StoreResult<Option<ProviderPullCandidate>> {
+                <$backend>::peek_provider_candidate(self, device_id, delivery_id, now).await
+            }
+
+            async fn peek_provider_candidates(
+                &self,
+                device_id: DeviceId,
+                now: i64,
+                limit: usize,
+            ) -> StoreResult<Vec<ProviderPullCandidate>> {
+                <$backend>::peek_provider_candidates(self, device_id, now, limit).await
+            }
+
             async fn ack_provider_item(
                 &self,
                 device_id: DeviceId,
@@ -444,6 +516,25 @@ macro_rules! impl_backend_provider_pull_access {
                 now: i64,
             ) -> StoreResult<Option<ProviderPullItem>> {
                 <$backend>::ack_provider_item(self, device_id, delivery_id, now).await
+            }
+
+            async fn ack_provider_items(
+                &self,
+                device_id: DeviceId,
+                delivery_ids: &[String],
+                now: i64,
+            ) -> StoreResult<Vec<ProviderPullItem>> {
+                <$backend>::ack_provider_items(self, device_id, delivery_ids, now).await
+            }
+
+            async fn discard_provider_items_by_outer_ids(
+                &self,
+                device_id: DeviceId,
+                delivery_ids: &[String],
+                now: i64,
+            ) -> StoreResult<usize> {
+                <$backend>::discard_provider_items_by_outer_ids(self, device_id, delivery_ids, now)
+                    .await
             }
         }
     };
@@ -499,10 +590,17 @@ macro_rules! impl_backend_dedupe_access {
                 &self,
                 dedupe_key: &str,
                 delivery_id: &str,
+                request_fingerprint: Option<&str>,
                 created_at: i64,
             ) -> StoreResult<OpDedupeReservation> {
-                <$backend>::reserve_op_dedupe_pending(self, dedupe_key, delivery_id, created_at)
-                    .await
+                <$backend>::reserve_op_dedupe_pending(
+                    self,
+                    dedupe_key,
+                    delivery_id,
+                    request_fingerprint,
+                    created_at,
+                )
+                .await
             }
 
             async fn mark_op_dedupe_sent(
@@ -611,11 +709,11 @@ macro_rules! impl_backend_system_state_access {
                 <$backend>::list_widget_push_targets_for_channel(self, channel_id).await
             }
 
-            async fn upsert_sender_submit_status(
+            async fn insert_sender_submit_status_if_absent(
                 &self,
                 record: &SenderSubmitStatusRecord,
-            ) -> StoreResult<()> {
-                <$backend>::upsert_sender_submit_status(self, record).await
+            ) -> StoreResult<bool> {
+                <$backend>::insert_sender_submit_status_if_absent(self, record).await
             }
 
             async fn update_sender_submit_status(
@@ -633,6 +731,23 @@ macro_rules! impl_backend_system_state_access {
                     updated_at,
                 )
                 .await
+            }
+
+            async fn finalize_provider_dispatch_outcome(
+                &self,
+                op_id: &str,
+                delivery_id: &str,
+                success: bool,
+            ) -> StoreResult<()> {
+                <$backend>::finalize_provider_dispatch_outcome(self, op_id, delivery_id, success)
+                    .await
+            }
+
+            async fn recover_interrupted_provider_dispatches(
+                &self,
+                updated_at: i64,
+            ) -> StoreResult<usize> {
+                <$backend>::recover_interrupted_provider_dispatches(self, updated_at).await
             }
 
             async fn load_sender_submit_status(

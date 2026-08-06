@@ -21,7 +21,6 @@ pub(crate) const WIDGET_KIND_OBJECT_STATUS: &str = "io.ethan.pushgo.widgets.obje
 pub(crate) const WIDGET_KIND_WATCH_SUMMARY: &str = "io.ethan.pushgo.widgets.watch-summary";
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct WidgetPushSubscriptionRequest {
     device_key: String,
     platform: String,
@@ -31,7 +30,6 @@ pub(crate) struct WidgetPushSubscriptionRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct WidgetPushWidgetRequest {
     kind: String,
     family: String,

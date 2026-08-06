@@ -78,11 +78,11 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, list_widget_push_targets_for_channel(channel_id))
     }
 
-    async fn upsert_sender_submit_status(
+    async fn insert_sender_submit_status_if_absent(
         &self,
         record: &SenderSubmitStatusRecord,
-    ) -> StoreResult<()> {
-        delegate_db_async!(self, upsert_sender_submit_status(record))
+    ) -> StoreResult<bool> {
+        delegate_db_async!(self, insert_sender_submit_status_if_absent(record))
     }
 
     async fn update_sender_submit_status(
@@ -96,6 +96,22 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
             self,
             update_sender_submit_status(op_id, status, dispatch_status, updated_at)
         )
+    }
+
+    async fn finalize_provider_dispatch_outcome(
+        &self,
+        op_id: &str,
+        delivery_id: &str,
+        success: bool,
+    ) -> StoreResult<()> {
+        delegate_db_async!(
+            self,
+            finalize_provider_dispatch_outcome(op_id, delivery_id, success)
+        )
+    }
+
+    async fn recover_interrupted_provider_dispatches(&self, updated_at: i64) -> StoreResult<usize> {
+        delegate_db_async!(self, recover_interrupted_provider_dispatches(updated_at))
     }
 
     async fn load_sender_submit_status(

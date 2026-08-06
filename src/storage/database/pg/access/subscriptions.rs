@@ -116,6 +116,7 @@ impl PostgresDb {
                     platform,
                     provider_token: token.into_owned(),
                     device_key,
+                    route_updated_at: route_updated_at.expect("route timestamp validated above"),
                 });
             }
         }

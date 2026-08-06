@@ -7,7 +7,6 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ChannelExistsQuery {
     channel_id: String,
 }
@@ -54,7 +53,6 @@ pub(crate) async fn channel_exists(
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ChannelRenameData {
     channel_id: String,
     channel_name: String,

@@ -1,8 +1,11 @@
 **/.DS_Store
 /target/
 /dist/
-/docs/
-/scripts/
+/docs/*
+!/docs/gateway-database-upgrade-plan.md
+/scripts/*
+!/scripts/preflight_release_audit.sh
+!/scripts/storage_crossdb_parity.sh
 bench/results/*
 !bench/results/.gitkeep
 /.cargo/

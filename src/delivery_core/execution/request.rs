@@ -10,6 +10,7 @@ pub(crate) struct DispatchMessageInput {
     pub(crate) op_id: Option<String>,
     pub(crate) thing_id: Option<String>,
     pub(crate) occurred_at: Option<i64>,
+    pub(crate) fingerprint_occurred_at: Option<i64>,
     pub(crate) title: String,
     pub(crate) body: Option<String>,
     pub(crate) severity: Option<String>,
@@ -69,6 +70,7 @@ impl DispatchAlert {
 
 pub(crate) struct DispatchRequest {
     pub(crate) op_id: String,
+    pub(crate) request_fingerprint: Option<String>,
     pub(crate) occurred_at: i64,
     pub(crate) alert: DispatchAlert,
     pub(crate) payload: DispatchEntityPayload,
@@ -78,6 +80,7 @@ pub(crate) struct DispatchRequest {
 impl DispatchRequest {
     pub(crate) fn new(
         op_id: String,
+        request_fingerprint: Option<String>,
         occurred_at: i64,
         alert: DispatchAlert,
         payload: DispatchEntityPayload,
@@ -85,12 +88,66 @@ impl DispatchRequest {
     ) -> Self {
         Self {
             op_id,
+            request_fingerprint,
             occurred_at,
             alert,
             payload,
             delivery_policy,
         }
     }
+}
+
+impl DispatchMessageInput {
+    pub(crate) fn idempotency_fingerprint(&self) -> String {
+        let mut hasher = blake3::Hasher::new();
+        fingerprint_part(&mut hasher, self.thing_id.as_deref().unwrap_or(""));
+        fingerprint_part(
+            &mut hasher,
+            self.fingerprint_occurred_at
+                .map(|value| value.to_string())
+                .as_deref()
+                .unwrap_or(""),
+        );
+        fingerprint_part(&mut hasher, self.title.trim());
+        fingerprint_part(&mut hasher, self.body.as_deref().unwrap_or(""));
+        fingerprint_part(&mut hasher, self.severity.as_deref().unwrap_or(""));
+        fingerprint_part(
+            &mut hasher,
+            self.ttl
+                .map(|value| value.to_string())
+                .as_deref()
+                .unwrap_or(""),
+        );
+        fingerprint_sorted_map(&mut hasher, &self.custom_data);
+        fingerprint_sorted_map_excluding(&mut hasher, &self.extra_fields, Some("message_id"));
+        fingerprint_part(&mut hasher, &format!("{:?}", self.delivery_policy));
+        hasher.finalize().to_hex().to_string()
+    }
+}
+
+fn fingerprint_sorted_map(hasher: &mut blake3::Hasher, values: &HashMap<String, String>) {
+    fingerprint_sorted_map_excluding(hasher, values, None);
+}
+
+fn fingerprint_sorted_map_excluding(
+    hasher: &mut blake3::Hasher,
+    values: &HashMap<String, String>,
+    excluded_key: Option<&str>,
+) {
+    let mut entries = values.iter().collect::<Vec<_>>();
+    entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    for (key, value) in entries {
+        if excluded_key == Some(key.as_str()) {
+            continue;
+        }
+        fingerprint_part(hasher, key);
+        fingerprint_part(hasher, value);
+    }
+}
+
+fn fingerprint_part(hasher: &mut blake3::Hasher, value: &str) {
+    hasher.update(&(value.len() as u64).to_be_bytes());
+    hasher.update(value.as_bytes());
 }
 
 pub(crate) enum DispatchEntityPayload {

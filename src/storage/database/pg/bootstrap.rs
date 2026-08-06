@@ -9,7 +9,7 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS channels (channel_id BYTEA PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) PRIMARY KEY, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT)",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT, expires_at BIGINT)",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, request_fingerprint VARCHAR(64), state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) PRIMARY KEY, semantic_id VARCHAR(128) NOT NULL UNIQUE, source VARCHAR(64), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) PRIMARY KEY, channel_id BYTEA NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64), accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token TEXT NOT NULL, channel_id BYTEA, platform VARCHAR(32) NOT NULL, schema_version INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT, PRIMARY KEY (activity_key, token))",
@@ -84,6 +84,7 @@ const PG_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS: &[&str] = &[
 ];
 const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
 const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
+const PROVIDER_TOKEN_NORMALIZATION_META_KEY: &str = "provider_token_semantics_v1";
 
 impl PostgresDb {
     pub async fn new(db_url: &str, runtime_profile: GatewayRuntimeProfile) -> StoreResult<Self> {
@@ -164,6 +165,13 @@ impl PostgresDb {
         {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+
+        self.ensure_pg_column(
+            "dispatch_op_dedupe",
+            "request_fingerprint",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN request_fingerprint VARCHAR(64)",
+        )
+        .await?;
 
         self.ensure_pg_column(
             "devices",
@@ -386,6 +394,7 @@ impl PostgresDb {
         .execute(&self.pool)
         .await?;
         self.normalize_pg_epoch_columns_to_millis_once().await?;
+        self.normalize_pg_provider_tokens_once().await?;
 
         self.store_pg_schema_version(STORAGE_SCHEMA_VERSION).await?;
         let migration_started_at = Utc::now().timestamp();
@@ -508,6 +517,134 @@ impl PostgresDb {
         )
         .bind(EPOCH_NORMALIZATION_META_KEY)
         .bind("1")
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn normalize_pg_provider_tokens_once(&self) -> StoreResult<()> {
+        let normalized: Option<String> =
+            sqlx::query_scalar("SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = $1")
+                .bind(PROVIDER_TOKEN_NORMALIZATION_META_KEY)
+                .fetch_optional(&self.pool)
+                .await?;
+        if normalized.as_deref() == Some("complete") {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        let bindings = sqlx::query(
+            "SELECT platform, token_hash, device_id, provider_token, created_at, updated_at \
+             FROM private_bindings WHERE platform IN (1, 2, 4) \
+               AND provider_token IS NOT NULL AND token_hash IS NOT NULL \
+             ORDER BY updated_at ASC, created_at ASC, token_hash ASC",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let routes = sqlx::query(
+            "SELECT device_id, device_key, platform, channel_type, provider_token, route_updated_at \
+             FROM devices \
+             WHERE platform IN ('ios', 'macos', 'watchos') \
+               AND provider_token IS NOT NULL AND device_key IS NOT NULL \
+               AND channel_type IS NOT NULL AND route_updated_at IS NOT NULL \
+             ORDER BY LOWER(TRIM(provider_token)), platform, route_updated_at DESC, device_key DESC",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE devices SET provider_token = LOWER(TRIM(provider_token)) \
+             WHERE platform IN ('ios', 'macos', 'watchos') AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE provider_pull_queue SET provider_token = LOWER(TRIM(provider_token)) \
+             WHERE platform IN ('ios', 'macos', 'watchos') AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        for row in bindings {
+            let platform: i16 = row.get("platform");
+            let old_hash: Vec<u8> = row.get("token_hash");
+            let device_id: Vec<u8> = row.get("device_id");
+            let provider_token: String = row.get("provider_token");
+            let canonical = provider_token.trim().to_ascii_lowercase();
+            let (new_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
+            let new_hash = new_hash.ok_or(StoreError::InvalidDeviceToken)?;
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (platform, token_hash, device_id, provider_token, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (platform, token_hash) DO UPDATE SET device_id = EXCLUDED.device_id, \
+                   provider_token = EXCLUDED.provider_token, \
+                   updated_at = GREATEST(private_bindings.updated_at, EXCLUDED.updated_at)",
+            )
+            .bind(platform)
+            .bind(new_hash.as_slice())
+            .bind(device_id.as_slice())
+            .bind(&canonical)
+            .bind(row.get::<i64, _>("created_at"))
+            .bind(row.get::<i64, _>("updated_at"))
+            .execute(&mut *tx)
+            .await?;
+            if old_hash != new_hash {
+                sqlx::query("DELETE FROM private_bindings WHERE platform = $1 AND token_hash = $2")
+                    .bind(platform)
+                    .bind(old_hash.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        let mut merged_routes = std::collections::HashSet::new();
+        for row in routes {
+            let platform: String = row.get("platform");
+            let canonical = row
+                .get::<String, _>("provider_token")
+                .trim()
+                .to_ascii_lowercase();
+            if !merged_routes.insert((platform.clone(), canonical.clone())) {
+                continue;
+            }
+            let route = DeviceRouteRecordRow {
+                device_key: row.get("device_key"),
+                platform,
+                channel_type: row.get("channel_type"),
+                provider_token: Some(canonical.clone()),
+                updated_at: row.get("route_updated_at"),
+            };
+            let values = route.persistence_values()?;
+            let old_device_id: Vec<u8> = row.get("device_id");
+            if old_device_id != values.device_id {
+                sqlx::query("UPDATE devices SET device_key = NULL WHERE device_id = $1")
+                    .bind(old_device_id.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            super::access::routes::upsert_device_route_in_tx(&mut tx, &route).await?;
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (platform, token_hash, device_id, provider_token, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $5) \
+                 ON CONFLICT (platform, token_hash) DO UPDATE SET \
+                   device_id = EXCLUDED.device_id, provider_token = EXCLUDED.provider_token, \
+                   updated_at = GREATEST(private_bindings.updated_at, EXCLUDED.updated_at)",
+            )
+            .bind(values.platform_code)
+            .bind(token_hash.as_deref())
+            .bind(values.device_id.as_slice())
+            .bind(&canonical)
+            .bind(values.updated_at)
+            .execute(&mut *tx)
+            .await?;
+            super::access::routes::coalesce_duplicate_provider_routes_in_tx(&mut tx, &values)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ($1, 'complete') \
+             ON CONFLICT (meta_key) DO UPDATE SET meta_value = EXCLUDED.meta_value",
+        )
+        .bind(PROVIDER_TOKEN_NORMALIZATION_META_KEY)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -921,8 +1058,8 @@ impl crate::storage::database::upgrade::state::UpgradeStateAccess for PostgresDb
 impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for PostgresDb {
     async fn create_upgrade_backup(
         &self,
-        _db_url: &str,
-        _driver: crate::storage::types::DatabaseKind,
+        db_url: &str,
+        driver: crate::storage::types::DatabaseKind,
         policy: crate::storage::database::migration::BackupPolicy,
         run_id: &str,
     ) -> crate::storage::database::upgrade::UpgradeResult<
@@ -934,13 +1071,20 @@ impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for Postgres
         ) {
             return Ok(None);
         }
-        let snapshot = external_snapshot_or_test_default("PostgreSQL")?;
+        #[cfg(test)]
+        if std::env::var_os("PUSHGO_DB_UPGRADE_BACKUP_MANIFEST").is_none() {
+            return Ok(Some(
+                crate::storage::database::upgrade::backup::test_external_backup_artifact(
+                    driver, run_id,
+                ),
+            ));
+        }
+        #[cfg(not(test))]
+        let _ = run_id;
         Ok(Some(
-            crate::storage::database::upgrade::backup::BackupArtifact {
-                uri: format!("postgres-external-snapshot:{snapshot}:{run_id}"),
-                sha256: "external".to_string(),
-                bytes: 0,
-            },
+            crate::storage::database::upgrade::backup::load_external_backup_manifest(
+                db_url, driver,
+            )?,
         ))
     }
 
@@ -954,28 +1098,6 @@ impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for Postgres
                 "PostgreSQL rollback requires manual restore from the recorded external snapshot or pg_restore artifact".to_string(),
             ),
         ))
-    }
-}
-
-fn external_snapshot_or_test_default(
-    driver: &str,
-) -> crate::storage::database::upgrade::UpgradeResult<String> {
-    match std::env::var("PUSHGO_DB_UPGRADE_EXTERNAL_SNAPSHOT") {
-        Ok(value) => Ok(value),
-        Err(_) => {
-            #[cfg(test)]
-            {
-                Ok(format!("{}-test-snapshot", driver.to_ascii_lowercase()))
-            }
-            #[cfg(not(test))]
-            {
-                Err(crate::storage::database::upgrade::UpgradeError::Store(
-                    StoreError::Upgrade(format!(
-                        "{driver} upgrade requires PUSHGO_DB_UPGRADE_EXTERNAL_SNAPSHOT or an operator-run dump before destructive/runtime-reset migrations"
-                    )),
-                ))
-            }
-        }
     }
 }
 
@@ -1000,8 +1122,6 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for Postgres
             "channel_subscriptions",
             "private_payloads",
             "sender_submit_status",
-            "pushgo_upgrade_runs",
-            "pushgo_upgrade_steps",
         ] {
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT 1::BIGINT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1 LIMIT 1",

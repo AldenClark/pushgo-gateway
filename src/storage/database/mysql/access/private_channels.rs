@@ -7,7 +7,10 @@ impl MySqlDb {
             .bind(&device_id[..])
             .fetch_all(&mut *tx)
             .await?;
-        let delivery_ids: Vec<String> = rows.into_iter().map(|r| r.get("delivery_id")).collect();
+        let delivery_ids: Vec<String> = rows
+            .into_iter()
+            .map(|r| decode_mysql_text(&r, "delivery_id"))
+            .collect::<StoreResult<_>>()?;
 
         sqlx::query("DELETE FROM private_bindings WHERE device_id = ?")
             .bind(&device_id[..])
@@ -171,23 +174,7 @@ impl MySqlDb {
 
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            out.push(PrivateOutboxEntry {
-                delivery_id: r.get("delivery_id"),
-                status: r.get("status"),
-                attempts: decode_mysql_attempts(&r),
-                occurred_at: r.get("occurred_at"),
-                created_at: r.get("created_at"),
-                claimed_at: r.get("claimed_at"),
-                claimed_by: r.get("claimed_by"),
-                first_sent_at: r.get("first_sent_at"),
-                last_attempt_at: r.get("last_attempt_at"),
-                acked_at: r.get("acked_at"),
-                fallback_sent_at: r.get("fallback_sent_at"),
-                next_attempt_at: r.get("next_attempt_at"),
-                last_error_code: r.get("last_error_code"),
-                last_error_detail: r.get("last_error_detail"),
-                updated_at: r.get("updated_at"),
-            });
+            out.push(decode_mysql_private_outbox_entry(&r)?);
         }
         Ok(out)
     }
@@ -226,7 +213,7 @@ impl MySqlDb {
         .fetch_all(&self.pool)
         .await?;
         for row in expired_rows {
-            let delivery_id: String = row.get("delivery_id");
+            let delivery_id = decode_mysql_text(&row, "delivery_id")?;
             sqlx::query("DELETE FROM private_payloads WHERE delivery_id = ?")
                 .bind(&delivery_id)
                 .execute(&self.pool)
@@ -252,7 +239,7 @@ impl MySqlDb {
         .await?;
         for row in dangling_rows {
             let device_id: Vec<u8> = row.get("device_id");
-            let delivery_id: String = row.get("delivery_id");
+            let delivery_id = decode_mysql_text(&row, "delivery_id")?;
             sqlx::query(
                 "DELETE FROM private_outbox \
                  WHERE device_id = ? AND delivery_id = ?",
@@ -418,8 +405,8 @@ async fn prune_mysql_device_outbox_overflow(
     };
     let delivery_ids = rows
         .into_iter()
-        .map(|row| row.get("delivery_id"))
-        .collect::<Vec<String>>();
+        .map(|row| decode_mysql_text(&row, "delivery_id"))
+        .collect::<StoreResult<Vec<_>>>()?;
     for delivery_id in &delivery_ids {
         sqlx::query(
             "DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND status = ?",
@@ -479,7 +466,7 @@ async fn prune_mysql_global_outbox_overflow(
     let mut delivery_ids = Vec::with_capacity(rows.len());
     for row in rows {
         let device_id: Vec<u8> = row.get("device_id");
-        let delivery_id: String = row.get("delivery_id");
+        let delivery_id = decode_mysql_text(&row, "delivery_id")?;
         sqlx::query(
             "DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND status = ?",
         )

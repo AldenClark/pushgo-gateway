@@ -43,11 +43,12 @@ impl DedupeDatabaseAccess for DatabaseDriver {
         &self,
         dedupe_key: &str,
         delivery_id: &str,
+        request_fingerprint: Option<&str>,
         created_at: i64,
     ) -> StoreResult<OpDedupeReservation> {
         delegate_db_async!(
             self,
-            reserve_op_dedupe_pending(dedupe_key, delivery_id, created_at)
+            reserve_op_dedupe_pending(dedupe_key, delivery_id, request_fingerprint, created_at)
         )
     }
 

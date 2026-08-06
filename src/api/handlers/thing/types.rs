@@ -1,10 +1,9 @@
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::IgnoredAny};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::api::{deserialize_empty_as_none, deserialize_unix_ts_millis_lenient};
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct ThingCommonFields {
     pub(super) channel_id: String,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
@@ -14,7 +13,6 @@ pub(super) struct ThingCommonFields {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ThingPatchFields {
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
@@ -50,8 +48,17 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+fn reject_forbidden_thing_field<'de, D>(deserializer: D) -> Result<Option<JsonValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let _ = IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "field is not allowed for this thing action",
+    ))
+}
+
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ThingCreateRequest {
     #[serde(flatten)]
     pub(super) common: ThingCommonFields,
@@ -59,30 +66,69 @@ pub(crate) struct ThingCreateRequest {
     pub(super) created_at: Option<i64>,
     #[serde(flatten)]
     pub(super) patch: ThingPatchFields,
+    #[serde(
+        default,
+        rename = "thing_id",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _thing_id: Option<JsonValue>,
+    #[serde(
+        default,
+        rename = "state",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _state: Option<JsonValue>,
+    #[serde(
+        default,
+        rename = "deleted_at",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _deleted_at: Option<JsonValue>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ThingUpdateRequest {
     #[serde(flatten)]
     pub(super) common: ThingCommonFields,
     pub(super) thing_id: String,
     #[serde(flatten)]
     pub(super) patch: ThingPatchFields,
+    #[serde(
+        default,
+        rename = "state",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _state: Option<JsonValue>,
+    #[serde(
+        default,
+        rename = "deleted_at",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _deleted_at: Option<JsonValue>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ThingArchiveRequest {
     #[serde(flatten)]
     pub(super) common: ThingCommonFields,
     pub(super) thing_id: String,
     #[serde(flatten)]
     pub(super) patch: ThingPatchFields,
+    #[serde(
+        default,
+        rename = "state",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _state: Option<JsonValue>,
+    #[serde(
+        default,
+        rename = "deleted_at",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _deleted_at: Option<JsonValue>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ThingDeleteRequest {
     #[serde(flatten)]
     pub(super) common: ThingCommonFields,
@@ -91,6 +137,12 @@ pub(crate) struct ThingDeleteRequest {
     pub(super) deleted_at: Option<i64>,
     #[serde(flatten)]
     pub(super) patch: ThingPatchFields,
+    #[serde(
+        default,
+        rename = "state",
+        deserialize_with = "reject_forbidden_thing_field"
+    )]
+    pub(super) _state: Option<JsonValue>,
 }
 
 #[cfg(test)]

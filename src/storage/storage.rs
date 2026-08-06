@@ -21,6 +21,8 @@ const OP_DEDUPE_PENDING_STALE_MILLIS: i64 = 2 * 60 * 1000;
 pub struct Storage {
     db: Arc<DatabaseDriver>,
     cache: Arc<CacheStore>,
+    #[cfg(test)]
+    provider_finalize_failures_remaining: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,11 +87,36 @@ impl Storage {
         Ok(Self {
             db: Arc::new(driver),
             cache: Arc::new(CacheStore::with_profile(runtime_profile)),
+            #[cfg(test)]
+            provider_finalize_failures_remaining: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
     pub fn cache_memory_snapshot(&self) -> CacheMemorySnapshot {
         self.cache.memory_snapshot()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_provider_finalize_failures(&self, count: usize) {
+        self.provider_finalize_failures_remaining
+            .store(count, std::sync::atomic::Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn consume_provider_finalize_failure(&self) -> bool {
+        self.provider_finalize_failures_remaining
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn provider_finalize_failures_remaining(&self) -> usize {
+        self.provider_finalize_failures_remaining
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 }
 

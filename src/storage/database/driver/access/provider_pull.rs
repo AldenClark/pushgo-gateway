@@ -35,6 +35,42 @@ impl ProviderPullDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, pull_provider_items(device_id, now, limit))
     }
 
+    async fn peek_provider_item(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullItem>> {
+        delegate_db_async!(self, peek_provider_item(device_id, delivery_id, now))
+    }
+
+    async fn peek_provider_items(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        delegate_db_async!(self, peek_provider_items(device_id, now, limit))
+    }
+
+    async fn peek_provider_candidate(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullCandidate>> {
+        delegate_db_async!(self, peek_provider_candidate(device_id, delivery_id, now))
+    }
+
+    async fn peek_provider_candidates(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullCandidate>> {
+        delegate_db_async!(self, peek_provider_candidates(device_id, now, limit))
+    }
+
     async fn ack_provider_item(
         &self,
         device_id: DeviceId,
@@ -42,6 +78,27 @@ impl ProviderPullDatabaseAccess for DatabaseDriver {
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>> {
         delegate_db_async!(self, ack_provider_item(device_id, delivery_id, now))
+    }
+
+    async fn ack_provider_items(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        delegate_db_async!(self, ack_provider_items(device_id, delivery_ids, now))
+    }
+
+    async fn discard_provider_items_by_outer_ids(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<usize> {
+        delegate_db_async!(
+            self,
+            discard_provider_items_by_outer_ids(device_id, delivery_ids, now)
+        )
     }
 }
 

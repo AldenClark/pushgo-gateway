@@ -6,14 +6,13 @@ use crate::{
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
     services::{DeviceRegisterCommand, ensure_device_registered},
-    storage::{DeviceRouteRecordRow, Platform},
+    storage::{DeviceRouteRecordRow, Platform, RouteChannelType, StoreError},
     value::{DeviceKeyRef, ProviderTokenRef},
 };
 
 use super::shared::{platform_from_channel_type, platform_from_str};
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct DeviceRegisterRequest {
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub device_key: Option<String>,
@@ -21,7 +20,6 @@ pub(crate) struct DeviceRegisterRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct DeviceChannelUpsertRequest {
     pub device_key: String,
     pub channel_type: String,
@@ -32,14 +30,12 @@ pub(crate) struct DeviceChannelUpsertRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct DeviceChannelDeleteRequest {
     pub device_key: String,
     pub channel_type: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ProviderTokenRetireRequest {
     pub platform: String,
     pub provider_token: String,
@@ -140,8 +136,10 @@ impl DeviceChannelUpsertRequest {
                     }
                     _ => {}
                 }
-                let token = token.validate_for_platform(platform)?;
-                Ok(Some(token.into_owned()))
+                Ok(Some(ProviderTokenRef::canonicalize_for_platform(
+                    token.as_str(),
+                    platform,
+                )?))
             }
         }
     }
@@ -163,11 +161,11 @@ impl ProviderTokenRetireRequest {
         platform_from_str(self.platform.as_str())
     }
 
-    fn normalized_provider_token(&self, platform: Platform) -> Result<&str, Error> {
-        Ok(
-            ProviderTokenRef::parse_for_platform(&self.provider_token, platform)
-                .map(ProviderTokenRef::as_str)?,
-        )
+    fn normalized_provider_token(&self, platform: Platform) -> Result<String, Error> {
+        Ok(ProviderTokenRef::canonicalize_for_platform(
+            &self.provider_token,
+            platform,
+        )?)
     }
 }
 
@@ -457,23 +455,58 @@ pub(crate) async fn device_channel_upsert(
         }));
     }
 
-    previous
-        .cleanup(device_key, Some(next_type), next_provider_token_ref)
-        .apply(&state)
-        .await?;
+    let ack_timeout_secs = state
+        .private
+        .as_ref()
+        .map(|private| private.config.ack_timeout_secs)
+        .unwrap_or(30);
+    let max_pending_per_device = state
+        .private
+        .as_ref()
+        .map(|private| private.config.max_pending_per_device)
+        .unwrap_or(usize::MAX);
+    let proposed = DeviceRouteRecord {
+        platform: previous.platform,
+        channel_type: next_type,
+        provider_token: next_provider_token.clone(),
+        updated_at: chrono::Utc::now().timestamp_millis(),
+    };
+    let migrated = state
+        .store
+        .transition_device_route(
+            &proposed.as_route_row(device_key),
+            RouteChannelType::from(previous.channel_type),
+            ack_timeout_secs,
+            max_pending_per_device,
+        )
+        .await
+        .map_err(|err| match err {
+            StoreError::RouteMigrationCapacityExceeded { .. } => Error::Conflict {
+                message: "pending deliveries exceed private route capacity".into(),
+                code: "route_transition_pending_capacity_exceeded".into(),
+            },
+            other => Error::Internal(format!("failed to transition device route: {other}")),
+        })?;
 
     let updated = state
         .device_registry
         .update_channel(device_key, next_type, next_provider_token)
         .map_err(Error::Internal)?;
-    updated
-        .persisted_change(device_key, Some(&previous), None)
-        .persist(&state, "route_upsert")
-        .await?;
-    updated
-        .persisted_change(device_key, Some(&previous), None)
-        .bind_private_mapping(&state)
-        .await?;
+    if migrated > 0
+        && next_type == DeviceChannelType::Private
+        && let Some(private_state) = state.private.as_deref()
+    {
+        private_state.request_fallback_resync();
+    }
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::INFO,
+        event = "device.route_transition_committed",
+        device_key = %(crate::util::redact_text(device_key)),
+        from_channel_type = %(previous.channel_type.as_str()),
+        to_channel_type = %(next_type.as_str()),
+        migrated = (migrated as u64)
+    );
 
     Ok(crate::api::ok(DeviceChannelResponse {
         device_key: device_key.to_string(),
@@ -569,7 +602,7 @@ pub(crate) async fn provider_token_retire(
     let provider_token = payload.normalized_provider_token(platform)?;
     if let Some(retired) = state
         .device_registry
-        .retire_provider_token(platform, provider_token)
+        .retire_provider_token(platform, &provider_token)
     {
         retired
             .updated
@@ -583,7 +616,7 @@ pub(crate) async fn provider_token_retire(
     }
     state
         .store
-        .retire_provider_token(platform, provider_token)
+        .retire_provider_token(platform, &provider_token)
         .await
         .map_err(|err| Error::Internal(format!("failed to retire provider token: {err}")))?;
 
@@ -619,7 +652,7 @@ mod tests {
     use super::{DeviceChannelDeleteRequest, DeviceChannelUpsertRequest, DeviceRegisterRequest};
 
     #[test]
-    fn device_channel_delete_rejects_provider_token() {
+    fn device_channel_delete_ignores_provider_token_extension_field() {
         let raw = r#"{
             "device_key":"dev-1",
             "channel_type":"apns",
@@ -627,8 +660,8 @@ mod tests {
         }"#;
         let parsed = serde_json::from_str::<DeviceChannelDeleteRequest>(raw);
         assert!(
-            parsed.is_err(),
-            "delete request should reject provider_token"
+            parsed.is_ok(),
+            "delete request should ignore extension fields"
         );
     }
 
@@ -667,15 +700,15 @@ mod tests {
     }
 
     #[test]
-    fn device_register_rejects_provider_token() {
+    fn device_register_ignores_provider_token_extension_field() {
         let raw = r#"{
             "platform":"android",
             "provider_token":"token-1"
         }"#;
         let parsed = serde_json::from_str::<DeviceRegisterRequest>(raw);
         assert!(
-            parsed.is_err(),
-            "register request should not accept provider_token"
+            parsed.is_ok(),
+            "register request should ignore extension fields"
         );
     }
 

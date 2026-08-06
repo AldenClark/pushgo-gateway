@@ -64,6 +64,11 @@ impl DispatchWorkerPool {
                 async move {
                     emit_dispatch_worker_started("APNS", worker_slot);
                     while let Ok(job) = apns_rx.recv_async().await {
+                        if let Some(outcome) = job.outcome.as_ref()
+                            && !outcome.wait_until_committed().await
+                        {
+                            continue;
+                        }
                         let apns_client = Arc::clone(&apns);
                         let runtime = runtime.clone();
                         let channel_id = encode_crockford_base32_128(&job.channel_id);
@@ -111,14 +116,21 @@ impl DispatchWorkerPool {
                         }
                         runtime.record_provider_dispatch_result(
                             "APNS",
+                            job.channel_id,
                             job.correlation_id.as_ref(),
                             job.delivery_id.as_ref(),
                             &channel_id,
                             actual_path,
                             Some(job.platform),
                             job.device_token.as_ref(),
+                            job.device_key.as_ref(),
                             &dispatch,
                         );
+                        if let Some(outcome) = job.outcome.as_ref()
+                            && outcome.record_provider_result(dispatch.success)
+                        {
+                            runtime.finalize_provider_dispatch_outcome(outcome).await;
+                        }
                         if !dispatch.success {
                             runtime.log_provider_dispatch_failure(
                                 ProviderDispatchFailureLog {
@@ -142,6 +154,7 @@ impl DispatchWorkerPool {
                                 device_key: job.device_key.as_ref(),
                                 platform: job.platform,
                                 device_token: job.device_token.as_ref(),
+                                route_updated_at: job.route_updated_at,
                                 provider: "APNS",
                                 correlation_id: job.correlation_id.as_ref(),
                             })
@@ -183,12 +196,14 @@ impl DispatchWorkerPool {
                             .await;
                         runtime.record_provider_dispatch_result(
                             "APNS_WIDGETS",
+                            job.channel_id,
                             job.correlation_id.as_ref(),
                             job.delivery_id.as_ref(),
                             &channel_id,
                             ProviderDeliveryPath::Direct,
                             Some(job.platform),
                             job.device_token.as_ref(),
+                            job.device_key.as_ref(),
                             &dispatch,
                         );
                         if !dispatch.success {
@@ -251,6 +266,11 @@ impl DispatchWorkerPool {
                 async move {
                     emit_dispatch_worker_started("FCM", worker_slot);
                     while let Ok(job) = fcm_rx.recv_async().await {
+                        if let Some(outcome) = job.outcome.as_ref()
+                            && !outcome.wait_until_committed().await
+                        {
+                            continue;
+                        }
                         let fcm_client = Arc::clone(&fcm);
                         let runtime = runtime.clone();
                         let channel_id = encode_crockford_base32_128(&job.channel_id);
@@ -309,14 +329,21 @@ impl DispatchWorkerPool {
                         }
                         runtime.record_provider_dispatch_result(
                             "FCM",
+                            job.channel_id,
                             job.correlation_id.as_ref(),
                             job.delivery_id.as_ref(),
                             &channel_id,
                             actual_path,
                             Some(Platform::ANDROID),
                             job.device_token.as_ref(),
+                            job.device_key.as_ref(),
                             &dispatch,
                         );
+                        if let Some(outcome) = job.outcome.as_ref()
+                            && outcome.record_provider_result(dispatch.success)
+                        {
+                            runtime.finalize_provider_dispatch_outcome(outcome).await;
+                        }
                         if !dispatch.success {
                             runtime.log_provider_dispatch_failure(
                                 ProviderDispatchFailureLog {
@@ -340,6 +367,7 @@ impl DispatchWorkerPool {
                                 device_key: job.device_key.as_ref(),
                                 platform: Platform::ANDROID,
                                 device_token: job.device_token.as_ref(),
+                                route_updated_at: job.route_updated_at,
                                 provider: "FCM",
                                 correlation_id: job.correlation_id.as_ref(),
                             })
@@ -367,6 +395,11 @@ impl DispatchWorkerPool {
                 async move {
                     emit_dispatch_worker_started("WNS", worker_slot);
                     while let Ok(job) = wns_rx.recv_async().await {
+                        if let Some(outcome) = job.outcome.as_ref()
+                            && !outcome.wait_until_committed().await
+                        {
+                            continue;
+                        }
                         let wns_client = Arc::clone(&wns);
                         let runtime = runtime.clone();
                         let channel_id = encode_crockford_base32_128(&job.channel_id);
@@ -404,14 +437,21 @@ impl DispatchWorkerPool {
                         }
                         runtime.record_provider_dispatch_result(
                             "WNS",
+                            job.channel_id,
                             job.correlation_id.as_ref(),
                             job.delivery_id.as_ref(),
                             &channel_id,
                             actual_path,
                             Some(Platform::WINDOWS),
                             job.device_token.as_ref(),
+                            job.device_key.as_ref(),
                             &dispatch,
                         );
+                        if let Some(outcome) = job.outcome.as_ref()
+                            && outcome.record_provider_result(dispatch.success)
+                        {
+                            runtime.finalize_provider_dispatch_outcome(outcome).await;
+                        }
                         if !dispatch.success {
                             runtime.log_provider_dispatch_failure(
                                 ProviderDispatchFailureLog {
@@ -435,6 +475,7 @@ impl DispatchWorkerPool {
                                 device_key: job.device_key.as_ref(),
                                 platform: Platform::WINDOWS,
                                 device_token: job.device_token.as_ref(),
+                                route_updated_at: job.route_updated_at,
                                 provider: "WNS",
                                 correlation_id: job.correlation_id.as_ref(),
                             })
@@ -535,4 +576,282 @@ fn emit_provider_path_downgraded(
         to_path = %(ProviderDeliveryPath::WakeupPull.as_str()),
         device_token = %(crate::util::redact_text(device_token))
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        providers::{ApnsClient, BoxFuture, FcmClient, TokenInfo, WnsClient},
+        storage::{
+            DedupeState, OpDedupeReservation, SenderSubmitStatusKind, SenderSubmitStatusRecord,
+        },
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::tempdir;
+    use tokio::time::{Duration, sleep};
+
+    struct StaticFcmClient {
+        success: bool,
+        calls: AtomicUsize,
+    }
+
+    impl FcmClient for StaticFcmClient {
+        fn send_to_device<'a>(
+            &'a self,
+            _device_token: &'a str,
+            _payload: Arc<FcmPayload>,
+            _prepared_body: Option<Arc<[u8]>>,
+        ) -> BoxFuture<'a, DispatchResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let success = self.success;
+            Box::pin(async move {
+                if success {
+                    DispatchResult::success(200)
+                } else {
+                    DispatchResult::from_error(503, crate::Error::Internal("injected".into()))
+                }
+            })
+        }
+
+        fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
+
+        fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
+    }
+
+    struct UnusedApnsClient;
+
+    impl ApnsClient for UnusedApnsClient {
+        fn send_to_device<'a>(
+            &'a self,
+            _device_token: &'a str,
+            _platform: Platform,
+            _payload: Arc<ApnsPayload>,
+            _collapse_id: Option<Arc<str>>,
+        ) -> BoxFuture<'a, DispatchResult> {
+            Box::pin(async { panic!("APNS should not be called in the FCM worker test") })
+        }
+
+        fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
+
+        fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
+    }
+
+    struct UnusedWnsClient;
+
+    impl WnsClient for UnusedWnsClient {
+        fn send_to_device<'a>(
+            &'a self,
+            _device_token: &'a str,
+            _payload: Arc<WnsPayload>,
+        ) -> BoxFuture<'a, DispatchResult> {
+            Box::pin(async { panic!("WNS should not be called in the FCM worker test") })
+        }
+
+        fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
+
+        fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
+            Box::pin(async { Err(crate::Error::Internal("unused".into())) })
+        }
+    }
+
+    async fn assert_fcm_worker_persists_final_provider_result(
+        success: bool,
+        finalize_failures: usize,
+    ) {
+        let dir = tempdir().expect("worker test tempdir");
+        let outcome_name = if success { "success" } else { "failure" };
+        let db_path = dir.path().join(format!(
+            "provider-worker-{outcome_name}-{finalize_failures}.sqlite"
+        ));
+        std::fs::File::create(&db_path).expect("worker sqlite file");
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+        let store = Storage::new(Some(&db_url))
+            .await
+            .expect("worker test storage should initialize");
+        let op_id = if success {
+            "provider-worker-success-op"
+        } else {
+            "provider-worker-failure-op"
+        };
+        let delivery_id = if success {
+            "provider-worker-success-delivery"
+        } else {
+            "provider-worker-failure-delivery"
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(matches!(
+            store
+                .reserve_op_dedupe_pending(op_id, delivery_id, now)
+                .await
+                .expect("reserve op dedupe"),
+            OpDedupeReservation::Reserved
+        ));
+        assert!(
+            store
+                .mark_op_dedupe_finalized(op_id, delivery_id, DedupeState::ProviderQueued)
+                .await
+                .expect("mark provider queued")
+        );
+        store
+            .insert_sender_submit_status_if_absent(&SenderSubmitStatusRecord {
+                op_id: op_id.to_string(),
+                channel_id: [7; 16],
+                model: "message".to_string(),
+                entity_id: "provider-worker-entity".to_string(),
+                status: SenderSubmitStatusKind::ProviderQueued,
+                dispatch_status: Some("provider_queued".to_string()),
+                accepted_at: now,
+                updated_at: now,
+                expires_at: now + 60_000,
+            })
+            .await
+            .expect("insert sender status");
+        store.inject_provider_finalize_failures(finalize_failures);
+
+        let fcm = Arc::new(StaticFcmClient {
+            success,
+            calls: AtomicUsize::new(0),
+        });
+        let (dispatch, receivers) = DispatchChannels::new();
+        let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
+        DispatchWorkerDeps {
+            apns: Arc::new(UnusedApnsClient),
+            fcm: fcm.clone(),
+            wns: Arc::new(UnusedWnsClient),
+            store: store.clone(),
+            private: None,
+            runtime_counters,
+            runtime_profile: GatewayRuntimeProfile::Small,
+        }
+        .spawn(receivers);
+
+        let outcome = Arc::new(ProviderDispatchOutcome::new(
+            Arc::from(op_id),
+            Arc::from(delivery_id),
+        ));
+        outcome.configure(1, 0);
+        let payload = Arc::new(FcmPayload::new(
+            hashbrown::HashMap::<String, String>::new(),
+            "NORMAL",
+            None,
+        ));
+        dispatch
+            .try_send_fcm(FcmJob {
+                channel_id: [7; 16],
+                correlation_id: Arc::from(op_id),
+                delivery_id: Arc::from(delivery_id),
+                device_key: Arc::from("provider-worker-device"),
+                device_token: Arc::from("provider-worker-token"),
+                route_updated_at: now,
+                direct_payload: payload,
+                direct_body: Arc::from(Vec::<u8>::new()),
+                wakeup_payload: None,
+                wakeup_body: None,
+                initial_path: ProviderDeliveryPath::Direct,
+                wakeup_payload_within_limit: false,
+                outcome: Some(outcome.clone()),
+            })
+            .expect("enqueue FCM job");
+        assert_eq!(
+            fcm.calls.load(Ordering::SeqCst),
+            0,
+            "worker must wait for commit"
+        );
+        outcome.commit();
+
+        if finalize_failures > 0 {
+            for _ in 0..100 {
+                if store.provider_finalize_failures_remaining() < finalize_failures {
+                    break;
+                }
+                sleep(Duration::from_millis(1)).await;
+            }
+            assert!(
+                store.provider_finalize_failures_remaining() < finalize_failures,
+                "worker should attempt provider outcome persistence"
+            );
+            let pending_record = store
+                .load_sender_submit_status(op_id)
+                .await
+                .expect("load pending worker sender status")
+                .expect("pending worker sender status should exist");
+            assert_eq!(
+                pending_record.status,
+                SenderSubmitStatusKind::ProviderQueued,
+                "a failed finalization attempt must not be treated as completion"
+            );
+        }
+
+        let expected_status = if success {
+            SenderSubmitStatusKind::Sent
+        } else {
+            SenderSubmitStatusKind::PartiallyFailed
+        };
+        let mut final_record = None;
+        for _ in 0..100 {
+            let record = store
+                .load_sender_submit_status(op_id)
+                .await
+                .expect("load worker sender status")
+                .expect("worker sender status should exist");
+            if record.status == expected_status {
+                final_record = Some(record);
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+        let final_record = final_record.expect("worker result should reach a durable final state");
+        assert_eq!(fcm.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            final_record.dispatch_status.as_deref(),
+            Some(if success {
+                "provider_success"
+            } else {
+                "provider_failed"
+            })
+        );
+        let replay = store
+            .reserve_op_dedupe_pending(op_id, delivery_id, now + 1)
+            .await
+            .expect("load final op dedupe state");
+        assert!(
+            matches!(
+                (success, replay),
+                (true, OpDedupeReservation::Sent { .. })
+                    | (false, OpDedupeReservation::PartialFailure { .. })
+            ),
+            "provider result and op dedupe must finalize together"
+        );
+    }
+
+    #[tokio::test]
+    async fn fcm_worker_persists_provider_success_after_actual_send() {
+        assert_fcm_worker_persists_final_provider_result(true, 0).await;
+    }
+
+    #[tokio::test]
+    async fn fcm_worker_persists_provider_failure_after_actual_send() {
+        assert_fcm_worker_persists_final_provider_result(false, 0).await;
+    }
+
+    #[tokio::test]
+    async fn fcm_worker_retries_provider_success_until_final_state_is_persisted() {
+        assert_fcm_worker_persists_final_provider_result(true, 2).await;
+    }
+
+    #[tokio::test]
+    async fn fcm_worker_retries_provider_failure_until_final_state_is_persisted() {
+        assert_fcm_worker_persists_final_provider_result(false, 2).await;
+    }
 }

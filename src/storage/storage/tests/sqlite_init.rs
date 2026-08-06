@@ -22,6 +22,282 @@ async fn sqlite_cold_start_initializes_schema() {
 }
 
 #[tokio::test]
+async fn sqlite_apns_case_only_identity_migration_merges_references_but_preserves_fcm_case() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("sqlite-apns-case-merge.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let delivery_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path()
+            .join("sqlite-apns-case-merge.delivery.sqlite")
+            .to_string_lossy()
+    );
+    let storage = Storage::new(Some(db_url.as_str()))
+        .await
+        .expect("initial sqlite storage should initialize");
+
+    let apns_lower = "ab".repeat(32);
+    let apns_upper = apns_lower.to_ascii_uppercase();
+    let old_key = "apns-case-old-device";
+    let winner_key = "apns-case-winner-device";
+    let old_id = PrivateDeviceId::derive(old_key).to_vec();
+    let winner_id = PrivateDeviceId::derive(winner_key).to_vec();
+    let apns = DeviceInfo::from_token(Platform::IOS, apns_lower.as_str())
+        .expect("APNs fixture token should decode");
+    let old_hash = ProviderTokenSnapshot::from_token(apns_upper.as_str())
+        .hash()
+        .expect("uppercase APNs hash")
+        .to_vec();
+    let winner_hash = ProviderTokenSnapshot::from_token(apns_lower.as_str())
+        .hash()
+        .expect("lowercase APNs hash")
+        .to_vec();
+    let now = chrono::Utc::now().timestamp_millis();
+
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: "fcm-case-upper-device".to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some("FcmCaseSensitiveToken0001".to_string()),
+            updated_at: now,
+        })
+        .await
+        .expect("uppercase FCM route should be stored");
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: "fcm-case-lower-device".to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: Platform::ANDROID.channel_type().to_string(),
+            provider_token: Some("fcmcasesensitivetoken0001".to_string()),
+            updated_at: now + 1,
+        })
+        .await
+        .expect("lowercase FCM route should be stored independently");
+
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite fixture connection should succeed");
+    for (device_id, key, token, updated_at) in [
+        (old_id.as_slice(), old_key, apns_upper.as_str(), now),
+        (
+            winner_id.as_slice(),
+            winner_key,
+            apns_lower.as_str(),
+            now + 10,
+        ),
+    ] {
+        sqlx::query(
+            "INSERT OR REPLACE INTO devices \
+             (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at) \
+             VALUES (?, ?, ?, ?, 'ios', 'apns', ?, ?)",
+        )
+        .bind(device_id)
+        .bind(apns.token_raw.as_ref())
+        .bind(Platform::IOS.to_byte() as i16)
+        .bind(key)
+        .bind(token)
+        .bind(updated_at)
+        .execute(&mut conn)
+        .await
+        .expect("duplicate APNs device route should be inserted");
+    }
+    for (hash, device_id, token, updated_at) in [
+        (
+            old_hash.as_slice(),
+            old_id.as_slice(),
+            apns_upper.as_str(),
+            now,
+        ),
+        (
+            winner_hash.as_slice(),
+            winner_id.as_slice(),
+            apns_lower.as_str(),
+            now + 10,
+        ),
+    ] {
+        sqlx::query(
+            "INSERT OR REPLACE INTO private_bindings \
+             (platform, token_hash, device_id, provider_token, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(Platform::IOS.to_byte() as i16)
+        .bind(hash)
+        .bind(device_id)
+        .bind(token)
+        .bind(updated_at)
+        .bind(updated_at)
+        .execute(&mut conn)
+        .await
+        .expect("duplicate APNs binding should be inserted");
+    }
+    for (channel_byte, device_id, delivery_id, token) in [
+        (
+            1_u8,
+            old_id.as_slice(),
+            "apns-old-delivery",
+            apns_upper.as_str(),
+        ),
+        (
+            2_u8,
+            winner_id.as_slice(),
+            "apns-winner-delivery",
+            apns_lower.as_str(),
+        ),
+    ] {
+        let channel_id = vec![channel_byte; 16];
+        sqlx::query(
+            "INSERT OR REPLACE INTO channel_subscriptions \
+             (channel_id, device_id, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)",
+        )
+        .bind(channel_id)
+        .bind(device_id)
+        .bind(now)
+        .bind(now)
+        .execute(&mut conn)
+        .await
+        .expect("APNs subscription should be inserted");
+        sqlx::query(
+            "INSERT OR REPLACE INTO provider_pull_queue \
+             (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
+             VALUES (?, ?, X'01', 1, ?, ?, 'ios', ?, ?, ?)",
+        )
+        .bind(device_id)
+        .bind(delivery_id)
+        .bind(now)
+        .bind(now + 60_000)
+        .bind(token)
+        .bind(now)
+        .bind(now)
+        .execute(&mut conn)
+        .await
+        .expect("APNs pending pull should be inserted");
+    }
+    sqlx::query("DELETE FROM pushgo_schema_meta WHERE meta_key = 'provider_token_semantics_v1'")
+        .execute(&mut conn)
+        .await
+        .expect("normalization marker should be reset for migration fixture");
+    let sidecar_delivery_id = "apns-old-sidecar-outbox-delivery";
+    let mut delivery = SqliteConnection::connect(&delivery_url)
+        .await
+        .expect("sqlite delivery sidecar fixture connection should succeed");
+    sqlx::query(
+        "INSERT INTO private_payloads \
+         (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) \
+         VALUES (?, X'010203', 3, ?, ?, ?, ?)",
+    )
+    .bind(sidecar_delivery_id)
+    .bind(now)
+    .bind(now + 60_000)
+    .bind(now)
+    .bind(now)
+    .execute(&mut delivery)
+    .await
+    .expect("loser sidecar payload should be inserted");
+    sqlx::query(
+        "INSERT INTO private_outbox \
+         (device_id, delivery_id, status, attempts, occurred_at, created_at, next_attempt_at, updated_at) \
+         VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)",
+    )
+    .bind(old_id.as_slice())
+    .bind(sidecar_delivery_id)
+    .bind(now)
+    .bind(now)
+    .bind(now)
+    .bind(now)
+    .execute(&mut delivery)
+    .await
+    .expect("loser sidecar outbox should be inserted");
+    drop(delivery);
+    drop(conn);
+    drop(storage);
+
+    let reopened = Storage::new(Some(db_url.as_str()))
+        .await
+        .expect("sqlite storage should merge APNs case-only identities");
+    let mut core = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite core verification connection should succeed");
+    let apns_devices: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM devices WHERE platform = 'ios' AND provider_token = ?",
+    )
+    .bind(apns_lower.as_str())
+    .fetch_one(&mut core)
+    .await
+    .expect("canonical APNs devices should be countable");
+    assert_eq!(apns_devices, 1);
+    let winner: String = sqlx::query_scalar(
+        "SELECT device_key FROM devices WHERE platform = 'ios' AND provider_token = ?",
+    )
+    .bind(apns_lower.as_str())
+    .fetch_one(&mut core)
+    .await
+    .expect("canonical APNs winner should be queryable");
+    assert_eq!(winner, winner_key);
+    let winner_subscriptions: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM channel_subscriptions WHERE device_id = ?")
+            .bind(winner_id.as_slice())
+            .fetch_one(&mut core)
+            .await
+            .expect("winner subscriptions should be countable");
+    assert_eq!(winner_subscriptions, 2);
+    let fcm_routes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM devices WHERE platform = 'android' AND provider_token IN (?, ?)",
+    )
+    .bind("FcmCaseSensitiveToken0001")
+    .bind("fcmcasesensitivetoken0001")
+    .fetch_one(&mut core)
+    .await
+    .expect("FCM case variants should be countable");
+    assert_eq!(fcm_routes, 2, "FCM token case must be preserved");
+    let canonical_bindings: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM private_bindings WHERE platform = ? AND provider_token = ? AND device_id = ?",
+    )
+    .bind(Platform::IOS.to_byte() as i16)
+    .bind(apns_lower.as_str())
+    .bind(winner_id.as_slice())
+    .fetch_one(&mut core)
+    .await
+    .expect("canonical APNs binding should be countable");
+    assert_eq!(canonical_bindings, 1);
+
+    let mut delivery = SqliteConnection::connect(&delivery_url)
+        .await
+        .expect("sqlite delivery verification connection should succeed");
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM provider_pull_queue WHERE device_id = ? AND provider_token = ?",
+    )
+    .bind(winner_id.as_slice())
+    .bind(apns_lower.as_str())
+    .fetch_one(&mut delivery)
+    .await
+    .expect("merged APNs pending rows should be countable");
+    assert_eq!(pending, 3);
+    let migrated_sidecar_pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM provider_pull_queue \
+         WHERE device_id = ? AND delivery_id = ? AND provider_token = ?",
+    )
+    .bind(winner_id.as_slice())
+    .bind(sidecar_delivery_id)
+    .bind(apns_lower.as_str())
+    .fetch_one(&mut delivery)
+    .await
+    .expect("migrated loser sidecar outbox should be queryable");
+    assert_eq!(migrated_sidecar_pending, 1);
+    let loser_sidecar_outbox: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM private_outbox WHERE device_id = ? AND delivery_id = ?",
+    )
+    .bind(old_id.as_slice())
+    .bind(sidecar_delivery_id)
+    .fetch_one(&mut delivery)
+    .await
+    .expect("loser sidecar outbox should be countable");
+    assert_eq!(loser_sidecar_outbox, 0);
+    drop(reopened);
+}
+
+#[tokio::test]
 async fn sqlite_new_creates_parent_directories() {
     let dir = tempdir().expect("tempdir should be created");
     let nested_dir = dir.path().join("nested").join("gateway").join("db");
@@ -588,6 +864,187 @@ async fn sqlite_managed_upgrade_records_run_steps_and_verifies_schema() {
         step_count >= 1,
         "fresh install should expose at least one upgrade step"
     );
+}
+
+#[tokio::test]
+async fn sqlite_managed_upgrade_noop_does_not_write_upgrade_run() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-managed-upgrade-noop").await;
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM pushgo_upgrade_runs")
+        .fetch_one(&mut conn)
+        .await
+        .expect("upgrade run count should be readable");
+
+    crate::storage::database::upgrade::UpgradeManager::new(StorageInitConfig {
+        db_url: Some(ctx.db_url.clone()),
+        ..StorageInitConfig::default()
+    })
+    .run(crate::storage::database::upgrade::UpgradeMode::Execute)
+    .await
+    .expect("noop managed upgrade should verify successfully");
+
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM pushgo_upgrade_runs")
+        .fetch_one(&mut conn)
+        .await
+        .expect("upgrade run count should remain readable");
+    assert_eq!(after, before, "noop upgrade must not insert run metadata");
+}
+
+#[tokio::test]
+async fn sqlite_managed_upgrade_noop_verify_never_mutates_upgrade_smoke_business_row() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-managed-upgrade-noop-readonly").await;
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query(
+        "INSERT INTO sender_submit_status \
+         (op_id, channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at) \
+         VALUES ('upgrade-smoke', X'0102030405060708090A0B0C0D0E0F10', 'thing', 'real-business-entity', 'processing', 'provider_queued', 11, 22, 33)",
+    )
+    .execute(&mut conn)
+    .await
+    .expect("business fixture should be inserted");
+    let before: (Vec<u8>, String, String, String, Option<String>, i64, i64, i64) =
+        sqlx::query_as(
+            "SELECT channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at \
+             FROM sender_submit_status WHERE op_id = 'upgrade-smoke'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .expect("business fixture should be readable");
+    drop(conn);
+
+    crate::storage::database::upgrade::UpgradeManager::new(StorageInitConfig {
+        db_url: Some(ctx.db_url.clone()),
+        ..StorageInitConfig::default()
+    })
+    .run(crate::storage::database::upgrade::UpgradeMode::Execute)
+    .await
+    .expect("noop managed upgrade should verify successfully");
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite verification connection should succeed");
+    let after: (Vec<u8>, String, String, String, Option<String>, i64, i64, i64) =
+        sqlx::query_as(
+            "SELECT channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at \
+             FROM sender_submit_status WHERE op_id = 'upgrade-smoke'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .expect("business fixture must still exist");
+    assert_eq!(
+        after, before,
+        "upgrade verification must be strictly read-only"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_backup_failure_records_terminal_failed_run_and_allows_retry() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("sqlite-upgrade-backup-retry.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite setup connection should succeed");
+    for stmt in [
+        "CREATE TABLE pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
+        "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ('schema_version', '2026-04-22-gateway-v9')",
+        "CREATE TABLE pushgo_schema_migrations (migration_id TEXT PRIMARY KEY, description TEXT NOT NULL, checksum TEXT NOT NULL, target_schema_version TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, execution_ms INTEGER NOT NULL, success INTEGER NOT NULL, error TEXT)",
+        "CREATE TABLE __pushgo_upgrade_inject_backup_failure (marker TEXT PRIMARY KEY)",
+    ] {
+        sqlx::query(stmt)
+            .execute(&mut conn)
+            .await
+            .expect("backup failure fixture statement should succeed");
+    }
+    drop(conn);
+
+    let first = crate::storage::database::upgrade::UpgradeManager::new(StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        ..StorageInitConfig::default()
+    })
+    .run(crate::storage::database::upgrade::UpgradeMode::Execute)
+    .await
+    .expect_err("injected backup failure should fail the run");
+    assert!(
+        first
+            .to_string()
+            .contains("injected upgrade backup failure")
+    );
+
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite verification connection should succeed");
+    let failed_status: String = sqlx::query_scalar(
+        "SELECT status FROM pushgo_upgrade_runs ORDER BY started_at DESC LIMIT 1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("failed upgrade run should be queryable");
+    assert_eq!(failed_status, "failed");
+    sqlx::query("DROP TABLE __pushgo_upgrade_inject_backup_failure")
+        .execute(&mut conn)
+        .await
+        .expect("failure condition should be removable");
+    drop(conn);
+
+    crate::storage::database::upgrade::UpgradeManager::new(StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        ..StorageInitConfig::default()
+    })
+    .run(crate::storage::database::upgrade::UpgradeMode::Execute)
+    .await
+    .expect("retry after backup condition is fixed should succeed");
+
+    let mut conn = SqliteConnection::connect(&db_url)
+        .await
+        .expect("sqlite final verification connection should succeed");
+    let completed: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM pushgo_upgrade_runs WHERE status = 'completed'")
+            .fetch_one(&mut conn)
+            .await
+            .expect("completed retry should be queryable");
+    assert_eq!(completed, 1);
+}
+
+#[tokio::test]
+async fn sqlite_managed_upgrade_noop_accepts_v9_without_upgrade_state_tables() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-managed-upgrade-noop-v9").await;
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite test connection should succeed");
+    sqlx::query("DROP TABLE pushgo_upgrade_steps")
+        .execute(&mut conn)
+        .await
+        .expect("upgrade steps table should be removed for v9 fixture");
+    sqlx::query("DROP TABLE pushgo_upgrade_runs")
+        .execute(&mut conn)
+        .await
+        .expect("upgrade runs table should be removed for v9 fixture");
+    drop(conn);
+
+    crate::storage::database::upgrade::UpgradeManager::new(StorageInitConfig {
+        db_url: Some(ctx.db_url.clone()),
+        ..StorageInitConfig::default()
+    })
+    .run(crate::storage::database::upgrade::UpgradeMode::Execute)
+    .await
+    .expect("v9 no-op upgrade must not require newer upgrade-state tables");
+
+    let mut conn = SqliteConnection::connect(&ctx.db_url)
+        .await
+        .expect("sqlite verification connection should succeed");
+    let recreated: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name IN ('pushgo_upgrade_runs', 'pushgo_upgrade_steps')",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .expect("upgrade-state table count should be readable");
+    assert_eq!(recreated, 0, "no-op upgrade must remain read-only");
 }
 
 #[tokio::test]

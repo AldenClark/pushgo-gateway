@@ -262,6 +262,13 @@ fn infer_problem_from_code(code: &str) -> Option<InferredProblem> {
             category: ApiProblemCategory::NotFound,
             retryable: false,
         },
+        "op_id_payload_conflict"
+        | "op_id_scope_conflict"
+        | "route_transition_pending_capacity_exceeded" => InferredProblem {
+            code: None,
+            category: ApiProblemCategory::Conflict,
+            retryable: false,
+        },
         "invalid_channel_id" => InferredProblem {
             code: Some("invalid_channel_id"),
             category: ApiProblemCategory::Validation,
@@ -531,6 +538,11 @@ fn infer_problem_from_status(status: StatusCode) -> InferredProblem {
         StatusCode::NOT_FOUND => InferredProblem {
             code: None,
             category: ApiProblemCategory::NotFound,
+            retryable: false,
+        },
+        StatusCode::CONFLICT => InferredProblem {
+            code: None,
+            category: ApiProblemCategory::Conflict,
             retryable: false,
         },
         StatusCode::TOO_MANY_REQUESTS => InferredProblem {
@@ -909,6 +921,11 @@ pub enum Error {
         message: Cow<'static, str>,
         code: Option<Cow<'static, str>>,
     },
+    #[error("request conflict: {message}")]
+    Conflict {
+        message: Cow<'static, str>,
+        code: Cow<'static, str>,
+    },
     #[error("invalid credentials or unauthorized")]
     Unauthorized,
     #[error("upstream {provider} error (HTTP {status}): {message}")]
@@ -936,6 +953,10 @@ impl IntoResponse for Error {
                 }
                 None => err(StatusCode::BAD_REQUEST, message),
             },
+            Error::Conflict { message, code } => {
+                StatusResponse::error_with_status(StatusCode::CONFLICT, message, Some(code))
+                    .with_status(StatusCode::CONFLICT)
+            }
             Error::Unauthorized => StatusResponse::error_with_status(
                 StatusCode::UNAUTHORIZED,
                 "authentication failed",
@@ -1024,6 +1045,11 @@ fn emit_api_error_observation(error: &Error) {
             code.as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty()),
+        ),
+        Error::Conflict { code, .. } => (
+            StatusCode::CONFLICT.as_u16(),
+            "conflict",
+            Some(code.as_ref()),
         ),
         Error::Unauthorized => (
             StatusCode::UNAUTHORIZED.as_u16(),

@@ -5,6 +5,8 @@ pub(crate) enum CoreError {
     #[error("{message}")]
     Validation { message: String, code: &'static str },
     #[error("{message}")]
+    Conflict { message: String, code: &'static str },
+    #[error("{message}")]
     Auth { message: String, code: &'static str },
     #[error("{0}")]
     Store(String),
@@ -29,6 +31,13 @@ impl CoreError {
 
     pub(crate) fn auth(message: impl Into<String>, code: &'static str) -> Self {
         Self::Auth {
+            message: message.into(),
+            code,
+        }
+    }
+
+    pub(crate) fn conflict(message: impl Into<String>, code: &'static str) -> Self {
+        Self::Conflict {
             message: message.into(),
             code,
         }

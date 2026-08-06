@@ -1,5 +1,5 @@
 use super::*;
-use crate::value::DeviceKeyRef;
+use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
 impl SqliteDb {
     pub(super) async fn load_private_outbox_entry(
@@ -161,6 +161,33 @@ impl SqliteDb {
                 .bind(device_id.as_slice())
                 .execute(&self.pool)
                 .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub(super) async fn unsubscribe_channel_if_provider_route_current(
+        &self,
+        channel_id: [u8; 16],
+        device_key: &str,
+        platform: Platform,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        let canonical = ProviderTokenRef::canonicalize_for_platform(provider_token, platform)
+            .map_err(|_| StoreError::InvalidDeviceToken)?;
+        let result = sqlx::query(
+            "DELETE FROM channel_subscriptions \
+             WHERE channel_id = ? AND device_id IN ( \
+               SELECT device_id FROM devices \
+               WHERE device_key = ? AND platform = ? AND provider_token = ? AND route_updated_at = ? \
+             )",
+        )
+        .bind(channel_id.as_slice())
+        .bind(device_key)
+        .bind(platform.name())
+        .bind(canonical)
+        .bind(route_updated_at)
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 }

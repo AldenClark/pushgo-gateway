@@ -1,5 +1,6 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, future::Future, sync::Arc};
 
+use ::tracing::Instrument;
 use chrono::Utc;
 use hashbrown::HashMap;
 
@@ -20,7 +21,10 @@ use crate::{
         ProviderDeliveryPath as CoreProviderDeliveryPath, ProviderPullTarget,
     },
     delivery_core::store::{channel::ChannelStore, counters::RuntimeCounterSink},
-    dispatch::{DispatchError, ProviderDeliveryPath, ProviderPullDelivery},
+    dispatch::{
+        DispatchError, ProviderDeliveryPath, ProviderDispatchOutcome, ProviderDispatchOutcomeLease,
+        ProviderPullDelivery,
+    },
     providers::{apns::ApnsPayload, fcm::FcmPayload, wns::WnsPayload},
     storage::{DeviceInfo, Platform},
 };
@@ -112,6 +116,8 @@ async fn dispatch_mqtt_receiver_targets(
             correlation_id: prepared.correlation_id.as_ref(),
             delivery_id: prepared.delivery_id.as_str(),
             channel_id: prepared.channel_id_value.as_str(),
+            sent_at: prepared.sent_at,
+            expires_at: prepared.provider_pull_expires_at(),
             targets: &prepared.mqtt_receiver_targets,
             payload: prepared.private_payload.clone(),
         },
@@ -200,14 +206,25 @@ pub(crate) async fn dispatch_entity_notification(
     let entity_id = request.payload.entity_id().trim().to_string();
     let op_id = OpId::parse(&request.op_id)?.into_inner();
     request.op_id = op_id.clone();
+    let request_fingerprint = request.request_fingerprint.clone();
     let channel_id_value = format_channel_id(&channel_id);
     let sent_at = Utc::now().timestamp_millis();
     let delivery_id = DeliveryId::reserve(state, sent_at).await?.into_inner();
+    let provider_outcome = Arc::new(ProviderDispatchOutcome::new(
+        Arc::from(op_id.clone().into_boxed_str()),
+        Arc::from(delivery_id.clone().into_boxed_str()),
+    ));
+    let dedupe_entity_id = if entity_kind == crate::delivery_core::payload::EntityKind::Message {
+        "-"
+    } else {
+        entity_id.as_str()
+    };
     let op_guard = match DispatchOpGuard::begin(
         state,
-        SemanticScope::new(&channel_id_value, entity_type, &entity_id)
+        SemanticScope::new(&channel_id_value, entity_type, dedupe_entity_id)
             .op_dedupe_key(&OpId::parse(&op_id)?),
         delivery_id.clone(),
+        request_fingerprint.as_deref(),
         sent_at,
         channel_id_value.clone(),
         op_id.clone(),
@@ -218,32 +235,118 @@ pub(crate) async fn dispatch_entity_notification(
         DispatchOpGuardStart::Proceed(guard) => guard,
     };
 
-    let dispatch_result = execute_dispatch(
-        state,
-        DispatchExecutionInput {
-            channel_id,
-            channel_id_text: channel_id_value,
-            sent_at,
-            delivery_id,
-            op_id,
-            entity_type,
-            entity_id,
-            request,
-        },
-        ApiDispatchDelegate,
-    )
-    .await;
+    // HTTP request futures may be dropped after provider jobs enter the in-memory
+    // queue. The owned task keeps dedupe settlement, the provider commit/cancel
+    // decision, and durable terminal-state persistence alive independently of
+    // the client connection.
+    let owned_state = state.clone();
+    await_owned_dispatch_lifecycle(async move {
+        let mut provider_lease = ProviderDispatchOutcomeLease::new(Arc::clone(&provider_outcome));
+        let dispatch_result = execute_dispatch(
+            &owned_state,
+            DispatchExecutionInput {
+                channel_id,
+                channel_id_text: channel_id_value,
+                sent_at,
+                delivery_id,
+                op_id,
+                entity_type,
+                entity_id,
+                request,
+                provider_outcome: Arc::clone(&provider_outcome),
+            },
+            ApiDispatchDelegate,
+        )
+        .await;
 
-    op_guard.finish(state, dispatch_result).await
+        match op_guard.finish(&owned_state, dispatch_result).await {
+            Ok(summary) => {
+                if let Some(success) = provider_lease.commit() {
+                    owned_state
+                        .store
+                        .finalize_provider_dispatch_outcome_durably(
+                            provider_outcome.op_id(),
+                            provider_outcome.delivery_id(),
+                            success,
+                        )
+                        .await;
+                }
+                Ok(summary)
+            }
+            Err(err) => {
+                provider_lease.cancel();
+                Err(err)
+            }
+        }
+    })
+    .await
+}
+
+async fn await_owned_dispatch_lifecycle<T, F>(lifecycle: F) -> Result<T, Error>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+{
+    let lifecycle_span = ::tracing::Span::current();
+    tokio::spawn(lifecycle.instrument(lifecycle_span))
+        .await
+        .map_err(|err| {
+            Error::Internal(format!(
+                "owned dispatch lifecycle task failed before completion: {err}"
+            ))
+        })?
 }
 
 fn dispatch_request_error_code(err: &Error) -> &'static str {
     match err {
         Error::Validation { .. } => "validation",
+        Error::Conflict { .. } => "conflict",
         Error::Unauthorized => "unauthorized",
         Error::Upstream { .. } => "upstream",
         Error::Internal(_) => "internal",
         Error::TooBusy => "too_busy",
         Error::StoreError(_) => "store_error",
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::await_owned_dispatch_lifecycle;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn aborting_request_waiter_does_not_cancel_owned_dispatch_lifecycle() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let completed = Arc::new(AtomicBool::new(false));
+        let lifecycle_completed = Arc::clone(&completed);
+        let request_waiter = tokio::spawn(async move {
+            await_owned_dispatch_lifecycle(async move {
+                let _ = started_tx.send(());
+                let _ = release_rx.await;
+                lifecycle_completed.store(true, Ordering::Release);
+                Ok(())
+            })
+            .await
+        });
+
+        started_rx
+            .await
+            .expect("owned lifecycle should start before request cancellation");
+        request_waiter.abort();
+        let _ = request_waiter.await;
+        let _ = release_tx.send(());
+
+        tokio::time::timeout(Duration::from_millis(250), async {
+            while !completed.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned lifecycle must complete after its request waiter is aborted");
     }
 }

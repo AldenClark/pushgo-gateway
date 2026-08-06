@@ -91,6 +91,8 @@ impl<'a> WatchLightPayload<'a> {
             "severity",
             "entity_type",
             "entity_id",
+            "base_url",
+            "provider_device_key",
         ] {
             if let Some(value) = self.field(key) {
                 output.insert(key.to_string(), value);
@@ -210,6 +212,31 @@ mod tests {
         assert_eq!(output.get("body").map(String::as_str), Some("Door open"));
         assert_eq!(output.get("severity").map(String::as_str), Some("high"));
         assert_eq!(output.get("channel_id").map(String::as_str), Some("ch-1"));
+    }
+
+    #[test]
+    fn watch_payload_preserves_immutable_provider_ack_source() {
+        let mut payload = HashMap::new();
+        payload.insert("entity_type".to_string(), "message".to_string());
+        payload.insert("message_id".to_string(), "message-1".to_string());
+        payload.insert(
+            "base_url".to_string(),
+            "https://gateway.example".to_string(),
+        );
+        payload.insert(
+            "provider_device_key".to_string(),
+            "watch-device".to_string(),
+        );
+
+        let output = quantize_watch_payload(&payload);
+
+        assert_eq!(
+            (
+                output.get("base_url").map(String::as_str),
+                output.get("provider_device_key").map(String::as_str),
+            ),
+            (Some("https://gateway.example"), Some("watch-device"))
+        );
     }
 
     #[test]

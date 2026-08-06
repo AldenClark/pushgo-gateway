@@ -152,6 +152,7 @@ pub(crate) fn prepare_dispatch_core(
                 platform,
                 provider_token,
                 device_key,
+                route_updated_at,
             } => {
                 if !platform.supports_provider_push() {
                     ::tracing::event!(
@@ -197,7 +198,11 @@ pub(crate) fn prepare_dispatch_core(
                 });
                 provider_device_candidates.insert(
                     (platform, device_key.clone()),
-                    ProviderDispatchDevice { info, device_key },
+                    ProviderDispatchDevice {
+                        info,
+                        device_key,
+                        route_updated_at,
+                    },
                 );
             }
             DispatchTarget::Private { device_id, .. } => {
@@ -414,6 +419,7 @@ mod tests {
                 platform: Platform::ANDROID,
                 provider_token: "   ".to_string(),
                 device_key: "device-key".to_string(),
+                route_updated_at: 1,
             }],
             private_enabled: true,
             private_default_ttl_secs: 60,
@@ -426,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn mqtt_receiver_targets_are_separate_from_private_outbox_targets() {
+    fn mqtt_receiver_targets_use_their_dedicated_durable_dispatch_path() {
         let prepared = prepare_dispatch_core(DispatchPreparationInput {
             channel_id: "channel".to_string(),
             op_id: "op".to_string(),

@@ -128,6 +128,12 @@ pub struct ProviderPullItem {
     pub provider_token: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderPullCandidate {
+    pub delivery_id: String,
+    pub payload: Arc<[u8]>,
+}
+
 #[derive(Debug, Deserialize)]
 struct PrivatePayloadEnvelopeOwned {
     payload_version: u8,

@@ -10,7 +10,7 @@ use crate::value::{DeviceKeyRef, ProviderTokenRef};
 use super::types::default_route_for_platform;
 use super::{DeviceChannelType, DeviceRegistryStats, DeviceRouteRecord};
 
-const REPLACED_DEVICE_KEY_TTL_SECS: i64 = 10 * 60;
+const REPLACED_DEVICE_KEY_TTL_MILLIS: i64 = 10 * 60 * 1000;
 
 #[derive(Debug, Clone)]
 pub struct RetiredProviderRoute {
@@ -121,7 +121,7 @@ impl DeviceRegistry {
             rec.channel_type = channel_type;
             rec.provider_token = ProviderTokenRef::optional(provider_token.as_deref())
                 .map(ProviderTokenRef::into_owned);
-            rec.updated_at = now;
+            rec.updated_at = next_route_revision(rec.updated_at, now);
 
             (rec.clone(), ProviderIngressKey::from_route(rec))
         };
@@ -160,7 +160,7 @@ impl DeviceRegistry {
             .get_mut(device_key)
             .ok_or_else(|| "device_key not found".to_string())?;
         rec.provider_token = None;
-        rec.updated_at = now;
+        rec.updated_at = next_route_revision(rec.updated_at, now);
         Ok(rec.clone())
     }
 
@@ -239,7 +239,7 @@ impl DeviceRegistry {
             let route = state.by_device.get_mut(device_key.as_str())?;
             route.channel_type = DeviceChannelType::Private;
             route.provider_token = None;
-            route.updated_at = now;
+            route.updated_at = next_route_revision(route.updated_at, now);
             route.clone()
         };
         Some(RetiredProviderRoute {
@@ -294,6 +294,10 @@ impl DeviceRegistry {
     }
 }
 
+fn next_route_revision(previous: i64, now: i64) -> i64 {
+    now.max(previous.saturating_add(1))
+}
+
 impl Default for DeviceRegistry {
     fn default() -> Self {
         Self::new()
@@ -316,7 +320,7 @@ struct ReplacedDeviceKey {
 impl DeviceRegistryState {
     fn purge_expired_replaced_device_keys(&mut self, now: i64) {
         self.replaced_device_keys
-            .retain(|_, replaced| now - replaced.recorded_at <= REPLACED_DEVICE_KEY_TTL_SECS);
+            .retain(|_, replaced| now - replaced.recorded_at <= REPLACED_DEVICE_KEY_TTL_MILLIS);
     }
 }
 
@@ -350,7 +354,7 @@ impl Hash for ProviderIngressKey {
 
 #[cfg(test)]
 mod tests {
-    use crate::routing::registry::REPLACED_DEVICE_KEY_TTL_SECS;
+    use crate::routing::registry::REPLACED_DEVICE_KEY_TTL_MILLIS;
     use crate::routing::{DeviceChannelType, DeviceRegistry};
     use crate::storage::Platform;
 
@@ -399,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn replaced_device_key_resolution_expires_stale_mapping() {
+    fn replaced_device_key_resolution_uses_ten_minute_millisecond_boundary() {
         let registry = DeviceRegistry::new();
         let replacement = registry
             .register_device(Platform::ANDROID, None)
@@ -410,19 +414,38 @@ mod tests {
             Platform::ANDROID,
         );
 
-        {
+        let recorded_at = {
             let mut state = registry.state.write();
             let replaced = state
                 .replaced_device_keys
                 .get_mut("old-device")
                 .expect("mapping should exist");
-            replaced.recorded_at -= REPLACED_DEVICE_KEY_TTL_SECS + 1;
+            replaced.recorded_at =
+                chrono::Utc::now().timestamp_millis() - REPLACED_DEVICE_KEY_TTL_MILLIS + 1;
+            replaced.recorded_at
+        };
+
+        assert_eq!(
+            registry
+                .resolve_replaced_device_key("old-device", Platform::ANDROID)
+                .as_deref(),
+            Some(replacement.as_str()),
+            "a replacement recorded 599999ms ago must remain valid"
+        );
+
+        {
+            let mut state = registry.state.write();
+            let replaced = state
+                .replaced_device_keys
+                .get_mut("old-device")
+                .expect("mapping should remain before expiry");
+            replaced.recorded_at = recorded_at - 2;
         }
 
         assert_eq!(
             registry.resolve_replaced_device_key("old-device", Platform::ANDROID),
             None,
-            "expired replacement mapping should not survive beyond the coalescing window"
+            "a replacement older than 600000ms must expire"
         );
     }
 }

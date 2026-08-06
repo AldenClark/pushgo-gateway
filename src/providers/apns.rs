@@ -7,6 +7,25 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use crate::util::SharedStringMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApnsExpirationEpochSeconds(i64);
+
+impl ApnsExpirationEpochSeconds {
+    pub fn from_epoch_millis(epoch_millis: i64) -> Self {
+        Self(epoch_millis.div_euclid(1000))
+    }
+
+    pub fn into_inner(self) -> i64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for ApnsExpirationEpochSeconds {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApnsPushType {
     Alert,
     Background,
@@ -58,7 +77,7 @@ pub struct ApnsPayload {
     #[serde(flatten)]
     data: SharedStringMap,
     #[serde(skip)]
-    pub expiration: Option<i64>,
+    pub expiration: Option<ApnsExpirationEpochSeconds>,
     #[serde(skip)]
     push_type: ApnsPushType,
     #[serde(skip)]
@@ -76,7 +95,7 @@ impl ApnsPayload {
         fallback_body: Option<String>,
         thread_id: Option<String>,
         level: String,
-        expiration: Option<i64>,
+        expiration: Option<ApnsExpirationEpochSeconds>,
         data: impl Into<SharedStringMap>,
     ) -> Self {
         let normalized_title = title
@@ -124,7 +143,7 @@ impl ApnsPayload {
         fallback_title: Option<String>,
         fallback_body: Option<String>,
         thread_id: Option<String>,
-        expiration: Option<i64>,
+        expiration: Option<ApnsExpirationEpochSeconds>,
         data: impl Into<SharedStringMap>,
     ) -> Self {
         let title = fallback_title
@@ -258,6 +277,18 @@ impl ApnsPayload {
         self.priority
     }
 
+    pub(crate) fn with_data(&self, data: impl Into<SharedStringMap>) -> Self {
+        Self {
+            aps: self.aps.clone(),
+            data: data.into(),
+            expiration: self.expiration,
+            push_type: self.push_type,
+            topic_override: self.topic_override.clone(),
+            priority: self.priority,
+            encoded_body_cache: Mutex::new(None),
+        }
+    }
+
     pub fn encoded_body(&self) -> Result<Arc<[u8]>, serde_json::Error> {
         if let Some(body) = self.encoded_body_cache.lock().as_ref() {
             return Ok(Arc::clone(body));
@@ -292,7 +323,7 @@ fn interruption_level_for(level: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::ApnsPayload;
+    use super::{ApnsExpirationEpochSeconds, ApnsPayload};
     use crate::util::SharedStringMap;
 
     #[test]
@@ -338,6 +369,13 @@ mod tests {
         );
         let json = serde_json::to_value(&payload).expect("serialize APNs payload");
         assert!(json["aps"].get("sound").is_none());
+    }
+
+    #[test]
+    fn expiration_converts_epoch_millis_to_apns_epoch_seconds() {
+        let expiration = ApnsExpirationEpochSeconds::from_epoch_millis(1_700_000_123_456);
+        assert_eq!(expiration.into_inner(), 1_700_000_123);
+        assert_eq!(expiration.to_string(), "1700000123");
     }
 
     #[test]

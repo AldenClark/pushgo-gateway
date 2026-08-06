@@ -18,6 +18,22 @@ pub(super) struct ProviderDispatchFailureLog<'a> {
 }
 
 impl DispatchWorkerRuntime {
+    pub(super) async fn finalize_provider_dispatch_outcome(
+        &self,
+        outcome: &ProviderDispatchOutcome,
+    ) {
+        let Some(success) = outcome.final_success() else {
+            return;
+        };
+        self.store
+            .finalize_provider_dispatch_outcome_durably(
+                outcome.op_id(),
+                outcome.delivery_id(),
+                success,
+            )
+            .await;
+    }
+
     pub(super) fn log_provider_dispatch_failure(
         &self,
         failure: ProviderDispatchFailureLog<'_>,
@@ -52,14 +68,21 @@ impl DispatchWorkerRuntime {
     pub(super) fn record_provider_dispatch_result(
         &self,
         provider: &'static str,
+        channel_id_raw: [u8; 16],
         correlation_id: &str,
         delivery_id: &str,
         channel_id: &str,
         path: ProviderDeliveryPath,
         platform: Option<Platform>,
         device_token: &str,
+        device_key: &str,
         dispatch: &DispatchResult,
     ) {
+        self.runtime_counters.record_provider_send_result(
+            channel_id_raw,
+            device_key,
+            dispatch.success,
+        );
         let error = dispatch
             .error
             .as_ref()

@@ -112,7 +112,7 @@ impl MySqlDb {
                 sent_at: provider_sent_at_from_row(&r),
                 expires_at: provider_expires_at_from_row(&r),
                 platform: r.get::<String, _>("platform").parse()?,
-                provider_token: r.get("provider_token"),
+                provider_token: decode_mysql_text(&r, "provider_token")?,
             })
         } else {
             None
@@ -152,7 +152,7 @@ impl MySqlDb {
         let mut out = Vec::with_capacity(rows.len());
         let mut delivery_ids = Vec::with_capacity(rows.len());
         for r in rows {
-            let delivery_id: String = r.get("delivery_id");
+            let delivery_id = decode_mysql_text(&r, "delivery_id")?;
             let platform_text: String = r.get("platform");
             let platform = platform_text.parse()?;
             out.push(ProviderPullItem {
@@ -162,7 +162,7 @@ impl MySqlDb {
                 sent_at: provider_sent_at_from_row(&r),
                 expires_at: provider_expires_at_from_row(&r),
                 platform,
-                provider_token: r.get("provider_token"),
+                provider_token: decode_mysql_text(&r, "provider_token")?,
             });
             delivery_ids.push(delivery_id);
         }
@@ -178,6 +178,116 @@ impl MySqlDb {
 
         tx.commit().await?;
         Ok(out)
+    }
+
+    pub(super) async fn peek_provider_item(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullItem>> {
+        let row = sqlx::query(
+            "SELECT q.payload_blob AS queue_payload_blob, q.sent_at AS queue_sent_at, \
+                    q.expires_at AS queue_expires_at, q.platform, q.provider_token, \
+                    p.payload_blob AS shared_payload_blob, p.sent_at AS shared_sent_at, \
+                    p.expires_at AS shared_expires_at \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = ? AND q.delivery_id = ? AND q.expires_at > ?",
+        )
+        .bind(device_id.as_slice())
+        .bind(delivery_id)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| provider_item_from_row(device_id, delivery_id.to_string(), &row))
+            .transpose()
+    }
+
+    pub(super) async fn peek_provider_items(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        let rows = sqlx::query(
+            "SELECT q.delivery_id, q.payload_blob AS queue_payload_blob, q.sent_at AS queue_sent_at, \
+                    q.expires_at AS queue_expires_at, q.platform, q.provider_token, \
+                    p.payload_blob AS shared_payload_blob, p.sent_at AS shared_sent_at, \
+                    p.expires_at AS shared_expires_at \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = ? AND q.expires_at > ? \
+             ORDER BY q.created_at ASC, q.delivery_id ASC LIMIT ?",
+        )
+        .bind(device_id.as_slice())
+        .bind(now)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let delivery_id = decode_mysql_text(&row, "delivery_id")?;
+                provider_item_from_row(device_id, delivery_id, &row)
+            })
+            .collect()
+    }
+
+    pub(super) async fn peek_provider_candidate(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullCandidate>> {
+        let row = sqlx::query(
+            "SELECT q.payload_blob AS queue_payload_blob, \
+                    p.payload_blob AS shared_payload_blob \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = ? AND q.delivery_id = ? AND q.expires_at > ?",
+        )
+        .bind(device_id.as_slice())
+        .bind(delivery_id)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| ProviderPullCandidate {
+            delivery_id: delivery_id.to_string(),
+            payload: provider_payload_from_row(&row),
+        }))
+    }
+
+    pub(super) async fn peek_provider_candidates(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullCandidate>> {
+        let rows = sqlx::query(
+            "SELECT q.delivery_id, q.payload_blob AS queue_payload_blob, \
+                    p.payload_blob AS shared_payload_blob \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = ? AND q.expires_at > ? \
+             ORDER BY q.created_at ASC, q.delivery_id ASC LIMIT ?",
+        )
+        .bind(device_id.as_slice())
+        .bind(now)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(ProviderPullCandidate {
+                    delivery_id: decode_mysql_text(&row, "delivery_id")?,
+                    payload: provider_payload_from_row(&row),
+                })
+            })
+            .collect()
     }
 
     pub(super) async fn ack_provider_item(
@@ -207,6 +317,17 @@ impl MySqlDb {
         .await?;
 
         let out = if let Some(r) = row {
+            let payload = provider_payload_from_row(&r);
+            if let Some(original_delivery_id) =
+                crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
+            {
+                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+                    .bind(device_id.as_slice())
+                    .bind(&original_delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                delete_orphan_private_payload_in_mysql_tx(&mut tx, &original_delivery_id).await?;
+            }
             sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
                 .bind(device_id.as_slice())
                 .bind(delivery_id)
@@ -216,11 +337,11 @@ impl MySqlDb {
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
-                payload: provider_payload_from_row(&r),
+                payload,
                 sent_at: provider_sent_at_from_row(&r),
                 expires_at: provider_expires_at_from_row(&r),
                 platform: r.get::<String, _>("platform").parse()?,
-                provider_token: r.get("provider_token"),
+                provider_token: decode_mysql_text(&r, "provider_token")?,
             })
         } else {
             None
@@ -228,6 +349,119 @@ impl MySqlDb {
         tx.commit().await?;
         Ok(out)
     }
+
+    pub(super) async fn ack_provider_items(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        if delivery_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND expires_at <= ?")
+            .bind(device_id.as_slice())
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        let mut query = sqlx::QueryBuilder::<sqlx::MySql>::new(
+            "SELECT q.delivery_id, q.payload_blob AS queue_payload_blob, q.sent_at AS queue_sent_at, \
+                    q.expires_at AS queue_expires_at, q.platform, q.provider_token, \
+                    p.payload_blob AS shared_payload_blob, p.sent_at AS shared_sent_at, \
+                    p.expires_at AS shared_expires_at \
+             FROM provider_pull_queue q \
+             LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
+             WHERE q.device_id = ",
+        );
+        query.push_bind(device_id.as_slice());
+        query.push(" AND q.delivery_id IN (");
+        let mut separated = query.separated(", ");
+        for delivery_id in delivery_ids {
+            separated.push_bind(delivery_id);
+        }
+        separated.push_unseparated(") ORDER BY q.delivery_id ASC FOR UPDATE");
+        let rows = query.build().fetch_all(&mut *tx).await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let delivery_id = decode_mysql_text(&row, "delivery_id")?;
+            let item = provider_item_from_row(device_id, delivery_id.clone(), &row)?;
+            if let Some(original_delivery_id) =
+                crate::storage::database::linked_private_outbox_delivery_id(item.payload.as_ref())
+            {
+                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+                    .bind(device_id.as_slice())
+                    .bind(&original_delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                delete_orphan_private_payload_in_mysql_tx(&mut tx, &original_delivery_id).await?;
+            }
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
+                .bind(device_id.as_slice())
+                .bind(&delivery_id)
+                .execute(&mut *tx)
+                .await?;
+            delete_orphan_private_payload_in_mysql_tx(&mut tx, &delivery_id).await?;
+            out.push(item);
+        }
+        tx.commit().await?;
+        Ok(out)
+    }
+
+    pub(super) async fn discard_provider_items_by_outer_ids(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<usize> {
+        if delivery_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await?;
+        let mut query = sqlx::QueryBuilder::<sqlx::MySql>::new(
+            "SELECT delivery_id FROM provider_pull_queue WHERE device_id = ",
+        );
+        query.push_bind(device_id.as_slice());
+        query.push(" AND expires_at > ");
+        query.push_bind(now);
+        query.push(" AND delivery_id IN (");
+        let mut separated = query.separated(", ");
+        for delivery_id in delivery_ids {
+            separated.push_bind(delivery_id);
+        }
+        separated.push_unseparated(") ORDER BY delivery_id ASC FOR UPDATE");
+        let rows = query.build().fetch_all(&mut *tx).await?;
+
+        for row in &rows {
+            let delivery_id = decode_mysql_text(row, "delivery_id")?;
+            sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
+                .bind(device_id.as_slice())
+                .bind(&delivery_id)
+                .execute(&mut *tx)
+                .await?;
+            delete_orphan_private_payload_in_mysql_tx(&mut tx, &delivery_id).await?;
+        }
+        let removed = rows.len();
+        tx.commit().await?;
+        Ok(removed)
+    }
+}
+
+fn provider_item_from_row(
+    device_id: DeviceId,
+    delivery_id: String,
+    row: &sqlx::mysql::MySqlRow,
+) -> StoreResult<ProviderPullItem> {
+    Ok(ProviderPullItem {
+        device_id,
+        delivery_id,
+        payload: provider_payload_from_row(row),
+        sent_at: provider_sent_at_from_row(row),
+        expires_at: provider_expires_at_from_row(row),
+        platform: row.get::<String, _>("platform").parse()?,
+        provider_token: decode_mysql_text(row, "provider_token")?,
+    })
 }
 
 fn provider_payload_from_row(row: &sqlx::mysql::MySqlRow) -> Arc<[u8]> {

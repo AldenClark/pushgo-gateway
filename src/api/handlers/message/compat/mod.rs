@@ -19,7 +19,6 @@ pub(crate) use ntfy::{compat_ntfy_get, compat_ntfy_post, compat_ntfy_put};
 pub(crate) use serverchan::{compat_serverchan_get, compat_serverchan_post};
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct MessageGetQuery {
     channel_id: String,
     password: String,
@@ -54,7 +53,6 @@ pub(crate) struct CompatNtfyPath {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct CompatNtfyQuery {
     pub message: Option<String>,
     pub body: Option<String>,
@@ -80,7 +78,6 @@ pub(crate) struct CompatServerChanPath {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct CompatServerChanPayload {
     pub title: Option<String>,
     pub text: Option<String>,
@@ -106,7 +103,6 @@ pub(crate) struct CompatBarkV1PathTitleBody {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct CompatBarkV1Query {
     pub url: Option<String>,
     pub op_id: Option<String>,
@@ -121,7 +117,6 @@ pub(crate) struct CompatBarkV1Query {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct CompatBarkV2Payload {
     pub device_key: String,
     pub title: Option<String>,
@@ -253,6 +248,7 @@ impl MessageGetQuery {
             channel_id: self.channel_id,
             password: self.password,
             op_id: self.op_id,
+            _message_id: None,
             thing_id: None,
             occurred_at: self.occurred_at,
             title: self.title,

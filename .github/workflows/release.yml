@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch: # allow manual trigger
 
 permissions:
   contents: write # create GitHub Releases
@@ -16,9 +15,39 @@ env:
   SOURCE_BINARY_NAME: pushgo-gateway
 
 jobs:
+  release-gate:
+    name: Validate release contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install dependency security auditor
+        run: cargo install cargo-audit --locked
+      - name: Verify tag, package version, notes, formatting, lint, and tests
+        env:
+          PUSHGO_REQUIRE_EXTERNAL_DB_TESTS: "1"
+        run: |
+          set -euo pipefail
+          package_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "pushgo-gateway") | .version')"
+          test "${GITHUB_REF_TYPE}" = "tag"
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+          grep -Fq "## [${GITHUB_REF_NAME}]" release/RELEASE_NOTES.md
+          grep -Fq "## [${GITHUB_REF_NAME}]" release/CHANGELOG.md
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo audit
+          cargo test --all-targets --all-features -- --test-threads=1
+
   build-gnu-binaries:
     name: "Build release binaries (GNU: x86_64 + aarch64 + arm32v7)"
     runs-on: ubuntu-latest
+    needs: release-gate
 
     steps:
       - name: Checkout source
@@ -98,6 +127,7 @@ jobs:
   build-musl-binaries:
     name: "Build release binary (musl: ${{ matrix.target }})"
     runs-on: ubuntu-latest
+    needs: release-gate
     strategy:
       fail-fast: false
       matrix:

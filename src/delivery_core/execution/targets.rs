@@ -24,6 +24,7 @@ mod tests {
             info: DeviceInfo::from_token(Platform::ANDROID, "android-provider-token-0001")
                 .expect("android provider token should parse"),
             device_key: "provider-device".to_string(),
+            route_updated_at: 1,
         };
         let mut candidates = HashMap::new();
         candidates.insert((Platform::ANDROID, "provider-device".to_string()), provider);
@@ -33,6 +34,7 @@ mod tests {
                 info: DeviceInfo::from_token(Platform::WINDOWS, "windows-provider-token-0001")
                     .expect("windows provider token should parse"),
                 device_key: "skipped-provider".to_string(),
+                route_updated_at: 1,
             },
         );
         let plan = DeliveryPlan {
@@ -125,6 +127,7 @@ mod tests {
             info: DeviceInfo::from_token(Platform::ANDROID, "android-provider-token-0002")
                 .expect("android provider token should parse"),
             device_key: "provider-device".to_string(),
+            route_updated_at: 1,
         };
         let mut candidates = HashMap::new();
         candidates.insert((Platform::ANDROID, "provider-device".to_string()), provider);
@@ -161,6 +164,7 @@ mod tests {
             info: DeviceInfo::from_token(Platform::ANDROID, "android-provider-token-0003")
                 .expect("android provider token should parse"),
             device_key: "provider-device".to_string(),
+            route_updated_at: 1,
         };
         let mut candidates = HashMap::new();
         candidates.insert((Platform::ANDROID, "provider-device".to_string()), provider);

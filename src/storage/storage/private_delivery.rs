@@ -167,6 +167,71 @@ impl Storage {
         Ok(items)
     }
 
+    pub async fn peek_provider_item(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullItem>> {
+        let item = self
+            .db
+            .peek_provider_item(device_id, delivery_id, now)
+            .await?;
+        if item.is_some() {
+            self.record_device_activity_best_effort(device_id, now, "provider_pull_v2")
+                .await;
+        }
+        Ok(item)
+    }
+
+    pub async fn peek_provider_items(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        let items = self.db.peek_provider_items(device_id, now, limit).await?;
+        if !items.is_empty() {
+            self.record_device_activity_best_effort(device_id, now, "provider_pull_v2")
+                .await;
+        }
+        Ok(items)
+    }
+
+    pub async fn peek_provider_candidate(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullCandidate>> {
+        let item = self
+            .db
+            .peek_provider_candidate(device_id, delivery_id, now)
+            .await?;
+        if item.is_some() {
+            self.record_device_activity_best_effort(device_id, now, "provider_pull_v2")
+                .await;
+        }
+        Ok(item)
+    }
+
+    pub async fn peek_provider_candidates(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullCandidate>> {
+        let items = self
+            .db
+            .peek_provider_candidates(device_id, now, limit)
+            .await?;
+        if !items.is_empty() {
+            self.record_device_activity_best_effort(device_id, now, "provider_pull_v2")
+                .await;
+        }
+        Ok(items)
+    }
+
     pub async fn ack_provider_item(
         &self,
         device_id: DeviceId,
@@ -180,11 +245,37 @@ impl Storage {
         let Some(item) = item else {
             return Ok(None);
         };
-        self.clear_private_outbox_after_provider_delivery(&item)
-            .await;
         self.record_device_activity_best_effort(device_id, now, "provider_ack")
             .await;
         Ok(Some(item))
+    }
+
+    pub async fn ack_provider_items(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<Vec<ProviderPullItem>> {
+        let items = self
+            .db
+            .ack_provider_items(device_id, delivery_ids, now)
+            .await?;
+        if !delivery_ids.is_empty() {
+            self.record_device_activity_best_effort(device_id, now, "provider_ack")
+                .await;
+        }
+        Ok(items)
+    }
+
+    pub async fn discard_invalid_provider_items(
+        &self,
+        device_id: DeviceId,
+        delivery_ids: &[String],
+        now: i64,
+    ) -> StoreResult<usize> {
+        self.db
+            .discard_provider_items_by_outer_ids(device_id, delivery_ids, now)
+            .await
     }
 
     pub async fn mark_private_fallback_sent(

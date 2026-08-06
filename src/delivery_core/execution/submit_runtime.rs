@@ -54,12 +54,14 @@ impl SubmitRuntime for AppState {
         &self,
         input: DispatchMessageInput,
     ) -> Result<DeliverySummary, CoreError> {
+        let request_fingerprint = input.idempotency_fingerprint();
         let message_id = input.message_id;
         dispatch_entity_notification(
             self,
             input.authorized_channel.channel_id,
             DispatchRequest::new(
                 input.op_id.unwrap_or_default(),
+                Some(request_fingerprint),
                 input.occurred_at.unwrap_or_default(),
                 DispatchAlert::new(Some(input.title), input.body, input.severity, input.ttl),
                 DispatchEntityPayload::message(message_id, input.custom_data, input.extra_fields),
@@ -79,6 +81,7 @@ impl SubmitRuntime for AppState {
             input.authorized_channel.channel_id,
             DispatchRequest::new(
                 input.op_id,
+                None,
                 input.occurred_at,
                 DispatchAlert::new(input.title, input.body, None, None),
                 DispatchEntityPayload::event(input.event_id, input.custom_data, input.extra_fields),
@@ -98,6 +101,7 @@ impl SubmitRuntime for AppState {
             input.authorized_channel.channel_id,
             DispatchRequest::new(
                 input.op_id,
+                None,
                 input.occurred_at,
                 DispatchAlert::new(input.title, input.body, None, None),
                 DispatchEntityPayload::thing(input.thing_id, input.custom_data, input.extra_fields),
@@ -112,6 +116,10 @@ impl SubmitRuntime for AppState {
 pub(crate) fn core_error_to_api_error(value: CoreError) -> Error {
     match value {
         CoreError::Validation { message, code } => Error::validation_code(message, code),
+        CoreError::Conflict { message, code } => Error::Conflict {
+            message: message.into(),
+            code: code.into(),
+        },
         CoreError::Auth { message, code } => Error::validation_code(message, code),
         CoreError::Store(message) | CoreError::Internal(message) => Error::Internal(message),
     }
@@ -126,6 +134,10 @@ fn core_error_from_api(error: Error) -> CoreError {
                 .and_then(stable_error_code)
                 .unwrap_or("validation_failed"),
         },
+        Error::Conflict { message, code } => CoreError::conflict(
+            message.into_owned(),
+            stable_error_code(code.as_ref()).unwrap_or("request_conflict"),
+        ),
         Error::StoreError(crate::storage::StoreError::ChannelNotFound)
         | Error::StoreError(crate::storage::StoreError::ChannelPasswordMismatch) => {
             CoreError::auth("channel not authorized", "channel_not_authorized")
@@ -145,6 +157,7 @@ fn stable_error_code(code: &str) -> Option<&'static str> {
         "authentication_failed" => Some("authentication_failed"),
         "channel_not_authorized" => Some("channel_not_authorized"),
         "op_id_not_allowed" => Some("op_id_not_allowed"),
+        "op_id_payload_conflict" => Some("op_id_payload_conflict"),
         _ => None,
     }
 }

@@ -8,6 +8,15 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.3.0]
+
+### Improved
+- Added non-destructive provider message Pull v2 with durable, atomic batch acknowledgements, while preserving the beta client compatibility route.
+- Improved delivery reliability across atomic route changes and MQTT QoS 1 reconnects (including rejected acknowledgements), and now distinguishes provider worker-queue acceptance from the provider's actual send result.
+- Unified APNs, FCM, and WNS token handling across SQLite, PostgreSQL, and MySQL, and corrected APNs expiration timestamps.
+- Strengthened database upgrades with no-write no-op checks, transactional route/widget updates, and byte-verified, recent operator-supplied backup artifacts for PostgreSQL and MySQL; the manifest is admission evidence and does not attest database provenance or restorability.
+- Improved sender retries with payload-bound `op_id` idempotency and forward-compatible public request fields.
+
 ## [v1.3.0-beta.1]
 
 ### Improved

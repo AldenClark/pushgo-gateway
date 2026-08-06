@@ -76,7 +76,10 @@ impl MySqlDb {
             .bind(&device_id[..])
             .fetch_all(&mut *tx)
             .await?;
-        let ids: Vec<String> = rows.into_iter().map(|r| r.get("delivery_id")).collect();
+        let ids: Vec<String> = rows
+            .into_iter()
+            .map(|r| decode_mysql_text(&r, "delivery_id"))
+            .collect::<StoreResult<_>>()?;
         sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
             .bind(&device_id[..])
             .execute(&mut *tx)
@@ -118,7 +121,7 @@ impl MySqlDb {
             tx.commit().await?;
             return Ok(None);
         };
-        let delivery_id: String = row.get("delivery_id");
+        let delivery_id = decode_mysql_text(&row, "delivery_id")?;
         sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
             .bind(&device_id[..])
             .bind(&delivery_id)
@@ -150,7 +153,7 @@ impl MySqlDb {
         let raw_device_id: Vec<u8> = row.get("device_id");
         let mut device_id = [0u8; 16];
         device_id.copy_from_slice(&raw_device_id);
-        let delivery_id: String = row.get("delivery_id");
+        let delivery_id = decode_mysql_text(&row, "delivery_id")?;
         sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
             .bind(&device_id[..])
             .bind(&delivery_id)
@@ -183,26 +186,7 @@ impl MySqlDb {
             let mut device_id = [0u8; 16];
             let raw: Vec<u8> = r.get("device_id");
             device_id.copy_from_slice(&raw);
-            out.push((
-                device_id,
-                PrivateOutboxEntry {
-                    delivery_id: r.get("delivery_id"),
-                    status: r.get("status"),
-                    attempts: decode_mysql_attempts(&r),
-                    occurred_at: r.get("occurred_at"),
-                    created_at: r.get("created_at"),
-                    claimed_at: r.get("claimed_at"),
-                    claimed_by: r.get("claimed_by"),
-                    first_sent_at: r.get("first_sent_at"),
-                    last_attempt_at: r.get("last_attempt_at"),
-                    acked_at: r.get("acked_at"),
-                    fallback_sent_at: r.get("fallback_sent_at"),
-                    next_attempt_at: r.get("next_attempt_at"),
-                    last_error_code: r.get("last_error_code"),
-                    last_error_detail: r.get("last_error_detail"),
-                    updated_at: r.get("updated_at"),
-                },
-            ));
+            out.push((device_id, decode_mysql_private_outbox_entry(&r)?));
         }
         Ok(out)
     }
@@ -233,7 +217,7 @@ impl MySqlDb {
         let mut out = Vec::new();
         for r in rows {
             let device_id_raw: Vec<u8> = r.get("device_id");
-            let delivery_id: String = r.get("delivery_id");
+            let delivery_id = decode_mysql_text(&r, "delivery_id")?;
 
             let updated_row = sqlx::query(
                 "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, last_attempt_at = ?, updated_at = ? \
@@ -260,26 +244,7 @@ impl MySqlDb {
 
                 let mut device_id = [0u8; 16];
                 device_id.copy_from_slice(&device_id_raw);
-                out.push((
-                    device_id,
-                    PrivateOutboxEntry {
-                        delivery_id: r.get("delivery_id"),
-                        status: r.get("status"),
-                        attempts: decode_mysql_attempts(&r),
-                        occurred_at: r.get("occurred_at"),
-                        created_at: r.get("created_at"),
-                        claimed_at: r.get("claimed_at"),
-                        claimed_by: r.get("claimed_by"),
-                        first_sent_at: r.get("first_sent_at"),
-                        last_attempt_at: r.get("last_attempt_at"),
-                        acked_at: r.get("acked_at"),
-                        fallback_sent_at: r.get("fallback_sent_at"),
-                        next_attempt_at: r.get("next_attempt_at"),
-                        last_error_code: r.get("last_error_code"),
-                        last_error_detail: r.get("last_error_detail"),
-                        updated_at: r.get("updated_at"),
-                    },
-                ));
+                out.push((device_id, decode_mysql_private_outbox_entry(&r)?));
             }
         }
         tx.commit().await?;
@@ -313,7 +278,7 @@ impl MySqlDb {
 
         let mut out = Vec::new();
         for r in rows {
-            let delivery_id: String = r.get("delivery_id");
+            let delivery_id = decode_mysql_text(&r, "delivery_id")?;
 
             sqlx::query(
                 "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, last_attempt_at = ?, updated_at = ? \
@@ -336,23 +301,7 @@ impl MySqlDb {
                     .fetch_one(&mut *tx)
                     .await?;
 
-            out.push(PrivateOutboxEntry {
-                delivery_id: r.get("delivery_id"),
-                status: r.get("status"),
-                attempts: decode_mysql_attempts(&r),
-                occurred_at: r.get("occurred_at"),
-                created_at: r.get("created_at"),
-                claimed_at: r.get("claimed_at"),
-                claimed_by: r.get("claimed_by"),
-                first_sent_at: r.get("first_sent_at"),
-                last_attempt_at: r.get("last_attempt_at"),
-                acked_at: r.get("acked_at"),
-                fallback_sent_at: r.get("fallback_sent_at"),
-                next_attempt_at: r.get("next_attempt_at"),
-                last_error_code: r.get("last_error_code"),
-                last_error_detail: r.get("last_error_detail"),
-                updated_at: r.get("updated_at"),
-            });
+            out.push(decode_mysql_private_outbox_entry(&r)?);
         }
         tx.commit().await?;
         Ok(out)

@@ -174,6 +174,17 @@ pub async fn build_app(
         managed_upgrade: true,
     })
     .await?;
+    let recovered_provider_dispatches = store
+        .recover_interrupted_provider_dispatches(chrono::Utc::now().timestamp_millis())
+        .await?;
+    if recovered_provider_dispatches > 0 {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "dispatch.provider_interrupted_recovered",
+            recovered = (recovered_provider_dispatches as u64)
+        );
+    }
     let runtime_counters =
         RuntimeCounterCollector::spawn_with_mode(store.clone(), false, runtime_tuning.profile);
     let device_registry = Arc::new(DeviceRegistry::new());

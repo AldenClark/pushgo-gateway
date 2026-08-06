@@ -72,8 +72,19 @@ impl Storage {
         delivery_id: &str,
         created_at: i64,
     ) -> StoreResult<OpDedupeReservation> {
+        self.reserve_op_dedupe_pending_with_fingerprint(dedupe_key, delivery_id, None, created_at)
+            .await
+    }
+
+    pub async fn reserve_op_dedupe_pending_with_fingerprint(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        request_fingerprint: Option<&str>,
+        created_at: i64,
+    ) -> StoreResult<OpDedupeReservation> {
         self.db
-            .reserve_op_dedupe_pending(dedupe_key, delivery_id, created_at)
+            .reserve_op_dedupe_pending(dedupe_key, delivery_id, request_fingerprint, created_at)
             .await
     }
 

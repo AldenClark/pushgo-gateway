@@ -9,7 +9,7 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS channels (channel_id BLOB PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id TEXT PRIMARY KEY, channel_id BLOB NOT NULL, model TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL, dispatch_status TEXT, accepted_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key TEXT NOT NULL, token TEXT NOT NULL, channel_id BLOB, platform TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER, PRIMARY KEY (activity_key, token))",
@@ -45,7 +45,7 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
 
 const SQLITE_DISPATCH_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
 ];
 
@@ -123,6 +123,7 @@ const SQLITE_RUNTIME_MIGRATION_META_KEY: &str = "runtime_migrated_from_core_v1";
 const SQLITE_DELIVERY_MIGRATION_META_KEY: &str = "runtime_delivery_migrated_from_core_v1";
 const EPOCH_MILLIS_THRESHOLD: i64 = 1_000_000_000_000;
 const EPOCH_NORMALIZATION_META_KEY: &str = "epoch_millis_normalized_v1";
+const PROVIDER_TOKEN_NORMALIZATION_META_KEY: &str = "provider_token_semantics_v1";
 
 impl SqliteDb {
     pub async fn new(db_url: &str) -> StoreResult<Self> {
@@ -172,6 +173,7 @@ impl SqliteDb {
             None
         };
         let this = Self {
+            core_db_path: sqlite_path_from_url(db_url),
             core_read_pool,
             delivery_pool,
             dispatch_pool,
@@ -199,6 +201,7 @@ impl SqliteDb {
         let pool =
             connect_sqlite_pool(db_url, 1, tuning.core_write_acquire_timeout, tuning).await?;
         Ok(Self {
+            core_db_path: sqlite_path_from_url(db_url),
             core_read_pool: pool.clone(),
             delivery_pool: pool.clone(),
             dispatch_pool: pool.clone(),
@@ -217,7 +220,7 @@ impl SqliteDb {
             event = "db.schema_init_started",
             driver = %("sqlite")
         );
-        sqlx::query("PRAGMA journal_mode = WAL")
+        sqlx::query("PRAGMA journal_mode = DELETE")
             .execute(&self.pool)
             .await?;
         sqlx::query("PRAGMA synchronous = NORMAL")
@@ -232,12 +235,6 @@ impl SqliteDb {
             .await?;
         let cache_size = format!("PRAGMA cache_size = -{}", tuning.page_cache_kib);
         sqlx::query(cache_size.as_str()).execute(&self.pool).await?;
-        let wal_autocheckpoint =
-            format!("PRAGMA wal_autocheckpoint = {}", tuning.wal_autocheckpoint);
-        sqlx::query(wal_autocheckpoint.as_str())
-            .execute(&self.pool)
-            .await?;
-
         self.ensure_sqlite_schema_meta_table().await?;
         self.ensure_sqlite_schema_migrations_table().await?;
         let applied_migrations = self.load_sqlite_schema_migrations().await?;
@@ -283,6 +280,13 @@ impl SqliteDb {
         {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+
+        self.ensure_sqlite_column(
+            "dispatch_op_dedupe",
+            "request_fingerprint",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN request_fingerprint TEXT",
+        )
+        .await?;
 
         self.ensure_sqlite_column(
             "devices",
@@ -505,6 +509,7 @@ impl SqliteDb {
         .execute(&self.pool)
         .await?;
         self.normalize_sqlite_epoch_columns_to_millis_once().await?;
+        self.normalize_sqlite_provider_tokens_once().await?;
 
         self.store_sqlite_schema_version(STORAGE_SCHEMA_VERSION)
             .await?;
@@ -588,6 +593,175 @@ impl SqliteDb {
                     .await?;
             }
         }
+        self.normalize_sqlite_delivery_provider_tokens_once()
+            .await?;
+        Ok(())
+    }
+
+    async fn normalize_sqlite_provider_tokens_once(&self) -> StoreResult<()> {
+        let normalized: Option<String> =
+            sqlx::query_scalar("SELECT meta_value FROM pushgo_schema_meta WHERE meta_key = ?")
+                .bind(PROVIDER_TOKEN_NORMALIZATION_META_KEY)
+                .fetch_optional(&self.pool)
+                .await?;
+        if normalized.as_deref() == Some("complete") {
+            return Ok(());
+        }
+        let mut conn = self.pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let bindings = sqlx::query(
+            "SELECT platform, token_hash, device_id, provider_token, created_at, updated_at \
+             FROM private_bindings WHERE platform IN (1, 2, 4) \
+               AND provider_token IS NOT NULL AND token_hash IS NOT NULL \
+             ORDER BY updated_at ASC, created_at ASC, token_hash ASC",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let routes = sqlx::query(
+            "SELECT device_id, device_key, platform, channel_type, provider_token, route_updated_at \
+             FROM devices \
+             WHERE platform IN ('ios', 'macos', 'watchos') \
+               AND provider_token IS NOT NULL AND device_key IS NOT NULL \
+               AND channel_type IS NOT NULL AND route_updated_at IS NOT NULL \
+             ORDER BY LOWER(TRIM(provider_token)), platform, route_updated_at DESC, device_key DESC",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE devices SET provider_token = LOWER(TRIM(provider_token)) \
+             WHERE platform IN ('ios', 'macos', 'watchos') AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        for row in bindings {
+            let platform: i16 = row.get("platform");
+            let old_hash: Vec<u8> = row.get("token_hash");
+            let device_id: Vec<u8> = row.get("device_id");
+            let provider_token: String = row.get("provider_token");
+            let canonical = provider_token.trim().to_ascii_lowercase();
+            let (new_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
+            let new_hash = new_hash.ok_or(StoreError::InvalidDeviceToken)?;
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (platform, token_hash, device_id, provider_token, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT (platform, token_hash) DO UPDATE SET device_id = excluded.device_id, \
+                   provider_token = excluded.provider_token, \
+                   updated_at = MAX(private_bindings.updated_at, excluded.updated_at)",
+            )
+            .bind(platform)
+            .bind(new_hash.as_slice())
+            .bind(device_id.as_slice())
+            .bind(&canonical)
+            .bind(row.get::<i64, _>("created_at"))
+            .bind(row.get::<i64, _>("updated_at"))
+            .execute(&mut *tx)
+            .await?;
+            if old_hash != new_hash {
+                sqlx::query("DELETE FROM private_bindings WHERE platform = ? AND token_hash = ?")
+                    .bind(platform)
+                    .bind(old_hash.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        sqlx::query(
+            "UPDATE provider_pull_queue SET provider_token = LOWER(TRIM(provider_token)) \
+             WHERE platform IN ('ios', 'macos', 'watchos') AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let mut merged_routes = std::collections::HashSet::new();
+        for row in routes {
+            let platform: String = row.get("platform");
+            let canonical = row
+                .get::<String, _>("provider_token")
+                .trim()
+                .to_ascii_lowercase();
+            if !merged_routes.insert((platform.clone(), canonical.clone())) {
+                continue;
+            }
+            let route = DeviceRouteRecordRow {
+                device_key: row.get("device_key"),
+                platform,
+                channel_type: row.get("channel_type"),
+                provider_token: Some(canonical.clone()),
+                updated_at: row.get("route_updated_at"),
+            };
+            let values = route.persistence_values()?;
+            let old_device_id: Vec<u8> = row.get("device_id");
+            if old_device_id != values.device_id {
+                sqlx::query("UPDATE devices SET device_key = NULL WHERE device_id = ?")
+                    .bind(old_device_id.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            super::access::routes::upsert_device_route_in_tx(&mut tx, &route).await?;
+            let (token_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
+            sqlx::query(
+                "INSERT INTO private_bindings \
+                 (platform, token_hash, device_id, provider_token, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT (platform, token_hash) DO UPDATE SET \
+                   device_id = excluded.device_id, provider_token = excluded.provider_token, \
+                   updated_at = MAX(private_bindings.updated_at, excluded.updated_at)",
+            )
+            .bind(values.platform_code)
+            .bind(token_hash.as_deref())
+            .bind(values.device_id.as_slice())
+            .bind(&canonical)
+            .bind(values.updated_at)
+            .bind(values.updated_at)
+            .execute(&mut *tx)
+            .await?;
+            let duplicate_device_ids =
+                super::access::routes::coalesce_duplicate_provider_routes_in_tx(&mut tx, &values)
+                    .await?;
+            self.coalesce_delivery_device_rows(
+                &duplicate_device_ids,
+                values.device_id.as_slice(),
+                values.platform.as_str(),
+                values.provider_token.as_deref(),
+            )
+            .await?;
+        }
+        sqlx::query(
+            "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES (?, 'complete') \
+             ON CONFLICT (meta_key) DO UPDATE SET meta_value = excluded.meta_value",
+        )
+        .bind(PROVIDER_TOKEN_NORMALIZATION_META_KEY)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn normalize_sqlite_delivery_provider_tokens_once(&self) -> StoreResult<()> {
+        let marker = format!("{PROVIDER_TOKEN_NORMALIZATION_META_KEY}_delivery");
+        let normalized: Option<String> =
+            sqlx::query_scalar("SELECT meta_value FROM pushgo_sidecar_meta WHERE meta_key = ?")
+                .bind(&marker)
+                .fetch_optional(&self.delivery_pool)
+                .await?;
+        if normalized.as_deref() == Some("complete") {
+            return Ok(());
+        }
+        let mut conn = self.delivery_pool.acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query(
+            "UPDATE provider_pull_queue SET provider_token = LOWER(TRIM(provider_token)) \
+             WHERE platform IN ('ios', 'macos', 'watchos') AND provider_token IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO pushgo_sidecar_meta (meta_key, meta_value) VALUES (?, 'complete') \
+             ON CONFLICT (meta_key) DO UPDATE SET meta_value = excluded.meta_value",
+        )
+        .bind(marker)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1264,6 +1438,15 @@ impl crate::storage::database::upgrade::backup::UpgradeBackupAccess for SqliteDb
     ) -> crate::storage::database::upgrade::UpgradeResult<
         Option<crate::storage::database::upgrade::backup::BackupArtifact>,
     > {
+        #[cfg(test)]
+        if self
+            .sqlite_table_exists("__pushgo_upgrade_inject_backup_failure")
+            .await?
+        {
+            return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                StoreError::Upgrade("injected upgrade backup failure".to_string()),
+            ));
+        }
         if matches!(
             policy,
             crate::storage::database::migration::BackupPolicy::None
@@ -1373,8 +1556,6 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for SqliteDb
             "channel_subscriptions",
             "private_payloads",
             "sender_submit_status",
-            "pushgo_upgrade_runs",
-            "pushgo_upgrade_steps",
         ] {
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
@@ -1406,27 +1587,37 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for SqliteDb
                 ));
             }
         }
-        sqlx::query(
-            "INSERT INTO sender_submit_status \
-             (op_id, channel_id, model, entity_id, status, dispatch_status, accepted_at, updated_at, expires_at) \
-             VALUES ('upgrade-smoke', X'00000000000000000000000000000000', 'message', 'upgrade-smoke', 'accepted', NULL, 1, 1, 2) \
-             ON CONFLICT(op_id) DO UPDATE SET updated_at = excluded.updated_at",
-        )
-        .execute(&self.pool)
-        .await?;
-        let status: String = sqlx::query_scalar(
-            "SELECT status FROM sender_submit_status WHERE op_id = 'upgrade-smoke'",
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        if status != "accepted" {
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&self.pool)
+            .await?;
+        if integrity != "ok" {
             return Err(crate::storage::database::upgrade::UpgradeError::Store(
-                StoreError::Upgrade("sender status smoke readback failed".to_string()),
+                StoreError::Upgrade(format!(
+                    "sqlite integrity check failed after upgrade: {integrity}"
+                )),
             ));
         }
-        sqlx::query("DELETE FROM sender_submit_status WHERE op_id = 'upgrade-smoke'")
-            .execute(&self.pool)
-            .await?;
+        for (table, column) in [
+            ("dispatch_op_dedupe", "request_fingerprint"),
+            ("sender_submit_status", "dispatch_status"),
+            ("devices", "provider_token"),
+            ("private_bindings", "provider_token"),
+            ("provider_pull_queue", "provider_token"),
+        ] {
+            let rows = sqlx::query(format!("PRAGMA table_info({table})").as_str())
+                .fetch_all(&self.pool)
+                .await?;
+            if !rows
+                .into_iter()
+                .any(|row| row.get::<String, _>("name") == column)
+            {
+                return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!(
+                        "required column missing after upgrade: {table}.{column}"
+                    )),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -1472,9 +1663,8 @@ async fn connect_sqlite_pool(
     tuning: crate::runtime_config::SqliteRuntimeTuning,
 ) -> StoreResult<SqlitePool> {
     let sqlite_page_cache_kib = tuning.page_cache_kib;
-    let sqlite_wal_autocheckpoint = tuning.wal_autocheckpoint;
     let connect_options = SqliteConnectOptions::from_str(db_url)?
-        .journal_mode(SqliteJournalMode::Wal)
+        .journal_mode(SqliteJournalMode::Delete)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
         .statement_cache_capacity(tuning.statement_cache_capacity)
@@ -1488,9 +1678,6 @@ async fn connect_sqlite_pool(
             Box::pin(async move {
                 let cache_size = format!("PRAGMA cache_size = -{sqlite_page_cache_kib}");
                 conn.execute(cache_size.as_str()).await?;
-                let wal_autocheckpoint =
-                    format!("PRAGMA wal_autocheckpoint = {sqlite_wal_autocheckpoint}");
-                conn.execute(wal_autocheckpoint.as_str()).await?;
                 Ok(())
             })
         })
