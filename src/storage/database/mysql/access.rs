@@ -54,6 +54,7 @@ fn decode_mysql_private_outbox_entry(
         created_at: row.get("created_at"),
         claimed_at: row.get("claimed_at"),
         claimed_by: row.get("claimed_by"),
+        claim_generation: row.get::<i64, _>("claim_generation").max(0) as u64,
         first_sent_at: row.get("first_sent_at"),
         last_attempt_at: row.get("last_attempt_at"),
         acked_at: row.get("acked_at"),

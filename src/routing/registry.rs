@@ -121,7 +121,7 @@ impl DeviceRegistry {
             rec.channel_type = channel_type;
             rec.provider_token = ProviderTokenRef::optional(provider_token.as_deref())
                 .map(ProviderTokenRef::into_owned);
-            rec.updated_at = next_route_revision(rec.updated_at, now);
+            rec.updated_at = rec.next_updated_at(now);
 
             (rec.clone(), ProviderIngressKey::from_route(rec))
         };
@@ -160,7 +160,7 @@ impl DeviceRegistry {
             .get_mut(device_key)
             .ok_or_else(|| "device_key not found".to_string())?;
         rec.provider_token = None;
-        rec.updated_at = next_route_revision(rec.updated_at, now);
+        rec.updated_at = rec.next_updated_at(now);
         Ok(rec.clone())
     }
 
@@ -239,7 +239,7 @@ impl DeviceRegistry {
             let route = state.by_device.get_mut(device_key.as_str())?;
             route.channel_type = DeviceChannelType::Private;
             route.provider_token = None;
-            route.updated_at = next_route_revision(route.updated_at, now);
+            route.updated_at = route.next_updated_at(now);
             route.clone()
         };
         Some(RetiredProviderRoute {
@@ -292,10 +292,6 @@ impl DeviceRegistry {
         state.provider_ingress_index.clear();
         state.replaced_device_keys.clear();
     }
-}
-
-fn next_route_revision(previous: i64, now: i64) -> i64 {
-    now.max(previous.saturating_add(1))
 }
 
 impl Default for DeviceRegistry {

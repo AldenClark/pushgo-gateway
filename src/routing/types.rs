@@ -64,6 +64,10 @@ impl DeviceRouteRecord {
             .map(ProviderTokenRef::into_owned);
         self
     }
+
+    pub(crate) fn next_updated_at(&self, now: i64) -> i64 {
+        now.max(self.updated_at.saturating_add(1))
+    }
 }
 
 pub(crate) fn default_route_for_platform(platform: Platform, updated_at: i64) -> DeviceRouteRecord {

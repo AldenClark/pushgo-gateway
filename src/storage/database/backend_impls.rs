@@ -290,6 +290,25 @@ macro_rules! impl_backend_private_message_access {
                 <$backend>::mark_private_fallback_sent(self, device_id, delivery_id, at_ts).await
             }
 
+            async fn mark_private_fallback_sent_if_claimed(
+                &self,
+                device_id: DeviceId,
+                delivery_id: &str,
+                worker_id: &str,
+                claim_generation: u64,
+                at_ts: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::mark_private_fallback_sent_if_claimed(
+                    self,
+                    device_id,
+                    delivery_id,
+                    worker_id,
+                    claim_generation,
+                    at_ts,
+                )
+                .await
+            }
+
             async fn defer_private_fallback(
                 &self,
                 device_id: DeviceId,
@@ -297,6 +316,42 @@ macro_rules! impl_backend_private_message_access {
                 at_ts: i64,
             ) -> StoreResult<()> {
                 <$backend>::defer_private_fallback(self, device_id, delivery_id, at_ts).await
+            }
+
+            async fn defer_private_fallback_if_claimed(
+                &self,
+                device_id: DeviceId,
+                delivery_id: &str,
+                worker_id: &str,
+                claim_generation: u64,
+                at_ts: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::defer_private_fallback_if_claimed(
+                    self,
+                    device_id,
+                    delivery_id,
+                    worker_id,
+                    claim_generation,
+                    at_ts,
+                )
+                .await
+            }
+
+            async fn drop_private_delivery_if_claimed(
+                &self,
+                device_id: DeviceId,
+                delivery_id: &str,
+                worker_id: &str,
+                claim_generation: u64,
+            ) -> StoreResult<bool> {
+                <$backend>::drop_private_delivery_if_claimed(
+                    self,
+                    device_id,
+                    delivery_id,
+                    worker_id,
+                    claim_generation,
+                )
+                .await
             }
 
             async fn ack_private_delivery(

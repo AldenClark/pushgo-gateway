@@ -1,7 +1,8 @@
 use crate::storage::{
-    STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1, STORAGE_SCHEMA_VERSION_LEGACY,
-    STORAGE_SCHEMA_VERSION_MIGRATABLE, STORAGE_SCHEMA_VERSION_OLDER_LEGACY,
-    STORAGE_SCHEMA_VERSION_OLDEST_LEGACY, STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
+    STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1, STORAGE_SCHEMA_VERSION_FORMAL_RELEASE,
+    STORAGE_SCHEMA_VERSION_LEGACY, STORAGE_SCHEMA_VERSION_MIGRATABLE,
+    STORAGE_SCHEMA_VERSION_OLDER_LEGACY, STORAGE_SCHEMA_VERSION_OLDEST_LEGACY,
+    STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
 };
 
 pub(crate) const DEVICE_IDENTITY_V8_MIGRATION: SchemaMigrationDefinition =
@@ -71,10 +72,36 @@ pub(crate) const FORMAL_RELEASE_V10_MIGRATION: SchemaMigrationDefinition =
         ],
     };
 
+pub(crate) const CONCURRENCY_FENCING_V11_MIGRATION: SchemaMigrationDefinition =
+    SchemaMigrationDefinition {
+        id: "20260808_001_concurrency_fencing_v11",
+        description: "Add durable claim fencing, provider run ownership, and route revisions",
+        checksum: "sha256:5ac8609854a01918f99f837fb1240aa74c8543f17fa777cf786520884271296e",
+        target_schema_version: STORAGE_SCHEMA_VERSION,
+        risk: MigrationRisk::AdditiveSchema,
+        backup_policy: BackupPolicy::Required,
+        rollback_policy: RollbackPolicy::RestoreBackup,
+        steps: &[
+            MigrationStepDefinition {
+                id: "add_concurrency_fencing_columns",
+                description: "Add outbox claim generation, provider run ownership, and route revision columns",
+            },
+            MigrationStepDefinition {
+                id: "normalize_legacy_claims",
+                description: "Release legacy claimed outbox rows after the required writer drain",
+            },
+            MigrationStepDefinition {
+                id: "verify_concurrency_contract",
+                description: "Verify fencing columns, indexes, and provider run state invariants",
+            },
+        ],
+    };
+
 pub(crate) const SCHEMA_MIGRATIONS: &[SchemaMigrationDefinition] = &[
     DEVICE_IDENTITY_V8_MIGRATION,
     OBSERVABILITY_V9_MIGRATION,
     FORMAL_RELEASE_V10_MIGRATION,
+    CONCURRENCY_FENCING_V11_MIGRATION,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +218,9 @@ impl SchemaMigrationPlan {
             },
             None => SchemaMigrationAction::FreshInstall,
             Some(version) if version == STORAGE_SCHEMA_VERSION => {
+                SchemaMigrationAction::BackfillCurrent
+            }
+            Some(version) if version == STORAGE_SCHEMA_VERSION_FORMAL_RELEASE => {
                 SchemaMigrationAction::BackfillCurrent
             }
             Some(version) if version == STORAGE_SCHEMA_VERSION_MIGRATABLE => {
@@ -359,25 +389,27 @@ fn emit_schema_plan_resolved(
 #[cfg(test)]
 mod tests {
     use super::{
-        AppliedSchemaMigration, DEVICE_IDENTITY_V8_MIGRATION, FORMAL_RELEASE_V10_MIGRATION,
-        OBSERVABILITY_V9_MIGRATION, SCHEMA_MIGRATIONS, SchemaMigrationAction, SchemaMigrationPlan,
-        latest_schema_migration, pending_schema_migrations, validate_applied_schema_migrations,
+        AppliedSchemaMigration, CONCURRENCY_FENCING_V11_MIGRATION, DEVICE_IDENTITY_V8_MIGRATION,
+        FORMAL_RELEASE_V10_MIGRATION, OBSERVABILITY_V9_MIGRATION, SCHEMA_MIGRATIONS,
+        SchemaMigrationAction, SchemaMigrationPlan, latest_schema_migration,
+        pending_schema_migrations, validate_applied_schema_migrations,
     };
     use crate::storage::{
-        STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1, STORAGE_SCHEMA_VERSION_MIGRATABLE,
+        STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1,
+        STORAGE_SCHEMA_VERSION_FORMAL_RELEASE, STORAGE_SCHEMA_VERSION_MIGRATABLE,
         STORAGE_SCHEMA_VERSION_PREVIOUS,
     };
 
     #[test]
     fn migration_catalog_exposes_latest_schema_version() {
-        assert_eq!(latest_schema_migration(), FORMAL_RELEASE_V10_MIGRATION);
+        assert_eq!(latest_schema_migration(), CONCURRENCY_FENCING_V11_MIGRATION);
         assert_eq!(
             latest_schema_migration().target_schema_version,
             STORAGE_SCHEMA_VERSION
         );
         assert_eq!(
             SCHEMA_MIGRATIONS.last(),
-            Some(&FORMAL_RELEASE_V10_MIGRATION)
+            Some(&CONCURRENCY_FENCING_V11_MIGRATION)
         );
     }
 
@@ -411,7 +443,7 @@ mod tests {
             plan.action,
             SchemaMigrationAction::HardResetRuntime {
                 reason: "legacy_runtime_without_schema_meta",
-                migration: FORMAL_RELEASE_V10_MIGRATION,
+                migration: CONCURRENCY_FENCING_V11_MIGRATION,
             }
         );
         assert_eq!(
@@ -419,7 +451,8 @@ mod tests {
             vec![
                 DEVICE_IDENTITY_V8_MIGRATION,
                 OBSERVABILITY_V9_MIGRATION,
-                FORMAL_RELEASE_V10_MIGRATION
+                FORMAL_RELEASE_V10_MIGRATION,
+                CONCURRENCY_FENCING_V11_MIGRATION
             ]
         );
     }
@@ -450,6 +483,11 @@ mod tests {
                 checksum: FORMAL_RELEASE_V10_MIGRATION.checksum.to_string(),
                 success: true,
             },
+            AppliedSchemaMigration {
+                id: CONCURRENCY_FENCING_V11_MIGRATION.id.to_string(),
+                checksum: CONCURRENCY_FENCING_V11_MIGRATION.checksum.to_string(),
+                success: true,
+            },
         ];
         let plan = SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION), true, &applied)
             .expect("plan should resolve");
@@ -458,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn v8_schema_version_backfills_through_v10_in_place() {
+    fn v8_schema_version_backfills_through_v11_in_place() {
         let applied = vec![AppliedSchemaMigration {
             id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
             checksum: DEVICE_IDENTITY_V8_MIGRATION.checksum.to_string(),
@@ -470,12 +508,16 @@ mod tests {
         assert_eq!(plan.action, SchemaMigrationAction::BackfillCurrent);
         assert_eq!(
             plan.pending_migrations,
-            vec![OBSERVABILITY_V9_MIGRATION, FORMAL_RELEASE_V10_MIGRATION]
+            vec![
+                OBSERVABILITY_V9_MIGRATION,
+                FORMAL_RELEASE_V10_MIGRATION,
+                CONCURRENCY_FENCING_V11_MIGRATION
+            ]
         );
     }
 
     #[test]
-    fn beta1_v9_schema_backfills_to_formal_v10_in_place() {
+    fn beta1_v9_schema_backfills_to_v11_in_place() {
         let applied = vec![
             AppliedSchemaMigration {
                 id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
@@ -492,7 +534,45 @@ mod tests {
             SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION_BETA1), true, &applied)
                 .expect("beta1 plan should resolve");
         assert_eq!(plan.action, SchemaMigrationAction::BackfillCurrent);
-        assert_eq!(plan.pending_migrations, vec![FORMAL_RELEASE_V10_MIGRATION]);
+        assert_eq!(
+            plan.pending_migrations,
+            vec![
+                FORMAL_RELEASE_V10_MIGRATION,
+                CONCURRENCY_FENCING_V11_MIGRATION
+            ]
+        );
+    }
+
+    #[test]
+    fn formal_v10_schema_backfills_concurrency_fencing_in_place() {
+        let applied = vec![
+            AppliedSchemaMigration {
+                id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
+                checksum: DEVICE_IDENTITY_V8_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+            AppliedSchemaMigration {
+                id: OBSERVABILITY_V9_MIGRATION.id.to_string(),
+                checksum: OBSERVABILITY_V9_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+            AppliedSchemaMigration {
+                id: FORMAL_RELEASE_V10_MIGRATION.id.to_string(),
+                checksum: FORMAL_RELEASE_V10_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+        ];
+        let plan = SchemaMigrationPlan::for_state(
+            Some(STORAGE_SCHEMA_VERSION_FORMAL_RELEASE),
+            true,
+            &applied,
+        )
+        .expect("formal v10 plan should resolve");
+        assert_eq!(plan.action, SchemaMigrationAction::BackfillCurrent);
+        assert_eq!(
+            plan.pending_migrations,
+            vec![CONCURRENCY_FENCING_V11_MIGRATION]
+        );
     }
 
     #[test]
@@ -525,6 +605,11 @@ mod tests {
             AppliedSchemaMigration {
                 id: FORMAL_RELEASE_V10_MIGRATION.id.to_string(),
                 checksum: FORMAL_RELEASE_V10_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+            AppliedSchemaMigration {
+                id: CONCURRENCY_FENCING_V11_MIGRATION.id.to_string(),
+                checksum: CONCURRENCY_FENCING_V11_MIGRATION.checksum.to_string(),
                 success: true,
             },
         ]);

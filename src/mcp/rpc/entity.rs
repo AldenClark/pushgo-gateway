@@ -75,9 +75,15 @@ struct EventCreateArgs {
     op_id: Option<String>,
     #[serde(default)]
     thing_id: Option<String>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     event_time: Option<i64>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     started_at: Option<i64>,
     #[serde(flatten)]
     patch: EventPatchArgs,
@@ -94,7 +100,10 @@ struct EventUpdateArgs {
     event_id: String,
     #[serde(default)]
     thing_id: Option<String>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     event_time: Option<i64>,
     #[serde(flatten)]
     patch: EventPatchArgs,
@@ -111,9 +120,15 @@ struct EventCloseArgs {
     event_id: String,
     #[serde(default)]
     thing_id: Option<String>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     event_time: Option<i64>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     ended_at: Option<i64>,
     #[serde(flatten)]
     patch: EventPatchArgs,
@@ -140,7 +155,10 @@ struct ThingPatchArgs {
     images: Option<Vec<String>>,
     #[serde(default)]
     ciphertext: Option<String>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     observed_at: Option<i64>,
     #[serde(default)]
     attrs: Option<JsonMap<String, JsonValue>>,
@@ -175,7 +193,10 @@ struct ThingCreateArgs {
     password: Option<String>,
     #[serde(default)]
     op_id: Option<String>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     created_at: Option<i64>,
     #[serde(flatten)]
     patch: ThingPatchArgs,
@@ -216,7 +237,10 @@ struct ThingDeleteArgs {
     #[serde(default)]
     op_id: Option<String>,
     thing_id: String,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     deleted_at: Option<i64>,
     #[serde(flatten)]
     patch: ThingPatchArgs,
@@ -235,9 +259,7 @@ async fn submit_mcp_event_command(
     password: Option<String>,
     command: EventCommand,
 ) -> Result<Value, String> {
-    let authorized_channel = service
-        .authorize_channel(channel_id, password)
-        .await?;
+    let authorized_channel = service.authorize_channel(channel_id, password).await?;
     let authorized_context = authorized_channel_context(authorized_channel);
     submit_command(
         SubmitContext {
@@ -254,7 +276,7 @@ async fn submit_mcp_event_command(
     )
     .await
     .map_err(core_error_to_api_error)
-    .map_err(|err| err.to_string())
+    .map_err(|err| err.client_safe_message().into_owned())
     .and_then(mcp_send_ack_value)
 }
 
@@ -264,9 +286,7 @@ async fn submit_mcp_thing_command(
     password: Option<String>,
     command: ThingCommand,
 ) -> Result<Value, String> {
-    let authorized_channel = service
-        .authorize_channel(channel_id, password)
-        .await?;
+    let authorized_channel = service.authorize_channel(channel_id, password).await?;
     let authorized_context = authorized_channel_context(authorized_channel);
     submit_command(
         SubmitContext {
@@ -283,7 +303,7 @@ async fn submit_mcp_thing_command(
     )
     .await
     .map_err(core_error_to_api_error)
-    .map_err(|err| err.to_string())
+    .map_err(|err| err.client_safe_message().into_owned())
     .and_then(mcp_send_ack_value)
 }
 
@@ -440,7 +460,9 @@ impl McpRpcService<'_> {
 mod tests {
     use serde_json::json;
 
-    use super::{EventCloseArgs, EventCreateArgs, EventUpdateArgs, ThingCreateArgs, ThingUpdateArgs};
+    use super::{
+        EventCloseArgs, EventCreateArgs, EventUpdateArgs, ThingCreateArgs, ThingUpdateArgs,
+    };
 
     #[test]
     fn thing_update_args_preserve_missing_patch_field_presence() {
@@ -509,8 +531,14 @@ mod tests {
             "ended_at": 1_700_000_000_001i64
         }));
 
-        assert!(with_event_id.is_err(), "event create should reject event_id");
-        assert!(with_ended_at.is_err(), "event create should reject ended_at");
+        assert!(
+            with_event_id.is_err(),
+            "event create should reject event_id"
+        );
+        assert!(
+            with_ended_at.is_err(),
+            "event create should reject ended_at"
+        );
     }
 
     #[test]
@@ -535,8 +563,14 @@ mod tests {
             "deleted_at": 1_700_000_000_001i64
         }));
 
-        assert!(with_thing_id.is_err(), "thing create should reject thing_id");
-        assert!(with_deleted_at.is_err(), "thing create should reject deleted_at");
+        assert!(
+            with_thing_id.is_err(),
+            "thing create should reject thing_id"
+        );
+        assert!(
+            with_deleted_at.is_err(),
+            "thing create should reject deleted_at"
+        );
     }
 
     #[test]
@@ -552,7 +586,13 @@ mod tests {
             "deleted_at": 1_700_000_000_001i64
         }));
 
-        assert!(with_created_at.is_err(), "thing update should reject created_at");
-        assert!(with_deleted_at.is_err(), "thing update should reject deleted_at");
+        assert!(
+            with_created_at.is_err(),
+            "thing update should reject created_at"
+        );
+        assert!(
+            with_deleted_at.is_err(),
+            "thing update should reject deleted_at"
+        );
     }
 }

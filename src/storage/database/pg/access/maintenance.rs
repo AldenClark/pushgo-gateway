@@ -174,18 +174,25 @@ impl PostgresDb {
         dispatch_status: Option<&str>,
         updated_at: i64,
     ) -> StoreResult<()> {
-        let protect_provider_final = status == SenderSubmitStatusKind::ProviderQueued;
         sqlx::query(
             "UPDATE sender_submit_status \
              SET status = $1, dispatch_status = $2, updated_at = $3 \
              WHERE op_id = $4 \
-               AND NOT ($5 AND status IN ('sent', 'partially_failed', 'failed'))",
+               AND updated_at <= $3 \
+               AND CASE $1 \
+                 WHEN 'accepted' THEN status IN ('accepted', 'failed') \
+                 WHEN 'processing' THEN status IN ('accepted', 'processing') \
+                 WHEN 'provider_queued' THEN status IN ('processing', 'provider_queued') \
+                 WHEN 'sent' THEN status IN ('processing', 'provider_queued', 'sent') \
+                 WHEN 'partially_failed' THEN status IN ('processing', 'provider_queued', 'partially_failed') \
+                 WHEN 'failed' THEN status IN ('accepted', 'processing', 'failed') \
+                 ELSE FALSE \
+               END",
         )
         .bind(status.as_str())
         .bind(dispatch_status)
         .bind(updated_at)
         .bind(op_id)
-        .bind(protect_provider_final)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -210,18 +217,23 @@ impl PostgresDb {
             DedupeState::PartialFailure
         };
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        let dedupe_update = sqlx::query(
             "UPDATE dispatch_op_dedupe SET state = $1, sent_at = $2, updated_at = $2 \
-             WHERE delivery_id = $3 AND state IN ('pending', 'provider_queued')",
+             WHERE dedupe_key = $3 AND delivery_id = $4 AND state IN ('pending', 'provider_queued')",
         )
         .bind(dedupe_state.as_str())
         .bind(now)
+        .bind(op_id)
         .bind(delivery_id)
         .execute(&mut *tx)
         .await?;
+        if dedupe_update.rows_affected() != 1 {
+            tx.commit().await?;
+            return Ok(());
+        }
         sqlx::query(
             "UPDATE sender_submit_status SET status = $1, dispatch_status = $2, updated_at = $3 \
-             WHERE op_id = $4 AND status IN ('processing', 'provider_queued')",
+             WHERE op_id = $4 AND status IN ('processing', 'provider_queued') AND updated_at <= $3",
         )
         .bind(sender_status)
         .bind(dispatch_status)
@@ -238,20 +250,29 @@ impl PostgresDb {
         updated_at: i64,
     ) -> StoreResult<usize> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM dispatch_op_dedupe WHERE state = 'provider_queued'")
-            .execute(&mut *tx)
-            .await?;
-        let recovered = sqlx::query(
-            "UPDATE sender_submit_status \
-             SET status = 'failed', dispatch_status = 'provider_interrupted', updated_at = $1 \
-             WHERE status = 'provider_queued'",
+        let rows = sqlx::query(
+            "UPDATE dispatch_op_dedupe \
+             SET state = 'partial_failure', sent_at = $1, updated_at = $1, provider_owner = NULL, provider_lease_until = NULL \
+             WHERE state = 'provider_queued' AND COALESCE(provider_lease_until, 0) <= $1 \
+             RETURNING dedupe_key",
         )
         .bind(updated_at)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected() as usize;
+        .fetch_all(&mut *tx)
+        .await?;
+        for row in &rows {
+            let op_id: String = row.get("dedupe_key");
+            sqlx::query(
+                "UPDATE sender_submit_status \
+                 SET status = 'failed', dispatch_status = 'provider_outcome_unknown', updated_at = $1 \
+                 WHERE op_id = $2 AND status = 'provider_queued' AND updated_at <= $1",
+            )
+            .bind(updated_at)
+            .bind(op_id)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
-        Ok(recovered)
+        Ok(rows.len())
     }
 
     pub(super) async fn load_sender_submit_status(
@@ -675,13 +696,20 @@ impl PostgresDb {
         state: DedupeState,
     ) -> StoreResult<bool> {
         let now = Utc::now().timestamp_millis();
+        let provider_queued = state == DedupeState::ProviderQueued;
+        let provider_run_token = provider_queued.then(crate::util::generate_hex_id_128);
+        let provider_owner = provider_queued.then(|| format!("gateway:{}", std::process::id()));
+        let provider_lease_until = provider_queued.then(|| now.saturating_add(15 * 60 * 1000));
         let result = sqlx::query(
             "UPDATE dispatch_op_dedupe \
-             SET state = $1, sent_at = $2, updated_at = $2 \
-             WHERE dedupe_key = $3 AND delivery_id = $4 AND state = $5",
+             SET state = $1, sent_at = $2, updated_at = $2, provider_run_token = $3, provider_owner = $4, provider_lease_until = $5 \
+             WHERE dedupe_key = $6 AND delivery_id = $7 AND state = $8",
         )
         .bind(state.as_str())
         .bind(now)
+        .bind(provider_run_token.as_deref())
+        .bind(provider_owner.as_deref())
+        .bind(provider_lease_until)
         .bind(dedupe_key)
         .bind(delivery_id)
         .bind(DedupeState::Pending.as_str())

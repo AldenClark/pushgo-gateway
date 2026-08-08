@@ -2,13 +2,13 @@ use std::{
     collections::HashMap,
     fmt,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::storage::Storage;
 
@@ -120,22 +120,18 @@ impl fmt::Display for McpScopeSet {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PkceMethod {
-    Plain,
     S256,
 }
 
 impl PkceMethod {
     pub(super) fn as_str(self) -> &'static str {
         match self {
-            Self::Plain => "plain",
             Self::S256 => "S256",
         }
     }
 
     pub(super) fn parse(raw: &str) -> Result<Self, &'static str> {
-        if raw.trim().eq_ignore_ascii_case("plain") {
-            Ok(Self::Plain)
-        } else if raw.trim().eq_ignore_ascii_case("s256") {
+        if raw.trim() == "S256" {
             Ok(Self::S256)
         } else {
             Err("invalid code_challenge_method")
@@ -144,7 +140,6 @@ impl PkceMethod {
 
     pub(super) fn verify(self, code_challenge: &str, code_verifier: &str) -> bool {
         match self {
-            Self::Plain => code_challenge == code_verifier,
             Self::S256 => {
                 let digest = Sha256::digest(code_verifier.as_bytes());
                 let encoded = URL_SAFE_NO_PAD.encode(digest);
@@ -214,9 +209,11 @@ pub(crate) struct McpConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct McpState {
     pub config: McpConfig,
-    pub(super) oauth_issuer: Arc<RwLock<String>>,
+    pub(super) oauth_issuer: Arc<str>,
     pub(super) oauth_signing_key: Arc<str>,
     pub(super) store: Storage,
+    pub(super) mutation: Arc<Mutex<()>>,
+    pub(super) persistence_healthy: Arc<AtomicBool>,
     pub(super) principals: Arc<RwLock<HashMap<String, Principal>>>,
     pub(super) auth_codes: Arc<RwLock<HashMap<String, AuthCode>>>,
     pub(super) refresh_tokens: Arc<RwLock<HashMap<String, RefreshToken>>>,
@@ -263,7 +260,6 @@ pub(super) struct ChannelGrant {
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub(super) struct AuthCode {
-    pub code: String,
     pub principal_id: String,
     pub client_id: String,
     pub redirect_uri: String,
@@ -271,20 +267,15 @@ pub(super) struct AuthCode {
     pub code_challenge: String,
     pub code_challenge_method: PkceMethod,
     pub expires_at: i64,
-    pub consumed: bool,
 }
 
 impl AuthCode {
     pub(super) fn is_active(&self, now: i64) -> bool {
-        !self.consumed && self.expires_at >= now
+        self.expires_at > now
     }
 
     pub(super) fn matches_exchange_request(&self, client_id: &str, redirect_uri: &str) -> bool {
         self.client_id == client_id && self.redirect_uri == redirect_uri
-    }
-
-    pub(super) fn consume(&mut self) {
-        self.consumed = true;
     }
 }
 
@@ -293,19 +284,33 @@ impl AuthCode {
 #[derive(Serialize, Deserialize)]
 pub(super) struct RefreshToken {
     pub token_hash: String,
+    #[serde(default)]
+    pub family_id: String,
     pub principal_id: String,
     pub client_id: String,
     pub scope: McpScopeSet,
-    pub expires_at: i64,
+    #[serde(alias = "expires_at")]
+    pub family_expires_at: i64,
     pub idle_expires_at: i64,
     pub revoked: bool,
+}
+
+pub(super) struct NewRefreshToken {
+    pub(super) token_hash: String,
+    pub(super) family_id: String,
+    pub(super) principal_id: String,
+    pub(super) client_id: String,
+    pub(super) scope: McpScopeSet,
+    pub(super) issued_at: i64,
+    pub(super) absolute_ttl_secs: i64,
+    pub(super) idle_ttl_secs: i64,
 }
 
 impl RefreshToken {
     pub(super) fn is_active_for(&self, client_id: &str, now: i64) -> bool {
         !self.revoked
-            && self.expires_at >= now
-            && self.idle_expires_at >= now
+            && self.family_expires_at > now
+            && self.idle_expires_at > now
             && self.client_id == client_id
     }
 
@@ -313,22 +318,48 @@ impl RefreshToken {
         self.revoked = true;
     }
 
-    pub(super) fn rotated(
+    pub(super) fn initial(new_token: NewRefreshToken) -> Self {
+        let NewRefreshToken {
+            token_hash,
+            family_id,
+            principal_id,
+            client_id,
+            scope,
+            issued_at,
+            absolute_ttl_secs,
+            idle_ttl_secs,
+        } = new_token;
+        Self {
+            token_hash,
+            family_id,
+            principal_id,
+            client_id,
+            scope,
+            family_expires_at: issued_at.saturating_add(absolute_ttl_secs),
+            idle_expires_at: issued_at
+                .saturating_add(idle_ttl_secs)
+                .min(issued_at.saturating_add(absolute_ttl_secs)),
+            revoked: false,
+        }
+    }
+
+    pub(super) fn rotate_from(
+        previous: &Self,
         token_hash: String,
-        principal_id: String,
-        client_id: String,
         scope: McpScopeSet,
         issued_at: i64,
-        absolute_ttl_secs: i64,
         idle_ttl_secs: i64,
     ) -> Self {
         Self {
             token_hash,
-            principal_id,
-            client_id,
+            family_id: previous.family_id.clone(),
+            principal_id: previous.principal_id.clone(),
+            client_id: previous.client_id.clone(),
             scope,
-            expires_at: issued_at + absolute_ttl_secs,
-            idle_expires_at: issued_at + idle_ttl_secs,
+            family_expires_at: previous.family_expires_at,
+            idle_expires_at: issued_at
+                .saturating_add(idle_ttl_secs)
+                .min(previous.family_expires_at),
             revoked: false,
         }
     }
@@ -338,7 +369,6 @@ impl RefreshToken {
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub(super) struct BindSession {
-    pub bind_session_id: String,
     pub principal_id: String,
     pub action: BindAction,
     pub requested_channel_id: Option<String>,
@@ -435,10 +465,37 @@ mod tests {
 
     #[test]
     fn pkce_and_grant_type_deserialize_from_strings() {
-        assert_eq!(PkceMethod::parse("S256").expect("pkce should parse"), PkceMethod::S256);
+        assert_eq!(
+            PkceMethod::parse("S256").expect("pkce should parse"),
+            PkceMethod::S256
+        );
         assert_eq!(
             OAuthGrantType::parse("refresh_token").expect("grant should parse"),
             OAuthGrantType::RefreshToken
         );
+        assert!(PkceMethod::parse("plain").is_err());
+    }
+
+    #[test]
+    fn refresh_rotation_preserves_absolute_family_expiry() {
+        let initial = super::RefreshToken::initial(super::NewRefreshToken {
+            token_hash: "hash-1".to_string(),
+            family_id: "family-1".to_string(),
+            principal_id: "principal-1".to_string(),
+            client_id: "client-1".to_string(),
+            scope: McpScopeSet::tools(),
+            issued_at: 1_000,
+            absolute_ttl_secs: 100,
+            idle_ttl_secs: 90,
+        });
+        let rotated = super::RefreshToken::rotate_from(
+            &initial,
+            "hash-2".to_string(),
+            McpScopeSet::tools(),
+            1_080,
+            90,
+        );
+        assert_eq!(rotated.family_expires_at, 1_100);
+        assert_eq!(rotated.idle_expires_at, 1_100);
     }
 }

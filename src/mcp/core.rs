@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    fmt::Write as _,
-};
+use std::collections::HashMap;
 
 use axum::{
     Json,
@@ -27,7 +24,7 @@ use self::{
     core_snapshot::McpSnapshot,
     core_types::{
         AuthCode, BindAction, BindSession, BindStatus, ChannelGrant, McpScope, McpScopeSet,
-        OAuthGrantType, PkceMethod, Principal, RefreshToken,
+        NewRefreshToken, OAuthGrantType, PkceMethod, Principal, RefreshToken,
     },
 };
 

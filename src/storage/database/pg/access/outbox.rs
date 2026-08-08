@@ -20,6 +20,30 @@ impl PostgresDb {
         Ok(())
     }
 
+    pub(super) async fn mark_private_fallback_sent_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        let result = sqlx::query(
+            "UPDATE private_outbox SET status = $1, attempts = attempts + 1, first_sent_at = COALESCE(first_sent_at, $2), fallback_sent_at = $2, updated_at = $2 \
+             WHERE device_id = $3 AND delivery_id = $4 AND status = $5 AND claimed_by = $6 AND claim_generation = $7",
+        )
+        .bind(OUTBOX_STATUS_SENT)
+        .bind(at_ts)
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_CLAIMED)
+        .bind(worker_id)
+        .bind(claim_generation.min(i64::MAX as u64) as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub(super) async fn defer_private_fallback(
         &self,
         device_id: DeviceId,
@@ -37,6 +61,56 @@ impl PostgresDb {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub(super) async fn defer_private_fallback_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        let result = sqlx::query(
+            "UPDATE private_outbox SET status = $1, attempts = attempts + 1, next_attempt_at = $2, claimed_at = NULL, claimed_by = NULL, updated_at = $2 \
+             WHERE device_id = $3 AND delivery_id = $4 AND status = $5 AND claimed_by = $6 AND claim_generation = $7",
+        )
+        .bind(OUTBOX_STATUS_PENDING)
+        .bind(at_ts)
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_CLAIMED)
+        .bind(worker_id)
+        .bind(claim_generation.min(i64::MAX as u64) as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub(super) async fn drop_private_delivery_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+    ) -> StoreResult<bool> {
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "DELETE FROM private_outbox \
+             WHERE device_id = $1 AND delivery_id = $2 AND status = $3 AND claimed_by = $4 AND claim_generation = $5",
+        )
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_CLAIMED)
+        .bind(worker_id)
+        .bind(claim_generation.min(i64::MAX as u64) as i64)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 1 {
+            delete_unreferenced_private_payload(&mut tx, delivery_id).await?;
+        }
+        tx.commit().await?;
+        Ok(result.rows_affected() == 1)
     }
 
     pub(super) async fn ack_private_delivery(
@@ -161,7 +235,7 @@ impl PostgresDb {
         limit: usize,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         let rows = sqlx::query(
-            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, claim_generation, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE next_attempt_at <= $1 AND status IN ($2, $3, $4) LIMIT $5",
         )
         .bind(before_ts)
@@ -187,6 +261,7 @@ impl PostgresDb {
                     created_at: r.get("created_at"),
                     claimed_at: r.get("claimed_at"),
                     claimed_by: r.get("claimed_by"),
+                    claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
                     first_sent_at: r.get("first_sent_at"),
                     last_attempt_at: r.get("last_attempt_at"),
                     acked_at: r.get("acked_at"),
@@ -209,7 +284,7 @@ impl PostgresDb {
         worker_id: &str,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         let rows = sqlx::query(
-            "UPDATE private_outbox SET status = $1, claimed_at = $2, claimed_by = $3, last_attempt_at = $2, updated_at = $2 \
+            "UPDATE private_outbox SET status = $1, claimed_at = $2, claimed_by = $3, claim_generation = claim_generation + 1, last_attempt_at = $2, updated_at = $2 \
              WHERE (device_id, delivery_id) IN ( \
                 SELECT device_id, delivery_id FROM private_outbox \
                 WHERE next_attempt_at <= $4 \
@@ -243,6 +318,7 @@ impl PostgresDb {
                     created_at: r.get("created_at"),
                     claimed_at: r.get("claimed_at"),
                     claimed_by: r.get("claimed_by"),
+                    claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
                     first_sent_at: r.get("first_sent_at"),
                     last_attempt_at: r.get("last_attempt_at"),
                     acked_at: r.get("acked_at"),
@@ -266,7 +342,7 @@ impl PostgresDb {
         worker_id: &str,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         let rows = sqlx::query(
-            "UPDATE private_outbox SET status = $1, claimed_at = $2, claimed_by = $3, last_attempt_at = $2, updated_at = $2 \
+            "UPDATE private_outbox SET status = $1, claimed_at = $2, claimed_by = $3, claim_generation = claim_generation + 1, last_attempt_at = $2, updated_at = $2 \
              WHERE (device_id, delivery_id) IN ( \
                 SELECT device_id, delivery_id FROM private_outbox \
                 WHERE device_id = $4 AND next_attempt_at <= $5 \
@@ -296,6 +372,7 @@ impl PostgresDb {
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),
                 claimed_by: r.get("claimed_by"),
+                claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
                 first_sent_at: r.get("first_sent_at"),
                 last_attempt_at: r.get("last_attempt_at"),
                 acked_at: r.get("acked_at"),

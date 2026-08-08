@@ -2,8 +2,46 @@ use super::*;
 use crate::storage::database::{
     ChannelQueryDatabaseAccess, PrivateChannelDatabaseAccess, ProviderSubscriptionDatabaseAccess,
 };
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Semaphore;
 
 const DISPATCH_TARGETS_CACHE_EFFECTIVE_AT_SKEW_MS: i64 = 5;
+#[cfg(not(test))]
+const PASSWORD_KDF_CONCURRENCY: usize = 4;
+#[cfg(test)]
+const PASSWORD_KDF_CONCURRENCY: usize = 64;
+static PASSWORD_KDF_PERMITS: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(PASSWORD_KDF_CONCURRENCY)));
+
+async fn hash_channel_password_async(password: &str) -> StoreResult<String> {
+    let permit = Arc::clone(&PASSWORD_KDF_PERMITS)
+        .try_acquire_owned()
+        .map_err(|_| StoreError::PasswordKdfBusy)?;
+    let password = password.to_string();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        hash_channel_password(&password)
+    })
+    .await
+    .map_err(|err| StoreError::PasswordHash(format!("password hashing task failed: {err}")))?
+}
+
+async fn verify_channel_password_async(
+    password_hash: &str,
+    password: &str,
+) -> StoreResult<ChannelPasswordVerifyOutcome> {
+    let permit = Arc::clone(&PASSWORD_KDF_PERMITS)
+        .try_acquire_owned()
+        .map_err(|_| StoreError::PasswordKdfBusy)?;
+    let password_hash = password_hash.to_string();
+    let password = password.to_string();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify_channel_password(&password_hash, &password)
+    })
+    .await
+    .map_err(|err| StoreError::PasswordHash(format!("password verification task failed: {err}")))?
+}
 
 impl Storage {
     pub async fn subscribe_channel_for_device_key(
@@ -31,7 +69,7 @@ impl Storage {
             )
             .await?
         } else {
-            hash_channel_password(password)?
+            hash_channel_password_async(password).await?
         };
 
         let outcome = self
@@ -244,7 +282,7 @@ impl Storage {
             )
             .await?
         } else {
-            hash_channel_password(password)?
+            hash_channel_password_async(password).await?
         };
         let outcome = self
             .db
@@ -302,9 +340,9 @@ impl Storage {
         password: &str,
         alias: Option<&str>,
     ) -> StoreResult<String> {
-        let verify_outcome = verify_channel_password(password_hash, password)?;
+        let verify_outcome = verify_channel_password_async(password_hash, password).await?;
         if verify_outcome.needs_upgrade() {
-            let upgraded_hash = hash_channel_password(password)?;
+            let upgraded_hash = hash_channel_password_async(password).await?;
             self.db
                 .update_channel_password_hash(channel_id, upgraded_hash.as_str())
                 .await?;

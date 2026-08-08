@@ -118,7 +118,8 @@ impl PrivateHub {
             occurred_at: sent_at,
             created_at: now,
             claimed_at: None,
-                claimed_by: None,
+            claimed_by: None,
+            claim_generation: 0,
             first_sent_at: None,
             last_attempt_at: None,
             acked_at: None,
@@ -164,6 +165,7 @@ impl PrivateHub {
                 created_at: now,
                 claimed_at: None,
                 claimed_by: None,
+                claim_generation: 0,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -379,6 +381,26 @@ impl PrivateHub {
             .map_err(|err| crate::Error::Internal(err.to_string()))
     }
 
+    pub async fn mark_fallback_sent_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        next_attempt_at: i64,
+    ) -> Result<bool, crate::Error> {
+        self.store
+            .mark_private_fallback_sent_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                next_attempt_at,
+            )
+            .await
+            .map_err(|err| crate::Error::Internal(err.to_string()))
+    }
+
     pub async fn defer_fallback_retry(
         &self,
         device_id: DeviceId,
@@ -387,6 +409,44 @@ impl PrivateHub {
     ) -> Result<(), crate::Error> {
         self.store
             .defer_private_fallback(device_id, delivery_id, retry_at)
+            .await
+            .map_err(|err| crate::Error::Internal(err.to_string()))
+    }
+
+    pub async fn defer_fallback_retry_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        retry_at: i64,
+    ) -> Result<bool, crate::Error> {
+        self.store
+            .defer_private_fallback_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                retry_at,
+            )
+            .await
+            .map_err(|err| crate::Error::Internal(err.to_string()))
+    }
+
+    pub async fn drop_delivery_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+    ) -> Result<bool, crate::Error> {
+        self.store
+            .drop_private_delivery_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+            )
             .await
             .map_err(|err| crate::Error::Internal(err.to_string()))
     }

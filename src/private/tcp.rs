@@ -8,8 +8,9 @@ use async_trait::async_trait;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{OwnedSemaphorePermit, Semaphore},
-    time::timeout,
+    sync::OwnedSemaphorePermit,
+    task::JoinSet,
+    time::{Instant, timeout, timeout_at},
 };
 use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
@@ -29,6 +30,7 @@ const MAX_PROXY_LINE_BYTES: usize = 108;
 struct TcpServerRuntime {
     config: warp_link::warp_link_core::ServerConfig,
     app: Arc<dyn ServerApp>,
+    state: Arc<PrivateState>,
     tls_acceptor: Option<TlsAcceptor>,
     proxy_protocol: ProxyProtocolConfig,
 }
@@ -36,7 +38,6 @@ struct TcpServerRuntime {
 #[derive(Clone, Copy)]
 struct ProxyProtocolConfig {
     enabled: bool,
-    hello_timeout_ms: u64,
 }
 
 struct ProxyProtocolV1;
@@ -48,7 +49,7 @@ pub async fn serve_tcp_tls(
     state: Arc<PrivateState>,
     proxy_protocol_enabled: bool,
 ) -> Result<(), String> {
-    let app: Arc<dyn ServerApp> = Arc::new(PushgoServerApp::new(state));
+    let app: Arc<dyn ServerApp> = Arc::new(PushgoServerApp::new(Arc::clone(&state)));
     let mut config = default_server_config();
     config.tcp_listen_addr = Some(bind_addr.to_string());
     config.tls_cert_path = Some(cert_path.to_string());
@@ -57,9 +58,15 @@ pub async fn serve_tcp_tls(
     config.tcp_tls_mode = TlsMode::TerminateInWarp;
     let tls_acceptor = ServerTlsIdentity::load(cert_path, key_path)?
         .into_acceptor(config.tcp_alpn.as_str(), "tcp")?;
-    TcpServerRuntime::new(config, app, Some(tls_acceptor), proxy_protocol_enabled)
-        .serve()
-        .await
+    TcpServerRuntime::new(
+        config,
+        app,
+        state,
+        Some(tls_acceptor),
+        proxy_protocol_enabled,
+    )
+    .serve()
+    .await
 }
 
 pub async fn serve_tcp_plain(
@@ -67,14 +74,14 @@ pub async fn serve_tcp_plain(
     state: Arc<PrivateState>,
     proxy_protocol_enabled: bool,
 ) -> Result<(), String> {
-    let app: Arc<dyn ServerApp> = Arc::new(PushgoServerApp::new(state));
+    let app: Arc<dyn ServerApp> = Arc::new(PushgoServerApp::new(Arc::clone(&state)));
     let mut config = default_server_config();
     config.tcp_listen_addr = Some(bind_addr.to_string());
     config.tcp_alpn = "pushgo-tcp".to_string();
     config.tcp_tls_mode = TlsMode::OffloadAtEdge;
     config.tls_cert_path = None;
     config.tls_key_path = None;
-    TcpServerRuntime::new(config, app, None, proxy_protocol_enabled)
+    TcpServerRuntime::new(config, app, state, None, proxy_protocol_enabled)
         .serve()
         .await
 }
@@ -83,16 +90,17 @@ impl TcpServerRuntime {
     fn new(
         config: warp_link::warp_link_core::ServerConfig,
         app: Arc<dyn ServerApp>,
+        state: Arc<PrivateState>,
         tls_acceptor: Option<TlsAcceptor>,
         proxy_protocol_enabled: bool,
     ) -> Self {
         let proxy_protocol = ProxyProtocolConfig {
             enabled: proxy_protocol_enabled,
-            hello_timeout_ms: config.hello_timeout_ms,
         };
         Self {
             config,
             app,
+            state,
             tls_acceptor,
             proxy_protocol,
         }
@@ -117,16 +125,31 @@ impl TcpServerRuntime {
             proxy_protocol_enabled = (self.proxy_protocol.enabled),
             tls_enabled = (self.tls_acceptor.is_some())
         );
-        let session_limiter = Arc::new(Semaphore::new(self.config.max_concurrent_sessions.max(1)));
+        let mut sessions = JoinSet::new();
 
         loop {
-            let (socket, remote_addr) = listener
-                .accept()
-                .await
-                .map_err(|err| format!("accept tcp connection failed: {err}"))?;
-            let permit = match Arc::clone(&session_limiter).try_acquire_owned() {
-                Ok(permit) => permit,
-                Err(_) => {
+            let accepted = tokio::select! {
+                biased;
+                _ = self.state.wait_for_shutdown() => break,
+                joined = sessions.join_next(), if !sessions.is_empty() => {
+                    if let Some(Err(join_error)) = joined {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::ERROR,
+                            event = "private.tcp_connection_task_failed",
+                            cancelled = (join_error.is_cancelled()),
+                            panicked = (join_error.is_panic())
+                        );
+                    }
+                    continue;
+                }
+                accepted = listener.accept() => accepted,
+            };
+            let (socket, remote_addr) =
+                accepted.map_err(|err| format!("accept tcp connection failed: {err}"))?;
+            let permit = match self.state.try_acquire_session_admission() {
+                Some(permit) => permit,
+                None => {
                     let peer = PeerMeta {
                         transport: TransportKind::Tcp,
                         remote_addr: Some(remote_addr.to_string()),
@@ -138,18 +161,51 @@ impl TcpServerRuntime {
                     continue;
                 }
             };
+            let handshake_permit = match self.state.try_acquire_handshake_admission() {
+                Some(permit) => permit,
+                None => {
+                    let peer = PeerMeta {
+                        transport: TransportKind::Tcp,
+                        remote_addr: Some(remote_addr.to_string()),
+                    };
+                    let error = WarpLinkError::Transport(
+                        "server busy: concurrent handshake limit reached".to_string(),
+                    );
+                    self.app.on_handshake_failure(peer, &error).await;
+                    continue;
+                }
+            };
 
             let span = tracing::info_span!(
                 "private.tcp.connection",
                 remote_addr = %remote_addr,
                 tls_enabled = self.tls_acceptor.is_some()
             );
-            tokio::spawn(
-                self.clone()
-                    .serve_connection(socket, remote_addr, permit)
-                    .instrument(span),
+            let runtime = self.clone();
+            let shutdown = Arc::clone(&self.state);
+            sessions.spawn(
+                async move {
+                    tokio::select! {
+                        _ = shutdown.wait_for_shutdown() => {}
+                        _ = runtime.serve_connection(socket, remote_addr, permit, handshake_permit) => {}
+                    }
+                }
+                .instrument(span),
             );
         }
+
+        while let Some(joined) = sessions.join_next().await {
+            if let Err(join_error) = joined {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::ERROR,
+                    event = "private.tcp_connection_task_failed",
+                    cancelled = (join_error.is_cancelled()),
+                    panicked = (join_error.is_panic())
+                );
+            }
+        }
+        Ok(())
     }
 
     async fn serve_connection(
@@ -157,11 +213,14 @@ impl TcpServerRuntime {
         mut socket: TcpStream,
         remote_addr: SocketAddr,
         permit: OwnedSemaphorePermit,
+        handshake_permit: OwnedSemaphorePermit,
     ) {
         let _permit = permit;
+        let handshake_deadline =
+            Instant::now() + Duration::from_millis(self.config.hello_timeout_ms.max(1));
         let peer_remote_addr = match self
             .proxy_protocol
-            .resolve_peer_remote_addr(&mut socket, remote_addr)
+            .resolve_peer_remote_addr(&mut socket, remote_addr, handshake_deadline)
             .await
         {
             Ok(value) => value,
@@ -180,9 +239,9 @@ impl TcpServerRuntime {
         };
 
         if let Some(acceptor) = self.tls_acceptor.clone() {
-            let tls_stream = match acceptor.accept(socket).await {
-                Ok(stream) => stream,
-                Err(err) => {
+            let tls_stream = match timeout_at(handshake_deadline, acceptor.accept(socket)).await {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(err)) => {
                     self.app
                         .on_handshake_failure(
                             PeerMeta {
@@ -194,17 +253,90 @@ impl TcpServerRuntime {
                         .await;
                     return;
                 }
+                Err(_) => {
+                    self.app
+                        .on_handshake_failure(
+                            PeerMeta {
+                                transport: TransportKind::Tcp,
+                                remote_addr: Some(peer_remote_addr),
+                            },
+                            &WarpLinkError::Timeout("tcp tls handshake timeout".to_string()),
+                        )
+                        .await;
+                    return;
+                }
             };
             let (reader, writer) = tokio::io::split(tls_stream);
-            self.run_session_io(reader, writer, peer_remote_addr).await;
+            let mut runtime = self;
+            if runtime.apply_remaining_hello_budget(handshake_deadline) {
+                runtime
+                    .run_session_io(
+                        reader,
+                        writer,
+                        peer_remote_addr,
+                        handshake_deadline,
+                        handshake_permit,
+                    )
+                    .await;
+            } else {
+                runtime
+                    .app
+                    .on_handshake_failure(
+                        PeerMeta {
+                            transport: TransportKind::Tcp,
+                            remote_addr: Some(peer_remote_addr),
+                        },
+                        &WarpLinkError::Timeout("tcp hello deadline exhausted".to_string()),
+                    )
+                    .await;
+            }
         } else {
             let (reader, writer) = tokio::io::split(socket);
-            self.run_session_io(reader, writer, peer_remote_addr).await;
+            let mut runtime = self;
+            if runtime.apply_remaining_hello_budget(handshake_deadline) {
+                runtime
+                    .run_session_io(
+                        reader,
+                        writer,
+                        peer_remote_addr,
+                        handshake_deadline,
+                        handshake_permit,
+                    )
+                    .await;
+            } else {
+                runtime
+                    .app
+                    .on_handshake_failure(
+                        PeerMeta {
+                            transport: TransportKind::Tcp,
+                            remote_addr: Some(peer_remote_addr),
+                        },
+                        &WarpLinkError::Timeout("tcp hello deadline exhausted".to_string()),
+                    )
+                    .await;
+            }
         }
     }
 
-    async fn run_session_io<R, W>(self, reader: R, writer: W, peer_remote_addr: String)
-    where
+    fn apply_remaining_hello_budget(&mut self, deadline: Instant) -> bool {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return false;
+        };
+        if remaining.is_zero() {
+            return false;
+        }
+        self.config.hello_timeout_ms = remaining.as_millis().clamp(1, u64::MAX as u128) as u64;
+        true
+    }
+
+    async fn run_session_io<R, W>(
+        self,
+        reader: R,
+        writer: W,
+        peer_remote_addr: String,
+        handshake_deadline: Instant,
+        handshake_permit: OwnedSemaphorePermit,
+    ) where
         R: AsyncRead + Unpin + Send,
         W: AsyncWrite + Unpin + Send,
     {
@@ -212,11 +344,26 @@ impl TcpServerRuntime {
             reader,
             writer,
             write_timeout_ms: self.config.write_timeout_ms,
+            prefetched_frame: None,
         };
         let peer = PeerMeta {
             transport: TransportKind::Tcp,
             remote_addr: Some(peer_remote_addr),
         };
+        let hello_frame = match timeout_at(handshake_deadline, io.recv_prefixed_frame()).await {
+            Ok(Ok(frame)) => frame,
+            Ok(Err(err)) => {
+                self.app.on_handshake_failure(peer, &err).await;
+                return;
+            }
+            Err(_) => {
+                let error = WarpLinkError::Timeout("tcp hello deadline exhausted".to_string());
+                self.app.on_handshake_failure(peer, &error).await;
+                return;
+            }
+        };
+        io.prefetched_frame = Some(hello_frame);
+        drop(handshake_permit);
         if let Err(err) = run_server_session(&self.config, self.app, &mut io, peer).await {
             ::tracing::event!(
                 target: "gateway.trace_event",
@@ -233,11 +380,12 @@ impl ProxyProtocolConfig {
         self,
         socket: &mut TcpStream,
         accepted_remote_addr: SocketAddr,
+        deadline: Instant,
     ) -> Result<String, WarpLinkError> {
         if !self.enabled {
             return Ok(accepted_remote_addr.to_string());
         }
-        let parsed = ProxyProtocolV1::read_source_addr(socket, self.hello_timeout_ms).await?;
+        let parsed = ProxyProtocolV1::read_source_addr(socket, deadline).await?;
         Ok(parsed.unwrap_or_else(|| accepted_remote_addr.to_string()))
     }
 }
@@ -245,7 +393,7 @@ impl ProxyProtocolConfig {
 impl ProxyProtocolV1 {
     async fn read_source_addr(
         socket: &mut TcpStream,
-        timeout_ms: u64,
+        deadline: Instant,
     ) -> Result<Option<String>, WarpLinkError> {
         let mut line = Vec::with_capacity(64);
         let read_future = async {
@@ -273,7 +421,7 @@ impl ProxyProtocolV1 {
             Self::parse_source_addr(line_str.as_str())
         };
 
-        timeout(Duration::from_millis(timeout_ms.max(1)), read_future)
+        timeout_at(deadline, read_future)
             .await
             .map_err(|_| WarpLinkError::Timeout("proxy protocol read timeout".to_string()))?
     }
@@ -336,6 +484,7 @@ struct FramedServerIo<R, W> {
     reader: R,
     writer: W,
     write_timeout_ms: u64,
+    prefetched_frame: Option<Vec<u8>>,
 }
 
 impl<R, W> FramedServerIo<R, W>
@@ -404,6 +553,9 @@ where
     }
 
     async fn recv_frame(&mut self, timeout_ms: u64) -> Result<Vec<u8>, WarpLinkError> {
+        if let Some(frame) = self.prefetched_frame.take() {
+            return Ok(frame);
+        }
         timeout(
             Duration::from_millis(timeout_ms),
             self.recv_prefixed_frame(),
@@ -416,6 +568,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::ProxyProtocolV1;
+    use std::time::Duration;
+    use tokio::{
+        io::AsyncWriteExt,
+        net::{TcpListener, TcpStream},
+        time::Instant,
+    };
+    use warp_link::warp_link_core::WarpLinkError;
 
     #[test]
     fn parse_proxy_tcp4_source_addr() {
@@ -445,5 +604,29 @@ mod tests {
     fn reject_non_proxy_payload() {
         let parsed = ProxyProtocolV1::parse_source_addr("GET /private/ws HTTP/1.1");
         assert!(parsed.is_err());
+    }
+
+    #[tokio::test]
+    async fn proxy_header_slowloris_cannot_renew_the_absolute_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let addr = listener.local_addr().expect("test address should exist");
+        let mut client = TcpStream::connect(addr)
+            .await
+            .expect("test client should connect");
+        let (mut server, _) = listener.accept().await.expect("server should accept");
+        client
+            .write_all(b"P")
+            .await
+            .expect("partial proxy header should write");
+
+        let result = ProxyProtocolV1::read_source_addr(
+            &mut server,
+            Instant::now() + Duration::from_millis(50),
+        )
+        .await;
+
+        assert!(matches!(result, Err(WarpLinkError::Timeout(_))));
     }
 }

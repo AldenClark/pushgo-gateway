@@ -8,8 +8,8 @@ pub(in crate::storage::database::pg) async fn upsert_device_route_in_tx(
     let values = route.persistence_values()?;
     sqlx::query(
         "INSERT INTO devices \
-         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at, route_revision) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1) \
          ON CONFLICT (device_id) DO UPDATE SET \
            token_raw = EXCLUDED.token_raw, \
            platform_code = EXCLUDED.platform_code, \
@@ -17,7 +17,8 @@ pub(in crate::storage::database::pg) async fn upsert_device_route_in_tx(
            platform = EXCLUDED.platform, \
            channel_type = EXCLUDED.channel_type, \
            provider_token = EXCLUDED.provider_token, \
-           route_updated_at = EXCLUDED.route_updated_at",
+           route_updated_at = EXCLUDED.route_updated_at, \
+           route_revision = devices.route_revision + 1",
     )
     .bind(values.device_id.as_slice())
     .bind(values.token_raw.as_slice())
@@ -300,7 +301,7 @@ impl PostgresDb {
     pub(super) async fn transition_device_route(
         &self,
         route: &DeviceRouteRecordRow,
-        previous_channel_type: RouteChannelType,
+        _previous_channel_type: RouteChannelType,
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
     ) -> StoreResult<usize> {
@@ -308,6 +309,24 @@ impl PostgresDb {
         let next_channel_type = route.channel_type_kind()?;
         let now = Utc::now().timestamp_millis();
         let mut tx = self.pool.begin().await?;
+        let current_route = sqlx::query(
+            "SELECT channel_type, route_updated_at FROM devices WHERE device_id = $1 FOR UPDATE",
+        )
+        .bind(values.device_id.as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if current_route.as_ref().is_some_and(|row| {
+            row.get::<Option<i64>, _>("route_updated_at")
+                .is_some_and(|updated_at| updated_at >= values.updated_at)
+        }) {
+            tx.commit().await?;
+            return Ok(0);
+        }
+        let previous_channel_type = current_route
+            .and_then(|row| row.get::<Option<String>, _>("channel_type"))
+            .map(|value| RouteChannelType::parse(value.as_str()))
+            .transpose()?
+            .unwrap_or(next_channel_type);
         let migrated = if previous_channel_type.is_private() && !next_channel_type.is_private() {
             let provider_token = values
                 .provider_token

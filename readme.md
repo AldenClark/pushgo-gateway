@@ -22,6 +22,10 @@
 - gateway: `https://gateway.pushgo.cn/`
 
 In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_URL`) based on region.
+Remote token-service URLs require `PUSHGO_TOKEN_SERVICE_AUTH_TOKEN`. This is a dedicated
+service-to-service secret; do not reuse the public Gateway API token (`PUSHGO_TOKEN`). HTTP is
+accepted only for literal loopback development endpoints, and token-service redirects may not
+cross origins.
 
 ## Private Transport Model
 
@@ -68,7 +72,8 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | No                | HTTP API / WSS bind address                            |
 | `--token`                         | `PUSHGO_TOKEN`                         | None                       | No                | Public API auth token (`Authorization: Bearer <token>` first; fallback `?token=<token>` only when Authorization is absent) |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
-| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | No                | token-service endpoint (recommended to set explicitly) |
+| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `http://127.0.0.1:6766`    | No                | token-service endpoint (set explicitly for remote deployments) |
+| —                                 | `PUSHGO_TOKEN_SERVICE_AUTH_TOKEN`      | None                       | For remote service | Env-only dedicated Bearer credential for token-service; never reuse `PUSHGO_TOKEN` |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss,mqtt`) |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | No                | Resource/performance profile (`small`/`public`); never changes the database driver selected by `--db-url` |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | No                | Native tracing log level (`off`/`error`/`warn`/`info`/`debug`/`trace`) |
@@ -347,6 +352,7 @@ Environment=PUSHGO_DB_URL=postgres://user:pass@127.0.0.1:5432/pushgo
 Environment=PUSHGO_PRIVATE_TLS_CERT=/etc/pushgo/certs/fullchain.pem
 Environment=PUSHGO_PRIVATE_TLS_KEY=/etc/pushgo/certs/privkey.pem
 Environment=PUSHGO_TOKEN=<gateway-bearer-token>
+EnvironmentFile=/etc/pushgo/token-service.env
 
 Restart=always
 RestartSec=2
@@ -355,6 +361,9 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 ```
+
+Create `/etc/pushgo/token-service.env` with mode `0600` and the single entry
+`PUSHGO_TOKEN_SERVICE_AUTH_TOKEN=<dedicated-token-service-secret>`.
 
 ### Option 2: Run with Docker
 
@@ -391,6 +400,7 @@ Example:
 
 ```bash
 docker run -d --name pushgo-gateway \
+  --env-file /etc/pushgo/token-service.env \
   -p 6666:6666 \
   -p 5223:5223/tcp \
   -p 5223:5223/udp \
@@ -483,6 +493,9 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 - gateway: `https://gateway.pushgo.cn/`
 
 生产环境建议根据部署地域显式设置 `--token-service-url`（或 `PUSHGO_TOKEN_SERVICE_URL`）。
+远端 token-service 必须配置 `PUSHGO_TOKEN_SERVICE_AUTH_TOKEN`。它是独立的服务间密钥，禁止复用
+Gateway 公共 API token（`PUSHGO_TOKEN`）。HTTP 只允许字面 loopback 开发地址，token-service
+重定向不得跨 origin。
 
 ## 私有传输模型
 
@@ -529,7 +542,8 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | 否       | HTTP API / WSS 监听地址                              |
 | `--token`                         | `PUSHGO_TOKEN`                         | 无                         | 否       | 公共 API 鉴权 token（优先 `Authorization: Bearer <token>`；仅当 Authorization 缺失时回退 `?token=<token>`） |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
-| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.dev` | 否       | token-service 地址（建议显式设置）                   |
+| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `http://127.0.0.1:6766`    | 否       | token-service 地址（远端部署必须显式设置）           |
+| —                                 | `PUSHGO_TOKEN_SERVICE_AUTH_TOKEN`      | 无                         | 远端服务必填 | 仅环境变量配置的 token-service 专用 Bearer 凭据；禁止复用 `PUSHGO_TOKEN` |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss,mqtt`） |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | 否       | 资源/性能档位（`small`/`public`）；不会改变 `--db-url` 选择的数据库驱动 |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | 否       | 原生 tracing 日志级别（`off`/`error`/`warn`/`info`/`debug`/`trace`） |
@@ -764,6 +778,7 @@ Environment=PUSHGO_DB_URL=postgres://user:pass@127.0.0.1:5432/pushgo
 Environment=PUSHGO_PRIVATE_TLS_CERT=/etc/pushgo/certs/fullchain.pem
 Environment=PUSHGO_PRIVATE_TLS_KEY=/etc/pushgo/certs/privkey.pem
 Environment=PUSHGO_TOKEN=<gateway-bearer-token>
+EnvironmentFile=/etc/pushgo/token-service.env
 
 Restart=always
 RestartSec=2
@@ -772,6 +787,9 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 ```
+
+创建权限为 `0600` 的 `/etc/pushgo/token-service.env`，文件只包含
+`PUSHGO_TOKEN_SERVICE_AUTH_TOKEN=<dedicated-token-service-secret>`。
 
 ### 方式二：Docker 运行
 
@@ -808,6 +826,7 @@ MCP/OAuth 路由（`/mcp`、`/oauth/*`、`/.well-known/*`）同样复用 `6666/t
 
 ```bash
 docker run -d --name pushgo-gateway \
+  --env-file /etc/pushgo/token-service.env \
   -p 6666:6666 \
   -p 5223:5223/tcp \
   -p 5223:5223/udp \

@@ -938,6 +938,8 @@ pub enum Error {
     Internal(String),
     #[error("server is too busy")]
     TooBusy,
+    #[error("request rate limit exceeded")]
+    RateLimited,
     #[error(transparent)]
     StoreError(#[from] StoreError),
 }
@@ -968,15 +970,20 @@ impl IntoResponse for Error {
                 "server is busy, please try again later",
                 "server_busy",
             ),
-            Error::Upstream { message, .. } => StatusResponse::error_with_status(
+            Error::RateLimited => err_with_code(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many requests, please try again later",
+                "rate_limited",
+            ),
+            Error::Upstream { .. } => StatusResponse::error_with_status(
                 StatusCode::BAD_GATEWAY,
-                message,
+                "upstream service unavailable",
                 Some(Cow::Borrowed("upstream_error")),
             )
             .with_status(StatusCode::BAD_GATEWAY),
-            Error::Internal(msg) => StatusResponse::error_with_status(
+            Error::Internal(_) => StatusResponse::error_with_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                msg,
+                "internal server error",
                 Some(Cow::Borrowed("internal_error")),
             )
             .with_status(StatusCode::INTERNAL_SERVER_ERROR),
@@ -1022,6 +1029,11 @@ impl IntoResponse for Error {
                 )
                 .with_status(StatusCode::BAD_REQUEST)
             }
+            Error::StoreError(StoreError::PasswordKdfBusy) => err_with_code(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server is busy, please try again later",
+                "server_busy",
+            ),
             Error::StoreError(StoreError::InvalidPlatform) => StatusResponse::error_with_status(
                 StatusCode::BAD_REQUEST,
                 "invalid platform",
@@ -1060,6 +1072,11 @@ fn emit_api_error_observation(error: &Error) {
             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
             "too_busy",
             Some("server_busy"),
+        ),
+        Error::RateLimited => (
+            StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            "rate_limit",
+            Some("rate_limited"),
         ),
         Error::Upstream { .. } => (
             StatusCode::BAD_GATEWAY.as_u16(),
@@ -1101,6 +1118,11 @@ fn emit_api_error_observation(error: &Error) {
             "store_error",
             Some("channel_subscriber_limit_exceeded"),
         ),
+        Error::StoreError(StoreError::PasswordKdfBusy) => (
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            "store_error",
+            Some("server_busy"),
+        ),
         Error::StoreError(StoreError::InvalidPlatform) => (
             StatusCode::BAD_REQUEST.as_u16(),
             "store_error",
@@ -1126,6 +1148,37 @@ fn emit_api_error_observation(error: &Error) {
 }
 
 impl Error {
+    pub(crate) fn client_safe_message(&self) -> Cow<'_, str> {
+        match self {
+            Error::Validation { message, .. } | Error::Conflict { message, .. } => {
+                Cow::Borrowed(message.as_ref())
+            }
+            Error::Unauthorized => Cow::Borrowed("authentication failed"),
+            Error::TooBusy | Error::StoreError(StoreError::PasswordKdfBusy) => {
+                Cow::Borrowed("server is busy, please try again later")
+            }
+            Error::RateLimited => Cow::Borrowed("too many requests, please try again later"),
+            Error::Upstream { .. } => Cow::Borrowed("upstream service unavailable"),
+            Error::Internal(_) => Cow::Borrowed("internal server error"),
+            Error::StoreError(StoreError::InvalidDeviceToken) => {
+                Cow::Borrowed("invalid device token")
+            }
+            Error::StoreError(StoreError::DeviceNotFound) => Cow::Borrowed("device not found"),
+            Error::StoreError(StoreError::ChannelNotFound) => Cow::Borrowed("channel not found"),
+            Error::StoreError(StoreError::ChannelPasswordMismatch) => {
+                Cow::Borrowed("invalid channel password")
+            }
+            Error::StoreError(StoreError::ChannelAliasMissing) => {
+                Cow::Borrowed("channel name must not be empty")
+            }
+            Error::StoreError(StoreError::ChannelSubscriberLimitExceeded) => {
+                Cow::Borrowed("channel subscriber limit exceeded")
+            }
+            Error::StoreError(StoreError::InvalidPlatform) => Cow::Borrowed("invalid platform"),
+            Error::StoreError(_) => Cow::Borrowed("database error, please try again later"),
+        }
+    }
+
     pub fn validation(msg: impl Into<Cow<'static, str>>) -> Self {
         Error::Validation {
             message: msg.into(),
@@ -1260,6 +1313,7 @@ impl StatusResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
 
     #[test]
     fn legacy_validation_detail_maps_to_stable_problem_code() {
@@ -1280,5 +1334,18 @@ mod tests {
         .expect("legacy limit problem should infer");
         assert_eq!(problem.code.as_deref(), Some("channels_limit_exceeded"));
         assert!(matches!(problem.category, ApiProblemCategory::Validation));
+    }
+
+    #[tokio::test]
+    async fn internal_error_response_does_not_expose_internal_detail() {
+        let error = Error::Internal("database password=super-secret".to_string());
+        assert_eq!(error.client_safe_message(), "internal server error");
+        let response = error.into_response();
+        let body = to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("response body");
+        let text = String::from_utf8(body.to_vec()).expect("UTF-8 response");
+        assert!(!text.contains("super-secret"));
+        assert!(text.contains("internal_error"));
     }
 }

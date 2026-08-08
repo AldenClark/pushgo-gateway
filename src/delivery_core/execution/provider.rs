@@ -8,7 +8,7 @@ use crate::{
     providers::{
         apns::{ApnsExpirationEpochSeconds, ApnsPayload},
         fcm::FcmPayload,
-        wns::WnsPayload,
+        wns::{WnsEnvelopeKind, WnsPayload},
     },
     runtime_counters::{
         OPS_METRIC_DISPATCH_INVALID_TOKEN_CLEANUP_LOOKUP_FAILED,
@@ -147,18 +147,20 @@ pub(crate) fn build_provider_payload_set(input: ProviderPayloadSetInput<'_>) -> 
             quantize_watch_payload(input.custom_data.as_ref()),
         ))
     });
+    let wns_payload = has_wns.then(|| {
+        Arc::new(WnsPayload::new(
+            crate::util::SharedStringMap::from(Arc::clone(&input.custom_data)),
+            input.delivery_id.as_str(),
+            WnsEnvelopeKind::Notification,
+            input.severity.as_str(),
+            input.ttl_seconds,
+        ))
+    });
     let apns_collapse_id = has_apns.then(|| Arc::from(input.delivery_id.into_boxed_str()));
     let apns_wakeup_title = has_apns.then(|| input.resolved_title.clone()).flatten();
     let apns_wakeup_body = has_apns
         .then(|| input.wakeup_data.get("body").cloned())
         .flatten();
-    let wns_payload = has_wns.then(|| {
-        Arc::new(WnsPayload::new(
-            crate::util::SharedStringMap::from(Arc::clone(&input.custom_data)),
-            input.severity.as_str(),
-            input.ttl_seconds,
-        ))
-    });
 
     ProviderPayloadSet {
         apns_payload,

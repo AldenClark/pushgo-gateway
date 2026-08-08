@@ -146,6 +146,7 @@ fn core_error_from_api(error: Error) -> CoreError {
         Error::Internal(message) => CoreError::Internal(message),
         Error::Unauthorized => CoreError::auth("authentication failed", "authentication_failed"),
         Error::TooBusy => CoreError::internal("server is busy, please try again later"),
+        Error::RateLimited => CoreError::internal("request rate limited"),
         Error::Upstream { message, .. } => CoreError::internal(message),
     }
 }

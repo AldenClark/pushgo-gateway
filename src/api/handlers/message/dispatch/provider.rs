@@ -7,6 +7,7 @@ use crate::{
         prepare_apns_payload, prepare_fcm_payload, prepare_provider_target, prepare_wns_payload,
     },
     delivery_core::payload::quantize_watch_payload,
+    providers::wns::WnsEnvelopeKind,
     storage::PrivateMessage,
     util::{SharedStringMap, encode_crockford_base32_128},
 };
@@ -230,6 +231,8 @@ async fn prepare_wns_provider_payload(
     )));
     let wakeup_payload = Arc::new(WnsPayload::new(
         SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
+        prepared.delivery_id.as_str(),
+        WnsEnvelopeKind::ProviderWakeup,
         "high",
         prepared.ttl_seconds,
     ));
@@ -371,22 +374,20 @@ mod tests {
     }
 
     #[test]
-    fn wns_direct_payload_contains_immutable_ack_source() {
+    fn wns_direct_payload_keeps_ack_target_out_of_wire_payload() {
         let payload = WnsPayload::new(
             SharedStringMap::from(direct_source_data("windows-device")),
+            "delivery-windows-device",
+            WnsEnvelopeKind::Notification,
             "high",
             None,
         );
+        let body = payload.encoded_body().expect("WNS payload should encode");
+        let envelope: serde_json::Value =
+            serde_json::from_slice(body.as_ref()).expect("WNS payload should be JSON");
 
-        assert_eq!(
-            (
-                payload.data().get("base_url").map(String::as_str),
-                payload
-                    .data()
-                    .get("provider_device_key")
-                    .map(String::as_str),
-            ),
-            (Some("https://gateway.example"), Some("windows-device"))
-        );
+        assert_eq!(envelope["delivery_id"], "delivery-windows-device");
+        assert!(envelope["payload"].get("base_url").is_none());
+        assert!(envelope["payload"].get("provider_device_key").is_none());
     }
 }

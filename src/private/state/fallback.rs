@@ -74,6 +74,30 @@ impl PrivateState {
         Ok(())
     }
 
+    pub async fn mark_fallback_sent_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        next_attempt_at: i64,
+    ) -> Result<bool, crate::Error> {
+        let settled = self
+            .hub
+            .mark_fallback_sent_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                next_attempt_at,
+            )
+            .await?;
+        if settled {
+            self.schedule_fallback(device_id, delivery_id.to_string(), next_attempt_at);
+        }
+        Ok(settled)
+    }
+
     pub async fn defer_fallback_retry(
         &self,
         device_id: DeviceId,
@@ -93,6 +117,47 @@ impl PrivateState {
         );
         self.schedule_fallback(device_id, delivery_id.to_string(), retry_at);
         Ok(())
+    }
+
+    pub async fn defer_fallback_retry_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        retry_at: i64,
+    ) -> Result<bool, crate::Error> {
+        let settled = self
+            .hub
+            .defer_fallback_retry_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                retry_at,
+            )
+            .await?;
+        if settled {
+            self.schedule_fallback(device_id, delivery_id.to_string(), retry_at);
+        }
+        Ok(settled)
+    }
+
+    pub async fn drop_fallback_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+    ) -> Result<bool, crate::Error> {
+        let settled = self
+            .hub
+            .drop_delivery_if_claimed(device_id, delivery_id, worker_id, claim_generation)
+            .await?;
+        if settled {
+            self.cancel_fallback(device_id, delivery_id);
+        }
+        Ok(settled)
     }
 
     pub async fn clear_device_outbox(&self, device_id: DeviceId) -> Result<usize, crate::Error> {

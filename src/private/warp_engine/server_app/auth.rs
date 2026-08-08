@@ -34,6 +34,9 @@ impl PushgoServerApp {
     }
 
     async fn handle_connect_auth(&self, request: AuthRequest) -> Result<AuthResponse, AuthError> {
+        if self.state.is_shutting_down() {
+            return Err(AuthError::Internal("server_shutting_down".to_string()));
+        }
         let peer = request
             .peer
             .ok_or_else(|| AuthError::Internal("missing_connect_peer".to_string()))?;
@@ -93,10 +96,6 @@ impl PushgoServerApp {
             crate::private::private_connection_queue_capacity(self.state.config.runtime_profile);
         let (tx, rx): (Sender<DeliverEnvelope>, Receiver<DeliverEnvelope>) =
             flume::bounded(connection_queue_capacity);
-        let registration =
-            self.state
-                .hub
-                .register_connection(device_id, conn_id, peer.transport, tx);
         self.state
             .hub
             .store()
@@ -106,6 +105,15 @@ impl PushgoServerApp {
                 "private_connect",
             )
             .await;
+        if self.state.is_shutting_down() {
+            return Err(AuthError::Internal("server_shutting_down".to_string()));
+        }
+        // Keep the presence registration after the final cancellable await so a
+        // shutdown that drops authentication cannot strand an ownerless session.
+        let registration =
+            self.state
+                .hub
+                .register_connection(device_id, conn_id, peer.transport, tx);
         self.state.request_fallback_resync();
         let logical_partition = logical_partition_for_device(device_id);
 

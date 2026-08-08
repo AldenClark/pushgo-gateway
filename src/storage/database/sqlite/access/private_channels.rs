@@ -203,7 +203,7 @@ impl SqliteDb {
         limit: usize,
     ) -> StoreResult<Vec<PrivateOutboxEntry>> {
         let rows = sqlx::query(
-            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, claim_generation, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE device_id = ? AND status IN (?, ?, ?) \
              ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC LIMIT ?",
         )
@@ -225,6 +225,7 @@ impl SqliteDb {
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),
                 claimed_by: r.get("claimed_by"),
+                claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
                 first_sent_at: r.get("first_sent_at"),
                 last_attempt_at: r.get("last_attempt_at"),
                 acked_at: r.get("acked_at"),
@@ -245,7 +246,7 @@ impl SqliteDb {
     ) -> StoreResult<Vec<PrivateOutboxMessageRow>> {
         let rows = sqlx::query(
             "SELECT o.device_id, o.delivery_id, o.status, o.attempts, o.occurred_at, o.created_at, \
-                    o.claimed_at, o.claimed_by, o.first_sent_at, o.last_attempt_at, o.acked_at, o.fallback_sent_at, \
+                    o.claimed_at, o.claimed_by, o.claim_generation, o.first_sent_at, o.last_attempt_at, o.acked_at, o.fallback_sent_at, \
                     o.next_attempt_at, o.last_error_code, o.last_error_detail, o.updated_at, \
                     p.payload_blob, p.payload_size, p.sent_at, p.expires_at \
              FROM private_outbox o \
@@ -632,6 +633,7 @@ fn private_outbox_entry_from_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> Privat
         created_at: row.get("created_at"),
         claimed_at: row.get("claimed_at"),
         claimed_by: row.get("claimed_by"),
+        claim_generation: row.get::<i64, _>("claim_generation").max(0) as u64,
         first_sent_at: row.get("first_sent_at"),
         last_attempt_at: row.get("last_attempt_at"),
         acked_at: row.get("acked_at"),

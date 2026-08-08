@@ -8,8 +8,8 @@ pub(in crate::storage::database::sqlite) async fn upsert_device_route_in_tx(
     let values = route.persistence_values()?;
     sqlx::query(
         "INSERT INTO devices \
-         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at, route_revision) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1) \
          ON CONFLICT (device_id) DO UPDATE SET \
            token_raw = EXCLUDED.token_raw, \
            platform_code = EXCLUDED.platform_code, \
@@ -17,7 +17,8 @@ pub(in crate::storage::database::sqlite) async fn upsert_device_route_in_tx(
            platform = EXCLUDED.platform, \
            channel_type = EXCLUDED.channel_type, \
            provider_token = EXCLUDED.provider_token, \
-           route_updated_at = EXCLUDED.route_updated_at",
+           route_updated_at = EXCLUDED.route_updated_at, \
+           route_revision = route_revision + 1",
     )
     .bind(values.device_id.as_slice())
     .bind(values.token_raw.as_slice())
@@ -63,13 +64,14 @@ async fn upsert_device_route_in_attached_core_tx(
     let values = route.persistence_values()?;
     sqlx::query(
         "INSERT INTO pushgo_core.devices \
-         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at, route_revision) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1) \
          ON CONFLICT (device_id) DO UPDATE SET \
            token_raw = excluded.token_raw, platform_code = excluded.platform_code, \
            device_key = excluded.device_key, platform = excluded.platform, \
            channel_type = excluded.channel_type, provider_token = excluded.provider_token, \
-           route_updated_at = excluded.route_updated_at",
+           route_updated_at = excluded.route_updated_at, \
+           route_revision = route_revision + 1",
     )
     .bind(values.device_id.as_slice())
     .bind(values.token_raw.as_slice())
@@ -479,7 +481,7 @@ impl SqliteDb {
     pub(super) async fn transition_device_route(
         &self,
         route: &DeviceRouteRecordRow,
-        previous_channel_type: RouteChannelType,
+        _previous_channel_type: RouteChannelType,
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
     ) -> StoreResult<usize> {
@@ -489,6 +491,24 @@ impl SqliteDb {
         let mut conn = self.delivery_pool().acquire().await?;
         ensure_core_database_attached(&mut conn, self.core_db_path.as_deref()).await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let current_route = sqlx::query(
+            "SELECT channel_type, route_updated_at FROM pushgo_core.devices WHERE device_id = ?",
+        )
+        .bind(values.device_id.as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if current_route.as_ref().is_some_and(|row| {
+            row.get::<Option<i64>, _>("route_updated_at")
+                .is_some_and(|updated_at| updated_at >= values.updated_at)
+        }) {
+            tx.commit().await?;
+            return Ok(0);
+        }
+        let previous_channel_type = current_route
+            .and_then(|row| row.get::<Option<String>, _>("channel_type"))
+            .map(|value| RouteChannelType::parse(value.as_str()))
+            .transpose()?
+            .unwrap_or(next_channel_type);
         let migrated = if previous_channel_type.is_private() && !next_channel_type.is_private() {
             let provider_token = values
                 .provider_token

@@ -43,6 +43,8 @@ impl GatewayProcess {
             .arg(db_url.clone())
             .arg("--token")
             .arg(&token)
+            .arg("--token-service-url")
+            .arg("http://127.0.0.1:1")
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
             .spawn()

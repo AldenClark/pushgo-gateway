@@ -90,7 +90,8 @@ impl MySqlDb {
                     p.expires_at AS shared_expires_at \
              FROM provider_pull_queue q \
              LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
-             WHERE q.device_id = ? AND q.delivery_id = ? AND q.expires_at > ?",
+             WHERE q.device_id = ? AND q.delivery_id = ? AND q.expires_at > ? \
+             FOR UPDATE",
         )
         .bind(device_id.as_slice())
         .bind(delivery_id)
@@ -99,6 +100,17 @@ impl MySqlDb {
         .await?;
 
         let result = if let Some(r) = row {
+            let payload = provider_payload_from_row(&r);
+            if let Some(original_delivery_id) =
+                crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
+            {
+                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+                    .bind(device_id.as_slice())
+                    .bind(&original_delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                delete_orphan_private_payload_in_mysql_tx(&mut tx, &original_delivery_id).await?;
+            }
             sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
                 .bind(device_id.as_slice())
                 .bind(delivery_id)
@@ -108,7 +120,7 @@ impl MySqlDb {
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
-                payload: provider_payload_from_row(&r),
+                payload,
                 sent_at: provider_sent_at_from_row(&r),
                 expires_at: provider_expires_at_from_row(&r),
                 platform: r.get::<String, _>("platform").parse()?,
@@ -141,7 +153,8 @@ impl MySqlDb {
              FROM provider_pull_queue q \
              LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
              WHERE q.device_id = ? AND q.expires_at > ? \
-             ORDER BY q.created_at ASC LIMIT ?",
+             ORDER BY q.created_at ASC, q.delivery_id ASC LIMIT ? \
+             FOR UPDATE SKIP LOCKED",
         )
         .bind(device_id.as_slice())
         .bind(now)
@@ -155,10 +168,21 @@ impl MySqlDb {
             let delivery_id = decode_mysql_text(&r, "delivery_id")?;
             let platform_text: String = r.get("platform");
             let platform = platform_text.parse()?;
+            let payload = provider_payload_from_row(&r);
+            if let Some(original_delivery_id) =
+                crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
+            {
+                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+                    .bind(device_id.as_slice())
+                    .bind(&original_delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                delete_orphan_private_payload_in_mysql_tx(&mut tx, &original_delivery_id).await?;
+            }
             out.push(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.clone(),
-                payload: provider_payload_from_row(&r),
+                payload,
                 sent_at: provider_sent_at_from_row(&r),
                 expires_at: provider_expires_at_from_row(&r),
                 platform,
@@ -309,7 +333,8 @@ impl MySqlDb {
                     p.expires_at AS shared_expires_at \
              FROM provider_pull_queue q \
              LEFT JOIN private_payloads p ON p.delivery_id = q.delivery_id \
-             WHERE q.device_id = ? AND q.delivery_id = ?",
+             WHERE q.device_id = ? AND q.delivery_id = ? \
+             FOR UPDATE",
         )
         .bind(device_id.as_slice())
         .bind(delivery_id)

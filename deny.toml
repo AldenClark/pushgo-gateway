@@ -1,0 +1,67 @@
+[graph]
+all-features = true
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "armv7-unknown-linux-musleabihf",
+]
+
+[advisories]
+yanked = "deny"
+# SQLx's MySQL client uses `rsa` only for RSA public-key encryption during
+# authentication. RUSTSEC-2023-0071 applies to observable private-key
+# operations; Gateway JWT signing is HS256 through aws-lc-rs and does not use
+# the RustCrypto RSA implementation. Keep this narrowly documented exception
+# until SQLx removes or replaces the dependency.
+ignore = ["RUSTSEC-2023-0071"]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+skip = [
+    # Pinned upstream crates still use these incompatible generations. Keep
+    # every exception exact so any new duplicate fails the release gate.
+    { name = "block-buffer", version = "=0.10.4", reason = "tungstenite SHA-1 remains on digest 0.10" },
+    { name = "const-oid", version = "=0.9.6", reason = "SQLx MySQL RSA authentication retains the older PKCS generation" },
+    { name = "cpufeatures", version = "=0.2.17", reason = "tungstenite SHA-1 and SQLx RSA remain on cpufeatures 0.2" },
+    { name = "crypto-common", version = "=0.1.6", reason = "tungstenite SHA-1 and SQLx RSA remain on crypto-common 0.1" },
+    { name = "digest", version = "=0.10.7", reason = "tungstenite SHA-1 and SQLx RSA remain on digest 0.10" },
+    { name = "flume", version = "=0.11.1", reason = "SQLx and the gateway queue use incompatible flume generations" },
+    { name = "foldhash", version = "=0.1.5", reason = "SQLx hashbrown remains on foldhash 0.1" },
+    { name = "getrandom", version = "=0.2.17", reason = "ring and SQLx RSA retain the legacy getrandom ABI" },
+    { name = "getrandom", version = "=0.3.4", reason = "tungstenite rand 0.9 retains the intermediate getrandom ABI" },
+    { name = "hashbrown", version = "=0.14.5", reason = "SQLx retains hashbrown 0.14" },
+    { name = "hashbrown", version = "=0.15.5", reason = "SQLx retains hashbrown 0.15" },
+    { name = "rand", version = "=0.8.7", reason = "SQLx RSA authentication retains rand 0.8" },
+    { name = "rand", version = "=0.9.5", reason = "tungstenite remains on rand 0.9 while warp-link uses rand 0.10" },
+    { name = "rand_chacha", version = "=0.3.1", reason = "SQLx RSA authentication retains rand 0.8" },
+    { name = "rand_core", version = "=0.6.4", reason = "SQLx RSA authentication retains rand_core 0.6" },
+    { name = "rand_core", version = "=0.9.5", reason = "tungstenite rand 0.9 retains rand_core 0.9" },
+    { name = "sha2", version = "=0.10.9", reason = "SQLx MySQL RSA authentication retains sha2 0.10" },
+    { name = "syn", version = "=2.0.119", reason = "application and SQLx macros remain on syn 2 while warp-link uses syn 3" },
+    { name = "untrusted", version = "=0.7.1", reason = "aws-lc-rs retains the legacy untrusted ABI" },
+    { name = "webpki-roots", version = "=0.26.11", reason = "SQLx and tungstenite retain the compatibility root bundle" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/AldenClark/warp-link"]

@@ -9,9 +9,9 @@ const MYSQL_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS channels (channel_id BINARY(16) PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, payload_blob BLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (delivery_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, request_fingerprint VARCHAR(64) NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, request_fingerprint VARCHAR(64) NULL, state VARCHAR(32) NOT NULL, provider_run_token VARCHAR(64) NULL, provider_owner VARCHAR(128) NULL, provider_lease_until BIGINT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, semantic_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, source VARCHAR(64) NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key), UNIQUE KEY semantic_id_registry_semantic_idx (semantic_id)) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, channel_id BINARY(16) NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64) NULL, accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (op_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, channel_id BINARY(16) NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64) NULL, provider_run_token VARCHAR(64) NULL, accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (op_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token VARCHAR(512) NOT NULL, channel_id BINARY(16) NULL, platform VARCHAR(32) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (activity_key, token)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL) ENGINE=InnoDB",
@@ -19,10 +19,10 @@ const MYSQL_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const MYSQL_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BINARY(32) PRIMARY KEY, token_raw BLOB NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, platform VARCHAR(32) NULL, channel_type VARCHAR(32) NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, route_updated_at BIGINT NULL) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BINARY(32) PRIMARY KEY, token_raw BLOB NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, platform VARCHAR(32) NULL, channel_type VARCHAR(32) NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, route_updated_at BIGINT NULL, route_revision BIGINT NOT NULL DEFAULT 0) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BINARY(16) NOT NULL, key_id INT NOT NULL, key_hash BLOB NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT NULL, PRIMARY KEY (device_id, key_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BINARY(16) NOT NULL, expires_at BIGINT NOT NULL) ENGINE=InnoDB",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, status VARCHAR(16) NOT NULL, attempts INT NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT NULL, claimed_by VARCHAR(128) NULL, first_sent_at BIGINT NULL, last_attempt_at BIGINT NULL, acked_at BIGINT NULL, fallback_sent_at BIGINT NULL, next_attempt_at BIGINT NOT NULL, last_error_code VARCHAR(64) NULL, last_error_detail TEXT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, status VARCHAR(16) NOT NULL, attempts INT NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT NULL, claimed_by VARCHAR(128) NULL, claim_generation BIGINT NOT NULL DEFAULT 0, first_sent_at BIGINT NULL, last_attempt_at BIGINT NULL, acked_at BIGINT NULL, fallback_sent_at BIGINT NULL, next_attempt_at BIGINT NOT NULL, last_error_code VARCHAR(64) NULL, last_error_detail TEXT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_bindings (platform SMALLINT NOT NULL, token_hash BINARY(32) NOT NULL, device_id BINARY(16) NOT NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (platform, token_hash)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BINARY(16) NOT NULL, device_id BINARY(32) NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'active', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (channel_id, device_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, payload_blob LONGBLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
@@ -34,6 +34,7 @@ const MYSQL_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
     "CREATE INDEX dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
+    "CREATE INDEX dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
     "CREATE INDEX semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
     "CREATE INDEX sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
@@ -177,6 +178,30 @@ impl MySqlDb {
             "ALTER TABLE dispatch_op_dedupe ADD COLUMN request_fingerprint VARCHAR(64) NULL",
         )
         .await?;
+        self.ensure_mysql_column(
+            "dispatch_op_dedupe",
+            "provider_run_token",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_run_token VARCHAR(64) NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "dispatch_op_dedupe",
+            "provider_owner",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_owner VARCHAR(128) NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "dispatch_op_dedupe",
+            "provider_lease_until",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_lease_until BIGINT NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "sender_submit_status",
+            "provider_run_token",
+            "ALTER TABLE sender_submit_status ADD COLUMN provider_run_token VARCHAR(64) NULL",
+        )
+        .await?;
 
         self.ensure_mysql_column(
             "devices",
@@ -218,6 +243,12 @@ impl MySqlDb {
             "devices",
             "route_updated_at",
             "ALTER TABLE devices ADD COLUMN route_updated_at BIGINT NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "devices",
+            "route_revision",
+            "ALTER TABLE devices ADD COLUMN route_revision BIGINT NOT NULL DEFAULT 0",
         )
         .await?;
         self.ensure_mysql_column(
@@ -273,6 +304,18 @@ impl MySqlDb {
             "claimed_by",
             "ALTER TABLE private_outbox ADD COLUMN claimed_by VARCHAR(128) NULL",
         )
+        .await?;
+        self.ensure_mysql_column(
+            "private_outbox",
+            "claim_generation",
+            "ALTER TABLE private_outbox ADD COLUMN claim_generation BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE private_outbox SET status = 'pending', claimed_at = NULL, claimed_by = NULL \
+             WHERE status = 'claimed'",
+        )
+        .execute(&self.pool)
         .await?;
         self.ensure_mysql_column(
             "private_outbox",
@@ -1027,18 +1070,9 @@ impl MySqlDb {
 }
 
 pub(crate) struct MySqlUpgradeLockGuard {
-    pool: sqlx::MySqlPool,
-}
-
-impl Drop for MySqlUpgradeLockGuard {
-    fn drop(&mut self) {
-        let pool = self.pool.clone();
-        tokio::spawn(async move {
-            let _ = sqlx::query("SELECT RELEASE_LOCK('pushgo_gateway_db_upgrade')")
-                .execute(&pool)
-                .await;
-        });
-    }
+    // MySQL named locks are owned by the connection that acquired them. Keep a
+    // dedicated physical session alive for the complete upgrade operation.
+    _connection: MySqlConnection,
 }
 
 impl MySqlDb {
@@ -1082,11 +1116,12 @@ impl crate::storage::database::upgrade::lock::UpgradeLockAccess for MySqlDb {
 
     async fn acquire_upgrade_lock(
         &self,
-        _db_url: &str,
+        db_url: &str,
     ) -> crate::storage::database::upgrade::UpgradeResult<Self::Guard> {
+        let mut connection = MySqlConnection::connect(db_url).await?;
         let locked: Option<i64> =
             sqlx::query_scalar("SELECT GET_LOCK('pushgo_gateway_db_upgrade', 0)")
-                .fetch_one(&self.pool)
+                .fetch_one(&mut connection)
                 .await?;
         if locked != Some(1) {
             return Err(crate::storage::database::upgrade::UpgradeError::Store(
@@ -1096,7 +1131,7 @@ impl crate::storage::database::upgrade::lock::UpgradeLockAccess for MySqlDb {
             ));
         }
         Ok(MySqlUpgradeLockGuard {
-            pool: self.pool.clone(),
+            _connection: connection,
         })
     }
 }
@@ -1342,6 +1377,30 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for MySqlDb 
             if exists.is_none() {
                 return Err(crate::storage::database::upgrade::UpgradeError::Store(
                     StoreError::Upgrade(format!("required table missing after upgrade: {table}")),
+                ));
+            }
+        }
+        for (table, column) in [
+            ("private_outbox", "claim_generation"),
+            ("dispatch_op_dedupe", "provider_run_token"),
+            ("dispatch_op_dedupe", "provider_owner"),
+            ("dispatch_op_dedupe", "provider_lease_until"),
+            ("sender_submit_status", "provider_run_token"),
+            ("devices", "route_revision"),
+        ] {
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM information_schema.columns \
+                 WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1",
+            )
+            .bind(table)
+            .bind(column)
+            .fetch_optional(&self.pool)
+            .await?;
+            if exists.is_none() {
+                return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!(
+                        "required column missing after upgrade: {table}.{column}"
+                    )),
                 ));
             }
         }

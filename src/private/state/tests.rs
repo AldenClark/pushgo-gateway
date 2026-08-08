@@ -102,6 +102,48 @@ async fn begin_shutdown_marks_state_and_wakes_waiters() {
 }
 
 #[tokio::test]
+async fn shutdown_runtime_joins_owned_tasks_and_rejects_late_spawns() {
+    let StateTestContext { _dir, state } = StateTestContext::new().await;
+    let state = Arc::new(state);
+    let worker_state = Arc::clone(&state);
+    assert!(state.spawn_runtime_task("test_worker", async move {
+        worker_state.wait_for_shutdown().await;
+    }));
+
+    let report = state.shutdown_runtime(Duration::from_secs(1)).await;
+
+    assert_eq!(report.joined, 1);
+    assert_eq!(report.panicked, 0);
+    assert_eq!(report.aborted, 0);
+    assert!(!state.spawn_runtime_task("late_worker", async {}));
+}
+
+#[tokio::test]
+async fn full_connection_queue_never_blocks_other_private_delivery_work() {
+    let ctx = StateTestContext::new().await;
+    let device_id = derive_private_device_id("bounded-delivery-device");
+    let (tx, _rx) = flume::bounded(1);
+    let envelope = crate::private::protocol::DeliverEnvelope {
+        delivery_id: "bounded-delivery".to_string(),
+        payload: Arc::from([1u8]),
+    };
+    tx.try_send(envelope.clone())
+        .expect("test queue should accept its first delivery");
+    ctx.state
+        .hub
+        .register_connection(device_id, 1, TransportKind::Tcp, tx);
+
+    let delivered = tokio::time::timeout(
+        Duration::from_millis(100),
+        ctx.state.hub.deliver_to_device(device_id, envelope),
+    )
+    .await
+    .expect("a full per-device queue must not suspend the caller");
+
+    assert!(!delivered);
+}
+
+#[tokio::test]
 async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_full() {
     let ctx = StateTestContext::new().await;
     let device_id = derive_private_device_id("capacity-evict-device");
@@ -195,6 +237,7 @@ async fn enqueue_private_delivery_does_not_evict_claimed_entries_for_capacity() 
                     created_at: now + index as i64,
                     claimed_at: Some(now + index as i64),
                     claimed_by: None,
+                    claim_generation: 0,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,

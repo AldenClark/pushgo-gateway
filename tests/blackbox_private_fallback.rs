@@ -10,6 +10,7 @@ use futures_util::{SinkExt, StreamExt};
 use pushgo_warp_profile::{PrivatePayloadEnvelope, PushgoWireProfile};
 use reqwest::Client;
 use serde_json::Value;
+use sqlx::{Connection, SqliteConnection};
 use tempfile::TempDir;
 use tokio_tungstenite::{
     connect_async,
@@ -22,6 +23,7 @@ struct GatewayProcess {
     _dir: TempDir,
     _cert_dir: TempDir,
     log_path: PathBuf,
+    delivery_db_path: PathBuf,
     http_port: u16,
     token: String,
 }
@@ -34,6 +36,7 @@ impl GatewayProcess {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let cert_dir = tempfile::tempdir().expect("cert dir should be created");
         let db_path = dir.path().join("gateway-blackbox.sqlite");
+        let delivery_db_path = dir.path().join("gateway-blackbox.delivery.sqlite");
         let log_path = dir.path().join("gateway-blackbox.log");
         let cert_path = cert_dir.path().join("cert.pem");
         let key_path = cert_dir.path().join("key.pem");
@@ -48,6 +51,8 @@ impl GatewayProcess {
             .arg(format!("sqlite://{}?mode=rwc", db_path.to_string_lossy()))
             .arg("--token")
             .arg(&token)
+            .arg("--token-service-url")
+            .arg("http://127.0.0.1:1")
             .arg("--private-transports")
             .arg("quic,tcp,wss")
             .arg("--private-tcp-bind")
@@ -72,6 +77,7 @@ impl GatewayProcess {
             _dir: dir,
             _cert_dir: cert_dir,
             log_path,
+            delivery_db_path,
             http_port,
             token,
         };
@@ -152,6 +158,95 @@ async fn private_ack_timeout_redelivers_over_private_ws_without_provider() {
     ws.send(Message::Binary(ack.to_vec().into()))
         .await
         .expect("ack should send");
+
+    wait_until_private_outbox_is_empty(&gateway).await;
+    ws.close(None).await.expect("acked websocket should close");
+
+    let mut reconnected = connect_private_ws(&gateway, &profile, &device_key).await;
+    assert_no_deliver_for(&mut reconnected, &profile, Duration::from_secs(3), &gateway).await;
+}
+
+async fn wait_until_private_outbox_is_empty(gateway: &GatewayProcess) {
+    let database_url = format!(
+        "sqlite://{}?mode=rw",
+        gateway.delivery_db_path.to_string_lossy()
+    );
+    let mut connection = SqliteConnection::connect(&database_url)
+        .await
+        .expect("delivery sidecar should open");
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    loop {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox")
+            .fetch_one(&mut connection)
+            .await
+            .expect("private outbox count should query");
+        if count == 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "ACK did not drain private_outbox before the deadline (remaining={count})\n{}",
+            gateway.logs()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn assert_no_deliver_for(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    profile: &Arc<PushgoWireProfile>,
+    duration: Duration,
+    gateway: &GatewayProcess,
+) {
+    let deadline = tokio::time::Instant::now() + duration;
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+            return;
+        };
+        let next = match tokio::time::timeout(remaining, ws.next()).await {
+            Err(_) => return,
+            Ok(next) => next
+                .expect("reconnected websocket should stay open")
+                .expect("reconnected websocket frame should decode"),
+        };
+        match next {
+            Message::Binary(frame) => match profile
+                .decode_server_frame(&frame)
+                .expect("server frame should decode")
+            {
+                DecodedServerFrame::Deliver(msg) => panic!(
+                    "ACKed delivery was replayed after reconnect: id={}\n{}",
+                    msg.id,
+                    gateway.logs()
+                ),
+                DecodedServerFrame::Ping => {
+                    let pong = profile.encode_client_pong();
+                    ws.send(Message::Binary(pong.to_vec().into()))
+                        .await
+                        .expect("pong should send");
+                }
+                DecodedServerFrame::Pong
+                | DecodedServerFrame::Welcome(_)
+                | DecodedServerFrame::Unknown => {}
+                DecodedServerFrame::Error { code, message } => {
+                    panic!("gateway returned error code={code} message={message}");
+                }
+                DecodedServerFrame::GoAway(reason) => {
+                    panic!("gateway closed reconnected session: {reason:?}");
+                }
+            },
+            Message::Ping(payload) => {
+                ws.send(Message::Pong(payload))
+                    .await
+                    .expect("pong should send");
+            }
+            Message::Pong(_) => {}
+            other => panic!("unexpected websocket frame after reconnect: {other:?}"),
+        }
+    }
 }
 
 fn free_port() -> u16 {

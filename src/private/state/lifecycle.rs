@@ -12,6 +12,9 @@ impl PrivateState {
         let owner = format!("gateway-{}", std::process::id());
         let fallback_tasks =
             (config.ack_timeout_secs > 0).then(|| FallbackTaskEngine::new(config.runtime_profile));
+        let max_sessions = crate::private::warp_engine::default_server_config()
+            .max_concurrent_sessions
+            .max(1);
         let state = PrivateState {
             hub,
             config,
@@ -24,6 +27,11 @@ impl PrivateState {
             revoked_devices: RwLock::new(HashMap::new()),
             session_controls: RwLock::new(HashMap::new()),
             session_devices: RwLock::new(HashMap::new()),
+            session_admission: Arc::new(tokio::sync::Semaphore::new(max_sessions)),
+            handshake_admission: Arc::new(tokio::sync::Semaphore::new(
+                (max_sessions / 16).clamp(32, 512),
+            )),
+            runtime_tasks: Mutex::new(Vec::new()),
             shutting_down: AtomicBool::new(false),
             shutdown_notify: tokio::sync::Notify::new(),
         };
@@ -50,6 +58,8 @@ impl PrivateState {
             control.expire_now();
         }
 
+        self.handshake_admission.close();
+        self.session_admission.close();
         self.shutdown_notify.notify_waiters();
         ::tracing::event!(
             target: "gateway.trace_event",
@@ -64,10 +74,88 @@ impl PrivateState {
     }
 
     pub async fn wait_for_shutdown(&self) {
-        if self.is_shutting_down() {
-            return;
+        loop {
+            // `notify_waiters` does not retain a permit. Register the waiter
+            // before re-checking the atomic flag so shutdown cannot land in
+            // the check/await gap and strand this task forever.
+            let notified = self.shutdown_notify.notified();
+            if self.is_shutting_down() {
+                return;
+            }
+            notified.await;
         }
-        self.shutdown_notify.notified().await;
+    }
+
+    pub(crate) fn try_acquire_session_admission(
+        &self,
+    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.session_admission).try_acquire_owned().ok()
+    }
+
+    pub(crate) fn try_acquire_handshake_admission(
+        &self,
+    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.handshake_admission)
+            .try_acquire_owned()
+            .ok()
+    }
+
+    pub(crate) fn spawn_runtime_task<F>(self: &Arc<Self>, name: &'static str, future: F) -> bool
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let mut tasks = self.runtime_tasks.lock();
+        if self.is_shutting_down() {
+            return false;
+        }
+        let handle = tokio::spawn(future);
+        tasks.push(PrivateRuntimeTask { name, handle });
+        true
+    }
+
+    pub async fn shutdown_runtime(&self, grace: Duration) -> PrivateShutdownReport {
+        self.begin_shutdown();
+        let mut tasks = std::mem::take(&mut *self.runtime_tasks.lock());
+        let deadline = TokioInstant::now() + grace;
+        let mut report = PrivateShutdownReport::default();
+
+        for task in &mut tasks {
+            match tokio::time::timeout_at(deadline, &mut task.handle).await {
+                Ok(Ok(())) => report.joined = report.joined.saturating_add(1),
+                Ok(Err(join_error)) => {
+                    report.panicked = report.panicked.saturating_add(1);
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::ERROR,
+                        event = "private.runtime_task_join_failed",
+                        task = %(task.name),
+                        cancelled = (join_error.is_cancelled()),
+                        panicked = (join_error.is_panic())
+                    );
+                }
+                Err(_) => {
+                    task.handle.abort();
+                    let _ = (&mut task.handle).await;
+                    report.aborted = report.aborted.saturating_add(1);
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "private.runtime_task_aborted",
+                        task = %(task.name)
+                    );
+                }
+            }
+        }
+
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "private.runtime_shutdown_finished",
+            joined = (report.joined as u64),
+            panicked = (report.panicked as u64),
+            aborted = (report.aborted as u64)
+        );
+        report
     }
 
     pub fn revoke_device_key(&self, device_key: &str) {

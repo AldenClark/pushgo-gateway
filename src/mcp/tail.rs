@@ -33,17 +33,26 @@ impl ChannelBinding {
 }
 
 impl ChannelBindingList {
-    fn parse(raw: Option<&str>) -> Self {
+    const MAX_BINDINGS: usize = 32;
+
+    fn parse(raw: Option<&str>) -> Result<Self, &'static str> {
         let mut out = Vec::new();
         let Some(raw) = raw else {
-            return Self(out);
+            return Err("channel_bindings_required");
         };
         for line in raw.lines() {
-            if let Some(binding) = ChannelBinding::parse(line) {
-                out.push(binding);
+            let Some(binding) = ChannelBinding::parse(line) else {
+                return Err("channel_binding_invalid");
+            };
+            if out.len() >= Self::MAX_BINDINGS {
+                return Err("channel_binding_quota_exceeded");
             }
+            out.push(binding);
         }
-        Self(out)
+        if out.is_empty() {
+            return Err("channel_bindings_required");
+        }
+        Ok(Self(out))
     }
 
     fn iter(&self) -> impl Iterator<Item = &ChannelBinding> {
@@ -95,12 +104,6 @@ mod tests {
     use crate::mcp::core_types::PkceMethod;
 
     #[test]
-    fn verify_pkce_plain() {
-        assert!(PkceMethod::Plain.verify("abc", "abc"));
-        assert!(!PkceMethod::Plain.verify("abc", "def"));
-    }
-
-    #[test]
     fn verify_pkce_s256() {
         // RFC 7636 example.
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -109,9 +112,9 @@ mod tests {
     }
 
     #[test]
-    fn channel_binding_list_ignores_invalid_lines() {
+    fn channel_binding_list_rejects_invalid_lines() {
         let bindings = ChannelBindingList::parse(Some("ch1,pw1\ninvalid\nch2,pw2\n,pw3\n"));
-        assert_eq!(bindings.into_vec().len(), 0);
+        assert!(bindings.is_err());
     }
 
     #[test]
@@ -119,7 +122,7 @@ mod tests {
         let bindings = ChannelBindingList::parse(Some(
             "06J0FZG1Y8XGG14VTQ4Y3G10MR,pass-1234\n06J0FZG1Y8XGG14VTQ4Y3G10MR,pass-9999",
         ));
-        let bindings = bindings.into_vec();
+        let bindings = bindings.expect("bindings should parse").into_vec();
         assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[0].channel_id_text, "06J0FZG1Y8XGG14VTQ4Y3G10MR");
         assert_eq!(bindings[0].password, "pass-1234");
@@ -129,6 +132,7 @@ mod tests {
     fn ensure_scope_uses_typed_scope_set() {
         let auth = McpAuthContext::OAuth {
             principal_id: "pr-1".to_string(),
+            client_id: Some("client-1".to_string()),
             scope: McpScopeSet::parse("mcp:tools").expect("scope should parse"),
         };
         assert!(ensure_scope(&auth, McpScope::Tools).is_ok());

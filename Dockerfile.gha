@@ -1,14 +1,14 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.6@sha256:ac85f380a63b13dfcefa89046420e1781752bab202122f8f50032edf31be0021
 
-FROM debian:bookworm-slim
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS certificates
+
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG BINARY_NAME=pushgo-gateway
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 RUN --mount=type=bind,source=dist,target=/tmp/dist,readonly \
     set -eux; \
@@ -28,7 +28,8 @@ RUN set -eux; \
 WORKDIR /data
 
 ENV PUSHGO_TOKEN= \
-    PUSHGO_TOKEN_SERVICE_URL=https://token.pushgo.dev \
+    PUSHGO_TOKEN_SERVICE_URL=http://127.0.0.1:6766 \
+    PUSHGO_TOKEN_SERVICE_AUTH_TOKEN= \
     PUSHGO_PRIVATE_TRANSPORTS=wss \
     PUSHGO_RUNTIME_PROFILE=small \
     PUSHGO_OBSERVABILITY_LOG_LEVEL=warn \
@@ -67,7 +68,7 @@ if [ ! -w /data ]; then
   exit 1
 fi
 
-exec /usr/local/bin/pushgo-gateway
+exec /usr/local/bin/pushgo-gateway "$@"
 EOF
 
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh

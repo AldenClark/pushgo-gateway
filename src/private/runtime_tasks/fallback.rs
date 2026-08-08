@@ -39,6 +39,7 @@ impl FallbackAttemptPolicy {
 pub(super) struct FallbackRuntime {
     pub(super) state: Arc<PrivateState>,
     pub(super) attempt_policy: FallbackAttemptPolicy,
+    fairness_cursor: AtomicUsize,
 }
 
 #[derive(Clone, Copy)]
@@ -57,8 +58,9 @@ impl FallbackPayloadContext {
         if message.expires_at <= now {
             return None;
         }
-        let envelope =
-            crate::private::protocol::PrivatePayloadEnvelope::decode_postcard(message.payload.as_ref())?;
+        let envelope = crate::private::protocol::PrivatePayloadEnvelope::decode_postcard(
+            message.payload.as_ref(),
+        )?;
         if !envelope.is_supported_version() {
             return None;
         }
@@ -91,6 +93,7 @@ impl FallbackRuntime {
         Self {
             attempt_policy: FallbackAttemptPolicy::from_config(&state.config),
             state,
+            fairness_cursor: AtomicUsize::new(0),
         }
     }
 
@@ -123,7 +126,7 @@ impl FallbackRuntime {
         let mut processed_total = 0usize;
         let mut rounds_executed = 0usize;
         for round in 0..max_rounds {
-            let online_devices = self.state.hub.online_device_ids();
+            let mut online_devices = self.state.hub.online_device_ids();
             if online_devices.is_empty() {
                 break;
             }
@@ -140,6 +143,13 @@ impl FallbackRuntime {
             if round_budget == 0 {
                 break;
             }
+
+            online_devices.sort_unstable();
+            let start = self
+                .fairness_cursor
+                .fetch_add(round_budget.max(1), Ordering::Relaxed)
+                % online_devices.len();
+            online_devices.rotate_left(start);
 
             let mut processed = 0usize;
             let per_device_limit = (round_budget / online_devices.len().max(1)).max(1);
@@ -168,7 +178,7 @@ impl FallbackRuntime {
                 for outbox in claimed {
                     processed = processed.saturating_add(1);
                     processed_total = processed_total.saturating_add(1);
-                    self.run_claimed_fallback_task(device_id, &outbox, now)
+                    self.run_claimed_fallback_task(device_id, &outbox, worker_id.as_str(), now)
                         .await?;
                     if processed >= round_budget || processed_total >= max_processed_total {
                         break;
@@ -184,7 +194,7 @@ impl FallbackRuntime {
             }
         }
         if processed_total > 0 {
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.claim_ack_drain_processed",
@@ -208,7 +218,7 @@ impl FallbackRuntime {
             self.state.hub.online_device_ids().into_iter().collect();
         if online_device_ids.is_empty() {
             scheduler.replace_fallback_tasks(std::iter::empty());
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.fallback_resync_snapshot",
@@ -233,7 +243,7 @@ impl FallbackRuntime {
         });
         if total_pending > limit {
             scheduler.merge_fallback_tasks(snapshot);
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.fallback_resync_snapshot",
@@ -245,7 +255,7 @@ impl FallbackRuntime {
             );
         } else {
             scheduler.replace_fallback_tasks(snapshot);
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.fallback_resync_snapshot",
@@ -298,7 +308,7 @@ impl FallbackRuntime {
         let total_pending = match self.state.hub.count_pending_outbox_total().await {
             Ok(value) => value,
             Err(err) => {
-                                ::tracing::event!(
+                ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::WARN,
                     event = "private.fallback_seed_failed",
@@ -317,7 +327,7 @@ impl FallbackRuntime {
         let entries = match self.state.hub.list_due_outbox(i64::MAX, seed_limit).await {
             Ok(value) => value,
             Err(err) => {
-                                ::tracing::event!(
+                ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::WARN,
                     event = "private.fallback_seed_failed",
@@ -344,7 +354,7 @@ impl FallbackRuntime {
         if seeded > 0 {
             self.state.metrics.mark_replay_bootstrap_enqueued(seeded);
         }
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "private.fallback_seed_applied",
@@ -359,6 +369,7 @@ impl FallbackRuntime {
         &self,
         device_id: DeviceId,
         outbox: &PrivateOutboxEntry,
+        worker_id: &str,
         now: i64,
     ) -> Result<(), crate::Error> {
         let Some(message) = self
@@ -367,13 +378,23 @@ impl FallbackRuntime {
             .load_private_message(outbox.delivery_id.as_str())
             .await?
         else {
-            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str(), "message_missing")
-                .await?;
+            self.drop_fallback_delivery(
+                device_id,
+                outbox,
+                worker_id,
+                "message_missing",
+            )
+            .await?;
             return Ok(());
         };
         let Some(context) = FallbackPayloadContext::parse(&message, now) else {
-            self.drop_fallback_delivery(device_id, outbox.delivery_id.as_str(), "payload_unusable")
-                .await?;
+            self.drop_fallback_delivery(
+                device_id,
+                outbox,
+                worker_id,
+                "payload_unusable",
+            )
+            .await?;
             return Ok(());
         };
 
@@ -384,10 +405,11 @@ impl FallbackRuntime {
         if self.attempt_policy.should_drop_outbox(outbox) {
             self.drop_fallback_delivery(
                 device_id,
-                outbox.delivery_id.as_str(),
+                outbox,
+                worker_id,
                 "max_attempts_reached",
             )
-                .await?;
+            .await?;
             return Ok(());
         }
 
@@ -398,11 +420,17 @@ impl FallbackRuntime {
         if sent {
             let next_attempt_at =
                 now.saturating_add(self.state.config.ack_timeout_secs.max(1) as i64 * 1000);
-            let _ = self
+            let settled = self
                 .state
-                .mark_fallback_sent(device_id, outbox.delivery_id.as_str(), next_attempt_at)
-                .await;
-                        ::tracing::event!(
+                .mark_fallback_sent_if_claimed(
+                    device_id,
+                    outbox.delivery_id.as_str(),
+                    worker_id,
+                    outbox.claim_generation,
+                    next_attempt_at,
+                )
+                .await?;
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.fallback_delivery_sent",
@@ -410,12 +438,15 @@ impl FallbackRuntime {
                 delivery_id = %(crate::util::redact_text(outbox.delivery_id.as_str())),
                 attempts = (outbox.attempts as u64),
                 next_attempt_at = (next_attempt_at)
+                , settled = (settled)
             );
-            self.state.metrics.mark_fallback_tick(1, 1, 0, 0);
+            if settled {
+                self.state.metrics.mark_fallback_tick(1, 1, 0, 0);
+            }
             return Ok(());
         }
 
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
             event = "private.fallback_delivery_send_failed",
@@ -424,7 +455,14 @@ impl FallbackRuntime {
             attempts = (outbox.attempts as u64)
         );
         self.state.metrics.mark_deliver_send_failure();
-        self.schedule_fallback_retry(device_id, outbox, now, 0, AttemptBudget::Enforced)
+        self.schedule_fallback_retry(
+            device_id,
+            outbox,
+            worker_id,
+            now,
+            0,
+            AttemptBudget::Enforced,
+        )
             .await?;
         Ok(())
     }
@@ -433,6 +471,7 @@ impl FallbackRuntime {
         &self,
         device_id: DeviceId,
         outbox: &PrivateOutboxEntry,
+        worker_id: &str,
         now: i64,
         sent: usize,
         budget: AttemptBudget,
@@ -444,17 +483,24 @@ impl FallbackRuntime {
         {
             self.drop_fallback_delivery(
                 device_id,
-                outbox.delivery_id.as_str(),
+                outbox,
+                worker_id,
                 "max_attempts_enforced",
             )
-                .await?;
+            .await?;
             return Ok(now);
         }
         let retry_at = self.attempt_policy.retry_at(now, next_attempt);
-        let _ = self
+        let settled = self
             .state
-            .defer_fallback_retry(device_id, outbox.delivery_id.as_str(), retry_at)
-            .await;
+            .defer_fallback_retry_if_claimed(
+                device_id,
+                outbox.delivery_id.as_str(),
+                worker_id,
+                outbox.claim_generation,
+                retry_at,
+            )
+            .await?;
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
@@ -466,31 +512,43 @@ impl FallbackRuntime {
             budget = %(match budget {
                 AttemptBudget::Enforced => "enforced",
                 AttemptBudget::Unlimited => "unlimited",
-            })
+            }),
+            settled = (settled)
         );
-        self.state.metrics.mark_fallback_tick(1, sent, 1, 0);
+        if settled {
+            self.state.metrics.mark_fallback_tick(1, sent, 1, 0);
+        }
         Ok(retry_at)
     }
 
     async fn drop_fallback_delivery(
         &self,
         device_id: DeviceId,
-        delivery_id: &str,
+        outbox: &PrivateOutboxEntry,
+        worker_id: &str,
         reason: &'static str,
     ) -> Result<(), crate::Error> {
-        let _ = self
+        let settled = self
             .state
-            .drop_terminal_delivery(device_id, delivery_id)
+            .drop_fallback_if_claimed(
+                device_id,
+                outbox.delivery_id.as_str(),
+                worker_id,
+                outbox.claim_generation,
+            )
             .await?;
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
             event = "private.fallback_delivery_dropped",
             reason = %(reason),
             device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
-            delivery_id = %(crate::util::redact_text(delivery_id))
+            delivery_id = %(crate::util::redact_text(outbox.delivery_id.as_str())),
+            settled = (settled)
         );
-        self.state.metrics.mark_fallback_tick(1, 0, 0, 1);
+        if settled {
+            self.state.metrics.mark_fallback_tick(1, 0, 0, 1);
+        }
         Ok(())
     }
 }
@@ -561,7 +619,7 @@ mod tests {
                 storage,
                 test_private_config(),
                 Arc::new(DeviceRegistry::new()),
-                                runtime_counters,
+                runtime_counters,
             ));
             Self { _dir: dir, state }
         }
@@ -708,6 +766,58 @@ mod tests {
         assert_eq!(entry.attempts, 1);
         assert!(entry.first_sent_at.is_some());
         assert!(entry.fallback_sent_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn one_item_batches_rotate_fairly_across_online_devices() {
+        let ctx = RuntimeTestContext::new().await;
+        let runtime = FallbackRuntime::new(Arc::clone(&ctx.state));
+        let now = chrono::Utc::now().timestamp_millis();
+        let expires_at = now + 60_000;
+        let channel_id = crate::api::format_channel_id(&[0x31; 16]);
+        let payload = private_message_with_data(
+            HashMap::from([
+                ("channel_id".to_string(), channel_id),
+                ("ttl".to_string(), expires_at.to_string()),
+            ]),
+            expires_at,
+        )
+        .payload;
+        let mut receivers = Vec::new();
+
+        for index in 0..2u64 {
+            let device_id = derive_private_device_id(format!("fair-device-{index}").as_str());
+            ctx.state
+                .enqueue_private_delivery(
+                    device_id,
+                    format!("fair-delivery-{index}").as_str(),
+                    payload.clone(),
+                    now - 3_000,
+                    expires_at,
+                )
+                .await
+                .expect("fairness delivery should enqueue");
+            let (tx, rx) = bounded(1);
+            ctx.state
+                .hub
+                .register_connection(device_id, index + 1, TransportKind::Tcp, tx);
+            receivers.push(rx);
+        }
+
+        let mut scheduler = crate::private::FallbackScheduler::default();
+        for _ in 0..2 {
+            runtime
+                .run_claim_ack_drain(&mut scheduler, 1, 1, 1)
+                .await
+                .expect("fairness drain should succeed");
+        }
+
+        for receiver in receivers {
+            tokio::time::timeout(Duration::from_secs(1), receiver.recv_async())
+                .await
+                .expect("each device should receive within two one-item rounds")
+                .expect("connection queue should remain open");
+        }
     }
 
     #[tokio::test]

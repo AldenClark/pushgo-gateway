@@ -62,17 +62,15 @@ impl PrivateState {
         transport: &'static str,
         bind_addr: String,
         mut serve: F,
-    )
-    where
+    ) where
         F: FnMut(Arc<PrivateState>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
     {
         let state = Arc::clone(self);
-        let loop_span =
-            tracing::info_span!("gateway.private.transport_loop", transport = transport, bind_addr = %bind_addr);
-        tokio::spawn(async move {
+        let loop_span = tracing::info_span!("gateway.private.transport_loop", transport = transport, bind_addr = %bind_addr);
+        let future = async move {
             let mut restart_delay_secs = 1u64;
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.transport_loop_started",
@@ -81,7 +79,7 @@ impl PrivateState {
             );
             loop {
                 if let Err(err) = serve(Arc::clone(&state)).await {
-                                        ::tracing::event!(
+                    ::tracing::event!(
                         target: "gateway.trace_event",
                         ::tracing::Level::WARN,
                         event = "private.transport_serve_failed",
@@ -92,7 +90,7 @@ impl PrivateState {
                     );
                 }
                 if state.is_shutting_down() {
-                                        ::tracing::event!(
+                    ::tracing::event!(
                         target: "gateway.trace_event",
                         ::tracing::Level::INFO,
                         event = "private.transport_loop_stopped",
@@ -101,7 +99,7 @@ impl PrivateState {
                     );
                     break;
                 }
-                                ::tracing::event!(
+                ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::INFO,
                     event = "private.transport_loop_retry_scheduled",
@@ -125,6 +123,7 @@ impl PrivateState {
                 restart_delay_secs = restart_delay_secs.saturating_mul(2).min(30);
             }
         }
-        .instrument(loop_span));
+        .instrument(loop_span);
+        let _ = self.spawn_runtime_task(transport, future);
     }
 }

@@ -148,7 +148,7 @@ impl<'a> McpRpcService<'a> {
 
 impl McpRpcService<'_> {
     pub(super) fn emit_rpc_rejected(&self, reason: &str) {
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
             event = "mcp.rpc.rejected",
@@ -157,17 +157,18 @@ impl McpRpcService<'_> {
     }
 
     pub(super) fn emit_rpc_failed(&self, stage: &str, error: &str) {
-                ::tracing::event!(
+        let error_fingerprint = McpState::token_hash(error);
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
             event = "mcp.rpc.failed",
             stage = %(stage),
-            error = %(error)
+            error_fingerprint = %(&error_fingerprint[..16])
         );
     }
 
     pub(super) fn emit_rpc_completed(&self, op: &str) {
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "mcp.rpc.completed",
@@ -221,9 +222,9 @@ impl McpRpcService<'_> {
                     .store
                     .channel_info(channel_id)
                     .await
-                .ok()
-                .flatten()
-                .map(|info| info.alias),
+                    .ok()
+                    .flatten()
+                    .map(|info| info.alias),
                 Err(_) => {
                     self.emit_rpc_rejected("invalid_channel_id_in_grants");
                     None
@@ -416,11 +417,10 @@ impl McpRpcService<'_> {
             self.emit_rpc_rejected("missing_params");
             "missing params".to_string()
         })?;
-        let call: ToolCallEnvelope =
-            serde_json::from_value(payload).map_err(|err| {
-                self.emit_rpc_failed("parse_tool_call_envelope", &err.to_string());
-                err.to_string()
-            })?;
+        let call: ToolCallEnvelope = serde_json::from_value(payload).map_err(|err| {
+            self.emit_rpc_failed("parse_tool_call_envelope", &err.to_string());
+            err.to_string()
+        })?;
         if Self::is_send_tool_name(call.name.as_str()) {
             ensure_scope(self.auth, McpScope::Tools).inspect_err(|err| {
                 self.emit_rpc_rejected(err);
@@ -452,7 +452,7 @@ impl McpRpcService<'_> {
                 ::tracing::Level::WARN,
                 event = "mcp.rpc.tool_call_failed",
                 tool_name = %(call.name.as_str()),
-                error = %(err.as_str())
+                error_fingerprint = %(&McpState::token_hash(err)[..16])
             );
         } else {
             self.emit_rpc_completed("handle_tools_call");
@@ -493,7 +493,7 @@ impl McpRpcService<'_> {
                     .await
                     .map_err(|err| {
                         self.emit_rpc_failed("authorize_channel_exists", &err.to_string());
-                        err.to_string()
+                        err.client_safe_message().into_owned()
                     })
             }
             McpAuthContext::Legacy => {
@@ -510,12 +510,11 @@ impl McpRpcService<'_> {
                 .await
                 .map_err(|err| {
                     self.emit_rpc_failed("authorize_channel_by_password", &err.to_string());
-                    err.to_string()
+                    err.client_safe_message().into_owned()
                 })
             }
         }
     }
-
 }
 
 #[cfg(test)]

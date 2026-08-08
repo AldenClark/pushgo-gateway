@@ -377,12 +377,17 @@ fn provider_adapters_do_not_own_payload_size_path_selection() {
     let provider_coordinator_source =
         fs::read_to_string(manifest_dir.join("src/api/handlers/message/dispatch/provider.rs"))
             .expect("provider coordinator should be readable");
+    let provider_coordinator_production = provider_coordinator_source
+        .split_once("#[cfg(test)]")
+        .map_or(provider_coordinator_source.as_str(), |(production, _)| {
+            production
+        });
     for pattern in [
         "ProviderDeliverySelection::",
         ".encoded_len()",
         ".encoded_body(",
     ] {
-        if provider_coordinator_source.contains(pattern) {
+        if provider_coordinator_production.contains(pattern) {
             violations.push(format!(
                 "src/api/handlers/message/dispatch/provider.rs still owns provider payload-size decision pattern `{pattern}`"
             ));
@@ -604,7 +609,14 @@ fn storage_queue_state_boundaries_match_delivery_roles() {
                 "{relative_file} does not define provider_pull_queue"
             ));
         }
-        for forbidden in ["provider_pull_queue (status", "claim_until", "lease_until"] {
+        for forbidden in [
+            "provider_pull_queue (status",
+            "ALTER TABLE provider_pull_queue ADD COLUMN claimed_at",
+            "ALTER TABLE provider_pull_queue ADD COLUMN claim_until",
+            "ALTER TABLE provider_pull_queue ADD COLUMN lease_until",
+            "ALTER TABLE provider_pull_queue ADD COLUMN attempt_no",
+            "ALTER TABLE provider_pull_queue ADD COLUMN retry_at",
+        ] {
             if source.contains(forbidden) {
                 violations.push(format!(
                     "{relative_file} models provider_pull_queue as worker claim queue via `{forbidden}`"

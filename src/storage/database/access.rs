@@ -165,12 +165,35 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
         delivery_id: &str,
         at_ts: i64,
     ) -> StoreResult<()>;
+    async fn mark_private_fallback_sent_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool>;
     async fn defer_private_fallback(
         &self,
         device_id: DeviceId,
         delivery_id: &str,
         at_ts: i64,
     ) -> StoreResult<()>;
+    async fn defer_private_fallback_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool>;
+    async fn drop_private_delivery_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+    ) -> StoreResult<bool>;
     async fn ack_private_delivery(&self, device_id: DeviceId, delivery_id: &str)
     -> StoreResult<()>;
     async fn clear_private_outbox_for_device(

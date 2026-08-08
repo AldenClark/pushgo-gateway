@@ -8,7 +8,7 @@ impl PostgresDb {
         delivery_id: &str,
     ) -> StoreResult<Option<PrivateOutboxEntry>> {
         let row = sqlx::query(
-            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, claim_generation, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE device_id = $1 AND delivery_id = $2",
         )
         .bind(&device_id[..])
@@ -24,6 +24,7 @@ impl PostgresDb {
             created_at: r.get("created_at"),
             claimed_at: r.get("claimed_at"),
             claimed_by: r.get("claimed_by"),
+            claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
             first_sent_at: r.get("first_sent_at"),
             last_attempt_at: r.get("last_attempt_at"),
             acked_at: r.get("acked_at"),

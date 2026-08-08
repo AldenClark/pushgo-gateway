@@ -70,6 +70,7 @@ impl PushgoServerApp {
             | WarpLinkError::Protocol(_)
             | WarpLinkError::Internal(_)
             | WarpLinkError::Coordination(_)
+            | WarpLinkError::Reconnect(_)
             | WarpLinkError::Unsupported(_) => self.mark_connect_failure(peer.transport),
             WarpLinkError::Auth(_) => {}
         }

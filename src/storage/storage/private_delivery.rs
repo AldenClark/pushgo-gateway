@@ -1,13 +1,11 @@
 use super::*;
 use crate::{
     delivery_core::store::delivery_queue::QueueClaimRequest,
-    private::protocol::PrivatePayloadEnvelope,
     storage::database::{
         PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderPullDatabaseAccess,
     },
     value::ProviderTokenRef,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const PRIVATE_MIGRATION_WRITE_BATCH_SIZE: usize = 64;
 
@@ -140,15 +138,11 @@ impl Storage {
             .db
             .pull_provider_item(device_id, delivery_id, now)
             .await?;
-        let Some(item) = item else {
-            return Ok(None);
-        };
-
-        self.clear_private_outbox_after_provider_delivery(&item)
-            .await;
-        self.record_device_activity_best_effort(device_id, now, "provider_pull")
-            .await;
-        Ok(Some(item))
+        if item.is_some() {
+            self.record_device_activity_best_effort(device_id, now, "provider_pull")
+                .await;
+        }
+        Ok(item)
     }
 
     pub async fn pull_provider_items(
@@ -158,8 +152,6 @@ impl Storage {
         limit: usize,
     ) -> StoreResult<Vec<ProviderPullItem>> {
         let items = self.db.pull_provider_items(device_id, now, limit).await?;
-        self.clear_private_outbox_after_provider_deliveries(&items)
-            .await;
         if !items.is_empty() {
             self.record_device_activity_best_effort(device_id, now, "provider_pull")
                 .await;
@@ -289,6 +281,25 @@ impl Storage {
             .await
     }
 
+    pub async fn mark_private_fallback_sent_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        self.db
+            .mark_private_fallback_sent_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                at_ts,
+            )
+            .await
+    }
+
     pub async fn defer_private_fallback(
         &self,
         device_id: DeviceId,
@@ -297,6 +308,37 @@ impl Storage {
     ) -> StoreResult<()> {
         self.db
             .defer_private_fallback(device_id, delivery_id, at_ts)
+            .await
+    }
+
+    pub async fn defer_private_fallback_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        self.db
+            .defer_private_fallback_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                at_ts,
+            )
+            .await
+    }
+
+    pub async fn drop_private_delivery_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+    ) -> StoreResult<bool> {
+        self.db
+            .drop_private_delivery_if_claimed(device_id, delivery_id, worker_id, claim_generation)
             .await
     }
 
@@ -505,6 +547,7 @@ impl Storage {
                     created_at: now,
                     claimed_at: None,
                     claimed_by: None,
+                    claim_generation: 0,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,
@@ -543,134 +586,4 @@ impl Storage {
         );
         Ok(migrated)
     }
-
-    async fn clear_private_outbox_after_provider_deliveries(&self, items: &[ProviderPullItem]) {
-        let mut linked = Vec::new();
-        for item in items {
-            if let Some(original_delivery_id) = linked_private_outbox_delivery_id(item) {
-                linked.push((
-                    item.device_id,
-                    original_delivery_id,
-                    item.delivery_id.clone(),
-                ));
-            }
-        }
-        if linked.is_empty() {
-            return;
-        }
-        let clear_keys = linked
-            .iter()
-            .map(|(device_id, original_delivery_id, _)| (*device_id, original_delivery_id.clone()))
-            .collect::<Vec<_>>();
-        if let Err(err) = self.db.clear_private_outbox_entries(&clear_keys).await {
-            for (device_id, original_delivery_id, delivery_id) in &linked {
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::WARN,
-                    event = "provider.pull_private_outbox_ack_failed",
-                    delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
-                    original_delivery_id = %(crate::util::redact_text(original_delivery_id.as_str())),
-                    device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(device_id))),
-                    error = %(err.to_string())
-                );
-            }
-            return;
-        }
-        for (device_id, original_delivery_id, delivery_id) in &linked {
-            emit_provider_pull_ack_skip(
-                "acked_linked_private_outbox",
-                *device_id,
-                delivery_id.as_str(),
-                Some(original_delivery_id.as_str()),
-            );
-        }
-    }
-
-    async fn clear_private_outbox_after_provider_delivery(&self, item: &ProviderPullItem) {
-        let Some(original_delivery_id) = linked_private_outbox_delivery_id(item) else {
-            return;
-        };
-        if let Err(err) = self
-            .db
-            .clear_private_outbox_entries(&[(item.device_id, original_delivery_id.clone())])
-            .await
-        {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "provider.pull_private_outbox_ack_failed",
-                delivery_id = %(crate::util::redact_text(item.delivery_id.as_str())),
-                original_delivery_id = %(crate::util::redact_text(original_delivery_id.as_str())),
-                device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&item.device_id))),
-                error = %(err.to_string())
-            );
-        } else {
-            emit_provider_pull_ack_skip(
-                "acked_linked_private_outbox",
-                item.device_id,
-                item.delivery_id.as_str(),
-                Some(original_delivery_id.as_str()),
-            );
-        }
-    }
-}
-
-fn linked_private_outbox_delivery_id(item: &ProviderPullItem) -> Option<String> {
-    let Some(envelope) = PrivatePayloadEnvelope::decode_postcard(item.payload.as_ref()) else {
-        emit_provider_pull_ack_skip(
-            "decode_failed",
-            item.device_id,
-            item.delivery_id.as_str(),
-            None,
-        );
-        return None;
-    };
-    if !envelope.is_supported_version() {
-        emit_provider_pull_ack_skip(
-            "unsupported_payload_version",
-            item.device_id,
-            item.delivery_id.as_str(),
-            None,
-        );
-        return None;
-    }
-    let Some(original_delivery_id) = envelope
-        .data
-        .get("delivery_id")
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        emit_provider_pull_ack_skip(
-            "missing_original_delivery_id",
-            item.device_id,
-            item.delivery_id.as_str(),
-            None,
-        );
-        return None;
-    };
-    Some(original_delivery_id.to_string())
-}
-
-fn emit_provider_pull_ack_skip(
-    reason: &'static str,
-    device_id: DeviceId,
-    delivery_id: &str,
-    original_delivery_id: Option<&str>,
-) {
-    static PROVIDER_PULL_ACK_OBS_COUNT: AtomicU64 = AtomicU64::new(0);
-    let count = PROVIDER_PULL_ACK_OBS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    if !(count <= 8 || count.is_power_of_two()) {
-        return;
-    }
-    ::tracing::event!(
-        target: "gateway.trace_event",
-        ::tracing::Level::INFO,
-        event = "provider.pull_private_outbox_ack_observed",
-        reason = %(reason),
-        count = (count),
-        delivery_id = %(crate::util::redact_text(delivery_id)),
-        device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
-        original_delivery_id = ?original_delivery_id.map(crate::util::redact_text)
-    );
 }

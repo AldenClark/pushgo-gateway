@@ -13,6 +13,7 @@ use super::{McpState, core_types::McpScopeSet};
 pub(super) enum McpAuthContext {
     OAuth {
         principal_id: String,
+        client_id: Option<String>,
         scope: McpScopeSet,
     },
     Legacy,
@@ -24,6 +25,8 @@ pub(super) struct AccessClaims {
     pub sub: String,
     pub aud: String,
     pub scope: McpScopeSet,
+    #[serde(default)]
+    pub client_id: Option<String>,
     pub iat: usize,
     pub exp: usize,
 }
@@ -54,7 +57,7 @@ impl BearerToken {
 impl McpState {
     pub(super) async fn authenticate(&self, headers: &HeaderMap) -> Result<McpAuthContext, Error> {
         let token = BearerToken::parse(headers).ok_or_else(|| {
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::WARN,
                 event = "mcp.auth_rejected",
@@ -64,7 +67,7 @@ impl McpState {
         })?;
 
         if let Some(auth) = self.authenticate_oauth_token(&token).await {
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "mcp.auth_completed",
@@ -73,7 +76,7 @@ impl McpState {
             return Ok(auth);
         }
         if self.authenticate_legacy_token(&token) {
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "mcp.auth_completed",
@@ -81,7 +84,7 @@ impl McpState {
             );
             return Ok(McpAuthContext::Legacy);
         }
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
             event = "mcp.auth_rejected",
@@ -124,6 +127,7 @@ impl McpState {
         ) {
             return Some(McpAuthContext::OAuth {
                 principal_id: decoded.claims.sub,
+                client_id: decoded.claims.client_id,
                 scope: decoded.claims.scope,
             });
         }

@@ -9,9 +9,9 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS channels (channel_id BYTEA PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) PRIMARY KEY, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT)",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, request_fingerprint VARCHAR(64), state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT, expires_at BIGINT)",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, request_fingerprint VARCHAR(64), state VARCHAR(32) NOT NULL, provider_run_token VARCHAR(64), provider_owner VARCHAR(128), provider_lease_until BIGINT, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) PRIMARY KEY, semantic_id VARCHAR(128) NOT NULL UNIQUE, source VARCHAR(64), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT, expires_at BIGINT)",
-    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) PRIMARY KEY, channel_id BYTEA NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64), accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) PRIMARY KEY, channel_id BYTEA NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64), provider_run_token VARCHAR(64), accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token TEXT NOT NULL, channel_id BYTEA, platform VARCHAR(32) NOT NULL, schema_version INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT, PRIMARY KEY (activity_key, token))",
     "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key VARCHAR(128) PRIMARY KEY, meta_value VARCHAR(255) NOT NULL)",
@@ -19,10 +19,10 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const PG_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BYTEA PRIMARY KEY, token_raw BYTEA NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255), platform VARCHAR(32), channel_type VARCHAR(32), provider_token TEXT, route_updated_at BIGINT)",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BYTEA PRIMARY KEY, token_raw BYTEA NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255), platform VARCHAR(32), channel_type VARCHAR(32), provider_token TEXT, route_updated_at BIGINT, route_revision BIGINT NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BYTEA NOT NULL, key_id INTEGER NOT NULL, key_hash BYTEA NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BYTEA NOT NULL, expires_at BIGINT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT, claimed_by TEXT, first_sent_at BIGINT, last_attempt_at BIGINT, acked_at BIGINT, fallback_sent_at BIGINT, next_attempt_at BIGINT NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT, claimed_by TEXT, claim_generation BIGINT NOT NULL DEFAULT 0, first_sent_at BIGINT, last_attempt_at BIGINT, acked_at BIGINT, fallback_sent_at BIGINT, next_attempt_at BIGINT NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
     "CREATE TABLE IF NOT EXISTS private_bindings (platform SMALLINT NOT NULL, token_hash BYTEA NOT NULL, device_id BYTEA NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (platform, token_hash))",
     "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BYTEA NOT NULL, device_id BYTEA NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'active', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (channel_id, device_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
@@ -34,6 +34,7 @@ const PG_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
+    "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
     "CREATE INDEX IF NOT EXISTS sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
@@ -172,6 +173,30 @@ impl PostgresDb {
             "ALTER TABLE dispatch_op_dedupe ADD COLUMN request_fingerprint VARCHAR(64)",
         )
         .await?;
+        self.ensure_pg_column(
+            "dispatch_op_dedupe",
+            "provider_run_token",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_run_token VARCHAR(64)",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "dispatch_op_dedupe",
+            "provider_owner",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_owner VARCHAR(128)",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "dispatch_op_dedupe",
+            "provider_lease_until",
+            "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_lease_until BIGINT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "sender_submit_status",
+            "provider_run_token",
+            "ALTER TABLE sender_submit_status ADD COLUMN provider_run_token VARCHAR(64)",
+        )
+        .await?;
 
         self.ensure_pg_column(
             "devices",
@@ -213,6 +238,12 @@ impl PostgresDb {
             "devices",
             "route_updated_at",
             "ALTER TABLE devices ADD COLUMN route_updated_at BIGINT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "devices",
+            "route_revision",
+            "ALTER TABLE devices ADD COLUMN route_revision BIGINT NOT NULL DEFAULT 0",
         )
         .await?;
         self.ensure_pg_column(
@@ -268,6 +299,18 @@ impl PostgresDb {
             "claimed_by",
             "ALTER TABLE private_outbox ADD COLUMN claimed_by TEXT",
         )
+        .await?;
+        self.ensure_pg_column(
+            "private_outbox",
+            "claim_generation",
+            "ALTER TABLE private_outbox ADD COLUMN claim_generation BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE private_outbox SET status = 'pending', claimed_at = NULL, claimed_by = NULL \
+             WHERE status = 'claimed'",
+        )
+        .execute(&self.pool)
         .await?;
         self.ensure_pg_column(
             "private_outbox",
@@ -818,18 +861,10 @@ impl PostgresDb {
 }
 
 pub(crate) struct PgUpgradeLockGuard {
-    pool: sqlx::PgPool,
-}
-
-impl Drop for PgUpgradeLockGuard {
-    fn drop(&mut self) {
-        let pool = self.pool.clone();
-        tokio::spawn(async move {
-            let _ = sqlx::query("SELECT pg_advisory_unlock(784477031742001)")
-                .execute(&pool)
-                .await;
-        });
-    }
+    // PostgreSQL advisory locks are session-scoped. Owning the raw connection
+    // guarantees the lock cannot be returned to, or reaped from, a pool while
+    // an upgrade is still running. Dropping the connection releases the lock.
+    _connection: PgConnection,
 }
 
 impl PostgresDb {
@@ -873,10 +908,11 @@ impl crate::storage::database::upgrade::lock::UpgradeLockAccess for PostgresDb {
 
     async fn acquire_upgrade_lock(
         &self,
-        _db_url: &str,
+        db_url: &str,
     ) -> crate::storage::database::upgrade::UpgradeResult<Self::Guard> {
+        let mut connection = PgConnection::connect(db_url).await?;
         let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(784477031742001)")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut connection)
             .await?;
         if !locked {
             return Err(crate::storage::database::upgrade::UpgradeError::Store(
@@ -886,7 +922,7 @@ impl crate::storage::database::upgrade::lock::UpgradeLockAccess for PostgresDb {
             ));
         }
         Ok(PgUpgradeLockGuard {
-            pool: self.pool.clone(),
+            _connection: connection,
         })
     }
 }
@@ -1132,6 +1168,30 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for Postgres
             if exists.is_none() {
                 return Err(crate::storage::database::upgrade::UpgradeError::Store(
                     StoreError::Upgrade(format!("required table missing after upgrade: {table}")),
+                ));
+            }
+        }
+        for (table, column) in [
+            ("private_outbox", "claim_generation"),
+            ("dispatch_op_dedupe", "provider_run_token"),
+            ("dispatch_op_dedupe", "provider_owner"),
+            ("dispatch_op_dedupe", "provider_lease_until"),
+            ("sender_submit_status", "provider_run_token"),
+            ("devices", "route_revision"),
+        ] {
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT 1::BIGINT FROM information_schema.columns \
+                 WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1",
+            )
+            .bind(table)
+            .bind(column)
+            .fetch_optional(&self.pool)
+            .await?;
+            if exists.is_none() {
+                return Err(crate::storage::database::upgrade::UpgradeError::Store(
+                    StoreError::Upgrade(format!(
+                        "required column missing after upgrade: {table}.{column}"
+                    )),
                 ));
             }
         }

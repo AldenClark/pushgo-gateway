@@ -71,6 +71,75 @@ async fn enqueue_raw_provider_pull_item(
         .expect("raw provider pull item should seed");
 }
 
+fn provider_contract_fixture(name: &str) -> Value {
+    let raw = match name {
+        "pull_v2_request" => {
+            include_str!("../../../tests/fixtures/provider_contract/pull_v2_request.json")
+        }
+        "pull_v2_response" => {
+            include_str!("../../../tests/fixtures/provider_contract/pull_v2_response.json")
+        }
+        "ack_v2_request" => {
+            include_str!("../../../tests/fixtures/provider_contract/ack_v2_request.json")
+        }
+        "ack_v2_response" => {
+            include_str!("../../../tests/fixtures/provider_contract/ack_v2_response.json")
+        }
+        _ => panic!("unknown provider contract fixture: {name}"),
+    };
+    serde_json::from_str(raw).expect("provider contract fixture should be valid JSON")
+}
+
+#[tokio::test]
+async fn provider_pull_and_ack_v2_match_shared_windows_fixtures() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let device_key = "fixture-device-key";
+    let delivery_id = "delivery-fixture-001";
+    enqueue_provider_pull_item(&state, device_key, delivery_id, "Fixture notification").await;
+
+    let (pull_status, pull_body) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        provider_contract_fixture("pull_v2_request"),
+    )
+    .await;
+    assert_eq!(pull_status, StatusCode::OK);
+    assert_eq!(
+        pull_body,
+        provider_contract_fixture("pull_v2_response"),
+        "Gateway pull response must remain JSON-shape compatible with the Windows fixture"
+    );
+
+    let (ack_status, ack_body) = post_json(
+        app.clone(),
+        "/v2/messages/ack",
+        provider_contract_fixture("ack_v2_request"),
+    )
+    .await;
+    assert_eq!(ack_status, StatusCode::OK);
+    assert_eq!(
+        ack_body,
+        provider_contract_fixture("ack_v2_response"),
+        "Gateway ACK response must remain compatible with the Windows fixture"
+    );
+
+    let (_, empty_body) = post_json(
+        app,
+        "/v2/messages/pull",
+        json!({ "device_key": device_key, "delivery_id": delivery_id }),
+    )
+    .await;
+    assert!(
+        response_data(&empty_body)
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("post-ACK items should be an array")
+            .is_empty(),
+        "ACK fixture must remove the exact outer delivery_id"
+    );
+}
+
 #[tokio::test]
 async fn messages_pull_without_delivery_id_returns_all_and_drains_queue() {
     let state = build_test_state().await;

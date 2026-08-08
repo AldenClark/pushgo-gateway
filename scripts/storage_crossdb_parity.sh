@@ -13,6 +13,8 @@ PG_PORT="${PG_PORT:-5433}"
 MYSQL_DB="pushgo_parity"
 PG_DB="pushgo_parity"
 CONTAINER_CLI="${CONTAINER_CLI:-auto}"
+MYSQL_IMAGE="mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb"
+POSTGRES_IMAGE="postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 
 SQLITE_DB_PATH="/tmp/pushgo-crossdb-parity.sqlite"
 SQLITE_DELIVERY_DB_PATH="/tmp/pushgo-crossdb-parity.delivery.sqlite"
@@ -503,14 +505,14 @@ run_scenario() {
 echo "[build] cargo build" | tee -a "$SUMMARY_FILE"
 (
   cd "$ROOT_DIR"
-  cargo build -q
+  cargo build --locked -q
 )
 
 echo "[container] starting mysql/postgresql with ${CONTAINER_CLI}" | tee -a "$SUMMARY_FILE"
 container_rm "$MYSQL_CONTAINER"
 container_rm "$PG_CONTAINER"
-container_run_db "$MYSQL_CONTAINER" "${MYSQL_PORT}:3306" mysql:8 -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE="$MYSQL_DB"
-container_run_db "$PG_CONTAINER" "${PG_PORT}:5432" postgres:16 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB="$PG_DB"
+container_run_db "$MYSQL_CONTAINER" "${MYSQL_PORT}:3306" "$MYSQL_IMAGE" -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE="$MYSQL_DB"
+container_run_db "$PG_CONTAINER" "${PG_PORT}:5432" "$POSTGRES_IMAGE" -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB="$PG_DB"
 
 for _ in $(seq 1 120); do
   if container_exec "$MYSQL_CONTAINER" mysqladmin ping -h127.0.0.1 -uroot -proot --silent >/dev/null 2>&1; then

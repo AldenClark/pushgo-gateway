@@ -11,14 +11,20 @@ struct MessageArgs {
     op_id: Option<String>,
     #[serde(default)]
     thing_id: Option<String>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     occurred_at: Option<i64>,
     title: String,
     #[serde(default)]
     body: Option<String>,
     #[serde(default)]
     severity: Option<String>,
-    #[serde(default, deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient")]
+    #[serde(
+        default,
+        deserialize_with = "crate::api::deserialize_unix_ts_millis_lenient"
+    )]
     ttl: Option<i64>,
     #[serde(default)]
     url: Option<String>,
@@ -82,7 +88,7 @@ impl McpRpcService<'_> {
         )
         .await
         .map_err(crate::api::handlers::delivery_core_adapter::core_error_to_api_error)
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| err.client_safe_message().into_owned())?;
 
         let value = mcp_send_ack_value(result)?;
         self.emit_rpc_completed("message_send");

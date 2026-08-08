@@ -3,9 +3,7 @@ use std::{borrow::Cow, sync::Arc};
 use axum::{
     body::{Body, to_bytes},
     extract::{Request, State as AxumState},
-    http::{
-        Method, StatusCode as HttpStatusCode, header::WWW_AUTHENTICATE, request::Parts,
-    },
+    http::{Method, StatusCode as HttpStatusCode, header::WWW_AUTHENTICATE, request::Parts},
     response::Response as AxumResponse,
 };
 use rmcp::{
@@ -28,82 +26,89 @@ pub(crate) async fn mcp_http(
 ) -> AxumResponse {
     let request_id = crate::util::generate_hex_id_128();
     let method = request.method().to_string();
-    let path = request.uri().path().to_string();
+    let route = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|matched| matched.as_str())
+        .unwrap_or("/mcp")
+        .to_string();
     let span = tracing::info_span!(
         "gateway.mcp.http.request",
         request_id = %request_id,
         method = %method,
-        path = %path
+        route = %route
     );
     async move {
-    let mcp = state
-        .mcp
-        .as_ref()
-        .expect("mcp routes must only be mounted when MCP is enabled");
-    if let Some(origin) = request_origin(request.headers()) {
-        mcp.maybe_update_issuer_from_origin(&origin).await;
-    }
-
-    let (mut parts, body) = request.into_parts();
-    let auth = match mcp.authenticate(&parts.headers).await {
-        Ok(auth) => auth,
-        Err(_) => {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.auth_failed",
-                request_id = %(crate::util::redact_text(request_id.as_str())),
-                method = %(method.as_str()),
-                path = %(path.as_str())
-            );
-            return auth_challenge_response(
-                mcp.oauth_issuer().await,
-                None,
-                HttpStatusCode::UNAUTHORIZED,
-            );
-        }
-    };
-
-    if parts.method == Method::POST {
-        let body = match to_bytes(body, 32 * 1024).await {
-            Ok(body) => body,
+        let mcp = state
+            .mcp
+            .as_ref()
+            .expect("mcp routes must only be mounted when MCP is enabled");
+        let (mut parts, body) = request.into_parts();
+        let auth = match mcp.authenticate(&parts.headers).await {
+            Ok(auth) => auth,
             Err(_) => {
-                                ::tracing::event!(
+                ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::WARN,
-                    event = "mcp.request_body_invalid",
+                    event = "mcp.auth_failed",
                     request_id = %(crate::util::redact_text(request_id.as_str())),
                     method = %(method.as_str()),
-                    path = %(path.as_str())
+                    route = %(route.as_str())
                 );
-                return (StatusCode::BAD_REQUEST, "invalid request body").into_response();
+                return auth_challenge_response(
+                    mcp.oauth_issuer().await,
+                    None,
+                    HttpStatusCode::UNAUTHORIZED,
+                );
             }
         };
-        if let Some(required_scope) = required_scope_for_request(&body)
-            && let McpAuthContext::OAuth { scope, .. } = &auth
-            && !scope.contains(required_scope)
-        {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.scope_rejected",
-                request_id = %(crate::util::redact_text(request_id.as_str())),
-                required_scope = %(required_scope.as_str())
-            );
-            return auth_challenge_response(
-                mcp.oauth_issuer().await,
-                Some(required_scope),
-                HttpStatusCode::FORBIDDEN,
-            );
-        }
-        parts.extensions.insert(auth);
-        let request = Request::from_parts(parts, Body::from(body));
-        return rmcp_http_service(state).handle(request).await.map(Body::new);
-    }
 
-    parts.extensions.insert(auth);
-    let request = Request::from_parts(parts, body);
-    rmcp_http_service(state).handle(request).await.map(Body::new)
+        if parts.method == Method::POST {
+            let body = match to_bytes(body, 32 * 1024).await {
+                Ok(body) => body,
+                Err(_) => {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "mcp.request_body_invalid",
+                        request_id = %(crate::util::redact_text(request_id.as_str())),
+                        method = %(method.as_str()),
+                        route = %(route.as_str())
+                    );
+                    return (StatusCode::BAD_REQUEST, "invalid request body").into_response();
+                }
+            };
+            if let Some(required_scope) = required_scope_for_request(&body)
+                && let McpAuthContext::OAuth { scope, .. } = &auth
+                && !scope.contains(required_scope)
+            {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.scope_rejected",
+                    request_id = %(crate::util::redact_text(request_id.as_str())),
+                    required_scope = %(required_scope.as_str())
+                );
+                return auth_challenge_response(
+                    mcp.oauth_issuer().await,
+                    Some(required_scope),
+                    HttpStatusCode::FORBIDDEN,
+                );
+            }
+            parts.extensions.insert(auth);
+            let request = Request::from_parts(parts, Body::from(body));
+            return rmcp_http_service(state)
+                .handle(request)
+                .await
+                .map(Body::new);
+        }
+
+        parts.extensions.insert(auth);
+        let request = Request::from_parts(parts, body);
+        rmcp_http_service(state)
+            .handle(request)
+            .await
+            .map(Body::new)
     }
     .instrument(span)
     .await
@@ -198,7 +203,10 @@ impl PushgoRmcpServer {
             .ok_or_else(|| McpError::internal_error("mcp disabled", None))
     }
 
-    fn auth_from_context(&self, context: &RequestContext<RoleServer>) -> Result<McpAuthContext, McpError> {
+    fn auth_from_context(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<McpAuthContext, McpError> {
         let Some(parts) = context.extensions.get::<Parts>() else {
             return Err(McpError::internal_error(
                 "missing http request context",
@@ -288,23 +296,25 @@ impl ServerHandler for PushgoRmcpServer {
                     ::tracing::Level::WARN,
                     event = "mcp.call_tool_failed",
                     tool_name = %(tool_name.as_str()),
-                    error = %(err.as_str())
+                    error_fingerprint = %(&McpState::token_hash(&err)[..16])
                 );
                 map_mcp_error(err, ErrorCode::INVALID_PARAMS)
             })?;
         if should_notify_resource_list_changed(&tool_name, &value) {
             let peer = context.peer.clone();
-            tokio::spawn(async move {
-                if let Err(err) = peer.notify_resource_list_changed().await {
-                    ::tracing::event!(
-                        target: "gateway.trace_event",
-                        ::tracing::Level::WARN,
-                        event = "mcp.resource_list_notify_failed",
-                        error = %(err.to_string())
-                    );
+            tokio::spawn(
+                async move {
+                    if let Err(err) = peer.notify_resource_list_changed().await {
+                        ::tracing::event!(
+                            target: "gateway.trace_event",
+                            ::tracing::Level::WARN,
+                            event = "mcp.resource_list_notify_failed",
+                            error_fingerprint = %(&McpState::token_hash(&err.to_string())[..16])
+                        );
+                    }
                 }
-            }
-            .in_current_span());
+                .in_current_span(),
+            );
         }
         Ok(CallToolResult::structured(value))
     }
@@ -316,20 +326,18 @@ impl ServerHandler for PushgoRmcpServer {
     ) -> Result<ListResourcesResult, McpError> {
         let auth = self.auth_from_context(&context)?;
         let service = self.rpc_service(&auth)?;
-        let value = service
-            .resources_list_result()
-            .await
-            .map_err(|err| {
-                                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::WARN,
-                    event = "mcp.list_resources_failed",
-                    error = %(err.as_str())
-                );
-                map_resource_error(err)
-            })?;
-        serde_json::from_value(value)
-            .map_err(|err| McpError::internal_error(format!("invalid resources payload: {err}"), None))
+        let value = service.resources_list_result().await.map_err(|err| {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.list_resources_failed",
+                error_fingerprint = %(&McpState::token_hash(&err)[..16])
+            );
+            map_resource_error(err)
+        })?;
+        serde_json::from_value(value).map_err(|err| {
+            McpError::internal_error(format!("invalid resources payload: {err}"), None)
+        })
     }
 
     async fn read_resource(
@@ -343,27 +351,28 @@ impl ServerHandler for PushgoRmcpServer {
             .resources_read_result(Some(request.uri.as_str()))
             .await
             .map_err(|err| {
-                                ::tracing::event!(
+                ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::WARN,
                     event = "mcp.read_resource_failed",
-                    error = %(err.as_str()),
-                    uri = %(request.uri.as_str())
+                    error_fingerprint = %(&McpState::token_hash(&err)[..16]),
+                    uri_fingerprint = %(&McpState::token_hash(request.uri.as_str())[..16])
                 );
                 map_resource_error(err)
             })?;
-        serde_json::from_value(value)
-            .map_err(|err| McpError::internal_error(format!("invalid resource content: {err}"), None))
+        serde_json::from_value(value).map_err(|err| {
+            McpError::internal_error(format!("invalid resource content: {err}"), None)
+        })
     }
 }
 
 fn map_mcp_error(message: String, code: ErrorCode) -> McpError {
-        ::tracing::event!(
+    ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
         event = "mcp.error_mapped",
         error_code = (i64::from(code.0)),
-        message = %(message.as_str())
+        message_fingerprint = %(&McpState::token_hash(&message)[..16])
     );
     match code {
         ErrorCode::INVALID_PARAMS => McpError::invalid_params(message, None),
@@ -373,11 +382,11 @@ fn map_mcp_error(message: String, code: ErrorCode) -> McpError {
 }
 
 fn map_resource_error(message: String) -> McpError {
-        ::tracing::event!(
+    ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
         event = "mcp.resource_error_mapped",
-        message = %(message.as_str())
+        message_fingerprint = %(&McpState::token_hash(&message)[..16])
     );
     if message == "resource_not_found" {
         return McpError::resource_not_found(message, Some(json!({ "uri": "unknown" })));

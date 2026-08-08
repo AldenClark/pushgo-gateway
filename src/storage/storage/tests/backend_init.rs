@@ -221,7 +221,7 @@ fn start_postgres_container() -> Option<(DockerContainer, String)> {
         "POSTGRES_DB=pushgo",
         "-p",
         &format!("{port}:5432"),
-        "postgres:16-alpine",
+        "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
     ]);
     Some((
         DockerContainer { name },
@@ -251,7 +251,7 @@ fn start_mysql_container() -> Option<(DockerContainer, String)> {
         "MYSQL_DATABASE=pushgo",
         "-p",
         &format!("{port}:3306"),
-        "mysql:8.4",
+        "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
     ]);
     Some((
         DockerContainer { name },
@@ -695,6 +695,7 @@ async fn seed_provider_raw_discard_fixture(
                 created_at: now,
                 claimed_at: None,
                 claimed_by: None,
+                claim_generation: 0,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -1649,6 +1650,7 @@ async fn seed_cleanup_shared_delivery_scenario(
                     created_at: updated_at,
                     claimed_at: None,
                     claimed_by: None,
+                    claim_generation: 0,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,

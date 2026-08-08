@@ -33,6 +33,21 @@ pub struct PrivateState {
     revoked_devices: RwLock<HashMap<DeviceId, ()>>,
     session_controls: RwLock<HashMap<String, SessionControl>>,
     session_devices: RwLock<HashMap<String, DeviceId>>,
+    session_admission: Arc<tokio::sync::Semaphore>,
+    handshake_admission: Arc<tokio::sync::Semaphore>,
+    runtime_tasks: Mutex<Vec<PrivateRuntimeTask>>,
     shutting_down: AtomicBool,
     shutdown_notify: tokio::sync::Notify,
+}
+
+struct PrivateRuntimeTask {
+    name: &'static str,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PrivateShutdownReport {
+    pub joined: usize,
+    pub panicked: usize,
+    pub aborted: usize,
 }

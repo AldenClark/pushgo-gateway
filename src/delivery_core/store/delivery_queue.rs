@@ -47,6 +47,7 @@ pub(crate) struct QueueClaimedTarget {
     pub(crate) claim_state: QueueClaimState,
     pub(crate) lease: QueueLease,
     pub(crate) worker_id: QueueWorkerId,
+    pub(crate) claim_generation: u64,
     pub(crate) attempt: QueueAttempt,
     pub(crate) retry: QueueRetry,
 }
@@ -110,6 +111,7 @@ impl QueueClaimedTarget {
             retry: QueueRetry {
                 retry_at: entry.next_attempt_at,
             },
+            claim_generation: entry.claim_generation,
             entry,
             claim_state,
             worker_id,
@@ -146,6 +148,23 @@ pub(crate) trait DeliveryQueueStore {
         &self,
         request: QueueClaimRequest,
     ) -> StoreResult<Vec<QueueClaimedTarget>>;
+
+    async fn mark_private_fallback_sent_if_claimed(
+        &self,
+        target: &QueueClaimedTarget,
+        at_ts: i64,
+    ) -> StoreResult<bool>;
+
+    async fn defer_private_fallback_if_claimed(
+        &self,
+        target: &QueueClaimedTarget,
+        at_ts: i64,
+    ) -> StoreResult<bool>;
+
+    async fn drop_private_delivery_if_claimed(
+        &self,
+        target: &QueueClaimedTarget,
+    ) -> StoreResult<bool>;
 }
 
 #[async_trait]
@@ -199,5 +218,48 @@ impl DeliveryQueueStore for Storage {
                 })
                 .collect()
         })
+    }
+
+    async fn mark_private_fallback_sent_if_claimed(
+        &self,
+        target: &QueueClaimedTarget,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        self.mark_private_fallback_sent_if_claimed(
+            target.device_id,
+            target.entry.delivery_id.as_str(),
+            target.worker_id.as_str(),
+            target.claim_generation,
+            at_ts,
+        )
+        .await
+    }
+
+    async fn defer_private_fallback_if_claimed(
+        &self,
+        target: &QueueClaimedTarget,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        self.defer_private_fallback_if_claimed(
+            target.device_id,
+            target.entry.delivery_id.as_str(),
+            target.worker_id.as_str(),
+            target.claim_generation,
+            at_ts,
+        )
+        .await
+    }
+
+    async fn drop_private_delivery_if_claimed(
+        &self,
+        target: &QueueClaimedTarget,
+    ) -> StoreResult<bool> {
+        self.drop_private_delivery_if_claimed(
+            target.device_id,
+            target.entry.delivery_id.as_str(),
+            target.worker_id.as_str(),
+            target.claim_generation,
+        )
+        .await
     }
 }

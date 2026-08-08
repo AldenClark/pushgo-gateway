@@ -105,7 +105,7 @@ impl Storage {
     #[cfg(test)]
     pub(crate) fn consume_provider_finalize_failure(&self) -> bool {
         self.provider_finalize_failures_remaining
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
                 |remaining| remaining.checked_sub(1),

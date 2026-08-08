@@ -2,7 +2,7 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-const STORAGE_SCHEMA_VERSION: &str = "2026-08-05-gateway-v10";
+const STORAGE_SCHEMA_VERSION: &str = "2026-08-08-gateway-v11";
 const STORAGE_SCHEMA_VERSION_BETA1: &str = "2026-04-22-gateway-v9";
 const STORAGE_SCHEMA_VERSION_MIGRATABLE: &str = "2026-04-17-gateway-v8";
 const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-04-16-gateway-v7";
@@ -18,6 +18,9 @@ const OBSERVABILITY_V9_CHECKSUM: &str =
 const FORMAL_RELEASE_V10_MIGRATION_ID: &str = "20260805_001_release_v10";
 const FORMAL_RELEASE_V10_CHECKSUM: &str =
     "sha256:f526ca103e36ed4ca6a0e0bddb6ebe2aff757a4c11417ff7d26500e2513b0bb1";
+const CONCURRENCY_FENCING_V11_MIGRATION_ID: &str = "20260808_001_concurrency_fencing_v11";
+const CONCURRENCY_FENCING_V11_CHECKSUM: &str =
+    "sha256:5ac8609854a01918f99f837fb1240aa74c8543f17fa777cf786520884271296e";
 const BETA1_TAG: &str = "v1.3.0-beta.1";
 const BETA1_COMMIT: &str = "a84a937ccc7cbcce99c5a0e37f35ed2d0fe55906";
 
@@ -211,9 +214,9 @@ fn db_upgrade_run_accepts_v8_sqlite_with_observability_data() {
 }
 
 #[test]
-fn db_upgrade_run_migrates_beta1_v9_to_formal_v10() {
+fn db_upgrade_run_migrates_beta1_v9_to_current_schema() {
     let dir = tempdir().expect("tempdir should be created");
-    let db_path = dir.path().join("cli-upgrade-v9-to-v10.sqlite");
+    let db_path = dir.path().join("cli-upgrade-v9-to-current.sqlite");
     let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
     seed_v9_sqlite(db_path.to_string_lossy().as_ref());
 
@@ -222,25 +225,26 @@ fn db_upgrade_run_migrates_beta1_v9_to_formal_v10() {
     let plan_stdout = String::from_utf8_lossy(&plan.stdout);
     assert!(
         plan_stdout
-            .contains("current schema=2026-04-22-gateway-v9 action=backfill_current pending=1"),
-        "beta1 must expose one real formal migration: {plan_stdout}"
+            .contains("current schema=2026-04-22-gateway-v9 action=backfill_current pending=2"),
+        "beta1 must expose the formal and fencing migrations: {plan_stdout}"
     );
 
     let run = run_gateway(&["--db-url", db_url.as_str(), "--db-upgrade", "run"]);
     assert!(
         run.status.success(),
-        "v9 to v10 upgrade failed: stdout={} stderr={}",
+        "v9 to current schema upgrade failed: stdout={} stderr={}",
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(stdout.contains("migration=20260805_001_release_v10"));
+    assert!(stdout.contains("migration=20260808_001_concurrency_fencing_v11"));
     assert!(stdout.contains("[upgrade] backup completed"));
     assert_upgraded_sqlite(db_path.to_string_lossy().as_ref());
     assert_eq!(
         table_row_count(db_path.to_string_lossy().as_ref(), "private_bindings"),
         1,
-        "v9 to v10 must preserve runtime bindings"
+        "v9 to current schema must preserve runtime bindings"
     );
 }
 
@@ -395,6 +399,20 @@ fn assert_upgraded_sqlite(path: &str) {
             .as_str(),
         ),
         FORMAL_RELEASE_V10_CHECKSUM
+    );
+    assert_eq!(
+        migration_count(path, CONCURRENCY_FENCING_V11_MIGRATION_ID),
+        1
+    );
+    assert_eq!(
+        sqlite3_scalar(
+            path,
+            format!(
+                "SELECT checksum FROM pushgo_schema_migrations WHERE migration_id='{CONCURRENCY_FENCING_V11_MIGRATION_ID}';"
+            )
+            .as_str(),
+        ),
+        CONCURRENCY_FENCING_V11_CHECKSUM
     );
     assert_eq!(
         completed_upgrade_runs(path),

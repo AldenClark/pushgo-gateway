@@ -402,24 +402,6 @@ impl DeviceRouteChange<'_> {
         );
         Ok(())
     }
-
-    async fn bind_private_mapping(self, state: &AppState) -> Result<(), Error> {
-        if self.next.channel_type == DeviceChannelType::Private {
-            return Ok(());
-        }
-        let Some(provider_token) = self.next.provider_token_ref() else {
-            return Ok(());
-        };
-        let device_id = derive_private_device_id(self.device_key);
-        state
-            .store
-            .bind_private_token(device_id, self.next.platform, provider_token)
-            .await
-            .map_err(|err| {
-                Error::Internal(format!("failed to bind private token mapping: {err}"))
-            })?;
-        Ok(())
-    }
 }
 
 pub(crate) async fn device_channel_upsert(
@@ -437,24 +419,6 @@ pub(crate) async fn device_channel_upsert(
     let requested_platform = payload.requested_platform()?;
     let previous = resolve_existing_for_route(&state, device_key, requested_platform).await?;
     let next_provider_token = payload.normalized_provider_token(previous.platform, next_type)?;
-    let next_provider_token_ref =
-        ProviderTokenRef::optional(next_provider_token.as_deref()).map(ProviderTokenRef::as_str);
-    if previous.channel_type == next_type
-        && previous.provider_token_ref() == next_provider_token_ref
-    {
-        previous
-            .persisted_change(device_key, Some(&previous), None)
-            .bind_private_mapping(&state)
-            .await?;
-        return Ok(crate::api::ok(DeviceChannelResponse {
-            device_key: device_key.to_string(),
-            channel_type: previous.channel_type.as_str().to_string(),
-            provider_token: previous.provider_token,
-            issued_new_key: false,
-            issue_reason: None,
-        }));
-    }
-
     let ack_timeout_secs = state
         .private
         .as_ref()
@@ -469,7 +433,7 @@ pub(crate) async fn device_channel_upsert(
         platform: previous.platform,
         channel_type: next_type,
         provider_token: next_provider_token.clone(),
-        updated_at: chrono::Utc::now().timestamp_millis(),
+        updated_at: previous.next_updated_at(chrono::Utc::now().timestamp_millis()),
     };
     let migrated = state
         .store

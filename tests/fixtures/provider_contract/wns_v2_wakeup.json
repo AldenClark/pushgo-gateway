@@ -1,0 +1,1 @@
+{"version":2,"kind":"provider_wakeup","delivery_id":"delivery-fixture-001","payload":{"_skip_persist":"1","body":"Open PushGo to retrieve the queued delivery","provider_mode":"wakeup","provider_wakeup":"1","title":"New PushGo delivery"}}

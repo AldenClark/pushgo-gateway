@@ -32,7 +32,12 @@ struct UnbindArgs {
 impl McpRpcService<'_> {
     #[tracing::instrument(name = "gateway.mcp.rpc.bind_start", skip_all)]
     pub(super) async fn call_bind_start(&self, args: Value) -> Result<Value, String> {
-        let McpAuthContext::OAuth { principal_id, .. } = self.auth else {
+        let McpAuthContext::OAuth {
+            principal_id,
+            client_id,
+            ..
+        } = self.auth
+        else {
             self.emit_rpc_rejected("auth_mode_not_supported");
             return Err("auth_mode_not_supported".to_string());
         };
@@ -52,14 +57,36 @@ impl McpRpcService<'_> {
                 return Err("invalid action".to_string());
             }
         };
+        let requested_channel_id = match parsed.requested_channel_id.as_deref() {
+            Some(raw) if !raw.trim().is_empty() => Some(
+                crate::api::ChannelId::parse(raw)
+                    .map_err(|_| "requested_channel_id_invalid".to_string())?
+                    .to_string(),
+            ),
+            _ => None,
+        };
+        let redirect_uri = match parsed.redirect_uri.as_deref() {
+            Some(uri) => {
+                let Some(client_id) = client_id.as_deref() else {
+                    self.emit_rpc_rejected("redirect_uri_requires_current_client");
+                    return Err("redirect_uri_invalid".to_string());
+                };
+                if !self.mcp.client_redirect_allowed(client_id, uri).await {
+                    self.emit_rpc_rejected("redirect_uri_not_registered");
+                    return Err("redirect_uri_invalid".to_string());
+                }
+                Some(uri.to_string())
+            }
+            None => None,
+        };
         let bind_session_id = McpState::random_id("mcp_bind");
-        let expires_at = McpState::now_ts() + self.mcp.config.bind_session_ttl_secs;
+        let bind_session_hash = McpState::token_hash(&bind_session_id);
+        let expires_at = McpState::now_ts().saturating_add(self.mcp.config.bind_session_ttl_secs);
         let session = BindSession {
-            bind_session_id: bind_session_id.clone(),
             principal_id: principal_id.clone(),
             action,
-            requested_channel_id: parsed.requested_channel_id.clone(),
-            redirect_uri: parsed.redirect_uri.clone(),
+            requested_channel_id,
+            redirect_uri,
             status: BindStatus::Pending,
             expires_at,
             completed_channel_id: None,
@@ -67,12 +94,24 @@ impl McpRpcService<'_> {
             error_message: None,
             resource_list_change_notified: false,
         };
+        let _mutation = self.mcp.mutation.lock().await;
+        if !self.mcp.oauth_ready() {
+            return Err("oauth_state_unavailable".to_string());
+        }
+        {
+            let mut sessions = self.mcp.bind_sessions.write().await;
+            sessions.retain(|_, value| value.expires_at > McpState::now_ts());
+            if sessions.len() >= core_snapshot::MAX_BIND_SESSIONS {
+                self.emit_rpc_rejected("bind_session_quota_exceeded");
+                return Err("bind_session_quota_exceeded".to_string());
+            }
+            sessions.insert(bind_session_hash, session);
+        }
         self.mcp
-            .bind_sessions
-            .write()
+            .persist_snapshot_locked()
             .await
-            .insert(bind_session_id.clone(), session);
-        self.mcp.persist_snapshot().await;
+            .map_err(|_| "oauth_state_unavailable".to_string())?;
+        drop(_mutation);
 
         let locale = McpLocale::from_request(parsed.lang.as_deref(), parsed.ui_locales.as_deref());
         let bind_url_path = format!(
@@ -111,15 +150,19 @@ impl McpRpcService<'_> {
         ensure_scope(self.auth, McpScope::ChannelsManage).inspect_err(|err| {
             self.emit_rpc_rejected(err);
         })?;
-        let parsed: BindStatusArgs =
-            serde_json::from_value(args).map_err(|err| {
-                self.emit_rpc_failed("bind_status_parse_args", &err.to_string());
-                err.to_string()
-            })?;
+        let parsed: BindStatusArgs = serde_json::from_value(args).map_err(|err| {
+            self.emit_rpc_failed("bind_status_parse_args", &err.to_string());
+            err.to_string()
+        })?;
+        let _mutation = self.mcp.mutation.lock().await;
+        if !self.mcp.oauth_ready() {
+            return Err("oauth_state_unavailable".to_string());
+        }
+        let bind_session_hash = McpState::token_hash(&parsed.bind_session_id);
         let mut changed = false;
         let snapshot = {
             let mut sessions = self.mcp.bind_sessions.write().await;
-            let Some(session) = sessions.get_mut(&parsed.bind_session_id) else {
+            let Some(session) = sessions.get_mut(&bind_session_hash) else {
                 self.emit_rpc_rejected("bind_session_invalid");
                 return Err("bind_session_invalid".to_string());
             };
@@ -127,7 +170,7 @@ impl McpRpcService<'_> {
                 self.emit_rpc_rejected("bind_session_invalid");
                 return Err("bind_session_invalid".to_string());
             }
-            if session.expires_at < McpState::now_ts() && session.status == BindStatus::Pending {
+            if session.expires_at <= McpState::now_ts() && session.status == BindStatus::Pending {
                 session.status = BindStatus::Expired;
                 session.error_code = Some("bind_session_expired".to_string());
                 changed = true;
@@ -148,8 +191,12 @@ impl McpRpcService<'_> {
             })
         };
         if changed {
-            self.mcp.persist_snapshot().await;
+            self.mcp
+                .persist_snapshot_locked()
+                .await
+                .map_err(|_| "oauth_state_unavailable".to_string())?;
         }
+        drop(_mutation);
         let mut snapshot = snapshot;
         if let Some(channel_id) = snapshot
             .get("channel_id")
@@ -203,7 +250,11 @@ impl McpRpcService<'_> {
             err.to_string()
         })?;
         let channel_name = self.channel_name(&parsed.channel_id).await;
-        let removed = self.mcp.remove_grant(principal_id, &parsed.channel_id).await;
+        let removed = self
+            .mcp
+            .remove_grant(principal_id, &parsed.channel_id)
+            .await
+            .map_err(|_| "oauth_state_unavailable".to_string())?;
         let result = json!({
             "removed": removed,
             "channel_id": parsed.channel_id,

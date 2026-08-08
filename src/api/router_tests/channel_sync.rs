@@ -2,7 +2,10 @@ use super::*;
 use crate::{
     private::protocol::PrivatePayloadEnvelope,
     routing::derive_private_device_id,
-    storage::{OUTBOX_STATUS_PENDING, Platform, PrivateMessage, PrivateOutboxEntry},
+    storage::{
+        DeviceRouteRecordRow, OUTBOX_STATUS_PENDING, Platform, PrivateMessage, PrivateOutboxEntry,
+        RouteChannelType,
+    },
 };
 
 fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
@@ -47,6 +50,7 @@ async fn seed_private_pending_delivery(
                 created_at: now,
                 claimed_at: None,
                 claimed_by: None,
+                claim_generation: 0,
                 first_sent_at: None,
                 last_attempt_at: None,
                 acked_at: None,
@@ -842,4 +846,75 @@ async fn route_switch_provider_to_private_migrates_pending_deliveries() {
             .is_some(),
         "migrated private message should be materialized"
     );
+}
+
+#[tokio::test]
+async fn idempotent_route_upsert_reconciles_a_stale_process_cache() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let provider_token = "android-token-stale-process-cache-0001";
+
+    let (_status, register_body) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({ "platform": "android" }),
+    )
+    .await;
+    let device_key = response_string_field(&register_body, "device_key").to_string();
+    let (status, route_body) = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": provider_token
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "route response: {route_body:?}");
+
+    // Simulate a second Gateway instance committing a route change. This
+    // process intentionally retains its old in-memory FCM record.
+    state
+        .store
+        .transition_device_route(
+            &DeviceRouteRecordRow {
+                device_key: device_key.clone(),
+                platform: Platform::ANDROID.name().to_string(),
+                channel_type: "private".to_string(),
+                provider_token: None,
+                updated_at: chrono::Utc::now().timestamp_millis(),
+            },
+            RouteChannelType::Fcm,
+            30,
+            16,
+        )
+        .await
+        .expect("external route transition should succeed");
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
+    let (status, body) = post_json(
+        app,
+        "/channel/device",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": provider_token
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "reconcile response: {body:?}");
+
+    let persisted = state
+        .store
+        .load_device_routes()
+        .await
+        .expect("routes should load")
+        .into_iter()
+        .find(|route| route.device_key == device_key)
+        .expect("route should remain present");
+    assert_eq!(persisted.channel_type, Platform::ANDROID.channel_type());
+    assert_eq!(persisted.provider_token.as_deref(), Some(provider_token));
 }

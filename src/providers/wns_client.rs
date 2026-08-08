@@ -14,6 +14,7 @@ use crate::{
 
 const WNS_TIMEOUT: Duration = Duration::from_secs(60);
 const WNS_TYPE: &str = "wns/raw";
+// WNS requires this media type for raw notifications even when the app payload is UTF-8 JSON.
 const WNS_CONTENT_TYPE: &str = "application/octet-stream";
 const WNS_MAX_RETRY: usize = 3;
 const WNS_INITIAL_BACKOFF: Duration = Duration::from_millis(500);

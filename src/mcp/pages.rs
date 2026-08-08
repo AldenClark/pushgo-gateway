@@ -24,35 +24,42 @@ pub(crate) async fn bind_page_get(
 ) -> Response {
     let span = tracing::info_span!("gateway.mcp.bind.page_get");
     let fut = async move {
-    let mcp = state
-        .mcp
-        .as_ref()
-        .expect("mcp routes must only be mounted when MCP is enabled");
-    let sessions = mcp.bind_sessions.read().await;
-    let Some(session) = sessions.get(&query.bind_session_id) else {
-                ::tracing::event!(
-            target: "gateway.trace_event",
-            ::tracing::Level::WARN,
-            event = "mcp.bind_page_rejected",
-            reason = %("bind_session_not_found")
-        );
-        return (StatusCode::NOT_FOUND, "bind session not found").into_response();
-    };
-    let locale = McpLocale::from_request(query.lang.as_deref(), query.ui_locales.as_deref());
-    let text = bind_page_text(locale, session.action);
+        let mcp = state
+            .mcp
+            .as_ref()
+            .expect("mcp routes must only be mounted when MCP is enabled");
+        if !mcp.oauth_ready() {
+            return oauth_state_unavailable();
+        }
+        let bind_session_hash = McpState::token_hash(&query.bind_session_id);
+        let sessions = mcp.bind_sessions.read().await;
+        let Some(session) = sessions.get(&bind_session_hash) else {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "mcp.bind_page_rejected",
+                reason = %("bind_session_not_found")
+            );
+            return (StatusCode::NOT_FOUND, "bind session not found").into_response();
+        };
+        let locale = McpLocale::from_request(query.lang.as_deref(), query.ui_locales.as_deref());
+        let text = bind_page_text(locale, session.action);
 
-    if session.status != BindStatus::Pending {
-        return Html(simple_status_page(locale, text.completed)).into_response();
-    }
+        if session.status != BindStatus::Pending {
+            return Html(simple_status_page(locale, text.completed)).into_response();
+        }
+        if session.expires_at <= McpState::now_ts() {
+            return (StatusCode::GONE, "bind session expired").into_response();
+        }
 
-    let requested = session.requested_channel_id.as_deref().unwrap_or("");
-    let action = if session.action == BindAction::Bind {
-        "bind"
-    } else {
-        "revoke"
-    };
-    let html = format!(
-        r#"<!doctype html>
+        let requested = session.requested_channel_id.as_deref().unwrap_or("");
+        let action = if session.action == BindAction::Bind {
+            "bind"
+        } else {
+            "revoke"
+        };
+        let html = format!(
+            r#"<!doctype html>
 <html lang="{html_lang}">
 <head>
   <meta charset="utf-8" />
@@ -150,25 +157,25 @@ pub(crate) async fn bind_page_get(
   </main>
 </body>
 </html>"#,
-        html_lang = locale.html_lang(),
-        title = text.title,
-        subtitle = text.subtitle,
-        action = action,
-        session_id = html_escape(&query.bind_session_id),
-        locale_code = locale.code(),
-        channel_id_label = text.channel_id_label,
-        password_label = text.password_label,
-        requested = html_escape(requested),
-        submit = text.submit,
-    );
+            html_lang = locale.html_lang(),
+            title = text.title,
+            subtitle = text.subtitle,
+            action = action,
+            session_id = html_escape(&query.bind_session_id),
+            locale_code = locale.code(),
+            channel_id_label = text.channel_id_label,
+            password_label = text.password_label,
+            requested = html_escape(requested),
+            submit = text.submit,
+        );
 
         ::tracing::event!(
-        target: "gateway.trace_event",
-        ::tracing::Level::INFO,
-        event = "mcp.bind_page_rendered",
-        action = %(action)
-    );
-    Html(html).into_response()
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "mcp.bind_page_rendered",
+            action = %(action)
+        );
+        Html(html).into_response()
     };
     tracing::Instrument::instrument(fut, span).await
 }
@@ -201,142 +208,191 @@ async fn bind_apply(
         }
     );
     let fut = async move {
-    let mcp = state
-        .mcp
-        .as_ref()
-        .expect("mcp routes must only be mounted when MCP is enabled");
-    let locale = McpLocale::from_request(form.lang.as_deref(), form.ui_locales.as_deref());
+        let mcp = state
+            .mcp
+            .as_ref()
+            .expect("mcp routes must only be mounted when MCP is enabled");
+        if !mcp.oauth_ready() {
+            return oauth_state_unavailable();
+        }
+        let locale = McpLocale::from_request(form.lang.as_deref(), form.ui_locales.as_deref());
+        let bind_session_hash = McpState::token_hash(&form.bind_session_id);
+        {
+            let sessions = mcp.bind_sessions.read().await;
+            let Some(session) = sessions.get(&bind_session_hash) else {
+                return (StatusCode::NOT_FOUND, "bind session not found").into_response();
+            };
+            if session.status != BindStatus::Pending {
+                return (StatusCode::BAD_REQUEST, "bind session already completed").into_response();
+            }
+            if session.expires_at <= McpState::now_ts() {
+                return (StatusCode::GONE, "bind session expired").into_response();
+            }
+            if session.action != expected_action {
+                return (StatusCode::BAD_REQUEST, "bind session action mismatch").into_response();
+            }
+        }
 
-    let channel_id = match parse_channel_id(&form.channel_id) {
-        Ok(v) => v,
-        Err(_) => {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_rejected",
-                reason = %("invalid_channel_id")
-            );
-            return (StatusCode::BAD_REQUEST, "invalid channel_id").into_response();
-        }
-    };
-    let password = match validate_channel_password(&form.password) {
-        Ok(v) => v,
-        Err(_) => {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_rejected",
-                reason = %("invalid_password")
-            );
-            return (StatusCode::BAD_REQUEST, "invalid password").into_response();
-        }
-    };
-
-    match state
-        .store
-        .channel_info_with_password(channel_id, password)
-        .await
-    {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_rejected",
-                reason = %("channel_password_mismatch")
-            );
-            return (StatusCode::BAD_REQUEST, "channel_id/password mismatch").into_response();
-        }
-        Err(_) => {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_failed",
-                stage = %("channel_validation")
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "channel validation failed",
-            )
-                .into_response();
-        }
-    }
-
-    let (principal_id, redirect_uri) = {
-        let mut sessions = mcp.bind_sessions.write().await;
-        let Some(session) = sessions.get_mut(&form.bind_session_id) else {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_rejected",
-                reason = %("bind_session_not_found")
-            );
-            return (StatusCode::NOT_FOUND, "bind session not found").into_response();
+        let channel_id = match parse_channel_id(&form.channel_id) {
+            Ok(v) => v,
+            Err(_) => {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_rejected",
+                    reason = %("invalid_channel_id")
+                );
+                return (StatusCode::BAD_REQUEST, "invalid channel_id").into_response();
+            }
         };
-        if session.status != BindStatus::Pending {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_rejected",
-                reason = %("bind_session_not_pending")
-            );
-            return (StatusCode::BAD_REQUEST, "bind session already completed").into_response();
-        }
-        if session.expires_at < McpState::now_ts() {
-            session.status = BindStatus::Expired;
-            session.error_code = Some("bind_session_expired".to_string());
-            drop(sessions);
-            mcp.persist_snapshot().await;
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_rejected",
-                reason = %("bind_session_expired")
-            );
-            return (StatusCode::BAD_REQUEST, "bind session expired").into_response();
-        }
-        if session.action != expected_action {
-                        ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "mcp.bind_apply_rejected",
-                reason = %("bind_session_action_mismatch")
-            );
-            return (StatusCode::BAD_REQUEST, "bind session action mismatch").into_response();
-        }
-        (session.principal_id.clone(), session.redirect_uri.clone())
-    };
+        let password = match validate_channel_password(&form.password) {
+            Ok(v) => v,
+            Err(_) => {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_rejected",
+                    reason = %("invalid_password")
+                );
+                return (StatusCode::BAD_REQUEST, "invalid password").into_response();
+            }
+        };
 
-    if expected_action == BindAction::Bind {
-        mcp.upsert_grant(&principal_id, &form.channel_id, None).await;
-    } else {
-        mcp.remove_grant(&principal_id, &form.channel_id).await;
-    }
-
-    {
-        let mut sessions = mcp.bind_sessions.write().await;
-        if let Some(session) = sessions.get_mut(&form.bind_session_id) {
-            session.status = BindStatus::Completed;
-            session.completed_channel_id = Some(form.channel_id.clone());
+        match state
+            .store
+            .channel_info_with_password(channel_id, password)
+            .await
+        {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_rejected",
+                    reason = %("channel_password_mismatch")
+                );
+                return (StatusCode::BAD_REQUEST, "channel_id/password mismatch").into_response();
+            }
+            Err(_) => {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_failed",
+                    stage = %("channel_validation")
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "channel validation failed",
+                )
+                    .into_response();
+            }
         }
-    }
-    mcp.persist_snapshot().await;
-    ::tracing::event!(
-        target: "gateway.trace_event",
-        ::tracing::Level::INFO,
-        event = "mcp.bind_apply_completed",
-        action = %(if expected_action == BindAction::Bind { "bind" } else { "revoke" })
-    );
 
-    if let Some(redirect_uri) = redirect_uri.as_deref() {
-        return Redirect::to(redirect_uri).into_response();
-    }
+        let _mutation = mcp.mutation.lock().await;
+        if !mcp.oauth_ready() {
+            return oauth_state_unavailable();
+        }
+        let (principal_id, redirect_uri) = {
+            let mut sessions = mcp.bind_sessions.write().await;
+            let Some(session) = sessions.get_mut(&bind_session_hash) else {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_rejected",
+                    reason = %("bind_session_not_found")
+                );
+                return (StatusCode::NOT_FOUND, "bind session not found").into_response();
+            };
+            if session.status != BindStatus::Pending {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_rejected",
+                    reason = %("bind_session_not_pending")
+                );
+                return (StatusCode::BAD_REQUEST, "bind session already completed").into_response();
+            }
+            if session.expires_at <= McpState::now_ts() {
+                session.status = BindStatus::Expired;
+                session.error_code = Some("bind_session_expired".to_string());
+                drop(sessions);
+                if mcp.persist_snapshot_locked().await.is_err() {
+                    return oauth_state_unavailable();
+                }
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_rejected",
+                    reason = %("bind_session_expired")
+                );
+                return (StatusCode::BAD_REQUEST, "bind session expired").into_response();
+            }
+            if session.action != expected_action {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "mcp.bind_apply_rejected",
+                    reason = %("bind_session_action_mismatch")
+                );
+                return (StatusCode::BAD_REQUEST, "bind session action mismatch").into_response();
+            }
+            (session.principal_id.clone(), session.redirect_uri.clone())
+        };
 
-    Html(simple_status_page(
-        locale,
-        bind_page_text(locale, expected_action).finished,
-    ))
-    .into_response()
+        {
+            let mut principals = mcp.principals.write().await;
+            let Some(principal) = principals.get_mut(&principal_id) else {
+                return (StatusCode::BAD_REQUEST, "principal no longer exists").into_response();
+            };
+            if expected_action == BindAction::Bind {
+                if !principal.grants.contains_key(&form.channel_id)
+                    && principal.grants.len() >= core_snapshot::MAX_GRANTS_PER_PRINCIPAL
+                {
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "channel grant quota exceeded",
+                    )
+                        .into_response();
+                }
+                principal.grants.insert(
+                    form.channel_id.clone(),
+                    ChannelGrant {
+                        channel_id: form.channel_id.clone(),
+                        granted_at: McpState::now_ts(),
+                        expires_at: None,
+                    },
+                );
+            } else {
+                principal.grants.remove(&form.channel_id);
+            }
+        }
+
+        {
+            let mut sessions = mcp.bind_sessions.write().await;
+            if let Some(session) = sessions.get_mut(&bind_session_hash) {
+                session.status = BindStatus::Completed;
+                session.completed_channel_id = Some(form.channel_id.clone());
+            }
+        }
+        if mcp.persist_snapshot_locked().await.is_err() {
+            return oauth_state_unavailable();
+        }
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "mcp.bind_apply_completed",
+            action = %(if expected_action == BindAction::Bind { "bind" } else { "revoke" })
+        );
+
+        if let Some(redirect_uri) = redirect_uri.as_deref() {
+            return Redirect::to(redirect_uri).into_response();
+        }
+
+        Html(simple_status_page(
+            locale,
+            bind_page_text(locale, expected_action).finished,
+        ))
+        .into_response()
     };
     tracing::Instrument::instrument(fut, span).await
 }

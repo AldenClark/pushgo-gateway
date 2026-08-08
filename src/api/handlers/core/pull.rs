@@ -195,8 +195,8 @@ pub(crate) async fn messages_pull_v2(
                 invalid_delivery_ids.push(delivery_id);
                 continue;
             }
-            let embedded_delivery_id = envelope
-                .data
+            let mut response_payload = envelope.data;
+            let embedded_delivery_id = response_payload
                 .get("delivery_id")
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty());
@@ -205,9 +205,10 @@ pub(crate) async fn messages_pull_v2(
                 continue;
             }
             if items.len() < V2_PULL_LIMIT {
+                response_payload.remove("delivery_id");
                 items.push(PullItem {
                     delivery_id,
-                    payload: envelope.data,
+                    payload: response_payload,
                 });
             } else {
                 has_unreturned_valid = true;

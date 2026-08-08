@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use bytes::BytesMut;
 use flume::{Receiver, Sender};
@@ -12,7 +12,8 @@ use mqttbytes::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    time::timeout,
+    sync::OwnedSemaphorePermit,
+    time::{Instant, timeout, timeout_at},
 };
 
 mod error;
@@ -46,6 +47,7 @@ const MAX_INFLIGHT: usize = 128;
 const MQTT_CONNECT_READ_TIMEOUT_SECS: u64 = 120;
 const MQTT_SERVER_KEEP_ALIVE_SECS: u16 = 120;
 const MQTT_MIN_READ_TIMEOUT_SECS: u64 = 2;
+const MQTT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct MqttSession {
     runtime: MqttRuntime,
@@ -55,6 +57,9 @@ struct MqttSession {
     next_pkid: u16,
     inflight: HashMap<u16, String>,
     read_timeout: Duration,
+    handshake_deadline: Option<Instant>,
+    handshake_permit: Option<OwnedSemaphorePermit>,
+    write_failed: bool,
 }
 
 struct AuthenticatedMqttClient {
@@ -94,7 +99,13 @@ struct MqttAuthSuccess {
 }
 
 impl MqttSession {
-    pub(super) fn new(runtime: MqttRuntime, socket: MqttStream, remote_addr: SocketAddr) -> Self {
+    pub(super) fn new(
+        runtime: MqttRuntime,
+        socket: MqttStream,
+        remote_addr: SocketAddr,
+        handshake_deadline: Instant,
+        handshake_permit: OwnedSemaphorePermit,
+    ) -> Self {
         Self {
             runtime,
             socket,
@@ -103,44 +114,62 @@ impl MqttSession {
             next_pkid: 1,
             inflight: HashMap::new(),
             read_timeout: Duration::from_secs(MQTT_CONNECT_READ_TIMEOUT_SECS),
+            handshake_deadline: Some(handshake_deadline),
+            handshake_permit: Some(handshake_permit),
+            write_failed: false,
         }
     }
 
     pub(super) async fn run(mut self) {
         match self.read_packet().await {
-            Ok(Packet::Connect(connect)) => match self.authenticate(connect).await {
-                Ok(success) => {
-                    if let Err(err) = self
-                        .write_connack(
-                            ConnectReturnCode::Success,
+            Ok(Packet::Connect(connect)) => {
+                let deadline = self.handshake_deadline.unwrap_or_else(Instant::now);
+                let auth_result = timeout_at(deadline, self.authenticate(connect))
+                    .await
+                    .unwrap_or(Err((
+                        ConnectReturnCode::ServerUnavailable,
+                        "mqtt_connect_timeout",
+                    )));
+                match auth_result {
+                    Ok(success) => {
+                        if let Err(err) = self
+                            .write_connack(
+                                ConnectReturnCode::Success,
+                                None,
+                                success.assigned_client_id.as_deref(),
+                                success.server_keep_alive,
+                            )
+                            .await
+                        {
+                            self.handshake_deadline = None;
+                            drop(self.handshake_permit.take());
+                            self.log_failure("connack_write_failed", err.as_str());
+                            return;
+                        }
+                        self.handshake_deadline = None;
+                        drop(self.handshake_permit.take());
+                        self.runtime.private.metrics.mark_mqtt_connect_success();
+                        self.read_timeout = success.read_timeout;
+                        self.event(
+                            "mqtt.connect_accepted",
+                            success
+                                .client
+                                .device_key
+                                .as_deref()
+                                .unwrap_or("temporary-publisher"),
                             None,
-                            success.assigned_client_id.as_deref(),
-                            success.server_keep_alive,
-                        )
-                        .await
-                    {
-                        self.log_failure("connack_write_failed", err.as_str());
-                        return;
+                        );
+                        self.run_authenticated(success.client).await;
                     }
-                    self.runtime.private.metrics.mark_mqtt_connect_success();
-                    self.read_timeout = success.read_timeout;
-                    self.event(
-                        "mqtt.connect_accepted",
-                        success
-                            .client
-                            .device_key
-                            .as_deref()
-                            .unwrap_or("temporary-publisher"),
-                        None,
-                    );
-                    self.run_authenticated(success.client).await;
+                    Err((code, reason)) => {
+                        self.runtime.private.metrics.mark_mqtt_connect_failure();
+                        self.log_failure("mqtt.connect_rejected", reason);
+                        let _ = self.write_connack(code, Some(reason), None, None).await;
+                        self.handshake_deadline = None;
+                        drop(self.handshake_permit.take());
+                    }
                 }
-                Err((code, reason)) => {
-                    self.runtime.private.metrics.mark_mqtt_connect_failure();
-                    self.log_failure("mqtt.connect_rejected", reason);
-                    let _ = self.write_connack(code, Some(reason), None, None).await;
-                }
-            },
+            }
             Ok(_) => {
                 self.runtime.private.metrics.mark_mqtt_connect_attempt();
                 self.runtime.private.metrics.mark_mqtt_connect_failure();
@@ -153,8 +182,12 @@ impl MqttSession {
                         None,
                     )
                     .await;
+                self.handshake_deadline = None;
+                drop(self.handshake_permit.take());
             }
             Err(err) => {
+                self.handshake_deadline = None;
+                drop(self.handshake_permit.take());
                 self.runtime.private.metrics.mark_mqtt_connect_attempt();
                 self.runtime.private.metrics.mark_mqtt_connect_failure();
                 self.log_failure("connect_read_failed", err.as_str());
@@ -167,6 +200,9 @@ impl MqttSession {
         connect: Connect,
     ) -> Result<MqttAuthSuccess, (ConnectReturnCode, &'static str)> {
         self.runtime.private.metrics.mark_mqtt_connect_attempt();
+        if self.runtime.private.is_shutting_down() {
+            return Err((ConnectReturnCode::ServerUnavailable, "server_shutting_down"));
+        }
         if connect.protocol != Protocol::V5 {
             return Err((
                 ConnectReturnCode::UnsupportedProtocolVersion,
@@ -290,10 +326,6 @@ impl MqttSession {
             ));
         let conn_id = rand::random::<u64>();
         self.runtime
-            .private
-            .hub
-            .register_mqtt_connection(device_id, conn_id, tx.clone());
-        self.runtime
             .state
             .store
             .record_device_activity_best_effort(
@@ -302,6 +334,16 @@ impl MqttSession {
                 "mqtt_connect",
             )
             .await;
+        if self.runtime.private.is_shutting_down() {
+            return Err((ConnectReturnCode::ServerUnavailable, "server_shutting_down"));
+        }
+        // Register only after the last cancellable await. The CONNECT absolute
+        // deadline may drop this future, and a half-registered presence would
+        // otherwise survive without a session owner to unregister it.
+        self.runtime
+            .private
+            .hub
+            .register_mqtt_connection(device_id, conn_id, tx.clone());
         self.runtime.private.request_fallback_resync();
         let mut bootstrap_dropped = 0usize;
         for (_, envelope) in prepared.bootstrap.inflight {
@@ -346,8 +388,14 @@ impl MqttSession {
 
     async fn run_authenticated(&mut self, client: AuthenticatedMqttClient) {
         let mut close_kind = MqttCloseKind::WithWill;
+        let shutdown = Arc::clone(&self.runtime.private);
         loop {
             tokio::select! {
+                biased;
+                _ = shutdown.wait_for_shutdown() => {
+                    close_kind = MqttCloseKind::Normal;
+                    break;
+                }
                 packet = self.read_packet() => {
                     match packet {
                         Ok(Packet::Publish(publish)) => self.handle_publish(&client, publish).await,
@@ -377,6 +425,10 @@ impl MqttSession {
                             break;
                         }
                         Err(err) => {
+                            if self.runtime.private.is_shutting_down() {
+                                close_kind = MqttCloseKind::Normal;
+                                break;
+                            }
                             self.runtime.private.metrics.mark_mqtt_protocol_error();
                             self.log_failure("mqtt.packet_read_failed", err.as_str());
                             let _ = self
@@ -396,6 +448,9 @@ impl MqttSession {
                         None => break,
                     }
                 }
+            }
+            if self.write_failed {
+                break;
             }
         }
         if let (Some(device_id), Some(conn_id)) = (client.device_id, client.conn_id) {
@@ -661,6 +716,9 @@ impl MqttSession {
     }
 
     async fn read_packet(&mut self) -> Result<Packet, String> {
+        let deadline = self
+            .handshake_deadline
+            .unwrap_or_else(|| Instant::now() + self.read_timeout);
         loop {
             if self.buffer.len() >= 2 && self.buffer[0] == 0xE0 && self.buffer[1] == 0x00 {
                 let _ = self.buffer.split_to(2);
@@ -673,8 +731,13 @@ impl MqttSession {
                 Ok(packet) => return Ok(packet),
                 Err(mqttbytes::Error::InsufficientBytes(_)) => {
                     let mut tmp = [0u8; 4096];
-                    let n = timeout(self.read_timeout, self.socket.reader.read(&mut tmp))
-                        .await
+                    let read = tokio::select! {
+                        _ = self.runtime.private.wait_for_shutdown() => {
+                            return Err("mqtt runtime shutting down".to_string());
+                        }
+                        read = timeout_at(deadline, self.socket.reader.read(&mut tmp)) => read,
+                    };
+                    let n = read
                         .map_err(|_| "mqtt read timeout".to_string())?
                         .map_err(|err| err.to_string())?;
                     if n == 0 {
@@ -725,11 +788,26 @@ impl MqttSession {
             _ => Err(mqttbytes::Error::MalformedPacket),
         }
         .map_err(|err| format!("mqtt encode failed: {err:?}"))?;
-        self.socket
-            .writer
-            .write_all(&out)
-            .await
-            .map_err(|err| err.to_string())
+        let deadline = self
+            .handshake_deadline
+            .map(|deadline| deadline.min(Instant::now() + MQTT_WRITE_TIMEOUT));
+        let write = async {
+            self.socket.writer.write_all(&out).await?;
+            self.socket.writer.flush().await
+        };
+        let result = match deadline {
+            Some(deadline) => timeout_at(deadline, write).await,
+            None => timeout(MQTT_WRITE_TIMEOUT, write).await,
+        };
+        let result = match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => Err(err.to_string()),
+            Err(_) => Err("mqtt write timeout".to_string()),
+        };
+        if result.is_err() {
+            self.write_failed = true;
+        }
+        result
     }
 
     async fn write_disconnect(

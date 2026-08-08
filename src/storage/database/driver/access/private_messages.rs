@@ -121,6 +121,26 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         )
     }
 
+    async fn mark_private_fallback_sent_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            mark_private_fallback_sent_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                at_ts
+            )
+        )
+    }
+
     async fn defer_private_fallback(
         &self,
         device_id: DeviceId,
@@ -128,6 +148,39 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         at_ts: i64,
     ) -> StoreResult<()> {
         delegate_db_async!(self, defer_private_fallback(device_id, delivery_id, at_ts))
+    }
+
+    async fn defer_private_fallback_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            defer_private_fallback_if_claimed(
+                device_id,
+                delivery_id,
+                worker_id,
+                claim_generation,
+                at_ts
+            )
+        )
+    }
+
+    async fn drop_private_delivery_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            drop_private_delivery_if_claimed(device_id, delivery_id, worker_id, claim_generation)
+        )
     }
 
     async fn ack_private_delivery(

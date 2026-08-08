@@ -151,6 +151,17 @@ impl SqliteDb {
         .await?;
 
         let result = if let Some(r) = row {
+            let payload = provider_payload_from_row(&r);
+            if let Some(original_delivery_id) =
+                crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
+            {
+                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+                    .bind(device_id.as_slice())
+                    .bind(&original_delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                delete_orphan_private_payload_in_sqlite_tx(&mut tx, &original_delivery_id).await?;
+            }
             sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
                 .bind(device_id.as_slice())
                 .bind(delivery_id)
@@ -160,7 +171,7 @@ impl SqliteDb {
             Some(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.to_string(),
-                payload: provider_payload_from_row(&r),
+                payload,
                 sent_at: provider_sent_at_from_row(&r),
                 expires_at: provider_expires_at_from_row(&r),
                 platform: r.get::<String, _>("platform").parse()?,
@@ -203,10 +214,21 @@ impl SqliteDb {
             let delivery_id: String = r.get("delivery_id");
             let platform_text: String = r.get("platform");
             let platform = platform_text.parse()?;
+            let payload = provider_payload_from_row(&r);
+            if let Some(original_delivery_id) =
+                crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
+            {
+                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
+                    .bind(device_id.as_slice())
+                    .bind(&original_delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                delete_orphan_private_payload_in_sqlite_tx(&mut tx, &original_delivery_id).await?;
+            }
             out.push(ProviderPullItem {
                 device_id,
                 delivery_id: delivery_id.clone(),
-                payload: provider_payload_from_row(&r),
+                payload,
                 sent_at: provider_sent_at_from_row(&r),
                 expires_at: provider_expires_at_from_row(&r),
                 platform,

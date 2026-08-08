@@ -5,7 +5,12 @@ use std::sync::{
 
 use chrono::{TimeZone, Utc};
 use hashbrown::HashMap;
-use tokio::{sync::mpsc, time::Duration};
+use parking_lot::Mutex;
+use tokio::{
+    sync::mpsc,
+    task::JoinHandle,
+    time::{Duration, Instant},
+};
 use tracing::Instrument;
 
 use crate::value::DeviceKeyRef;
@@ -73,9 +78,16 @@ enum RuntimeCounterEvent {
     },
 }
 
-#[derive(Clone)]
 pub struct RuntimeCounterCollector {
-    tx: Option<mpsc::Sender<RuntimeCounterEvent>>,
+    tx: Mutex<Option<mpsc::Sender<RuntimeCounterEvent>>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeCounterShutdownReport {
+    pub joined: usize,
+    pub panicked: usize,
+    pub aborted: usize,
 }
 
 impl RuntimeCounterCollector {
@@ -89,23 +101,30 @@ impl RuntimeCounterCollector {
         runtime_profile: GatewayRuntimeProfile,
     ) -> Arc<Self> {
         if !enabled {
-            return Arc::new(Self { tx: None });
+            return Arc::new(Self {
+                tx: Mutex::new(None),
+                worker: Mutex::new(None),
+            });
         }
         let tuning = RuntimeTuning::for_profile(runtime_profile).runtime_counters;
         let channel_capacity = tuning.channel_capacity;
         let (tx, rx) = mpsc::channel(channel_capacity);
-        tokio::spawn(run_runtime_counter_worker(store, rx, tuning).instrument(
+        let worker = tokio::spawn(run_runtime_counter_worker(store, rx, tuning).instrument(
             tracing::info_span!(
                 "gateway.runtime_counters.worker",
                 runtime_profile = %runtime_profile.as_str()
             ),
         ));
-        Arc::new(Self { tx: Some(tx) })
+        Arc::new(Self {
+            tx: Mutex::new(Some(tx)),
+            worker: Mutex::new(Some(worker)),
+        })
     }
 
     #[inline]
     fn try_send(&self, event: RuntimeCounterEvent) {
-        let Some(tx) = &self.tx else {
+        let tx = self.tx.lock();
+        let Some(tx) = tx.as_ref() else {
             return;
         };
         let event_kind = runtime_counter_event_kind(&event);
@@ -128,6 +147,51 @@ impl RuntimeCounterCollector {
                         reason = %("worker_channel_closed"),
                         event_kind = %(event_kind)
                     );
+                }
+            }
+        }
+    }
+
+    pub async fn shutdown_until(&self, deadline: Instant) -> RuntimeCounterShutdownReport {
+        // Taking the sole sender closes the channel after every event already
+        // accepted by `try_send` has been queued. The worker then drains and
+        // performs its final flush before it returns.
+        self.tx.lock().take();
+        let worker = self.worker.lock().take();
+        let Some(mut worker) = worker else {
+            return RuntimeCounterShutdownReport::default();
+        };
+
+        match tokio::time::timeout_at(deadline, &mut worker).await {
+            Ok(Ok(())) => RuntimeCounterShutdownReport {
+                joined: 1,
+                ..RuntimeCounterShutdownReport::default()
+            },
+            Ok(Err(join_error)) => {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::ERROR,
+                    event = "runtime_counters.worker_join_failed",
+                    cancelled = (join_error.is_cancelled()),
+                    panicked = (join_error.is_panic())
+                );
+                RuntimeCounterShutdownReport {
+                    panicked: 1,
+                    ..RuntimeCounterShutdownReport::default()
+                }
+            }
+            Err(_) => {
+                worker.abort();
+                let _ = worker.await;
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::ERROR,
+                    event = "runtime_counters.worker_aborted",
+                    reason = %("shutdown_deadline_exceeded")
+                );
+                RuntimeCounterShutdownReport {
+                    aborted: 1,
+                    ..RuntimeCounterShutdownReport::default()
                 }
             }
         }

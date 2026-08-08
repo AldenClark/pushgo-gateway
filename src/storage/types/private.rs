@@ -72,6 +72,8 @@ pub struct PrivateOutboxEntry {
     pub created_at: i64,
     pub claimed_at: Option<i64>,
     pub claimed_by: Option<String>,
+    #[serde(default)]
+    pub claim_generation: u64,
     pub first_sent_at: Option<i64>,
     pub last_attempt_at: Option<i64>,
     pub acked_at: Option<i64>,

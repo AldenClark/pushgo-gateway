@@ -36,6 +36,8 @@ pub enum StoreError {
     Serde(#[from] serde_json::Error),
     #[error("Password hash error: {0}")]
     PasswordHash(String),
+    #[error("Password hashing capacity is exhausted")]
+    PasswordKdfBusy,
     #[error("Schema version mismatch: expected {expected}, got {actual}")]
     SchemaVersionMismatch { expected: String, actual: String },
     #[error("Database upgrade failed: {0}")]

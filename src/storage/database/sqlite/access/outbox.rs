@@ -22,6 +22,32 @@ impl SqliteDb {
         Ok(())
     }
 
+    pub(super) async fn mark_private_fallback_sent_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        let result = sqlx::query(
+            "UPDATE private_outbox SET status = ?, attempts = attempts + 1, first_sent_at = COALESCE(first_sent_at, ?), fallback_sent_at = ?, updated_at = ? \
+             WHERE device_id = ? AND delivery_id = ? AND status = ? AND claimed_by = ? AND claim_generation = ?",
+        )
+        .bind(OUTBOX_STATUS_SENT)
+        .bind(at_ts)
+        .bind(at_ts)
+        .bind(at_ts)
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_CLAIMED)
+        .bind(worker_id)
+        .bind(claim_generation.min(i64::MAX as u64) as i64)
+        .execute(self.delivery_pool())
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub(super) async fn defer_private_fallback(
         &self,
         device_id: DeviceId,
@@ -40,6 +66,58 @@ impl SqliteDb {
         .execute(self.delivery_pool())
         .await?;
         Ok(())
+    }
+
+    pub(super) async fn defer_private_fallback_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+        at_ts: i64,
+    ) -> StoreResult<bool> {
+        let result = sqlx::query(
+            "UPDATE private_outbox SET status = ?, attempts = attempts + 1, next_attempt_at = ?, claimed_at = NULL, claimed_by = NULL, updated_at = ? \
+             WHERE device_id = ? AND delivery_id = ? AND status = ? AND claimed_by = ? AND claim_generation = ?",
+        )
+        .bind(OUTBOX_STATUS_PENDING)
+        .bind(at_ts)
+        .bind(at_ts)
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_CLAIMED)
+        .bind(worker_id)
+        .bind(claim_generation.min(i64::MAX as u64) as i64)
+        .execute(self.delivery_pool())
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub(super) async fn drop_private_delivery_if_claimed(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        worker_id: &str,
+        claim_generation: u64,
+    ) -> StoreResult<bool> {
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let result = sqlx::query(
+            "DELETE FROM private_outbox \
+             WHERE device_id = ? AND delivery_id = ? AND status = ? AND claimed_by = ? AND claim_generation = ?",
+        )
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_CLAIMED)
+        .bind(worker_id)
+        .bind(claim_generation.min(i64::MAX as u64) as i64)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 1 {
+            delete_unreferenced_private_payload(&mut tx, delivery_id).await?;
+        }
+        tx.commit().await?;
+        Ok(result.rows_affected() == 1)
     }
 
     pub(super) async fn ack_private_delivery(
@@ -169,7 +247,7 @@ impl SqliteDb {
         limit: usize,
     ) -> StoreResult<Vec<(DeviceId, PrivateOutboxEntry)>> {
         let rows = sqlx::query(
-            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
+            "SELECT device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, claim_generation, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at \
              FROM private_outbox WHERE next_attempt_at <= ? AND status IN (?, ?, ?) LIMIT ?",
         )
         .bind(before_ts)
@@ -195,6 +273,7 @@ impl SqliteDb {
                     created_at: r.get("created_at"),
                     claimed_at: r.get("claimed_at"),
                     claimed_by: r.get("claimed_by"),
+                    claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
                     first_sent_at: r.get("first_sent_at"),
                     last_attempt_at: r.get("last_attempt_at"),
                     acked_at: r.get("acked_at"),
@@ -222,7 +301,7 @@ impl SqliteDb {
             "SELECT device_id, delivery_id FROM private_outbox \
              WHERE next_attempt_at <= ? \
                AND (status = ? OR (status IN (?, ?) AND (claimed_at IS NULL OR claimed_at <= ?))) \
-             LIMIT ?",
+             ORDER BY next_attempt_at ASC, created_at ASC, delivery_id ASC LIMIT ?",
         )
         .bind(before_ts)
         .bind(OUTBOX_STATUS_PENDING)
@@ -239,7 +318,7 @@ impl SqliteDb {
             let delivery_id: String = r.get("delivery_id");
 
             sqlx::query(
-                "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, last_attempt_at = ?, updated_at = ? \
+                "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, claim_generation = claim_generation + 1, last_attempt_at = ?, updated_at = ? \
                  WHERE device_id = ? AND delivery_id = ?",
             )
             .bind(OUTBOX_STATUS_CLAIMED)
@@ -271,6 +350,7 @@ impl SqliteDb {
                     created_at: r.get("created_at"),
                     claimed_at: r.get("claimed_at"),
                     claimed_by: r.get("claimed_by"),
+                    claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
                     first_sent_at: r.get("first_sent_at"),
                     last_attempt_at: r.get("last_attempt_at"),
                     acked_at: r.get("acked_at"),
@@ -300,7 +380,7 @@ impl SqliteDb {
             "SELECT delivery_id FROM private_outbox \
              WHERE device_id = ? AND next_attempt_at <= ? \
                AND (status = ? OR (status IN (?, ?) AND (claimed_at IS NULL OR claimed_at <= ?))) \
-             LIMIT ?",
+             ORDER BY next_attempt_at ASC, created_at ASC, delivery_id ASC LIMIT ?",
         )
         .bind(&device_id[..])
         .bind(before_ts)
@@ -317,7 +397,7 @@ impl SqliteDb {
             let delivery_id: String = r.get("delivery_id");
 
             sqlx::query(
-                "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, last_attempt_at = ?, updated_at = ? \
+                "UPDATE private_outbox SET status = ?, claimed_at = ?, claimed_by = ?, claim_generation = claim_generation + 1, last_attempt_at = ?, updated_at = ? \
                  WHERE device_id = ? AND delivery_id = ?",
             )
             .bind(OUTBOX_STATUS_CLAIMED)
@@ -345,6 +425,7 @@ impl SqliteDb {
                 created_at: r.get("created_at"),
                 claimed_at: r.get("claimed_at"),
                 claimed_by: r.get("claimed_by"),
+                claim_generation: r.get::<i64, _>("claim_generation").max(0) as u64,
                 first_sent_at: r.get("first_sent_at"),
                 last_attempt_at: r.get("last_attempt_at"),
                 acked_at: r.get("acked_at"),

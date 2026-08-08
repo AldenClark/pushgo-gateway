@@ -6,127 +6,181 @@ on:
       - "v*"
 
 permissions:
-  contents: write # create GitHub Releases
-  packages: write # push to GHCR
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   BINARY_NAME: pushgo-gateway
   IMAGE_NAME: pushgo-gateway
   SOURCE_BINARY_NAME: pushgo-gateway
+  CARGO_AUDIT_VERSION: "0.22.2"
+  CARGO_DENY_VERSION: "0.20.2"
+  CROSS_VERSION: "0.2.5"
+  SYFT_VERSION: "1.50.0"
+  RUSTSEC_ADVISORY_DB_REV: 1237bbe09d2701e14e6593a630fbaf28928df712
+  DEBIAN_RUNTIME_IMAGE: debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+  ALPINE_RUNTIME_IMAGE: alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 
 jobs:
   release-gate:
-    name: Validate release contract
-    runs-on: ubuntu-latest
+    name: Validate release contract and runtime preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      stable: ${{ steps.contract.outputs.stable }}
+      prerelease: ${{ steps.contract.outputs.prerelease }}
+      channel: ${{ steps.contract.outputs.channel }}
+      notes_section: ${{ steps.contract.outputs.notes_section }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+
+      - name: Reject release workflow drift
+        run: .github/scripts/static_release_audit.sh
+
+      - name: Read exact Rust toolchain contract
+        id: rust
+        run: echo "channel=$(.github/scripts/release_toolchain.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
+          toolchain: ${{ steps.rust.outputs.channel }}
           components: rustfmt, clippy
-      - name: Install dependency security auditor
-        run: cargo install cargo-audit --locked
-      - name: Verify tag, package version, notes, formatting, lint, and tests
-        env:
-          PUSHGO_REQUIRE_EXTERNAL_DB_TESTS: "1"
+
+      - name: Verify runner preflight tools
         run: |
           set -euo pipefail
-          package_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "pushgo-gateway") | .version')"
+          command -v jq
+          command -v sqlite3
+
+      - name: Install exact dependency policy tools
+        run: |
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked
+
+      - name: Validate tag and package version
+        id: contract
+        run: |
+          set -euo pipefail
+          package_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "pushgo-gateway") | .version')"
           test "${GITHUB_REF_TYPE}" = "tag"
-          test "${GITHUB_REF_NAME}" = "v${package_version}"
-          grep -Fq "## [${GITHUB_REF_NAME}]" release/RELEASE_NOTES.md
-          grep -Fq "## [${GITHUB_REF_NAME}]" release/CHANGELOG.md
-          cargo fmt --all -- --check
-          cargo clippy --all-targets --all-features -- -D warnings
-          cargo audit
-          cargo test --all-targets --all-features -- --test-threads=1
+          .github/scripts/release_contract.sh "${GITHUB_REF_NAME}" "${package_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate release notes contract
+        env:
+          NOTES_SECTION: ${{ steps.contract.outputs.notes_section }}
+        run: |
+          set -euo pipefail
+          grep -Fq "## [${NOTES_SECTION}]" release/CHANGELOG.md
+          .github/scripts/release_notes.sh release/RELEASE_NOTES.md "${NOTES_SECTION}" >/dev/null
+
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+
+      - name: Lint and audit the locked graph
+        run: |
+          set -euo pipefail
+          cargo clippy --frozen --all-targets --all-features -- -D warnings
+          cargo deny --frozen check -D warnings
+          advisory_db="${RUNNER_TEMP}/rustsec-advisory-db"
+          mkdir -p "${advisory_db}"
+          git -C "${advisory_db}" init
+          git -C "${advisory_db}" remote add origin https://github.com/RustSec/advisory-db.git
+          git -C "${advisory_db}" fetch --depth=1 origin "${RUSTSEC_ADVISORY_DB_REV}"
+          git -C "${advisory_db}" checkout --detach FETCH_HEAD
+          test "$(git -C "${advisory_db}" rev-parse HEAD)" = "${RUSTSEC_ADVISORY_DB_REV}"
+          cargo audit --db "${advisory_db}" --no-fetch
+
+      - name: Run frozen preflight and black-box flows
+        env:
+          CARGO_DEPENDENCY_MODE: frozen
+          EVIDENCE_DIR: evidence/preflight
+          PUSHGO_REQUIRE_EXTERNAL_DB_TESTS: "1"
+          REQUIRE_CLEAN_WORKTREE: "1"
+        run: scripts/preflight_release_audit.sh all
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-preflight-evidence
+          path: evidence/preflight
+          if-no-files-found: error
+          retention-days: 30
 
   build-gnu-binaries:
-    name: "Build release binaries (GNU: x86_64 + aarch64 + arm32v7)"
-    runs-on: ubuntu-latest
+    name: Build GNU binary (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     needs: release-gate
-
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main@sha256:bd64b44f22afa7ec8ba332f4fd9943a4b43252d9f1174a10214d960423dd7732
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main@sha256:86fb5b55fbada2eeca29a4da135a2bec274caa4bc561791d6c2207fdd217a34b
+          - target: armv7-unknown-linux-gnueabihf
+            arch: armv7
+            image: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main@sha256:067e4cd778a1f5bba7fd4328e1478b4744f6341cbc2571f9b9f06e68486bc9bc
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build release binaries (GNU in Debian 12 / glibc 2.36)
-        run: |
-          docker run --rm \
-            -e SOURCE_BINARY_NAME="${SOURCE_BINARY_NAME}" \
-            -v "${GITHUB_WORKSPACE}:/work" \
-            -w /work \
-            debian:bookworm \
-            bash -lc '
-              set -eux
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                ca-certificates curl build-essential pkg-config \
-                gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
-                libc6-dev-arm64-cross libc6-dev-armhf-cross
-              rm -rf /var/lib/apt/lists/*
-              curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
-              . "$HOME/.cargo/env"
-              rustup target add \
-                x86_64-unknown-linux-gnu \
-                aarch64-unknown-linux-gnu \
-                armv7-unknown-linux-gnueabihf
-              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-                CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
-                cargo build --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target x86_64-unknown-linux-gnu
-              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-                CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
-                cargo build --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target aarch64-unknown-linux-gnu
-              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-                CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
-                cargo build --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target armv7-unknown-linux-gnueabihf
-            '
-
-      - name: Verify amd64 GNU binary loads in bookworm-slim
-        run: |
-          docker run --rm \
-            -e SOURCE_BINARY_NAME="${SOURCE_BINARY_NAME}" \
-            -v "${GITHUB_WORKSPACE}:/work" \
-            -w /work \
-            debian:bookworm-slim \
-            bash -lc '
-              set -eux
-              apt-get update
-              apt-get install -y --no-install-recommends ca-certificates
-              rm -rf /var/lib/apt/lists/*
-              ./target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} --help >/dev/null
-            '
-
-      - name: Fix workspace permissions after Dockerized GNU build
-        run: |
-          sudo chown -R "$(id -u):$(id -g)" target
-          chmod -R u+rwX target
-
-      - name: Collect GNU binaries
-        run: |
-          mkdir -p out-gnu
-          cp target/x86_64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} out-gnu/${BINARY_NAME}-linux-amd64-gnu
-          cp target/aarch64-unknown-linux-gnu/release/${SOURCE_BINARY_NAME} out-gnu/${BINARY_NAME}-linux-arm64-gnu
-          cp target/armv7-unknown-linux-gnueabihf/release/${SOURCE_BINARY_NAME} out-gnu/${BINARY_NAME}-linux-armv7-gnu
-          chmod +x out-gnu/${BINARY_NAME}-linux-amd64-gnu out-gnu/${BINARY_NAME}-linux-arm64-gnu out-gnu/${BINARY_NAME}-linux-armv7-gnu
-          ls -l out-gnu
-
-      - name: Upload GNU binaries artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          name: pushgo-gnu-binaries
+          persist-credentials: false
+
+      - name: Read exact Rust toolchain contract
+        id: rust
+        run: echo "channel=$(.github/scripts/release_toolchain.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
+          targets: ${{ matrix.target }}
+
+      - name: Install exact cross version
+        run: cargo install cross --version "${CROSS_VERSION}" --locked
+
+      - name: Build GNU binary with pinned cross image
+        env:
+          CROSS_IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          printf '[target.%s]\nimage = "%s"\n' "${TARGET}" "${CROSS_IMAGE}" > Cross.toml
+          cargo fetch --locked --target "${TARGET}"
+          cross build --frozen --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target "${TARGET}"
+
+      - name: Collect GNU binary
+        run: |
+          set -euo pipefail
+          mkdir -p out-gnu
+          cp "target/${{ matrix.target }}/release/${SOURCE_BINARY_NAME}" "out-gnu/${BINARY_NAME}-linux-${{ matrix.arch }}-gnu"
+          chmod 0755 out-gnu/*
+
+      - name: Upload GNU binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-gnu-${{ matrix.arch }}
           path: out-gnu
+          if-no-files-found: error
+          retention-days: 7
 
   build-musl-binaries:
-    name: "Build release binary (musl: ${{ matrix.target }})"
-    runs-on: ubuntu-latest
+    name: Build musl binary (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     needs: release-gate
     strategy:
       fail-fast: false
@@ -134,242 +188,629 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             arch: amd64
-            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main@sha256:dfb72a59029f50787396e5fe1c3d26b57cab78e326f434578e8719f0e12a8ecd
           - target: aarch64-unknown-linux-musl
             arch: arm64
-            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main@sha256:e148c4bc7bc3f5dfb252d2b546dafbc79f2d7eeba2d371b28a7b149270ffc331
           - target: armv7-unknown-linux-musleabihf
             arch: armv7
-            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main
-
+            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main@sha256:60661244162f05c27ed4a6c8427dbdbb3a8b298ba55b8dcce1b6f1d9069d5d7c
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Read exact Rust toolchain contract
+        id: rust
+        run: echo "channel=$(.github/scripts/release_toolchain.sh)" >> "$GITHUB_OUTPUT"
 
-      - name: Add cross compilation target
-        run: rustup target add ${{ matrix.target }}
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
+          targets: ${{ matrix.target }}
 
-      - name: Install cross for musl target
-        run: cargo install cross --locked
+      - name: Install exact cross version
+        run: cargo install cross --version "${CROSS_VERSION}" --locked
 
-      - name: Build release binary (musl)
+      - name: Build musl binary with pinned cross image
+        env:
+          CROSS_IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
         run: |
-          cat > Cross.toml <<'EOF'
-          [target.${{ matrix.target }}]
-          image = "${{ matrix.image }}"
-          EOF
-          cross build --release -p pushgo-gateway --bin ${{ env.SOURCE_BINARY_NAME }} --target ${{ matrix.target }}
+          set -euo pipefail
+          printf '[target.%s]\nimage = "%s"\n' "${TARGET}" "${CROSS_IMAGE}" > Cross.toml
+          cargo fetch --locked --target "${TARGET}"
+          cross build --frozen --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target "${TARGET}"
 
       - name: Collect musl binary
         run: |
+          set -euo pipefail
           mkdir -p out-musl
-          cp target/${{ matrix.target }}/release/${SOURCE_BINARY_NAME} out-musl/${BINARY_NAME}-linux-${{ matrix.arch }}-musl
-          chmod +x out-musl/${BINARY_NAME}-linux-${{ matrix.arch }}-musl
-          ls -l out-musl
+          cp "target/${{ matrix.target }}/release/${SOURCE_BINARY_NAME}" "out-musl/${BINARY_NAME}-linux-${{ matrix.arch }}-musl"
+          chmod 0755 out-musl/*
 
-      - name: Upload musl binary artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload musl binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pushgo-musl-${{ matrix.arch }}
           path: out-musl
+          if-no-files-found: error
+          retention-days: 7
 
   assemble-binaries:
-    name: Assemble release and Docker binary artifacts
-    runs-on: ubuntu-latest
+    name: Assemble and inventory six release binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     needs: [build-gnu-binaries, build-musl-binaries]
-
     steps:
-      - name: Download GNU binaries
-        uses: actions/download-artifact@v8
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          name: pushgo-gnu-binaries
+          persist-credentials: false
+
+      - name: Download GNU binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: pushgo-gnu-*
+          merge-multiple: true
           path: inputs/gnu
 
       - name: Download musl binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: pushgo-musl-*
           merge-multiple: true
           path: inputs/musl
 
-      - name: Assemble binaries for release and Docker
+      - name: Assemble release and Docker inputs
         run: |
-          mkdir -p dist
-          mkdir -p dist-docker
-          cp inputs/gnu/${BINARY_NAME}-linux-amd64-gnu dist/${BINARY_NAME}-linux-amd64-gnu
-          cp inputs/gnu/${BINARY_NAME}-linux-arm64-gnu dist/${BINARY_NAME}-linux-arm64-gnu
-          cp inputs/gnu/${BINARY_NAME}-linux-armv7-gnu dist/${BINARY_NAME}-linux-armv7-gnu
-          cp inputs/musl/${BINARY_NAME}-linux-amd64-musl dist/${BINARY_NAME}-linux-amd64-musl
-          cp inputs/musl/${BINARY_NAME}-linux-arm64-musl dist/${BINARY_NAME}-linux-arm64-musl
-          cp inputs/musl/${BINARY_NAME}-linux-armv7-musl dist/${BINARY_NAME}-linux-armv7-musl
-          cp inputs/gnu/${BINARY_NAME}-linux-amd64-gnu dist-docker/${BINARY_NAME}-amd64-gnu
-          cp inputs/gnu/${BINARY_NAME}-linux-arm64-gnu dist-docker/${BINARY_NAME}-arm64-gnu
-          cp inputs/gnu/${BINARY_NAME}-linux-armv7-gnu dist-docker/${BINARY_NAME}-armv7-gnu
-          chmod +x dist/${BINARY_NAME}-linux-amd64-gnu dist/${BINARY_NAME}-linux-arm64-gnu dist/${BINARY_NAME}-linux-armv7-gnu
-          chmod +x dist/${BINARY_NAME}-linux-amd64-musl dist/${BINARY_NAME}-linux-arm64-musl dist/${BINARY_NAME}-linux-armv7-musl
-          chmod +x dist-docker/${BINARY_NAME}-amd64-gnu dist-docker/${BINARY_NAME}-arm64-gnu dist-docker/${BINARY_NAME}-armv7-gnu
-          ls -l dist
+          set -euo pipefail
+          mkdir -p dist dist-docker evidence
+          cp "inputs/gnu/${BINARY_NAME}-linux-amd64-gnu" dist/
+          cp "inputs/gnu/${BINARY_NAME}-linux-arm64-gnu" dist/
+          cp "inputs/gnu/${BINARY_NAME}-linux-armv7-gnu" dist/
+          cp "inputs/musl/${BINARY_NAME}-linux-amd64-musl" dist/
+          cp "inputs/musl/${BINARY_NAME}-linux-arm64-musl" dist/
+          cp "inputs/musl/${BINARY_NAME}-linux-armv7-musl" dist/
+          cp "inputs/gnu/${BINARY_NAME}-linux-amd64-gnu" "dist-docker/${BINARY_NAME}-amd64-gnu"
+          cp "inputs/gnu/${BINARY_NAME}-linux-arm64-gnu" "dist-docker/${BINARY_NAME}-arm64-gnu"
+          cp "inputs/gnu/${BINARY_NAME}-linux-armv7-gnu" "dist-docker/${BINARY_NAME}-armv7-gnu"
+          find dist dist-docker -maxdepth 1 -type f -name "${BINARY_NAME}-*" -exec chmod 0755 {} +
+          .github/scripts/verify_release_assets.sh dist evidence
 
-      - name: Upload release binaries artifact
-        uses: actions/upload-artifact@v7
+      - name: Generate binary SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: dist
+          format: spdx-json
+          output-file: evidence/pushgo-gateway-binaries.spdx.json
+          syft-version: ${{ env.SYFT_VERSION }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-release-binaries
+          path: dist
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-release-metadata
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Docker binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-docker-binaries
+          path: dist-docker
+          if-no-files-found: error
+          retention-days: 7
+
+  binary-smoke:
+    name: Smoke ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: assemble-binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64-gnu
+            platform: linux/amd64
+            runtime: debian
+          - target: linux-arm64-gnu
+            platform: linux/arm64
+            runtime: debian
+          - target: linux-armv7-gnu
+            platform: linux/arm/v7
+            runtime: debian
+          - target: linux-amd64-musl
+            platform: linux/amd64
+            runtime: alpine
+          - target: linux-arm64-musl
+            platform: linux/arm64
+            runtime: alpine
+          - target: linux-armv7-musl
+            platform: linux/arm/v7
+            runtime: alpine
+    steps:
+      - name: Download release binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: pushgo-release-binaries
           path: dist
 
-      - name: Upload Docker binaries artifact (GNU only)
-        uses: actions/upload-artifact@v7
+      - name: Set up QEMU
+        if: matrix.platform != 'linux/amd64'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Execute exact binary under target runtime
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          RUNTIME: ${{ matrix.runtime }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          case "${RUNTIME}" in
+            debian) image="${DEBIAN_RUNTIME_IMAGE}" ;;
+            alpine) image="${ALPINE_RUNTIME_IMAGE}" ;;
+            *) exit 1 ;;
+          esac
+          asset="${GITHUB_WORKSPACE}/dist/${BINARY_NAME}-${TARGET}"
+          docker run --rm --platform "${PLATFORM}" \
+            --mount "type=bind,source=${asset},target=/usr/local/bin/${BINARY_NAME},readonly" \
+            --entrypoint "/usr/local/bin/${BINARY_NAME}" \
+            "${image}" --help >/dev/null
+          mkdir -p evidence
+          jq -n \
+            --arg target "${TARGET}" \
+            --arg platform "${PLATFORM}" \
+            --arg runtime_image "${image}" \
+            --arg sha256 "$(sha256sum "${asset}" | awk '{print $1}')" \
+            '{schema_version: 1, status: "passed", target: $target, platform: $platform, runtime_image: $runtime_image, sha256: $sha256}' \
+            > "evidence/binary-smoke-${TARGET}.json"
+
+      - name: Upload binary smoke evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: pushgo-docker-binaries
-          path: dist-docker
+          name: binary-smoke-${{ matrix.target }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  attest-binaries:
+    name: Attest release binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: binary-smoke
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download verified release binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: pushgo-release-binaries
+          path: dist
+
+      - name: Create GitHub build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/${{ env.BINARY_NAME }}-linux-*
 
   docker:
-    name: Build & push multi-arch Docker image to GHCR
-    runs-on: ubuntu-latest
-    needs: assemble-binaries
-
+    name: Build isolated multi-arch OCI candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs: [release-gate, binary-smoke]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+      image: ${{ steps.candidate.outputs.image }}
+      candidate: ${{ steps.candidate.outputs.ref }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - name: Download prebuilt binaries
-        uses: actions/download-artifact@v8
+      - name: Download prebuilt Docker binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: pushgo-docker-binaries
           path: dist
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract tag
-        id: vars
+      - name: Derive isolated candidate reference
+        id: candidate
         run: |
-          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-          echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner_lc}/${IMAGE_NAME}"
+          candidate="${image}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "ref=${candidate}" >> "${GITHUB_OUTPUT}"
 
-      - name: Build and push multi-arch image
-        uses: docker/build-push-action@v6
+      - name: Build and push isolated candidate with SBOM and provenance
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: . # includes dist/ and Dockerfile.gha
+          context: .
           file: ./Dockerfile.gha
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           build-args: |
             BINARY_NAME=${{ env.BINARY_NAME }}
-          tags: |
-            ghcr.io/${{ steps.vars.outputs.owner_lc }}/${{ env.IMAGE_NAME }}:latest
-            ghcr.io/${{ steps.vars.outputs.owner_lc }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
-            ghcr.io/${{ steps.vars.outputs.owner_lc }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+          tags: ${{ steps.candidate.outputs.ref }}
+          provenance: mode=max
+          sbom: true
+
+  docker-smoke:
+    name: Smoke OCI image (${{ matrix.platform }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [release-gate, docker]
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: amd64
+          - platform: linux/arm64
+            slug: arm64
+          - platform: linux/arm/v7
+            slug: armv7
+    steps:
+      - name: Set up QEMU
+        if: matrix.platform != 'linux/amd64'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify manifest and execute image
+        env:
+          IMAGE: ${{ needs.docker.outputs.candidate }}
+          PLATFORM: ${{ matrix.platform }}
+          SLUG: ${{ matrix.slug }}
+          EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
+        run: |
+          set -euo pipefail
+          manifest_json="$(docker buildx imagetools inspect "${IMAGE}" --format '{{json .Manifest}}')"
+          resolved_digest="$(jq -r '.digest' <<<"${manifest_json}")"
+          test "${resolved_digest}" = "${EXPECTED_DIGEST}"
+          platform_digest="$(jq -r --arg platform "${PLATFORM}" '.manifests[] | select(.platform.os != "unknown") | (.platform.os + "/" + .platform.architecture + (if .platform.architecture == "arm" and .platform.variant then "/" + .platform.variant else "" end)) as $candidate | select($candidate == $platform) | .digest' <<<"${manifest_json}")"
+          [[ "${platform_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          manifest="$(docker buildx imagetools inspect "${IMAGE}")"
+          grep -Fq "${PLATFORM}" <<<"${manifest}"
+          verified_ref="${IMAGE}@${EXPECTED_DIGEST}"
+          docker pull --platform "${PLATFORM}" "${verified_ref}"
+          docker run --rm --platform "${PLATFORM}" "${verified_ref}" --help >/dev/null
+          mkdir -p evidence
+          jq -n \
+            --arg platform "${PLATFORM}" \
+            --arg image "${IMAGE}" \
+            --arg verified_ref "${verified_ref}" \
+            --arg index_digest "${resolved_digest}" \
+            --arg platform_manifest_digest "${platform_digest}" \
+            '{schema_version: 1, status: "passed", platform: $platform, image: $image, verified_ref: $verified_ref, index_digest: $index_digest, platform_manifest_digest: $platform_manifest_digest}' \
+            > "evidence/docker-smoke-${SLUG}.json"
+
+      - name: Upload image smoke evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docker-smoke-${{ matrix.slug }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  release-evidence:
+    name: Enforce complete release evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [release-gate, binary-smoke, attest-binaries, docker, docker-smoke]
+    steps:
+      - name: Checkout source contract
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download release metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: pushgo-release-metadata
+          path: evidence
+
+      - name: Download binary smoke records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: binary-smoke-*
+          merge-multiple: true
+          path: evidence/smoke
+
+      - name: Download image smoke records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: docker-smoke-*
+          merge-multiple: true
+          path: evidence/smoke
+
+      - name: Reject incomplete or drifting evidence
+        env:
+          IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
+          IMAGE_CANDIDATE: ${{ needs.docker.outputs.candidate }}
+          RELEASE_CHANNEL: ${{ needs.release-gate.outputs.channel }}
+        run: |
+          set -euo pipefail
+          mapfile -t binary_records < <(find evidence/smoke -type f -name 'binary-smoke-*.json' | LC_ALL=C sort)
+          mapfile -t docker_records < <(find evidence/smoke -type f -name 'docker-smoke-*.json' | LC_ALL=C sort)
+          test "${#binary_records[@]}" -eq 6
+          test "${#docker_records[@]}" -eq 3
+          cargo_lock_sha256="$(sha256sum Cargo.lock | awk '{print $1}')"
+          workflow_sha256="$(sha256sum .github/workflows/release.yml | awk '{print $1}')"
+          dockerfile_sha256="$(sha256sum Dockerfile.gha | awk '{print $1}')"
+          rust_toolchain="$(.github/scripts/release_toolchain.sh)"
+          expected_targets='["linux-amd64-gnu","linux-amd64-musl","linux-arm64-gnu","linux-arm64-musl","linux-armv7-gnu","linux-armv7-musl"]'
+          expected_platforms='["linux/amd64","linux/arm/v7","linux/arm64"]'
+          jq -e --arg git_sha "${GITHUB_SHA}" --arg lock_sha "${cargo_lock_sha256}" --arg workflow_sha "${workflow_sha256}" --arg dockerfile_sha "${dockerfile_sha256}" --arg rust_toolchain "${rust_toolchain}" --argjson targets "${expected_targets}" \
+            '.git_sha == $git_sha and .git_ref == env.GITHUB_REF_NAME and .cargo_lock_sha256 == $lock_sha and .release_workflow_sha256 == $workflow_sha and .dockerfile_sha256 == $dockerfile_sha and .rust_toolchain == $rust_toolchain and (.assets | length == 6) and ([.assets[].target] | sort == $targets) and ([.assets[].sha256] | unique | length == 6)' \
+            evidence/release-assets.json >/dev/null
+          jq -e -s --slurpfile manifest evidence/release-assets.json \
+            'length == 6 and all(.[]; .status == "passed") and ([.[].target] | sort == ["linux-amd64-gnu","linux-amd64-musl","linux-arm64-gnu","linux-arm64-musl","linux-armv7-gnu","linux-armv7-musl"]) and (. as $records | $manifest[0].assets as $assets | all($records[] as $record; any($assets[]; .target == $record.target and .sha256 == $record.sha256)))' \
+            "${binary_records[@]}" >/dev/null
+          jq -e -s --arg digest "${IMAGE_DIGEST}" --arg image "${IMAGE_CANDIDATE}" --argjson platforms "${expected_platforms}" \
+            'length == 3 and all(.[]; .status == "passed" and .index_digest == $digest and .image == $image and .verified_ref == ($image + "@" + $digest) and (.platform_manifest_digest | test("^sha256:[0-9a-f]{64}$"))) and ([.[].platform] | sort == $platforms) and ([.[].platform_manifest_digest] | unique | length == 3)' \
+            "${docker_records[@]}" >/dev/null
+          asset_manifest_sha256="$(sha256sum evidence/release-assets.json | awk '{print $1}')"
+          sbom_sha256="$(sha256sum evidence/pushgo-gateway-binaries.spdx.json | awk '{print $1}')"
+          jq -n \
+            --arg git_sha "${GITHUB_SHA}" \
+            --arg git_ref "${GITHUB_REF_NAME}" \
+            --arg channel "${RELEASE_CHANNEL}" \
+            --arg image_digest "${IMAGE_DIGEST}" \
+            --arg asset_manifest_sha256 "${asset_manifest_sha256}" \
+            --arg sbom_sha256 "${sbom_sha256}" \
+            '{schema_version: 1, status: "passed", git_sha: $git_sha, git_ref: $git_ref, channel: $channel, image_digest: $image_digest, asset_manifest_sha256: $asset_manifest_sha256, sbom_sha256: $sbom_sha256, binary_target_count: 6, image_platform_count: 3}' \
+            > evidence/release-verification.json
+          sha256sum evidence/release-assets.json evidence/pushgo-gateway-binaries.spdx.json evidence/release-verification.json evidence/smoke/*.json | LC_ALL=C sort -k2 > evidence/EVIDENCE_SHA256SUMS
+
+      - name: Upload final release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-release-verification
+          path: evidence
+          if-no-files-found: error
+          retention-days: 90
+
+  promote-images:
+    name: Promote verified image to immutable release tags
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [release-gate, docker, release-evidence]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout promotion contract
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub when explicitly enabled
+        if: vars.PUBLISH_DOCKERHUB == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote only to immutable version and source tags
+        env:
+          IMAGE: ${{ needs.docker.outputs.image }}
+          CANDIDATE: ${{ needs.docker.outputs.candidate }}
+          DIGEST: ${{ needs.docker.outputs.digest }}
+          PUBLISH_DOCKERHUB: ${{ vars.PUBLISH_DOCKERHUB == 'true' && 'true' || 'false' }}
+          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          source_ref="${CANDIDATE}@${DIGEST}"
+          tags="$(.github/scripts/image_tags.sh \
+            "${IMAGE}" \
+            "${GITHUB_REF_NAME}" \
+            "${GITHUB_SHA}" \
+            false \
+            "${PUBLISH_DOCKERHUB}" \
+            "${DOCKERHUB_NAMESPACE}")"
+          promote_immutable() {
+            local target="$1"
+            local actual
+            if actual="$(docker buildx imagetools inspect "$target" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest')"; then
+              if [[ "$actual" != "$DIGEST" ]]; then
+                echo "refusing to overwrite immutable image tag: target=$target actual=$actual expected=$DIGEST" >&2
+                return 1
+              fi
+            else
+              docker buildx imagetools create --tag "$target" "$source_ref"
+            fi
+            actual="$(docker buildx imagetools inspect "$target" --format '{{json .Manifest}}' | jq -r '.digest')"
+            test "$actual" = "$DIGEST"
+          }
+          while IFS= read -r target; do
+            promote_immutable "$target"
+          done <<<"$tags"
+          mkdir -p promotion
+          tags_json="$(printf '%s\n' "$tags" | jq -R . | jq -s .)"
+          jq -n \
+            --arg source_ref "$source_ref" \
+            --arg digest "$DIGEST" \
+            --argjson tags "$tags_json" \
+            '{schema_version: 1, status: "passed", source_ref: $source_ref, digest: $digest, immutable_tags: $tags}' \
+            > promotion/image-promotion.json
+          (cd promotion && sha256sum image-promotion.json > PROMOTION_SHA256SUMS)
+
+      - name: Upload immutable promotion evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-image-promotion
+          path: promotion
+          if-no-files-found: error
+          retention-days: 90
 
   release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [assemble-binaries, docker]
-
+    name: Create GitHub Release after all gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [release-gate, release-evidence, promote-images]
+    permissions:
+      contents: write
     steps:
       - name: Checkout source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
-      - name: Parse SemVer tag context
-        id: tag
-        shell: bash
+      - name: Extract exact release notes section
+        env:
+          NOTES_SECTION: ${{ needs.release-gate.outputs.notes_section }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-beta\.([1-9][0-9]*)$ ]]; then
-            semver="${BASH_REMATCH[1]}"
-            changelog_section="Unreleased"
-            prerelease="true"
-          elif [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            semver="${BASH_REMATCH[1]}"
-            changelog_section="v${semver}"
-            prerelease="false"
-          else
-            echo "Unsupported tag format: $tag"
-            echo "Allowed formats: vX.Y.Z or vX.Y.Z-beta.N"
-            exit 1
-          fi
+          section_body="$(.github/scripts/release_notes.sh release/RELEASE_NOTES.md "${NOTES_SECTION}")"
           {
-            echo "semver=$semver"
-            echo "changelog_section=$changelog_section"
-            echo "prerelease=$prerelease"
-          } >> "$GITHUB_OUTPUT"
+            echo "RELEASE_BODY<<__PUSHGO_RELEASE_BODY__"
+            printf '%s\n' "${section_body}"
+            echo "__PUSHGO_RELEASE_BODY__"
+          } >> "${GITHUB_ENV}"
 
-      - name: Extract release notes from release/RELEASE_NOTES
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_notes_file="release/RELEASE_NOTES.md"
-          section="${{ steps.tag.outputs.changelog_section }}"
-          if [[ ! -f "$release_notes_file" ]]; then
-            echo "Missing $release_notes_file"
-            exit 1
-          fi
-          section_body="$(awk -v sec="$section" '
-            BEGIN { in_section = 0 }
-            /^## \[/ {
-              if (in_section == 1) exit
-              if ($0 ~ "^## \\[" sec "\\]([[:space:]]|$|[[:space:]]-)") {
-                in_section = 1
-                next
-              }
-            }
-            in_section == 1 { print }
-          ' "$release_notes_file")"
-          section_body="$(printf "%s\n" "$section_body" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' )"
-          if [[ -z "$section_body" ]]; then
-            if [[ "${{ steps.tag.outputs.prerelease }}" == "true" ]]; then
-              section_body=""
-            else
-              echo "RELEASE_NOTES section not found or empty: [$section]"
-              exit 1
-            fi
-          fi
-          release_body=""
-          if [[ -n "$section_body" ]]; then
-            release_notes_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${release_notes_file}"
-            release_body="Source: [${release_notes_file}](${release_notes_url}) [$section]"$'\n\n'"$section_body"
-          fi
-          {
-            echo "RELEASE_CHANGELOG_BODY<<__PUSHGO_GATEWAY_RELEASE_BODY_EOF__"
-            printf "%s\n" "$release_body"
-            echo "__PUSHGO_GATEWAY_RELEASE_BODY_EOF__"
-          } >> "$GITHUB_ENV"
-
-      - name: Download prebuilt binaries
-        uses: actions/download-artifact@v8
+      - name: Download verified binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: pushgo-release-binaries
           path: dist
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+      - name: Download final evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: pushgo-release-verification
+          path: evidence
+
+      - name: Download image promotion evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: pushgo-image-promotion
+          path: evidence/promotion
+
+      - name: Re-verify downloaded release assets
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum --check SHA256SUMS)
+          sha256sum --check evidence/EVIDENCE_SHA256SUMS
+          (cd evidence/promotion && sha256sum --check PROMOTION_SHA256SUMS)
+
+      - name: Refuse to overwrite a different GitHub Release
+        id: release-state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_PRERELEASE: ${{ needs.release-gate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" > existing-release.json 2>existing-release.err; then
+            test "$(jq -r '.prerelease' existing-release.json)" = "${EXPECTED_PRERELEASE}"
+            test "$(jq -r '.body // ""' existing-release.json)" = "${RELEASE_BODY}"
+            mkdir -p existing-assets
+            gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --dir existing-assets
+            current_assets=(
+              "dist/${BINARY_NAME}-linux-amd64-gnu"
+              "dist/${BINARY_NAME}-linux-arm64-gnu"
+              "dist/${BINARY_NAME}-linux-armv7-gnu"
+              "dist/${BINARY_NAME}-linux-amd64-musl"
+              "dist/${BINARY_NAME}-linux-arm64-musl"
+              "dist/${BINARY_NAME}-linux-armv7-musl"
+              "dist/SHA256SUMS"
+              "evidence/release-assets.json"
+              "evidence/pushgo-gateway-binaries.spdx.json"
+              "evidence/release-verification.json"
+              "evidence/EVIDENCE_SHA256SUMS"
+              "evidence/smoke/binary-smoke-linux-amd64-gnu.json"
+              "evidence/smoke/binary-smoke-linux-amd64-musl.json"
+              "evidence/smoke/binary-smoke-linux-arm64-gnu.json"
+              "evidence/smoke/binary-smoke-linux-arm64-musl.json"
+              "evidence/smoke/binary-smoke-linux-armv7-gnu.json"
+              "evidence/smoke/binary-smoke-linux-armv7-musl.json"
+              "evidence/smoke/docker-smoke-amd64.json"
+              "evidence/smoke/docker-smoke-arm64.json"
+              "evidence/smoke/docker-smoke-armv7.json"
+              "evidence/promotion/image-promotion.json"
+              "evidence/promotion/PROMOTION_SHA256SUMS"
+            )
+            test "$(find existing-assets -maxdepth 1 -type f | wc -l | tr -d '[:space:]')" -eq "${#current_assets[@]}"
+            for current in "${current_assets[@]}"; do
+              cmp "$current" "existing-assets/$(basename "$current")"
+            done
+            echo "create=false" >> "$GITHUB_OUTPUT"
+          else
+            if ! grep -Fq 'HTTP 404' existing-release.err; then
+              cat existing-release.err >&2
+              exit 1
+            fi
+            echo "create=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create immutable GitHub Release
+        if: steps.release-state.outputs.create == 'true'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body: ${{ env.RELEASE_CHANGELOG_BODY }}
-          prerelease: ${{ steps.tag.outputs.prerelease }}
+          body: ${{ env.RELEASE_BODY }}
+          prerelease: ${{ needs.release-gate.outputs.prerelease }}
+          fail_on_unmatched_files: true
           files: |
             dist/${{ env.BINARY_NAME }}-linux-amd64-gnu
             dist/${{ env.BINARY_NAME }}-linux-arm64-gnu
@@ -377,3 +818,146 @@ jobs:
             dist/${{ env.BINARY_NAME }}-linux-amd64-musl
             dist/${{ env.BINARY_NAME }}-linux-arm64-musl
             dist/${{ env.BINARY_NAME }}-linux-armv7-musl
+            dist/SHA256SUMS
+            evidence/release-assets.json
+            evidence/pushgo-gateway-binaries.spdx.json
+            evidence/release-verification.json
+            evidence/EVIDENCE_SHA256SUMS
+            evidence/smoke/binary-smoke-linux-amd64-gnu.json
+            evidence/smoke/binary-smoke-linux-amd64-musl.json
+            evidence/smoke/binary-smoke-linux-arm64-gnu.json
+            evidence/smoke/binary-smoke-linux-arm64-musl.json
+            evidence/smoke/binary-smoke-linux-armv7-gnu.json
+            evidence/smoke/binary-smoke-linux-armv7-musl.json
+            evidence/smoke/docker-smoke-amd64.json
+            evidence/smoke/docker-smoke-arm64.json
+            evidence/smoke/docker-smoke-armv7.json
+            evidence/promotion/image-promotion.json
+            evidence/promotion/PROMOTION_SHA256SUMS
+
+  promote-stable-channel:
+    name: Promote stable image channel after GitHub Release
+    if: needs.release-gate.outputs.stable == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [release-gate, docker, release]
+    concurrency:
+      group: pushgo-gateway-stable-channel
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Decide monotonic stable promotion
+        id: decision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE: ${{ needs.docker.outputs.candidate }}
+          DIGEST: ${{ needs.docker.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p promotion
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" > current-release.json
+          jq -e --arg tag "${GITHUB_REF_NAME}" '.tag_name == $tag and .draft == false and .prerelease == false' current-release.json >/dev/null
+          latest_stable_tag="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" | jq -s -r '
+            [.[][] |
+              select(.draft == false and .prerelease == false) |
+              .tag_name |
+              select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) |
+              {tag: ., version: (capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") | [.major, .minor, .patch] | map(tonumber))}
+            ] | sort_by(.version) | last | .tag // empty
+          ')"
+          if [[ -z "${latest_stable_tag}" ]]; then
+            echo "no stable GitHub Release exists for latest promotion" >&2
+            exit 1
+          fi
+          relation="$(jq -n -r --arg current "${GITHUB_REF_NAME}" --arg latest "${latest_stable_tag}" '
+            def version: capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") | [.major, .minor, .patch] | map(tonumber);
+            ($current | version) as $current_version |
+            ($latest | version) as $latest_version |
+            if $current_version < $latest_version then "older"
+            elif $current_version == $latest_version then "current"
+            else "not_visible"
+            end
+          ')"
+          source_ref="${CANDIDATE}@${DIGEST}"
+          case "${relation}" in
+            older)
+              echo "promote=false" >> "$GITHUB_OUTPUT"
+              jq -n \
+                --arg current_tag "${GITHUB_REF_NAME}" \
+                --arg latest_stable_tag "${latest_stable_tag}" \
+                --arg source_ref "${source_ref}" \
+                '{schema_version: 1, status: "skipped_older_release", current_tag: $current_tag, latest_stable_tag: $latest_stable_tag, source_ref: $source_ref}' \
+                > promotion/stable-channel.json
+              ;;
+            current)
+              echo "promote=true" >> "$GITHUB_OUTPUT"
+              ;;
+            not_visible)
+              jq -n \
+                --arg current_tag "${GITHUB_REF_NAME}" \
+                --arg latest_stable_tag "${latest_stable_tag}" \
+                '{schema_version: 1, status: "failed_release_list_not_converged", current_tag: $current_tag, latest_stable_tag: $latest_stable_tag}' \
+                > promotion/stable-channel.json
+              echo "current release is not yet visible in the stable release listing; retry without touching latest" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Set up Docker Buildx
+        if: steps.decision.outputs.promote == 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Log in to GHCR
+        if: steps.decision.outputs.promote == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub when explicitly enabled
+        if: steps.decision.outputs.promote == 'true' && vars.PUBLISH_DOCKERHUB == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote tested digest to stable latest
+        if: steps.decision.outputs.promote == 'true'
+        env:
+          IMAGE: ${{ needs.docker.outputs.image }}
+          CANDIDATE: ${{ needs.docker.outputs.candidate }}
+          DIGEST: ${{ needs.docker.outputs.digest }}
+          PUBLISH_DOCKERHUB: ${{ vars.PUBLISH_DOCKERHUB == 'true' && 'true' || 'false' }}
+          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          source_ref="${CANDIDATE}@${DIGEST}"
+          tags="${IMAGE}:latest"
+          if [[ "${PUBLISH_DOCKERHUB}" == "true" ]]; then
+            test -n "${DOCKERHUB_NAMESPACE}"
+            tags+=$'\n'"${DOCKERHUB_NAMESPACE}/${IMAGE_NAME}:latest"
+          fi
+          while IFS= read -r target; do
+            docker buildx imagetools create --tag "$target" "$source_ref"
+            actual="$(docker buildx imagetools inspect "$target" --format '{{json .Manifest}}' | jq -r '.digest')"
+            test "$actual" = "$DIGEST"
+          done <<<"$tags"
+          mkdir -p promotion
+          jq -n \
+            --arg source_ref "$source_ref" \
+            --arg digest "$DIGEST" \
+            --argjson tags "$(printf '%s\n' "$tags" | jq -R . | jq -s .)" \
+            '{schema_version: 1, status: "passed", source_ref: $source_ref, digest: $digest, stable_tags: $tags}' \
+            > promotion/stable-channel.json
+
+      - name: Upload stable channel evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pushgo-stable-channel-promotion
+          path: promotion
+          if-no-files-found: error
+          retention-days: 90

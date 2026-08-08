@@ -29,4 +29,4 @@ pub(crate) use types::{
     ProviderDeliveryPath, ProviderDispatchOutcome, ProviderDispatchOutcomeLease,
     ProviderPullDelivery, WidgetPushJob, WnsJob,
 };
-pub(crate) use workers::DispatchWorkerDeps;
+pub(crate) use workers::{DispatchWorkerDeps, DispatchWorkerTasks};

@@ -1,14 +1,9 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.6@sha256:ac85f380a63b13dfcefa89046420e1781752bab202122f8f50032edf31be0021
 
-FROM debian:bookworm AS builder
+FROM rust:1.97.1-bookworm@sha256:14bc9c5966e7b3a385794b3d5389a8765668342025fbcc7b2e3d2866ac4bd8c3 AS builder
 
 ARG BINARY_NAME=pushgo-gateway
 WORKDIR /src
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl build-essential pkg-config \
-    && curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
@@ -18,16 +13,12 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/src/target \
     set -eux; \
-    . "$HOME/.cargo/env"; \
-    cargo build --release -p pushgo-gateway --bin "${BINARY_NAME}"; \
+    cargo build --locked --release -p pushgo-gateway --bin "${BINARY_NAME}"; \
     install -m 0755 "target/release/${BINARY_NAME}" /tmp/pushgo-gateway
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /tmp/pushgo-gateway /usr/local/bin/pushgo-gateway
 
 RUN set -eux; \
@@ -38,7 +29,8 @@ RUN set -eux; \
 WORKDIR /data
 
 ENV PUSHGO_TOKEN= \
-    PUSHGO_TOKEN_SERVICE_URL=https://token.pushgo.dev \
+    PUSHGO_TOKEN_SERVICE_URL=http://127.0.0.1:6766 \
+    PUSHGO_TOKEN_SERVICE_AUTH_TOKEN= \
     PUSHGO_PRIVATE_TRANSPORTS=wss \
     PUSHGO_RUNTIME_PROFILE=small \
     PUSHGO_OBSERVABILITY_LOG_LEVEL=warn \
@@ -77,7 +69,7 @@ if [ ! -w /data ]; then
   exit 1
 fi
 
-exec /usr/local/bin/pushgo-gateway
+exec /usr/local/bin/pushgo-gateway "$@"
 ENTRYPOINT_EOF
 
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh

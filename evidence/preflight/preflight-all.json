@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "mode": "all",
+  "status": "passed",
+  "git_sha": "c66f62a06c6abfc2874e07aa45f0176c97f41295",
+  "cargo_lock_sha256": "59e15c9f32c92c9ff63d4b2019c9ce60ac0b44341c8b9291f290fa5c6c1cced5",
+  "binary_sha256": "19ef6bfb5ebfad4210c36c7af29d094babf5482daa082210c12ac3ce94ae79b3",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "jq": "jq-1.7.1-apple",
+  "sqlite3": "3.54.0",
+  "runner_os": "local",
+  "runner_version": "local",
+  "dirty_worktree": true,
+  "source_drift": false,
+  "metrics": {
+    "managed_upgrade": {
+      "status": "passed",
+      "schema_version": "2026-08-08-gateway-v11",
+      "completed_runs": 1
+    },
+    "private_ack_blackbox": {
+      "status": "passed",
+      "contract": "redelivery_then_ack_retires_outbox"
+    },
+    "private": {
+      "status": "passed",
+      "send_200": 32,
+      "outbox_before_restart": 32,
+      "outbox_after_restart": 32,
+      "max_ttl_millis": 604800000
+    },
+    "public": {
+      "status": "passed",
+      "rate_limit_enforced": true,
+      "subscriptions_initial": 3,
+      "subscriptions_after_full_sync": 2,
+      "subscriptions_after_partial_sync": 2,
+      "send_200": 55,
+      "send_503": 0,
+      "send_429": 145
+    }
+  },
+  "generated_at": "2026-08-07T19:26:36Z"
+}

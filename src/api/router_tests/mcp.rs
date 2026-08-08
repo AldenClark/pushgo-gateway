@@ -1,5 +1,7 @@
 use super::*;
 
+const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+
 fn extract_auth_code(location: &str) -> String {
     location
         .split('?')
@@ -13,7 +15,11 @@ fn extract_auth_code(location: &str) -> String {
         .expect("code should exist in redirect")
 }
 
-async fn oauth_access_token(app: axum::Router, channel_id: &str, signing_scope: &str) -> String {
+async fn oauth_token_response(
+    app: axum::Router,
+    channel_id: &str,
+    signing_scope: &str,
+) -> (String, Value) {
     let register_payload = json!({
         "redirect_uris": ["https://client.example/callback"],
         "token_endpoint_auth_method": "none"
@@ -48,6 +54,11 @@ async fn oauth_access_token(app: axum::Router, channel_id: &str, signing_scope: 
     assert_eq!(token_status, StatusCode::OK);
     let token_body: Value =
         serde_json::from_slice(&token_body_raw).expect("token response should be json");
+    (client_id.to_string(), token_body)
+}
+
+async fn oauth_access_token(app: axum::Router, channel_id: &str, signing_scope: &str) -> String {
+    let (_, token_body) = oauth_token_response(app, channel_id, signing_scope).await;
     token_body
         .get("access_token")
         .and_then(Value::as_str)
@@ -66,7 +77,7 @@ async fn raw_mcp_post(
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
         .header("host", "localhost")
-        .header("mcp-protocol-version", "2025-11-25");
+        .header("mcp-protocol-version", MCP_PROTOCOL_VERSION);
     if let Some(bearer) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
     }
@@ -364,6 +375,56 @@ async fn mcp_refresh_token_cannot_escalate_scope() {
 }
 
 #[tokio::test]
+async fn refresh_rotation_preserves_family_deadline_and_replay_revokes_family() {
+    let state = build_mcp_test_state(AuthMode::Disabled).await;
+    let mcp = Arc::clone(state.mcp.as_ref().expect("MCP state"));
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mcp-device-refresh-family",
+        "mcp-refresh-family",
+        "password-1234",
+        "android-token-refresh-family-0001",
+        Platform::ANDROID,
+    )
+    .await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let (client_id, first_tokens) =
+        oauth_token_response(app.clone(), &channel_id, "mcp:tools").await;
+    let first_refresh = first_tokens
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .expect("first refresh token")
+        .to_string();
+    let (family_id, family_expires_at, first_revoked) = mcp
+        .refresh_token_state_for_test(&first_refresh)
+        .await
+        .expect("first refresh record");
+    assert!(!first_revoked);
+
+    let refresh_form =
+        format!("grant_type=refresh_token&client_id={client_id}&refresh_token={first_refresh}");
+    let (rotate_status, _, rotate_body) =
+        post_form(app.clone(), "/oauth/token", &refresh_form).await;
+    assert_eq!(rotate_status, StatusCode::OK);
+    let rotated: Value = serde_json::from_slice(&rotate_body).expect("rotated token response");
+    let next_refresh = rotated
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .expect("next refresh token");
+    let (next_family_id, next_family_expires_at, next_revoked) = mcp
+        .refresh_token_state_for_test(next_refresh)
+        .await
+        .expect("next refresh record");
+    assert_eq!(next_family_id, family_id);
+    assert_eq!(next_family_expires_at, family_expires_at);
+    assert!(!next_revoked);
+
+    let (replay_status, _, _) = post_form(app, "/oauth/token", &refresh_form).await;
+    assert_eq!(replay_status, StatusCode::BAD_REQUEST);
+    assert!(mcp.refresh_family_all_revoked_for_test(&family_id).await);
+}
+
+#[tokio::test]
 async fn mcp_send_requires_mcp_tools_scope() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
     let channel_id = seed_provider_channel_for_router_test(
@@ -418,6 +479,7 @@ async fn mcp_send_requires_mcp_tools_scope() {
 #[tokio::test]
 async fn mcp_bind_session_is_one_time() {
     let state = build_mcp_test_state(AuthMode::Disabled).await;
+    let store = state.store.clone();
     let channel_id = seed_provider_channel_for_router_test(
         &state,
         "mcp-device-mcp-oauth-bind-once",
@@ -434,6 +496,29 @@ async fn mcp_bind_session_is_one_time() {
         "mcp:tools%20mcp:channels:manage",
     )
     .await;
+    let (rejected_status, rejected_body) = post_json_with_auth(
+        app.clone(),
+        "/mcp",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "pushgo.channel.bind.start",
+                "arguments": {
+                    "requested_channel_id": channel_id,
+                    "redirect_uri": "https://attacker.example/callback"
+                }
+            }
+        }),
+        &access_token,
+    )
+    .await;
+    assert_eq!(rejected_status, StatusCode::OK);
+    assert!(
+        rejected_body.to_string().contains("redirect_uri_invalid"),
+        "unregistered bind redirect must be rejected: {rejected_body}"
+    );
     let (start_status, start_body) = post_json_with_auth(
         app.clone(),
         "/mcp",
@@ -458,6 +543,15 @@ async fn mcp_bind_session_is_one_time() {
         .and_then(|v| v.get("bind_session_id"))
         .and_then(Value::as_str)
         .expect("bind_session_id should exist");
+    let snapshot = store
+        .load_mcp_state_json()
+        .await
+        .expect("load MCP snapshot")
+        .expect("MCP snapshot exists");
+    assert!(
+        !snapshot.contains(bind_session_id),
+        "bind session credentials must be persisted only as hashes"
+    );
     let bind_url = start_body
         .get("result")
         .and_then(|v| v.get("structuredContent"))
@@ -643,8 +737,14 @@ async fn mcp_grant_password_not_persisted_in_snapshot() {
     let authorize_form = format!(
         "client_id={client_id}&redirect_uri={redirect_uri}&state=abc&code_challenge={code_challenge}&code_challenge_method=S256&scope=mcp:tools&channel_bindings={channel_id},password-1234"
     );
-    let (status, _, _) = post_form(app, "/oauth/authorize", authorize_form.as_str()).await;
+    let (status, headers, _) = post_form(app, "/oauth/authorize", authorize_form.as_str()).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
+    let code = extract_auth_code(
+        headers
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .expect("authorize redirect"),
+    );
     let snapshot = store
         .load_mcp_state_json()
         .await
@@ -653,6 +753,10 @@ async fn mcp_grant_password_not_persisted_in_snapshot() {
     assert!(
         !snapshot.contains("password-1234"),
         "snapshot should not contain plaintext password"
+    );
+    assert!(
+        !snapshot.contains(&code),
+        "snapshot should store only the authorization-code hash"
     );
 }
 
@@ -705,7 +809,7 @@ async fn oauth_register_requires_gateway_token_when_enabled() {
         post_json_with_auth(app, "/oauth/register", payload, "gateway-token-1").await;
     assert_eq!(status, StatusCode::CREATED);
     assert!(body.get("client_id").and_then(Value::as_str).is_some());
-    assert!(body.get("client_secret").and_then(Value::as_str).is_some());
+    assert!(body.get("client_secret").is_none());
 }
 
 #[tokio::test]
@@ -717,8 +821,9 @@ async fn oauth_metadata_returns_absolute_endpoints() {
             Request::builder()
                 .method("GET")
                 .uri("/.well-known/oauth-authorization-server")
-                .header("host", "localhost")
-                .header("x-forwarded-proto", "https")
+                .header("host", "attacker.example")
+                .header("x-forwarded-host", "attacker.example")
+                .header("x-forwarded-proto", "http")
                 .body(Body::empty())
                 .expect("request should build"),
         )
@@ -732,6 +837,10 @@ async fn oauth_metadata_returns_absolute_endpoints() {
     assert_eq!(
         json.get("ui_locales_supported"),
         Some(&json!(["en", "zh-CN", "zh-TW"]))
+    );
+    assert_eq!(
+        json.get("code_challenge_methods_supported"),
+        Some(&json!(["S256"]))
     );
     for key in [
         "issuer",
@@ -751,6 +860,60 @@ async fn oauth_metadata_returns_absolute_endpoints() {
             "{key} should be absolute https URL: {value}"
         );
     }
+}
+
+#[tokio::test]
+async fn oauth_authorize_rejects_plain_pkce() {
+    let state = build_mcp_test_state(AuthMode::Disabled).await;
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let (register_status, register_body) = post_json(
+        app.clone(),
+        "/oauth/register",
+        json!({
+            "redirect_uris": ["https://client.example/callback"],
+            "token_endpoint_auth_method": "none"
+        }),
+    )
+    .await;
+    assert_eq!(register_status, StatusCode::CREATED);
+    let client_id = register_body
+        .get("client_id")
+        .and_then(Value::as_str)
+        .expect("client id");
+    let path = format!(
+        "/oauth/authorize?client_id={client_id}&redirect_uri=https://client.example/callback&code_challenge=test&code_challenge_method=plain"
+    );
+    let (status, body) = get_text(app, &path).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        !body.contains("mcp_code_"),
+        "plain PKCE must not issue a code"
+    );
+}
+
+#[tokio::test]
+async fn corrupt_oauth_snapshot_fails_state_initialization() {
+    let state = build_test_state().await;
+    state
+        .store
+        .save_mcp_state_json("{not-json")
+        .await
+        .expect("seed corrupt snapshot");
+    let config = McpConfig {
+        bootstrap_http_addr: Arc::from("127.0.0.1:6666"),
+        public_base_url: Some(Arc::from("https://sandbox.pushgo.dev")),
+        access_token_ttl_secs: 900,
+        refresh_token_absolute_ttl_secs: 2_592_000,
+        refresh_token_idle_ttl_secs: 604_800,
+        bind_session_ttl_secs: 600,
+        dcr_enabled: true,
+        predefined_clients: Vec::new(),
+    };
+    assert!(
+        McpState::try_new(config, &state.auth, state.store.clone())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -774,7 +937,7 @@ async fn oauth_authorize_page_supports_chinese_locale() {
     let (status, body) = get_text(
         app,
         &format!(
-            "/oauth/authorize?client_id={client_id}&redirect_uri=https://client.example/callback&code_challenge=test&code_challenge_method=plain&lang=zh-CN"
+            "/oauth/authorize?client_id={client_id}&redirect_uri=https://client.example/callback&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&lang=zh-CN"
         ),
     )
     .await;
@@ -805,7 +968,7 @@ async fn oauth_authorize_page_supports_traditional_chinese_locale() {
     let (status, body) = get_text(
         app,
         &format!(
-            "/oauth/authorize?client_id={client_id}&redirect_uri=https://client.example/callback&code_challenge=test&code_challenge_method=plain&lang=zh-TW"
+            "/oauth/authorize?client_id={client_id}&redirect_uri=https://client.example/callback&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&lang=zh-TW"
         ),
     )
     .await;
@@ -860,7 +1023,7 @@ async fn oauth_register_returns_not_found_when_dcr_disabled() {
 }
 
 #[tokio::test]
-async fn predefined_client_can_authorize_without_registration() {
+async fn predefined_client_without_exact_redirect_allowlist_is_rejected() {
     let mut state = build_test_state().await;
     let config = McpConfig {
         bootstrap_http_addr: Arc::from("127.0.0.1:6666"),
@@ -888,32 +1051,15 @@ async fn predefined_client_can_authorize_without_registration() {
     )
     .await;
     let app = super::super::build_router(state, "<html>docs</html>");
-    let code_verifier = "static-client-verifier";
+    let code_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
     let authorize_form = format!(
-        "client_id=chatgpt-static&redirect_uri=https://client.example/callback&code_challenge={code_verifier}&code_challenge_method=plain&scope=mcp:tools&channel_bindings={channel_id},password-1234"
+        "client_id=chatgpt-static&redirect_uri=https://client.example/callback&code_challenge={code_challenge}&code_challenge_method=S256&scope=mcp:tools&channel_bindings={channel_id},password-1234"
     );
     let (authorize_status, authorize_headers, _) =
         post_form(app.clone(), "/oauth/authorize", authorize_form.as_str()).await;
-    assert_eq!(authorize_status, StatusCode::SEE_OTHER);
-    let location = authorize_headers
-        .get(header::LOCATION)
-        .and_then(|value| value.to_str().ok())
-        .expect("authorize should redirect with code");
-    let code = extract_auth_code(location);
-    let token_form = format!(
-        "grant_type=authorization_code&client_id=chatgpt-static&client_secret=static-secret&code={code}&redirect_uri=https://client.example/callback&code_verifier={code_verifier}"
-    );
-    let (token_status, _, token_body_raw) =
-        post_form(app, "/oauth/token", token_form.as_str()).await;
-    assert_eq!(token_status, StatusCode::OK);
-    let token_body: Value =
-        serde_json::from_slice(&token_body_raw).expect("token response should be json");
-    assert!(
-        token_body
-            .get("access_token")
-            .and_then(Value::as_str)
-            .is_some()
-    );
+    assert_eq!(authorize_status, StatusCode::BAD_REQUEST);
+    assert!(authorize_headers.get(header::LOCATION).is_none());
 }
 
 #[tokio::test]
@@ -960,7 +1106,7 @@ async fn mcp_requires_bearer_challenge_before_initialize() {
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": { "name": "test", "version": "1.0" }
             }
@@ -1005,7 +1151,7 @@ async fn mcp_notifications_initialized_is_accepted() {
             "id": 11,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": { "name": "test", "version": "1.0" }
             }
@@ -1013,7 +1159,12 @@ async fn mcp_notifications_initialized_is_accepted() {
         Some(&access_token),
     )
     .await;
-    assert_eq!(init_status, StatusCode::OK);
+    assert_eq!(
+        init_status,
+        StatusCode::OK,
+        "initialize response: {}",
+        String::from_utf8_lossy(&init_body)
+    );
     let content_type = init_headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

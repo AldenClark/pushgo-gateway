@@ -12,8 +12,17 @@ pub(crate) struct ApnsTokenProvider {
 }
 
 impl ApnsTokenProvider {
-    pub(crate) fn new(token_service_url: &str, client: reqwest::Client) -> Self {
-        let cache = GatewayTokenCache::new(client, GatewayProvider::Apns, token_service_url);
+    pub(crate) fn new(
+        token_service_url: &str,
+        authorization: Option<reqwest::header::HeaderValue>,
+        client: reqwest::Client,
+    ) -> Self {
+        let cache = GatewayTokenCache::new(
+            client,
+            GatewayProvider::Apns,
+            token_service_url,
+            authorization,
+        );
         Self { cache }
     }
 }

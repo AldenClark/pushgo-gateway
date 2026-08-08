@@ -305,6 +305,7 @@ fn dispatch_request_error_code(err: &Error) -> &'static str {
         Error::Upstream { .. } => "upstream",
         Error::Internal(_) => "internal",
         Error::TooBusy => "too_busy",
+        Error::RateLimited => "rate_limited",
         Error::StoreError(_) => "store_error",
     }
 }

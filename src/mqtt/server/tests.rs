@@ -32,7 +32,7 @@ struct MqttFlowTestContext {
     state: Arc<AppState>,
     private: Arc<PrivateState>,
     addr: SocketAddr,
-    _server: tokio::task::JoinHandle<()>,
+    server: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl MqttFlowTestContext {
@@ -102,7 +102,7 @@ impl MqttFlowTestContext {
             state,
             private,
             addr,
-            _server: server,
+            server: Some(server),
         }
     }
 
@@ -141,6 +141,24 @@ impl MqttFlowTestContext {
         .await
         .expect("channel should be created")
         .channel_id
+    }
+
+    async fn shutdown(mut self) {
+        self.private.begin_shutdown();
+        let server = self.server.take().expect("MQTT listener task should exist");
+        timeout(Duration::from_secs(2), server)
+            .await
+            .expect("MQTT listener should stop within the shutdown deadline")
+            .expect("MQTT listener task should not panic");
+    }
+}
+
+impl Drop for MqttFlowTestContext {
+    fn drop(&mut self) {
+        self.private.begin_shutdown();
+        if let Some(server) = self.server.take() {
+            server.abort();
+        }
     }
 }
 
@@ -365,6 +383,21 @@ async fn setup_connected_channel() -> (MqttFlowTestContext, TcpStream, String, S
         channel_id,
         channel_password.to_string(),
     )
+}
+
+#[tokio::test]
+async fn shutdown_closes_listener_and_authenticated_sessions() {
+    let ctx = MqttFlowTestContext::new().await;
+    let mut stream = connect_publish_client(ctx.addr, "mqtt-shutdown-client").await;
+
+    ctx.shutdown().await;
+
+    let mut byte = [0u8; 1];
+    let read = timeout(Duration::from_secs(1), stream.read(&mut byte))
+        .await
+        .expect("shutdown should close the client stream promptly")
+        .expect("client read should complete");
+    assert_eq!(read, 0, "server must close established MQTT sessions");
 }
 
 async fn subscribe_stream_to_channel(

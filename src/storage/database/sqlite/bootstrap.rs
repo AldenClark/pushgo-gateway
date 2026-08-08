@@ -9,9 +9,9 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS channels (channel_id BLOB PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, provider_run_token TEXT, provider_owner TEXT, provider_lease_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
-    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id TEXT PRIMARY KEY, channel_id BLOB NOT NULL, model TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL, dispatch_status TEXT, accepted_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id TEXT PRIMARY KEY, channel_id BLOB NOT NULL, model TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL, dispatch_status TEXT, provider_run_token TEXT, accepted_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key TEXT NOT NULL, token TEXT NOT NULL, channel_id BLOB, platform TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER, PRIMARY KEY (activity_key, token))",
     "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key TEXT NOT NULL, platform TEXT NOT NULL, token TEXT NOT NULL, widget_kind TEXT NOT NULL, family TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family))",
     "CREATE TABLE IF NOT EXISTS pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)",
@@ -19,10 +19,10 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const SQLITE_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER, route_revision INTEGER NOT NULL DEFAULT 0)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BLOB NOT NULL, key_id INTEGER NOT NULL, key_hash BLOB NOT NULL, issued_at INTEGER NOT NULL, valid_until INTEGER, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id TEXT PRIMARY KEY, device_id BLOB NOT NULL, expires_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, claim_generation INTEGER NOT NULL DEFAULT 0, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
     "CREATE TABLE IF NOT EXISTS private_bindings (platform INTEGER NOT NULL, token_hash BLOB NOT NULL, device_id BLOB NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (platform, token_hash))",
     "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BLOB NOT NULL, device_id BLOB NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (channel_id, device_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
@@ -34,6 +34,7 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
+    "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
     "CREATE INDEX IF NOT EXISTS sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
@@ -45,7 +46,7 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
 
 const SQLITE_DISPATCH_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
-    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, provider_run_token TEXT, provider_owner TEXT, provider_lease_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
 ];
 
@@ -54,13 +55,14 @@ const SQLITE_DISPATCH_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
+    "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
 ];
 
 const SQLITE_DELIVERY_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, claim_generation INTEGER NOT NULL DEFAULT 0, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
 ];
 
@@ -287,6 +289,29 @@ impl SqliteDb {
             "ALTER TABLE dispatch_op_dedupe ADD COLUMN request_fingerprint TEXT",
         )
         .await?;
+        for (column, ddl) in [
+            (
+                "provider_run_token",
+                "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_run_token TEXT",
+            ),
+            (
+                "provider_owner",
+                "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_owner TEXT",
+            ),
+            (
+                "provider_lease_until",
+                "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_lease_until INTEGER",
+            ),
+        ] {
+            self.ensure_sqlite_column("dispatch_op_dedupe", column, ddl)
+                .await?;
+        }
+        self.ensure_sqlite_column(
+            "sender_submit_status",
+            "provider_run_token",
+            "ALTER TABLE sender_submit_status ADD COLUMN provider_run_token TEXT",
+        )
+        .await?;
 
         self.ensure_sqlite_column(
             "devices",
@@ -328,6 +353,12 @@ impl SqliteDb {
             "devices",
             "route_updated_at",
             "ALTER TABLE devices ADD COLUMN route_updated_at INTEGER",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "devices",
+            "route_revision",
+            "ALTER TABLE devices ADD COLUMN route_revision INTEGER NOT NULL DEFAULT 0",
         )
         .await?;
         self.ensure_sqlite_column(
@@ -383,6 +414,18 @@ impl SqliteDb {
             "claimed_by",
             "ALTER TABLE private_outbox ADD COLUMN claimed_by TEXT",
         )
+        .await?;
+        self.ensure_sqlite_column(
+            "private_outbox",
+            "claim_generation",
+            "ALTER TABLE private_outbox ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE private_outbox SET status = 'pending', claimed_at = NULL, claimed_by = NULL \
+             WHERE status = 'claimed'",
+        )
+        .execute(&self.pool)
         .await?;
         self.ensure_sqlite_column(
             "private_outbox",
@@ -537,10 +580,27 @@ impl SqliteDb {
         sqlx::query(SQLITE_SIDECAR_META_TABLE)
             .execute(&self.dispatch_pool)
             .await?;
-        for stmt in SQLITE_DISPATCH_TABLE_STATEMENTS
-            .iter()
-            .chain(SQLITE_DISPATCH_INDEX_STATEMENTS.iter())
-        {
+        for stmt in SQLITE_DISPATCH_TABLE_STATEMENTS {
+            sqlx::query(stmt).execute(&self.dispatch_pool).await?;
+        }
+        for (column, ddl) in [
+            (
+                "provider_run_token",
+                "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_run_token TEXT",
+            ),
+            (
+                "provider_owner",
+                "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_owner TEXT",
+            ),
+            (
+                "provider_lease_until",
+                "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_lease_until INTEGER",
+            ),
+        ] {
+            ensure_sqlite_column_in_pool(&self.dispatch_pool, "dispatch_op_dedupe", column, ddl)
+                .await?;
+        }
+        for stmt in SQLITE_DISPATCH_INDEX_STATEMENTS {
             sqlx::query(stmt).execute(&self.dispatch_pool).await?;
         }
         migrate_sidecar_tables_once(
@@ -577,6 +637,19 @@ impl SqliteDb {
             "claimed_by",
             "ALTER TABLE private_outbox ADD COLUMN claimed_by TEXT",
         )
+        .await?;
+        ensure_sqlite_column_in_pool(
+            &self.delivery_pool,
+            "private_outbox",
+            "claim_generation",
+            "ALTER TABLE private_outbox ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE private_outbox SET status = 'pending', claimed_at = NULL, claimed_by = NULL \
+             WHERE status = 'claimed'",
+        )
+        .execute(&self.delivery_pool)
         .await?;
         if sqlite_url_without_query(core_db_url) != sqlite_url_without_query(sidecar_db_url) {
             self.sync_delivery_sidecar_from_core(core_db_url).await?;
@@ -1599,8 +1672,14 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for SqliteDb
         }
         for (table, column) in [
             ("dispatch_op_dedupe", "request_fingerprint"),
+            ("dispatch_op_dedupe", "provider_run_token"),
+            ("dispatch_op_dedupe", "provider_owner"),
+            ("dispatch_op_dedupe", "provider_lease_until"),
             ("sender_submit_status", "dispatch_status"),
+            ("sender_submit_status", "provider_run_token"),
+            ("private_outbox", "claim_generation"),
             ("devices", "provider_token"),
+            ("devices", "route_revision"),
             ("private_bindings", "provider_token"),
             ("provider_pull_queue", "provider_token"),
         ] {

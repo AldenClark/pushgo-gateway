@@ -1,5 +1,6 @@
 use crate::{api::Error, app::AppState, storage::StoreError, util::generate_hex_id_128};
 
+pub(crate) use crate::domain_model::ids::SemanticScope;
 pub(crate) use crate::value::OpId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,32 +45,6 @@ impl DeliveryId {
 
     pub(crate) fn into_inner(self) -> String {
         self.0
-    }
-}
-
-pub(crate) struct SemanticScope(String);
-
-impl SemanticScope {
-    pub(crate) fn new(channel_id: &str, entity_type: &str, entity_id: &str) -> Self {
-        Self(format!(
-            "{}:{}:{}",
-            normalize_scope_component(channel_id),
-            normalize_scope_component(entity_type),
-            normalize_scope_component(entity_id)
-        ))
-    }
-
-    pub(crate) fn op_dedupe_key(&self, op_id: &OpId) -> String {
-        format!("op:{}:{}", self.0, op_id.as_str())
-    }
-}
-
-fn normalize_scope_component(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        "-".to_string()
-    } else {
-        trimmed.to_ascii_lowercase()
     }
 }
 

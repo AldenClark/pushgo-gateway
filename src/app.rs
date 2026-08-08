@@ -1,7 +1,7 @@
 use crate::{
     api::router::build_router,
     args::Args,
-    dispatch::{DispatchChannels, DispatchWorkerDeps},
+    dispatch::{DispatchChannels, DispatchWorkerDeps, DispatchWorkerTasks},
     mcp::{McpConfig, McpPredefinedClientConfig, McpState},
     mqtt::MqttConfig,
     private::{PrivateConfig, PrivateState},
@@ -17,8 +17,9 @@ use std::sync::{
     Arc, OnceLock, Weak,
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tokio::time::Instant as TokioInstant;
 
 #[derive(Clone)]
 pub(crate) struct PrivateTransportProfile {
@@ -58,7 +59,75 @@ pub(crate) struct AppState {
 
 pub struct AppRuntime {
     pub router: Router,
-    pub private: Option<Arc<PrivateState>>,
+    pub shutdown: AppShutdown,
+}
+
+pub struct AppShutdown {
+    private: Option<Arc<PrivateState>>,
+    dispatch_workers: DispatchWorkerTasks,
+    runtime_counters: Arc<RuntimeCounterCollector>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AppShutdownReport {
+    pub joined: usize,
+    pub panicked: usize,
+    pub aborted: usize,
+}
+
+impl AppShutdown {
+    pub fn private_state(&self) -> Option<Arc<PrivateState>> {
+        self.private.clone()
+    }
+
+    pub async fn shutdown(self, grace: Duration) -> AppShutdownReport {
+        self.shutdown_until(TokioInstant::now() + grace).await
+    }
+
+    pub async fn shutdown_until(self, deadline: TokioInstant) -> AppShutdownReport {
+        let AppShutdown {
+            private,
+            dispatch_workers,
+            runtime_counters,
+        } = self;
+        let mut report = AppShutdownReport::default();
+
+        if let Some(private) = private {
+            let private_report = private
+                .shutdown_runtime(deadline.saturating_duration_since(TokioInstant::now()))
+                .await;
+            report.joined = report.joined.saturating_add(private_report.joined);
+            report.panicked = report.panicked.saturating_add(private_report.panicked);
+            report.aborted = report.aborted.saturating_add(private_report.aborted);
+            drop(private);
+        }
+
+        // Private/MQTT producers are gone. HTTP graceful shutdown runs in
+        // parallel and eventually drops its remaining dispatch senders;
+        // workers then drain every accepted job, including provider outcome
+        // finalization, before their receivers report closure.
+        let dispatch_report = dispatch_workers.shutdown_until(deadline).await;
+        report.joined = report.joined.saturating_add(dispatch_report.joined);
+        report.panicked = report.panicked.saturating_add(dispatch_report.panicked);
+        report.aborted = report.aborted.saturating_add(dispatch_report.aborted);
+
+        // Dispatch workers are producers of runtime counter events. Close and
+        // flush the counter worker only after every provider worker is done.
+        let counter_report = runtime_counters.shutdown_until(deadline).await;
+        report.joined = report.joined.saturating_add(counter_report.joined);
+        report.panicked = report.panicked.saturating_add(counter_report.panicked);
+        report.aborted = report.aborted.saturating_add(counter_report.aborted);
+
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "gateway.runtime_shutdown_finished",
+            joined = (report.joined as u64),
+            panicked = (report.panicked as u64),
+            aborted = (report.aborted as u64)
+        );
+        report
+    }
 }
 
 pub(crate) struct DeviceOperationGuards {
@@ -260,31 +329,15 @@ pub async fn build_app(
     }
     .normalized();
     let private = if private_channel_enabled {
-        let state = Arc::new(PrivateState::new(
+        Some(Arc::new(PrivateState::new(
             store.clone(),
             private_config,
             Arc::clone(&device_registry),
             Arc::clone(&runtime_counters),
-        ));
-        state
-            .spawn_configured_transports()
-            .map_err(|err| std::io::Error::other(err.to_string()))?;
-        state.spawn_persistent_fallback_worker();
-        Some(state)
+        )))
     } else {
         None
     };
-
-    DispatchWorkerDeps {
-        apns: Arc::clone(&apns),
-        fcm: Arc::clone(&fcm),
-        wns: Arc::clone(&wns),
-        store: store.clone(),
-        private: private.clone(),
-        runtime_counters: Arc::clone(&runtime_counters),
-        runtime_profile: runtime_tuning.profile,
-    }
-    .spawn(receivers);
 
     let public_base_url = args
         .public_base_url_value()?
@@ -322,7 +375,9 @@ pub async fn build_app(
             dcr_enabled: args.mcp_dcr_enabled,
             predefined_clients,
         };
-        Some(Arc::new(McpState::new(config, &auth, store.clone()).await))
+        Some(Arc::new(
+            McpState::try_new(config, &auth, store.clone()).await?,
+        ))
     } else {
         None
     };
@@ -334,21 +389,52 @@ pub async fn build_app(
         public_base_url,
         device_registry,
         device_operation_guards,
-        runtime_counters,
+        runtime_counters: Arc::clone(&runtime_counters),
         private_transport_profile,
         private: private.clone(),
         store,
         mcp: mcp_state,
     };
-    if let Some(private_state) = private.as_ref()
-        && let Some(mqtt_config) = private_state.config.mqtt.clone()
-    {
-        crate::mqtt::spawn_mqtt(
-            Arc::new(state.clone()),
-            Arc::clone(private_state),
-            mqtt_config,
-        );
+    if let Some(private_state) = private.as_ref() {
+        // Start long-lived tasks only after every fallible application state
+        // constructor has succeeded. Otherwise an MCP/configuration failure can
+        // leave tasks holding the partially-built runtime alive.
+        if let Err(err) = private_state.spawn_configured_transports() {
+            // `spawn_configured_transports` may have started an earlier
+            // transport before a later configuration error is discovered.
+            // Tear down and join anything already registered before failing
+            // application construction.
+            let report = private_state.shutdown_runtime(Duration::ZERO).await;
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::ERROR,
+                event = "gateway.app_build_private_runtime_rollback",
+                joined = (report.joined as u64),
+                panicked = (report.panicked as u64),
+                aborted = (report.aborted as u64)
+            );
+            return Err(std::io::Error::other(err.to_string()).into());
+        }
+        private_state.spawn_persistent_fallback_worker();
+        if let Some(mqtt_config) = private_state.config.mqtt.clone() {
+            crate::mqtt::spawn_mqtt(
+                Arc::new(state.clone()),
+                Arc::clone(private_state),
+                mqtt_config,
+            );
+        }
     }
+
+    let dispatch_workers = DispatchWorkerDeps {
+        apns: Arc::clone(&apns),
+        fcm: Arc::clone(&fcm),
+        wns: Arc::clone(&wns),
+        store: state.store.clone(),
+        private: private.clone(),
+        runtime_counters: Arc::clone(&runtime_counters),
+        runtime_profile: runtime_tuning.profile,
+    }
+    .spawn(receivers);
 
     let router = build_router(state.clone(), docs_html);
 
@@ -357,7 +443,14 @@ pub async fn build_app(
         ::tracing::Level::INFO,
         event = "gateway.app_build_finished"
     );
-    Ok(AppRuntime { router, private })
+    Ok(AppRuntime {
+        router,
+        shutdown: AppShutdown {
+            private,
+            dispatch_workers,
+            runtime_counters,
+        },
+    })
 }
 
 fn derive_wss_advertised_port(public_base_url: Option<&str>) -> u16 {

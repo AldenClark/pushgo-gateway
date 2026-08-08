@@ -100,7 +100,7 @@ impl PrivateHub {
                 mqtt_active: None,
                 draining: Vec::new(),
             });
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "private.presence_connection_registered",
@@ -227,7 +227,7 @@ impl PrivateHub {
         if remove_presence {
             self.presence.remove(&device_id);
         }
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "private.presence_connection_unregistered",
@@ -294,29 +294,31 @@ impl PrivateHub {
             drop(presence);
             let mut delivered = false;
             for sender in senders {
-                if sender.send_async(envelope.clone()).await.is_ok() {
+                // The durable outbox owns retries. Never let one full connection queue
+                // suspend the global fallback worker or starve other devices.
+                if sender.try_send(envelope.clone()).is_ok() {
                     delivered = true;
                 }
             }
             if !delivered {
-                                ::tracing::event!(
+                ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::WARN,
                     event = "private.presence_delivery_failed",
                     device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
                     delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
-                    mode = %("async")
+                    mode = %("bounded")
                 );
             }
             return delivered;
         }
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
             event = "private.presence_delivery_failed",
             device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
             delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
-            mode = %("async"),
+            mode = %("bounded"),
             reason = %("device_not_online")
         );
         false
@@ -338,7 +340,7 @@ impl PrivateHub {
                 }
             }
             if !delivered {
-                                ::tracing::event!(
+                ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::WARN,
                     event = "private.presence_delivery_failed",
@@ -349,7 +351,7 @@ impl PrivateHub {
             }
             return delivered;
         }
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::WARN,
             event = "private.presence_delivery_failed",

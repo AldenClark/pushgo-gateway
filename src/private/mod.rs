@@ -403,7 +403,7 @@ impl PrivateState {
         let state = Arc::clone(self);
 
         let worker_span = tracing::info_span!("gateway.private.fallback_worker");
-        tokio::spawn(async move {
+        let future = async move {
             let private_tuning = RuntimeTuning::for_profile(state.config.runtime_profile).private;
             let runtime = FallbackRuntime::new(Arc::clone(&state));
             let mut scheduler = FallbackScheduler::default();
@@ -544,7 +544,8 @@ impl PrivateState {
                 scheduler_depth = (scheduler.depth() as u64)
             );
         }
-        .instrument(worker_span));
+        .instrument(worker_span);
+        let _ = self.spawn_runtime_task("fallback_worker", future);
     }
 }
 

@@ -1455,6 +1455,7 @@ async fn sqlite_init_heals_missing_private_outbox_columns() {
         created_at: now - 1,
         claimed_at: None,
         claimed_by: None,
+        claim_generation: 0,
         first_sent_at: None,
         last_attempt_at: None,
         acked_at: None,

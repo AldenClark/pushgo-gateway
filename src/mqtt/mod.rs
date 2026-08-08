@@ -34,7 +34,8 @@ pub(crate) struct MqttRuntime {
 
 pub(crate) fn spawn_mqtt(state: Arc<AppState>, private: Arc<PrivateState>, config: MqttConfig) {
     let bind_addr = config.bind_addr.clone();
-    tokio::spawn(async move {
+    let runtime_owner = Arc::clone(&private);
+    let future = async move {
         let mut restart_delay_secs = 1u64;
         loop {
             let runtime = MqttRuntime {
@@ -70,7 +71,8 @@ pub(crate) fn spawn_mqtt(state: Arc<AppState>, private: Arc<PrivateState>, confi
             }
             restart_delay_secs = restart_delay_secs.saturating_mul(2).min(30);
         }
-    });
+    };
+    let _ = runtime_owner.spawn_runtime_task("mqtt", future);
 }
 
 fn mqtt_tls_acceptor(config: &MqttConfig) -> Result<tokio_rustls::TlsAcceptor, String> {

@@ -15,6 +15,7 @@ pub async fn serve_quic(
 ) -> Result<(), String> {
     let span = tracing::info_span!("gateway.private.quic.serve", bind_addr = bind_addr);
     let fut = async move {
+        let shutdown = Arc::clone(&state);
         let app = PushgoServerApp::new(state);
         let mut config = default_server_config();
         config.quic_listen_addr = Some(bind_addr.to_string());
@@ -27,9 +28,10 @@ pub async fn serve_quic(
             event = "private.quic_serve_started",
             bind_addr = %(bind_addr)
         );
-        let result = warp_serve_quic(config, app)
-            .await
-            .map_err(|e| e.to_string());
+        let result = tokio::select! {
+            _ = shutdown.wait_for_shutdown() => Ok(()),
+            result = warp_serve_quic(config, app) => result.map_err(|e| e.to_string()),
+        };
         if let Err(err) = &result {
             ::tracing::event!(
                 target: "gateway.trace_event",

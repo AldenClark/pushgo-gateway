@@ -423,6 +423,7 @@ mod tests {
                     created_at: now,
                     claimed_at: None,
                     claimed_by: None,
+                    claim_generation: 0,
                     first_sent_at: None,
                     last_attempt_at: None,
                     acked_at: None,

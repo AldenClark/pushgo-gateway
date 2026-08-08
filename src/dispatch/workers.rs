@@ -4,7 +4,65 @@ use crate::delivery_core::execution::provider::{
     ProviderInvalidTokenCleanup, cleanup_invalid_provider_token,
 };
 use crate::runtime_counters::RuntimeCounterCollector;
+use tokio::time::Instant;
 use tracing::Instrument;
+
+pub(crate) struct DispatchWorkerTasks {
+    tasks: Vec<DispatchWorkerTask>,
+}
+
+struct DispatchWorkerTask {
+    provider: &'static str,
+    worker_slot: usize,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct DispatchWorkerShutdownReport {
+    pub joined: usize,
+    pub panicked: usize,
+    pub aborted: usize,
+}
+
+impl DispatchWorkerTasks {
+    pub(crate) async fn shutdown_until(
+        mut self,
+        deadline: Instant,
+    ) -> DispatchWorkerShutdownReport {
+        let mut report = DispatchWorkerShutdownReport::default();
+        for task in &mut self.tasks {
+            match tokio::time::timeout_at(deadline, &mut task.handle).await {
+                Ok(Ok(())) => report.joined = report.joined.saturating_add(1),
+                Ok(Err(join_error)) => {
+                    report.panicked = report.panicked.saturating_add(1);
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::ERROR,
+                        event = "dispatch.worker_join_failed",
+                        provider = %(task.provider),
+                        worker_slot = (task.worker_slot as u64),
+                        cancelled = (join_error.is_cancelled()),
+                        panicked = (join_error.is_panic())
+                    );
+                }
+                Err(_) => {
+                    task.handle.abort();
+                    let _ = (&mut task.handle).await;
+                    report.aborted = report.aborted.saturating_add(1);
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::ERROR,
+                        event = "dispatch.worker_aborted",
+                        provider = %(task.provider),
+                        worker_slot = (task.worker_slot as u64),
+                        reason = %("shutdown_deadline_exceeded")
+                    );
+                }
+            }
+        }
+        report
+    }
+}
 
 pub(crate) struct DispatchWorkerDeps {
     pub apns: Arc<dyn ApnsClient>,
@@ -17,7 +75,7 @@ pub(crate) struct DispatchWorkerDeps {
 }
 
 impl DispatchWorkerDeps {
-    pub(crate) fn spawn(self, receivers: DispatchWorkerReceivers) {
+    pub(crate) fn spawn(self, receivers: DispatchWorkerReceivers) -> DispatchWorkerTasks {
         let runtime = DispatchWorkerRuntime {
             store: self.store,
             private: self.private,
@@ -30,7 +88,7 @@ impl DispatchWorkerDeps {
             runtime,
             config: DispatchRuntimeConfig::from_profile(self.runtime_profile),
         };
-        pool.spawn(receivers);
+        pool.spawn(receivers)
     }
 }
 
@@ -43,14 +101,16 @@ struct DispatchWorkerPool {
 }
 
 impl DispatchWorkerPool {
-    fn spawn(self, receivers: DispatchWorkerReceivers) {
-        self.spawn_apns_workers(receivers.apns);
-        self.spawn_widget_push_workers(receivers.widget_push);
-        self.spawn_fcm_workers(receivers.fcm);
-        self.spawn_wns_workers(receivers.wns);
+    fn spawn(self, receivers: DispatchWorkerReceivers) -> DispatchWorkerTasks {
+        let mut tasks = Vec::with_capacity(self.config.worker_count.saturating_mul(4));
+        self.spawn_apns_workers(receivers.apns, &mut tasks);
+        self.spawn_widget_push_workers(receivers.widget_push, &mut tasks);
+        self.spawn_fcm_workers(receivers.fcm, &mut tasks);
+        self.spawn_wns_workers(receivers.wns, &mut tasks);
+        DispatchWorkerTasks { tasks }
     }
 
-    fn spawn_apns_workers(&self, apns_rx: Receiver<ApnsJob>) {
+    fn spawn_apns_workers(&self, apns_rx: Receiver<ApnsJob>, tasks: &mut Vec<DispatchWorkerTask>) {
         for worker_slot in 0..self.config.worker_count {
             let apns_rx = apns_rx.clone();
             let apns = Arc::clone(&self.apns);
@@ -60,7 +120,7 @@ impl DispatchWorkerPool {
                 provider = "APNS",
                 worker_slot = worker_slot
             );
-            tokio::spawn(
+            let handle = tokio::spawn(
                 async move {
                     emit_dispatch_worker_started("APNS", worker_slot);
                     while let Ok(job) = apns_rx.recv_async().await {
@@ -165,10 +225,19 @@ impl DispatchWorkerPool {
                 }
                 .instrument(worker_span),
             );
+            tasks.push(DispatchWorkerTask {
+                provider: "APNS",
+                worker_slot,
+                handle,
+            });
         }
     }
 
-    fn spawn_widget_push_workers(&self, widget_push_rx: Receiver<WidgetPushJob>) {
+    fn spawn_widget_push_workers(
+        &self,
+        widget_push_rx: Receiver<WidgetPushJob>,
+        tasks: &mut Vec<DispatchWorkerTask>,
+    ) {
         for worker_slot in 0..self.config.worker_count {
             let widget_push_rx = widget_push_rx.clone();
             let apns = Arc::clone(&self.apns);
@@ -178,7 +247,7 @@ impl DispatchWorkerPool {
                 provider = "APNS_WIDGETS",
                 worker_slot = worker_slot
             );
-            tokio::spawn(
+            let handle = tokio::spawn(
                 async move {
                     emit_dispatch_worker_started("APNS_WIDGETS", worker_slot);
                     while let Ok(job) = widget_push_rx.recv_async().await {
@@ -249,10 +318,15 @@ impl DispatchWorkerPool {
                 }
                 .instrument(worker_span),
             );
+            tasks.push(DispatchWorkerTask {
+                provider: "APNS_WIDGETS",
+                worker_slot,
+                handle,
+            });
         }
     }
 
-    fn spawn_fcm_workers(&self, fcm_rx: Receiver<FcmJob>) {
+    fn spawn_fcm_workers(&self, fcm_rx: Receiver<FcmJob>, tasks: &mut Vec<DispatchWorkerTask>) {
         for worker_slot in 0..self.config.worker_count {
             let fcm_rx = fcm_rx.clone();
             let fcm = Arc::clone(&self.fcm);
@@ -262,7 +336,7 @@ impl DispatchWorkerPool {
                 provider = "FCM",
                 worker_slot = worker_slot
             );
-            tokio::spawn(
+            let handle = tokio::spawn(
                 async move {
                     emit_dispatch_worker_started("FCM", worker_slot);
                     while let Ok(job) = fcm_rx.recv_async().await {
@@ -378,10 +452,15 @@ impl DispatchWorkerPool {
                 }
                 .instrument(worker_span),
             );
+            tasks.push(DispatchWorkerTask {
+                provider: "FCM",
+                worker_slot,
+                handle,
+            });
         }
     }
 
-    fn spawn_wns_workers(&self, wns_rx: Receiver<WnsJob>) {
+    fn spawn_wns_workers(&self, wns_rx: Receiver<WnsJob>, tasks: &mut Vec<DispatchWorkerTask>) {
         for worker_slot in 0..self.config.worker_count {
             let wns_rx = wns_rx.clone();
             let wns = Arc::clone(&self.wns);
@@ -391,7 +470,7 @@ impl DispatchWorkerPool {
                 provider = "WNS",
                 worker_slot = worker_slot
             );
-            tokio::spawn(
+            let handle = tokio::spawn(
                 async move {
                     emit_dispatch_worker_started("WNS", worker_slot);
                     while let Ok(job) = wns_rx.recv_async().await {
@@ -486,6 +565,11 @@ impl DispatchWorkerPool {
                 }
                 .instrument(worker_span),
             );
+            tasks.push(DispatchWorkerTask {
+                provider: "WNS",
+                worker_slot,
+                handle,
+            });
         }
     }
 }
@@ -725,13 +809,13 @@ mod tests {
         });
         let (dispatch, receivers) = DispatchChannels::new();
         let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
-        DispatchWorkerDeps {
+        let workers = DispatchWorkerDeps {
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
             store: store.clone(),
             private: None,
-            runtime_counters,
+            runtime_counters: Arc::clone(&runtime_counters),
             runtime_profile: GatewayRuntimeProfile::Small,
         }
         .spawn(receivers);
@@ -833,6 +917,21 @@ mod tests {
             ),
             "provider result and op dedupe must finalize together"
         );
+
+        drop(dispatch);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let worker_report = workers.shutdown_until(deadline).await;
+        assert_eq!(worker_report.panicked, 0);
+        assert_eq!(worker_report.aborted, 0);
+        assert_eq!(
+            worker_report.joined,
+            DispatchRuntimeConfig::from_profile(GatewayRuntimeProfile::Small).worker_count * 4
+        );
+
+        let counter_report = runtime_counters.shutdown_until(deadline).await;
+        assert_eq!(counter_report.panicked, 0);
+        assert_eq!(counter_report.aborted, 0);
+        assert_eq!(counter_report.joined, 1);
     }
 
     #[tokio::test]
