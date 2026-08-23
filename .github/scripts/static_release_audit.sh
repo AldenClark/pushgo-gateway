@@ -111,7 +111,11 @@ grep -Fq 'find dist -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec chm
 grep -Fq 'runtime_platform_ref="${image%@sha256:*}@${runtime_platform_digest}"' "$workflow"
 grep -Fq 'executed_ref="${IMAGE}@${platform_digest}"' "$workflow"
 grep -Fq '(.runtime_platform_ref | test("^[^@]+@sha256:[0-9a-f]{64}$"))' "$workflow"
+grep -Fq 'all($records[]; . as $record | any($assets[]; .target == $record.target and .sha256 == $record.sha256))' "$workflow"
 grep -Fq '.executed_ref == ($image + "@" + .platform_manifest_digest)' "$workflow"
+jq -n -e \
+  '[{target: "linux-amd64-musl", sha256: "abc"}] as $records | [{target: "linux-amd64-musl", sha256: "abc"}] as $assets | all($records[]; . as $record | any($assets[]; .target == $record.target and .sha256 == $record.sha256))' \
+  >/dev/null
 
 stable_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0 1111111111111111111111111111111111111111 true false)"
 beta_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0-beta.2 2222222222222222222222222222222222222222 false false)"
