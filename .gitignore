@@ -11,7 +11,6 @@ bench/results/*
 !bench/results/.gitkeep
 /.cargo/*
 !/.cargo/audit.toml
-!/.cargo/config.toml
 **/__pycache__/
 *.pyc
 /.env
