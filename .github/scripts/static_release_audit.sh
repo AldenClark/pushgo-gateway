@@ -108,6 +108,10 @@ fi
 grep -Fq 'name: binary-smoke-linux' "$workflow"
 grep -Fq 'name: docker-smoke-linux' "$workflow"
 grep -Fq 'find dist -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec chmod 0755 {} +' "$workflow"
+grep -Fq 'runtime_platform_ref="${image%@sha256:*}@${runtime_platform_digest}"' "$workflow"
+grep -Fq 'executed_ref="${IMAGE}@${platform_digest}"' "$workflow"
+grep -Fq '(.runtime_platform_ref | test("^[^@]+@sha256:[0-9a-f]{64}$"))' "$workflow"
+grep -Fq '.executed_ref == ($image + "@" + .platform_manifest_digest)' "$workflow"
 
 stable_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0 1111111111111111111111111111111111111111 true false)"
 beta_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0-beta.2 2222222222222222222222222222222222222222 false false)"
