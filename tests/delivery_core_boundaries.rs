@@ -300,42 +300,34 @@ fn public_surface_uses_tracing_level_not_observability_modes() {
 }
 
 #[test]
-fn implementation_audit_tracks_design_and_plan_phases() {
-    let workspace_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("gateway repo should have workspace parent");
-    let audit = fs::read_to_string(
-        workspace_dir.join("docs/design/gateway-domain-delivery-core-implementation-audit.md"),
-    )
-    .expect("implementation audit should be readable");
+fn release_audit_tracks_implemented_controls_and_final_gates() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let audit = fs::read_to_string(manifest_dir.join("release/V1.3.0_RELEASE_AUDIT.md"))
+        .expect("tracked release audit should be readable");
     let mut violations = Vec::new();
 
     for required in [
-        "gateway-domain-delivery-core-design.md",
-        "gateway-domain-delivery-core-implementation-plan.md",
-        "Phase 0: Behavior Lock",
-        "Phase 1: Core Facade And Store Traits",
-        "Phase 2: Message Domain Normalization",
-        "Phase 3: Event And Thing Normalization",
-        "Phase 4: Payload Pipeline Extraction",
-        "Phase 5: DeliveryPlan, Queue Claim, Backpressure",
-        "Phase 6: Execution Boundaries",
-        "Phase 7: MQTT Roles",
-        "Phase 8: Observability Removal And Tracing",
-        "Phase 9: Active Data Lifecycle Cleanup",
+        "## Implemented controls",
+        "### Pull and ACK data integrity",
+        "### Token identity",
+        "### Delivery lifecycle and idempotency",
+        "### Route, SQLite, MQTT, and upgrade safety",
+        "## Red/blue audit rounds",
+        "## Verification evidence",
         "scripts/storage_crossdb_parity.sh",
-        "Completion Criteria",
+        "Gateway release preflight",
+        "Production rollout order",
     ] {
         if !audit.contains(required) {
             violations.push(format!(
-                "implementation audit is missing required coverage marker `{required}`"
+                "release audit is missing required coverage marker `{required}`"
             ));
         }
     }
 
     assert!(
         violations.is_empty(),
-        "implementation audit must track all design/plan phases and remaining gates:\n{}",
+        "release audit must track implemented controls and final gates:\n{}",
         violations.join("\n")
     );
 }
