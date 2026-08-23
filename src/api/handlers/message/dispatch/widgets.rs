@@ -10,10 +10,12 @@ use crate::{
     storage::{Platform, WidgetPushSubscriptionRecord},
 };
 
-pub(super) async fn dispatch_widget_push_targets(prepared: &PreparedDispatch<'_>) {
+pub(super) async fn dispatch_widget_push_targets(
+    prepared: &PreparedDispatch<'_>,
+) -> Result<(), crate::Error> {
     let requested_kinds = requested_widget_kinds(prepared.entity_type);
     if requested_kinds.is_empty() {
-        return;
+        return Ok(());
     }
 
     let targets = match prepared
@@ -30,13 +32,14 @@ pub(super) async fn dispatch_widget_push_targets(prepared: &PreparedDispatch<'_>
                 Some(err.to_string()),
                 &requested_kinds,
             );
-            return;
+            return Err(crate::Error::StoreError(err));
         }
     };
 
     let requested: HashSet<&str> = requested_kinds.iter().copied().collect();
     let mut seen_tokens = HashSet::new();
     let mut matched = 0usize;
+    let mut first_error = None;
     for target in targets {
         if !requested.contains(target.widget_kind.as_str()) {
             continue;
@@ -54,20 +57,29 @@ pub(super) async fn dispatch_widget_push_targets(prepared: &PreparedDispatch<'_>
             continue;
         }
         matched += 1;
-        enqueue_widget_push(prepared, platform, target, requested_kinds.as_slice());
+        if let Err(err) =
+            enqueue_widget_push(prepared, platform, target, requested_kinds.as_slice()).await
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
     }
 
     if matched == 0 {
         emit_widget_push_dispatch_skipped(prepared, "no_matching_widgets", None, &requested_kinds);
     }
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
-fn enqueue_widget_push(
+async fn enqueue_widget_push(
     prepared: &PreparedDispatch<'_>,
     platform: Platform,
     target: WidgetPushSubscriptionRecord,
     requested_kinds: &[&'static str],
-) {
+) -> Result<(), crate::Error> {
     let job = WidgetPushJob {
         channel_id: prepared.channel_id,
         correlation_id: Arc::clone(&prepared.correlation_id),
@@ -85,21 +97,43 @@ fn enqueue_widget_push(
             prepared.entity_type, prepared.channel_id_value
         ))),
     };
+    let durable = crate::dispatch::DurableProviderJob::from_widget(&job);
+    let mut record = match durable.to_record(
+        "pending",
+        prepared.sent_at,
+        prepared.provider_pull_expires_at(),
+    ) {
+        Ok(record) => record,
+        Err(err) => {
+            emit_widget_push_dispatch_skipped(
+                prepared,
+                "widget_push_encode_failed",
+                Some(err.to_string()),
+                requested_kinds,
+            );
+            return Ok(());
+        }
+    };
+    record.coalesce_order = prepared.acceptance_order;
     if let Err(err) = prepared
         .runtime
-        .dispatch_channels()
-        .try_send_widget_push(job)
+        .storage()
+        .enqueue_provider_dispatch_job(&record)
+        .await
     {
         emit_widget_push_dispatch_skipped(
             prepared,
-            match err {
-                crate::dispatch::DispatchError::QueueFull => "widget_push_queue_full",
-                crate::dispatch::DispatchError::ChannelClosed => "widget_push_queue_closed",
-            },
-            None,
+            "widget_push_store_failed",
+            Some(err.to_string()),
             requested_kinds,
         );
+        return Err(crate::Error::StoreError(err));
     }
+    let _ = prepared
+        .runtime
+        .dispatch_channels()
+        .try_send_widget_push(job);
+    Ok(())
 }
 
 fn requested_widget_kinds(entity_type: &str) -> Vec<&'static str> {
@@ -117,6 +151,20 @@ fn emit_widget_push_dispatch_skipped(
     error: Option<String>,
     widget_kinds: &[&str],
 ) {
+    if reason == "no_matching_widgets" {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::DEBUG,
+            event = "widget_push.dispatch_skipped",
+            correlation_id = %(crate::util::redact_text(prepared.correlation_id.as_ref())),
+            delivery_id = %(crate::util::redact_text(prepared.delivery_id.as_str())),
+            channel_id = %(crate::util::redact_text(prepared.channel_id_value.as_str())),
+            reason = %(reason),
+            widget_kinds = %(widget_kinds.join(",")),
+            error = %(error.as_deref().unwrap_or(""))
+        );
+        return;
+    }
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::WARN,

@@ -46,6 +46,7 @@ pub(super) async fn dispatch_provider_targets(
     };
     let total = prepared.provider_targets.len();
     let route_resolver = AppProviderRouteResolver(prepared);
+    let mut first_error = None;
     for (index, execution_target) in prepared.provider_targets.iter().enumerate() {
         let target = prepare_provider_target(ProviderTargetPreparation {
             resolver: &route_resolver,
@@ -54,30 +55,52 @@ pub(super) async fn dispatch_provider_targets(
             execution_target,
         });
         let target = ResolvedProviderTarget::from(target);
-        if execution_target.wakeup_pull_ref.is_some()
-            && !ensure_provider_pull_cached(prepared, &target, &provider_pull_message, progress)
+        // The pull row is a recovery copy for both direct and wakeup payloads.
+        // Direct delivery never waits on a client-side pull, but retaining this
+        // copy until durable client ACK closes the NSE-local-write failure gap.
+        let pull_cached =
+            match ensure_provider_pull_cached(prepared, &target, &provider_pull_message, progress)
                 .await
-        {
+            {
+                Ok(cached) => cached,
+                Err(err) => {
+                    prepared.provider_outcome.record_failure();
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                    continue;
+                }
+            };
+        if !pull_cached {
             prepared.provider_outcome.record_failure();
             continue;
         }
 
-        let Some(provider_payload) =
-            prepare_provider_payload(prepared, payloads, &target, progress).await?
-        else {
+        let provider_payload =
+            match prepare_provider_payload(prepared, payloads, &target, progress).await {
+                Ok(payload) => payload,
+                Err(err) => {
+                    prepared.provider_outcome.record_failure();
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                    continue;
+                }
+            };
+        let Some(provider_payload) = provider_payload else {
             prepared.provider_outcome.record_failure();
             continue;
         };
 
-        match execution_target.device.info.platform {
+        let dispatch_result = match execution_target.device.info.platform {
             Platform::ANDROID => {
-                android::dispatch(prepared, &target, provider_payload, progress).await?
+                android::dispatch(prepared, &target, provider_payload, progress).await
             }
             Platform::WINDOWS => {
-                windows::dispatch(prepared, &target, provider_payload, progress).await?
+                windows::dispatch(prepared, &target, provider_payload, progress).await
             }
             Platform::IOS | Platform::MACOS | Platform::WATCHOS => {
-                apple::dispatch(prepared, payloads, &target, provider_payload, progress).await?
+                apple::dispatch(prepared, payloads, &target, provider_payload, progress).await
             }
             Platform::MQTT => {
                 prepared.provider_outcome.record_failure();
@@ -88,7 +111,13 @@ pub(super) async fn dispatch_provider_targets(
                     "mqtt platform is private-transport only",
                 )
                 .await;
+                Ok(())
             }
+        };
+        if let Err(err) = dispatch_result
+            && first_error.is_none()
+        {
+            first_error = Some(err);
         }
 
         if progress.dispatch_closed {
@@ -98,7 +127,10 @@ pub(super) async fn dispatch_provider_targets(
             break;
         }
     }
-    Ok(())
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 async fn prepare_provider_payload(
@@ -277,7 +309,7 @@ async fn ensure_provider_pull_cached(
     target: &ResolvedProviderTarget,
     provider_pull_message: &PrivateMessage,
     progress: &mut DispatchProgress,
-) -> bool {
+) -> Result<bool, Error> {
     let Some(provider_pull) = target.provider_pull_delivery.as_ref() else {
         record_provider_cache_enqueue_failed(
             prepared,
@@ -286,7 +318,7 @@ async fn ensure_provider_pull_cached(
             "provider pull cache unavailable: missing provider target identity",
         )
         .await;
-        return false;
+        return Ok(false);
     };
     match cache_provider_pull_delivery(ProviderPullCacheRequest {
         store: prepared.runtime.storage(),
@@ -298,7 +330,7 @@ async fn ensure_provider_pull_cached(
     })
     .await
     {
-        Ok(()) => true,
+        Ok(()) => Ok(true),
         Err(err) => {
             record_provider_cache_enqueue_failed(
                 prepared,
@@ -312,7 +344,7 @@ async fn ensure_provider_pull_cached(
                 ),
             )
             .await;
-            false
+            Err(Error::StoreError(err))
         }
     }
 }

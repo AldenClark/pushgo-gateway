@@ -210,6 +210,7 @@ impl MySqlDb {
 
     pub(super) async fn finalize_provider_dispatch_outcome(
         &self,
+        dedupe_key: &str,
         op_id: &str,
         delivery_id: &str,
         success: bool,
@@ -229,12 +230,12 @@ impl MySqlDb {
         let mut tx = self.pool.begin().await?;
         let dedupe_update = sqlx::query(
             "UPDATE dispatch_op_dedupe SET state = ?, sent_at = ?, updated_at = ? \
-             WHERE dedupe_key = ? AND delivery_id = ? AND state IN ('pending', 'provider_queued')",
+             WHERE dedupe_key = ? AND delivery_id = ? AND state = 'provider_queued'",
         )
         .bind(dedupe_state.as_str())
         .bind(now)
         .bind(now)
-        .bind(op_id)
+        .bind(dedupe_key)
         .bind(delivery_id)
         .execute(&mut *tx)
         .await?;
@@ -263,33 +264,100 @@ impl MySqlDb {
     ) -> StoreResult<usize> {
         let mut tx = self.pool.begin().await?;
         let rows = sqlx::query(
-            "SELECT dedupe_key FROM dispatch_op_dedupe \
-             WHERE state = 'provider_queued' AND COALESCE(provider_lease_until, 0) <= ? \
-             FOR UPDATE",
+            "SELECT d.dedupe_key, d.delivery_id FROM dispatch_op_dedupe d \
+             WHERE d.state = 'provider_queued' AND ( \
+                COALESCE(d.provider_lease_until, 0) <= ? OR ( \
+                    EXISTS ( \
+                        SELECT 1 FROM provider_dispatch_outbox terminal \
+                        WHERE terminal.delivery_id = d.delivery_id \
+                          AND terminal.provider IN ('APNS','FCM','WNS') \
+                          AND terminal.state IN ('provider_accepted','permanent_failed','superseded_route','expired','cancelled') \
+                    ) AND NOT EXISTS ( \
+                        SELECT 1 FROM provider_dispatch_outbox open_job \
+                        WHERE open_job.delivery_id = d.delivery_id \
+                          AND open_job.provider IN ('APNS','FCM','WNS') \
+                          AND open_job.state IN ('preparing','pending','retry_wait','leased') \
+                    ) \
+                ) \
+             ) ORDER BY d.updated_at, d.dedupe_key LIMIT 1024 FOR UPDATE",
         )
         .bind(updated_at)
         .fetch_all(&mut *tx)
         .await?;
         for row in &rows {
-            let op_id = decode_mysql_text(row, "dedupe_key")?;
+            let dedupe_key = decode_mysql_text(row, "dedupe_key")?;
+            let delivery_id = decode_mysql_text(row, "delivery_id")?;
+            let summary = sqlx::query(
+                "SELECT COUNT(1) AS total, \
+                        CAST(COALESCE(SUM(CASE WHEN state IN ('preparing','pending','retry_wait','leased') THEN 1 ELSE 0 END), 0) AS SIGNED) AS open_count, \
+                        CAST(COALESCE(SUM(CASE WHEN state IN ('permanent_failed','expired','cancelled') THEN 1 ELSE 0 END), 0) AS SIGNED) AS failed_count, \
+                        CAST(COALESCE(SUM(CASE WHEN dedupe_key = ? AND op_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS SIGNED) AS matched_count, \
+                        MIN(CASE WHEN dedupe_key = ? THEN op_id END) AS min_op_id, \
+                        MAX(CASE WHEN dedupe_key = ? THEN op_id END) AS max_op_id \
+                 FROM provider_dispatch_outbox \
+                 WHERE delivery_id = ? AND provider IN ('APNS','FCM','WNS')",
+            )
+            .bind(&dedupe_key)
+            .bind(&dedupe_key)
+            .bind(&dedupe_key)
+            .bind(&delivery_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let total: i64 = summary.try_get("total")?;
+            let open: i64 = summary.try_get("open_count")?;
+            let failed: i64 = summary.try_get("failed_count")?;
+            let matched: i64 = summary.try_get("matched_count")?;
+            let min_op_id = decode_mysql_optional_text(&summary, "min_op_id")?;
+            let max_op_id = decode_mysql_optional_text(&summary, "max_op_id")?;
+
+            if total > 0 && open > 0 {
+                sqlx::query(
+                    "UPDATE dispatch_op_dedupe SET provider_owner = NULL, provider_lease_until = ? + 900000, updated_at = ? \
+                     WHERE dedupe_key = ? AND state = 'provider_queued' AND COALESCE(provider_lease_until, 0) <= ?",
+                )
+                .bind(updated_at)
+                .bind(updated_at)
+                .bind(&dedupe_key)
+                .bind(updated_at)
+                .execute(&mut *tx)
+                .await?;
+                continue;
+            }
+
+            let exact_op_id =
+                (total > 0 && matched == total && min_op_id.is_some() && min_op_id == max_op_id)
+                    .then_some(min_op_id)
+                    .flatten();
+            let (dedupe_state, sender_status, dispatch_status) = if exact_op_id.is_some() {
+                if failed == 0 {
+                    ("sent", "sent", "provider_success")
+                } else {
+                    ("partial_failure", "partially_failed", "provider_failed")
+                }
+            } else {
+                ("partial_failure", "failed", "provider_outcome_unknown")
+            };
             sqlx::query(
                 "UPDATE dispatch_op_dedupe \
-                 SET state = 'partial_failure', sent_at = ?, updated_at = ?, provider_owner = NULL, provider_lease_until = NULL \
-                 WHERE dedupe_key = ? AND state = 'provider_queued' AND COALESCE(provider_lease_until, 0) <= ?",
+                 SET state = ?, sent_at = ?, updated_at = ?, provider_owner = NULL, provider_lease_until = NULL \
+                 WHERE dedupe_key = ? AND state = 'provider_queued'",
             )
+            .bind(dedupe_state)
             .bind(updated_at)
             .bind(updated_at)
-            .bind(op_id.as_str())
-            .bind(updated_at)
+            .bind(&dedupe_key)
             .execute(&mut *tx)
             .await?;
+            let sender_op_id = exact_op_id.as_deref().unwrap_or(&dedupe_key);
             sqlx::query(
                 "UPDATE sender_submit_status \
-                 SET status = 'failed', dispatch_status = 'provider_outcome_unknown', updated_at = ? \
+                 SET status = ?, dispatch_status = ?, updated_at = ? \
                  WHERE op_id = ? AND status = 'provider_queued' AND updated_at <= ?",
             )
+            .bind(sender_status)
+            .bind(dispatch_status)
             .bind(updated_at)
-            .bind(op_id.as_str())
+            .bind(sender_op_id)
             .bind(updated_at)
             .execute(&mut *tx)
             .await?;
@@ -384,15 +452,18 @@ impl MySqlDb {
     pub(super) async fn cleanup_stale_private_outbox(
         &self,
         before_ts: i64,
+        acked_before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
         let mut tx = self.pool.begin().await?;
         let rows = sqlx::query(
             "SELECT device_id, delivery_id FROM private_outbox \
-             WHERE updated_at <= ? \
+             WHERE (status = 'acked' AND updated_at <= ?) \
+                OR (status <> 'acked' AND updated_at <= ?) \
              ORDER BY updated_at ASC, created_at ASC, delivery_id ASC \
              LIMIT ? FOR UPDATE",
         )
+        .bind(acked_before_ts)
         .bind(before_ts)
         .bind(limit as i64)
         .fetch_all(&mut *tx)
@@ -410,10 +481,12 @@ impl MySqlDb {
         for (device_id, delivery_id) in &selected {
             deleted = deleted.saturating_add(
                 sqlx::query(
-                    "DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND updated_at <= ?",
+                    "DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ? \
+                     AND ((status = 'acked' AND updated_at <= ?) OR (status <> 'acked' AND updated_at <= ?))",
                 )
                     .bind(device_id.as_slice())
                     .bind(delivery_id)
+                    .bind(acked_before_ts)
                     .bind(before_ts)
                     .execute(&mut *tx)
                     .await?
@@ -434,7 +507,7 @@ impl MySqlDb {
             "SELECT device_id, device_key FROM devices d \
              WHERE d.route_updated_at IS NOT NULL AND d.route_updated_at <= ? \
                AND NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id) \
-               AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(d.device_id, 1, 16)) \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(d.device_id, 1, 16) AND o.status <> 'acked') \
                AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = SUBSTRING(d.device_id, 1, 16)) \
                AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = SUBSTRING(d.device_id, 1, 16)) \
              ORDER BY d.route_updated_at ASC, d.device_key ASC LIMIT ? FOR UPDATE",
@@ -458,7 +531,7 @@ impl MySqlDb {
                  JOIN devices d ON d.device_id = s.device_id \
                  WHERE s.status = ? AND s.updated_at <= ? \
                    AND d.route_updated_at IS NOT NULL AND d.route_updated_at <= ? \
-                   AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(s.device_id, 1, 16)) \
+                   AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(s.device_id, 1, 16) AND o.status <> 'acked') \
                    AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = SUBSTRING(s.device_id, 1, 16)) \
                    AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = SUBSTRING(s.device_id, 1, 16)) \
                  ORDER BY s.updated_at ASC LIMIT ? \
@@ -491,7 +564,7 @@ impl MySqlDb {
                  JOIN devices d ON d.device_id = s.device_id \
                  WHERE s.status = ? AND s.updated_at <= ? \
                    AND d.route_updated_at IS NOT NULL \
-                   AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(s.device_id, 1, 16)) \
+                   AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(s.device_id, 1, 16) AND o.status <> 'acked') \
                    AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = SUBSTRING(s.device_id, 1, 16)) \
                    AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = SUBSTRING(s.device_id, 1, 16)) \
                  ORDER BY s.updated_at ASC LIMIT ? \
@@ -518,7 +591,7 @@ impl MySqlDb {
             "SELECT device_id, device_key FROM devices d \
              WHERE NOT EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status <> 'frozen') \
                AND EXISTS (SELECT 1 FROM channel_subscriptions s WHERE s.device_id = d.device_id AND s.status = 'frozen' AND s.updated_at <= ?) \
-               AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(d.device_id, 1, 16)) \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox o WHERE o.device_id = SUBSTRING(d.device_id, 1, 16) AND o.status <> 'acked') \
                AND NOT EXISTS (SELECT 1 FROM provider_pull_queue q WHERE q.device_id = SUBSTRING(d.device_id, 1, 16)) \
                AND NOT EXISTS (SELECT 1 FROM private_sessions ps WHERE ps.device_id = SUBSTRING(d.device_id, 1, 16)) \
              ORDER BY d.route_updated_at ASC, d.device_key ASC LIMIT ? FOR UPDATE",
@@ -587,7 +660,7 @@ impl MySqlDb {
             for statement in [
                 "DELETE FROM provider_pull_queue WHERE device_id = ?",
                 "DELETE FROM private_bindings WHERE device_id = ?",
-                "DELETE FROM private_outbox WHERE device_id = ?",
+                "DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
                 "DELETE FROM private_sessions WHERE device_id = ?",
                 "DELETE FROM private_device_keys WHERE device_id = ?",
             ] {
@@ -671,6 +744,8 @@ impl MySqlDb {
         delivery_id: &str,
         request_fingerprint: Option<&str>,
         created_at: i64,
+        submission: Option<&DispatchSubmissionRecord>,
+        submission_hard_capacity: usize,
     ) -> StoreResult<OpDedupeReservation> {
         let mut tx = self.pool.begin().await?;
         let inserted = sqlx::query(
@@ -689,7 +764,71 @@ impl MySqlDb {
             > 0;
 
         let outcome = if inserted {
-            OpDedupeReservation::Reserved
+            let mut acceptance_order = 0;
+            if let Some(submission) = submission {
+                if submission.dedupe_key != dedupe_key
+                    || submission.delivery_id != delivery_id
+                    || submission.accepted_at != created_at
+                {
+                    return Err(StoreError::Upgrade(
+                        "dispatch submission identity does not match dedupe reservation".into(),
+                    ));
+                }
+                let pending: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(1) FROM dispatch_submission s \
+                     JOIN dispatch_op_dedupe d ON d.dedupe_key=s.dedupe_key \
+                     WHERE d.state='pending'",
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+                if pending >= submission_hard_capacity as i64 {
+                    return Err(StoreError::DispatchSubmissionCapacityExceeded {
+                        pending: pending as usize,
+                        capacity: submission_hard_capacity,
+                    });
+                }
+                sqlx::query(
+                    "INSERT IGNORE INTO dispatch_acceptance_sequence (singleton, current_value) VALUES (1, 0)",
+                )
+                .execute(&mut *tx)
+                .await?;
+                let advanced = sqlx::query(
+                    "UPDATE dispatch_acceptance_sequence SET current_value=current_value+1 WHERE singleton=1 AND current_value<9223372036854775807",
+                )
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+                if advanced != 1 {
+                    return Err(StoreError::Upgrade(
+                        "dispatch acceptance order exhausted".into(),
+                    ));
+                }
+                acceptance_order = sqlx::query_scalar(
+                    "SELECT current_value FROM dispatch_acceptance_sequence WHERE singleton=1",
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+                sqlx::query(
+                    "INSERT INTO dispatch_submission \
+                     (dedupe_key, delivery_id, op_id, payload_version, payload_blob, acceptance_order, accepted_at, expires_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(submission.dedupe_key.as_str())
+                .bind(submission.delivery_id.as_str())
+                .bind(submission.op_id.as_str())
+                .bind(submission.payload_version)
+                .bind(submission.payload_blob.as_slice())
+                .bind(acceptance_order)
+                .bind(submission.accepted_at)
+                .bind(submission.expires_at)
+                .execute(&mut *tx)
+                .await?;
+            }
+            if acceptance_order > 0 {
+                OpDedupeReservation::ReservedSubmission { acceptance_order }
+            } else {
+                OpDedupeReservation::Reserved
+            }
         } else {
             let existing = sqlx::query(
                 "SELECT delivery_id, request_fingerprint, state FROM dispatch_op_dedupe WHERE dedupe_key = ? FOR UPDATE",
@@ -734,6 +873,164 @@ impl MySqlDb {
         Ok(outcome)
     }
 
+    pub(super) async fn list_pending_dispatch_submissions(
+        &self,
+        limit: usize,
+        now: i64,
+    ) -> StoreResult<Vec<DispatchSubmissionRecord>> {
+        let rows = sqlx::query(
+            "SELECT s.dedupe_key, s.delivery_id, s.op_id, s.payload_version, s.payload_blob, \
+                    s.acceptance_order, s.accepted_at, s.expires_at \
+             FROM dispatch_submission s \
+             JOIN dispatch_op_dedupe d ON d.dedupe_key = s.dedupe_key \
+             WHERE d.state = 'pending' AND COALESCE(d.provider_lease_until, 0) <= ? \
+             ORDER BY s.accepted_at, s.delivery_id LIMIT ?",
+        )
+        .bind(now)
+        .bind(limit.min(10_000) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(DispatchSubmissionRecord {
+                    dedupe_key: decode_mysql_text(&row, "dedupe_key")?,
+                    delivery_id: decode_mysql_text(&row, "delivery_id")?,
+                    op_id: decode_mysql_text(&row, "op_id")?,
+                    payload_version: row.try_get("payload_version")?,
+                    payload_blob: row.try_get("payload_blob")?,
+                    acceptance_order: row.try_get("acceptance_order")?,
+                    accepted_at: row.try_get("accepted_at")?,
+                    expires_at: row.try_get("expires_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub(super) async fn load_dispatch_submission_acceptance_order(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+    ) -> StoreResult<Option<i64>> {
+        sqlx::query_scalar(
+            "SELECT acceptance_order FROM dispatch_submission WHERE dedupe_key=? AND delivery_id=?",
+        )
+        .bind(dedupe_key)
+        .bind(delivery_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub(super) async fn claim_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<bool> {
+        let changed = sqlx::query(
+            "UPDATE dispatch_op_dedupe SET provider_owner=?, provider_lease_until=?, updated_at=? \
+             WHERE dedupe_key=? AND delivery_id=? AND state='pending' \
+               AND COALESCE(provider_lease_until, 0)<=?",
+        )
+        .bind(owner)
+        .bind(lease_until)
+        .bind(now)
+        .bind(dedupe_key)
+        .bind(delivery_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(changed == 1)
+    }
+
+    pub(super) async fn renew_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<bool> {
+        let changed = sqlx::query(
+            "UPDATE dispatch_op_dedupe SET provider_lease_until=?, updated_at=? \
+             WHERE dedupe_key=? AND delivery_id=? AND state='pending' AND provider_owner=?",
+        )
+        .bind(lease_until)
+        .bind(now)
+        .bind(dedupe_key)
+        .bind(delivery_id)
+        .bind(owner)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(changed == 1)
+    }
+
+    pub(super) async fn release_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+    ) -> StoreResult<bool> {
+        let changed = sqlx::query(
+            "UPDATE dispatch_op_dedupe SET provider_owner=NULL, provider_lease_until=NULL, updated_at=? \
+             WHERE dedupe_key=? AND delivery_id=? AND state='pending' AND provider_owner=?",
+        )
+        .bind(now)
+        .bind(dedupe_key)
+        .bind(delivery_id)
+        .bind(owner)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(changed == 1)
+    }
+
+    pub(super) async fn terminalize_unrecoverable_dispatch_submission(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        op_id: &str,
+        reason: &str,
+        now: i64,
+    ) -> StoreResult<bool> {
+        let mut tx = self.pool.begin().await?;
+        let changed = sqlx::query(
+            "UPDATE dispatch_op_dedupe SET state='partial_failure', sent_at=?, updated_at=?, \
+             provider_owner=NULL, provider_lease_until=NULL \
+             WHERE dedupe_key=? AND delivery_id=? AND state='pending'",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(dedupe_key)
+        .bind(delivery_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1;
+        if changed {
+            sqlx::query("DELETE FROM dispatch_submission WHERE dedupe_key=? AND delivery_id=?")
+                .bind(dedupe_key)
+                .bind(delivery_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "UPDATE sender_submit_status SET status='failed', dispatch_status=?, updated_at=? WHERE op_id=?",
+            )
+            .bind(reason)
+            .bind(now)
+            .bind(op_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(changed)
+    }
+
     pub(super) async fn mark_op_dedupe_sent(
         &self,
         dedupe_key: &str,
@@ -745,6 +1042,7 @@ impl MySqlDb {
         let provider_run_token = provider_queued.then(crate::util::generate_hex_id_128);
         let provider_owner = provider_queued.then(|| format!("gateway:{}", std::process::id()));
         let provider_lease_until = provider_queued.then(|| now.saturating_add(15 * 60 * 1000));
+        let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "UPDATE dispatch_op_dedupe \
              SET state = ?, sent_at = ?, updated_at = ?, provider_run_token = ?, provider_owner = ?, provider_lease_until = ? \
@@ -759,9 +1057,18 @@ impl MySqlDb {
         .bind(dedupe_key)
         .bind(delivery_id)
         .bind(DedupeState::Pending.as_str())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        Ok(result.rows_affected() > 0)
+        let finalized = result.rows_affected() > 0;
+        if finalized {
+            sqlx::query("DELETE FROM dispatch_submission WHERE dedupe_key=? AND delivery_id=?")
+                .bind(dedupe_key)
+                .bind(delivery_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(finalized)
     }
 
     pub(super) async fn clear_op_dedupe_pending(
@@ -769,6 +1076,18 @@ impl MySqlDb {
         dedupe_key: &str,
         delivery_id: &str,
     ) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM dispatch_submission WHERE dedupe_key = ? AND EXISTS (\
+                SELECT 1 FROM dispatch_op_dedupe WHERE dedupe_key = ? AND delivery_id = ? AND state = ?\
+             )",
+        )
+        .bind(dedupe_key)
+        .bind(dedupe_key)
+        .bind(delivery_id)
+        .bind(DedupeState::Pending.as_str())
+        .execute(&mut *tx)
+        .await?;
         sqlx::query(
             "DELETE FROM dispatch_op_dedupe \
              WHERE dedupe_key = ? AND delivery_id = ? AND state = ?",
@@ -776,8 +1095,9 @@ impl MySqlDb {
         .bind(dedupe_key)
         .bind(delivery_id)
         .bind(DedupeState::Pending.as_str())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -798,6 +1118,7 @@ impl MySqlDb {
 
     pub(super) async fn automation_reset(&self) -> StoreResult<()> {
         let tables = vec![
+            "dispatch_submission",
             "dispatch_op_dedupe",
             "dispatch_delivery_dedupe",
             "semantic_id_registry",
@@ -944,7 +1265,7 @@ pub(super) async fn delete_orphan_private_payload_in_mysql_tx(
     sqlx::query(
         "DELETE FROM private_payloads \
          WHERE delivery_id = ? \
-           AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+           AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id AND private_outbox.status <> 'acked') \
            AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
     )
     .bind(delivery_id)

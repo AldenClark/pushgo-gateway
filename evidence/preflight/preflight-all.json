@@ -2,9 +2,9 @@
   "schema_version": 1,
   "mode": "all",
   "status": "passed",
-  "git_sha": "c66f62a06c6abfc2874e07aa45f0176c97f41295",
-  "cargo_lock_sha256": "59e15c9f32c92c9ff63d4b2019c9ce60ac0b44341c8b9291f290fa5c6c1cced5",
-  "binary_sha256": "19ef6bfb5ebfad4210c36c7af29d094babf5482daa082210c12ac3ce94ae79b3",
+  "git_sha": "6c26f420114823a827caa0274a0bbc3739d91211",
+  "cargo_lock_sha256": "bda0d3769e914fe3646dae3413a7a507dd8d5943f10b0d40c77ea473d03d114b",
+  "binary_sha256": "f08cd0aa60545adae0d6bce92e5b25dcdf9a4bba41bcb526df5344eac8b0313a",
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
   "jq": "jq-1.7.1-apple",
@@ -16,7 +16,7 @@
   "metrics": {
     "managed_upgrade": {
       "status": "passed",
-      "schema_version": "2026-08-08-gateway-v11",
+      "schema_version": "2026-08-20-gateway-v12",
       "completed_runs": 1
     },
     "private_ack_blackbox": {
@@ -32,14 +32,14 @@
     },
     "public": {
       "status": "passed",
-      "rate_limit_enforced": true,
+      "authenticated_password_budget_bypassed": true,
       "subscriptions_initial": 3,
       "subscriptions_after_full_sync": 2,
       "subscriptions_after_partial_sync": 2,
-      "send_200": 55,
+      "send_200": 200,
       "send_503": 0,
-      "send_429": 145
+      "send_429": 0
     }
   },
-  "generated_at": "2026-08-07T19:26:36Z"
+  "generated_at": "2026-08-23T03:38:48Z"
 }

@@ -218,6 +218,13 @@ macro_rules! impl_backend_private_message_access {
                 .await
             }
 
+            async fn list_acked_private_outbox_devices(
+                &self,
+                delivery_id: &str,
+            ) -> StoreResult<Vec<DeviceId>> {
+                <$backend>::list_acked_private_outbox_devices(self, delivery_id).await
+            }
+
             async fn list_private_outbox(
                 &self,
                 device_id: DeviceId,
@@ -358,7 +365,7 @@ macro_rules! impl_backend_private_message_access {
                 &self,
                 device_id: DeviceId,
                 delivery_id: &str,
-            ) -> StoreResult<()> {
+            ) -> StoreResult<bool> {
                 <$backend>::ack_private_delivery(self, device_id, delivery_id).await
             }
 
@@ -426,6 +433,25 @@ macro_rules! impl_backend_device_route_access {
         impl crate::storage::database::DeviceRouteDatabaseAccess for $backend {
             async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>> {
                 <$backend>::load_device_routes(self).await
+            }
+
+            async fn provider_route_is_current(
+                &self,
+                device_key: &str,
+                platform: Platform,
+                channel_type: RouteChannelType,
+                provider_token: &str,
+                route_updated_at: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::provider_route_is_current(
+                    self,
+                    device_key,
+                    platform,
+                    channel_type,
+                    provider_token,
+                    route_updated_at,
+                )
+                .await
             }
 
             async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()> {
@@ -591,6 +617,18 @@ macro_rules! impl_backend_provider_pull_access {
                 <$backend>::discard_provider_items_by_outer_ids(self, device_id, delivery_ids, now)
                     .await
             }
+
+            async fn discard_provider_items_if_candidates_match(
+                &self,
+                device_id: DeviceId,
+                candidates: &[ProviderPullCandidate],
+                now: i64,
+            ) -> StoreResult<usize> {
+                <$backend>::discard_provider_items_if_candidates_match(
+                    self, device_id, candidates, now,
+                )
+                .await
+            }
         }
     };
 }
@@ -647,6 +685,8 @@ macro_rules! impl_backend_dedupe_access {
                 delivery_id: &str,
                 request_fingerprint: Option<&str>,
                 created_at: i64,
+                submission: Option<&DispatchSubmissionRecord>,
+                submission_hard_capacity: usize,
             ) -> StoreResult<OpDedupeReservation> {
                 <$backend>::reserve_op_dedupe_pending(
                     self,
@@ -654,6 +694,99 @@ macro_rules! impl_backend_dedupe_access {
                     delivery_id,
                     request_fingerprint,
                     created_at,
+                    submission,
+                    submission_hard_capacity,
+                )
+                .await
+            }
+
+            async fn list_pending_dispatch_submissions(
+                &self,
+                limit: usize,
+                now: i64,
+            ) -> StoreResult<Vec<DispatchSubmissionRecord>> {
+                <$backend>::list_pending_dispatch_submissions(self, limit, now).await
+            }
+
+            async fn load_dispatch_submission_acceptance_order(
+                &self,
+                dedupe_key: &str,
+                delivery_id: &str,
+            ) -> StoreResult<Option<i64>> {
+                <$backend>::load_dispatch_submission_acceptance_order(self, dedupe_key, delivery_id)
+                    .await
+            }
+
+            async fn claim_dispatch_submission_materialization(
+                &self,
+                dedupe_key: &str,
+                delivery_id: &str,
+                owner: &str,
+                now: i64,
+                lease_until: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::claim_dispatch_submission_materialization(
+                    self,
+                    dedupe_key,
+                    delivery_id,
+                    owner,
+                    now,
+                    lease_until,
+                )
+                .await
+            }
+
+            async fn renew_dispatch_submission_materialization(
+                &self,
+                dedupe_key: &str,
+                delivery_id: &str,
+                owner: &str,
+                now: i64,
+                lease_until: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::renew_dispatch_submission_materialization(
+                    self,
+                    dedupe_key,
+                    delivery_id,
+                    owner,
+                    now,
+                    lease_until,
+                )
+                .await
+            }
+
+            async fn release_dispatch_submission_materialization(
+                &self,
+                dedupe_key: &str,
+                delivery_id: &str,
+                owner: &str,
+                now: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::release_dispatch_submission_materialization(
+                    self,
+                    dedupe_key,
+                    delivery_id,
+                    owner,
+                    now,
+                )
+                .await
+            }
+
+            async fn terminalize_unrecoverable_dispatch_submission(
+                &self,
+                dedupe_key: &str,
+                delivery_id: &str,
+                op_id: &str,
+                reason: &str,
+                now: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::terminalize_unrecoverable_dispatch_submission(
+                    self,
+                    dedupe_key,
+                    delivery_id,
+                    op_id,
+                    reason,
+                    now,
                 )
                 .await
             }
@@ -790,12 +923,19 @@ macro_rules! impl_backend_system_state_access {
 
             async fn finalize_provider_dispatch_outcome(
                 &self,
+                dedupe_key: &str,
                 op_id: &str,
                 delivery_id: &str,
                 success: bool,
             ) -> StoreResult<()> {
-                <$backend>::finalize_provider_dispatch_outcome(self, op_id, delivery_id, success)
-                    .await
+                <$backend>::finalize_provider_dispatch_outcome(
+                    self,
+                    dedupe_key,
+                    op_id,
+                    delivery_id,
+                    success,
+                )
+                .await
             }
 
             async fn recover_interrupted_provider_dispatches(
@@ -831,9 +971,11 @@ macro_rules! impl_backend_system_state_access {
             async fn cleanup_stale_private_outbox(
                 &self,
                 before_ts: i64,
+                acked_before_ts: i64,
                 limit: usize,
             ) -> StoreResult<usize> {
-                <$backend>::cleanup_stale_private_outbox(self, before_ts, limit).await
+                <$backend>::cleanup_stale_private_outbox(self, before_ts, acked_before_ts, limit)
+                    .await
             }
 
             async fn cleanup_orphan_devices(
@@ -889,7 +1031,148 @@ macro_rules! impl_backend_database_access {
         impl_backend_private_message_access!($backend);
         impl_backend_device_route_access!($backend);
         impl_backend_provider_pull_access!($backend);
+        impl_backend_provider_dispatch_access!($backend);
         impl_backend_dedupe_access!($backend);
         impl_backend_system_state_access!($backend);
+    };
+}
+
+macro_rules! impl_backend_provider_dispatch_access {
+    ($backend:ty) => {
+        #[async_trait]
+        impl crate::storage::database::ProviderDispatchDatabaseAccess for $backend {
+            async fn enqueue_provider_dispatch_job(
+                &self,
+                record: &ProviderDispatchOutboxRecord,
+                hard_capacity: usize,
+            ) -> StoreResult<bool> {
+                <$backend>::enqueue_provider_dispatch_job(self, record, hard_capacity).await
+            }
+
+            async fn activate_provider_dispatch_jobs(
+                &self,
+                delivery_id: &str,
+                now: i64,
+            ) -> StoreResult<usize> {
+                <$backend>::activate_provider_dispatch_jobs(self, delivery_id, now).await
+            }
+
+            async fn cancel_preparing_provider_dispatch_jobs(
+                &self,
+                delivery_id: &str,
+                now: i64,
+            ) -> StoreResult<usize> {
+                <$backend>::cancel_preparing_provider_dispatch_jobs(self, delivery_id, now).await
+            }
+
+            async fn reconcile_preparing_provider_dispatch_jobs(
+                &self,
+                now: i64,
+            ) -> StoreResult<usize> {
+                <$backend>::reconcile_preparing_provider_dispatch_jobs(self, now).await
+            }
+
+            async fn claim_provider_dispatch_job(
+                &self,
+                provider: &str,
+                job_id: Option<&str>,
+                owner: &str,
+                now: i64,
+                lease_until: i64,
+            ) -> StoreResult<Option<ProviderDispatchOutboxLease>> {
+                <$backend>::claim_provider_dispatch_job(
+                    self,
+                    provider,
+                    job_id,
+                    owner,
+                    now,
+                    lease_until,
+                )
+                .await
+            }
+
+            async fn renew_provider_dispatch_job_lease(
+                &self,
+                lease: &ProviderDispatchOutboxLease,
+                now: i64,
+                lease_until: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::renew_provider_dispatch_job_lease(self, lease, now, lease_until).await
+            }
+
+            async fn claim_due_provider_dispatch_retry_job(
+                &self,
+                provider: &str,
+                owner: &str,
+                now: i64,
+                lease_until: i64,
+            ) -> StoreResult<Option<ProviderDispatchOutboxLease>> {
+                <$backend>::claim_due_provider_dispatch_retry_job(
+                    self,
+                    provider,
+                    owner,
+                    now,
+                    lease_until,
+                )
+                .await
+            }
+
+            async fn settle_provider_dispatch_job(
+                &self,
+                lease: &ProviderDispatchOutboxLease,
+                settlement: ProviderDispatchSettlement,
+                next_attempt_at: i64,
+                status_code: u16,
+                error_code: Option<&str>,
+                now: i64,
+            ) -> StoreResult<bool> {
+                <$backend>::settle_provider_dispatch_job(
+                    self,
+                    lease,
+                    settlement,
+                    next_attempt_at,
+                    status_code,
+                    error_code,
+                    now,
+                )
+                .await
+            }
+
+            async fn count_pending_provider_dispatch_jobs(
+                &self,
+                provider: &str,
+            ) -> StoreResult<usize> {
+                <$backend>::count_pending_provider_dispatch_jobs(self, provider).await
+            }
+
+            async fn provider_dispatch_terminal_success(
+                &self,
+                delivery_id: &str,
+            ) -> StoreResult<Option<bool>> {
+                <$backend>::provider_dispatch_terminal_success(self, delivery_id).await
+            }
+
+            async fn has_durable_dispatch_side_effects(
+                &self,
+                delivery_id: &str,
+            ) -> StoreResult<bool> {
+                <$backend>::has_durable_dispatch_side_effects(self, delivery_id).await
+            }
+
+            async fn recover_expired_provider_dispatch_leases(
+                &self,
+                now: i64,
+            ) -> StoreResult<usize> {
+                <$backend>::recover_expired_provider_dispatch_leases(self, now).await
+            }
+
+            async fn cleanup_terminal_provider_dispatch_jobs(
+                &self,
+                before_ts: i64,
+                limit: usize,
+            ) -> StoreResult<usize> {
+                <$backend>::cleanup_terminal_provider_dispatch_jobs(self, before_ts, limit).await
+            }
+        }
     };
 }

@@ -191,8 +191,12 @@ run_public_flow() {
   fi
   jq -e '.data.success == 2 and .data.failed == 0' <<<"$sync_ok" >/dev/null
   jq -e '.data.success == 1 and .data.failed == 1' <<<"$sync_partial" >/dev/null
-  if [[ "$s200" -le 0 || "$s429" -le 0 || "$s503" -ne 0 || "$sother" -ne 0 || $((s200 + s429)) -ne 200 ]]; then
-    echo "public audit did not prove successful delivery plus fail-closed rate limiting: 200=$s200 503=$s503 429=$s429 other=$sother" >&2
+  # SharedToken-authenticated traffic is deliberately outside the public
+  # password-guessing budget. That limiter protects unauthenticated/bypass-auth
+  # surfaces and has its own router-level isolation tests; applying it here
+  # would turn one legitimate sender burst into password-budget exhaustion.
+  if [[ "$s200" -ne 200 || "$s429" -ne 0 || "$s503" -ne 0 || "$sother" -ne 0 ]]; then
+    echo "public audit did not prove uninterrupted authenticated delivery: 200=$s200 503=$s503 429=$s429 other=$sother" >&2
     return 1
   fi
   jq -n \
@@ -202,7 +206,7 @@ run_public_flow() {
     --argjson send_200 "$s200" \
     --argjson send_503 "$s503" \
     --argjson send_429 "$s429" \
-    '{public: {status: "passed", rate_limit_enforced: ($send_429 > 0), subscriptions_initial: $subscriptions_initial, subscriptions_after_full_sync: $subscriptions_after_full_sync, subscriptions_after_partial_sync: $subscriptions_after_partial_sync, send_200: $send_200, send_503: $send_503, send_429: $send_429}}' \
+    '{public: {status: "passed", authenticated_password_budget_bypassed: ($send_200 == 200 and $send_429 == 0), subscriptions_initial: $subscriptions_initial, subscriptions_after_full_sync: $subscriptions_after_full_sync, subscriptions_after_partial_sync: $subscriptions_after_partial_sync, send_200: $send_200, send_503: $send_503, send_429: $send_429}}' \
     > "$PREFLIGHT_METRICS_DIR/public.json"
 
   printf 'PUBLIC_WORK_DIR=%s\nPUBLIC_DEVICE_KEY=%s\nPUBLIC_PROVIDER_TOKEN=%s\nPUBLIC_CHANNELS=%s,%s,%s\nPUBLIC_COUNT_INITIAL=%s\nPUBLIC_COUNT_AFTER_SYNC_OK=%s\nPUBLIC_COUNT_AFTER_SYNC_PARTIAL=%s\nPUBLIC_SYNC_OK=%s\nPUBLIC_SYNC_PARTIAL=%s\nPUBLIC_SEND_200=%s\nPUBLIC_SEND_503=%s\nPUBLIC_SEND_429=%s\nPUBLIC_SEND_OTHER=%s\n' \

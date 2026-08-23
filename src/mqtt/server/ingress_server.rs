@@ -316,9 +316,10 @@ impl MqttSession {
                     metadata: payload.metadata,
                 }))
             }
-            MqttPublishCommand::Event(command) => {
-                DomainCommandInput::Event(Box::new(EventInput { command }))
-            }
+            MqttPublishCommand::Event(command) => DomainCommandInput::Event(Box::new(EventInput {
+                command,
+                live_activity: None,
+            })),
             MqttPublishCommand::Thing(command) => {
                 DomainCommandInput::Thing(Box::new(ThingInput { command }))
             }

@@ -259,6 +259,48 @@ fn start_mysql_container() -> Option<(DockerContainer, String)> {
     ))
 }
 
+#[tokio::test]
+async fn postgres_unsafe_durability_allows_plan_but_blocks_writes() {
+    let Some((_container, db_url)) = start_postgres_container() else {
+        return;
+    };
+    wait_for_postgres(&db_url).await;
+    let mut connection = PgConnection::connect(&db_url)
+        .await
+        .expect("PostgreSQL durability fixture should connect");
+    sqlx::query("ALTER DATABASE pushgo SET synchronous_commit = off")
+        .execute(&mut connection)
+        .await
+        .expect("PostgreSQL durability fixture should lower synchronous_commit");
+    connection
+        .close()
+        .await
+        .expect("PostgreSQL durability fixture should close");
+
+    let config = StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        runtime_profile: GatewayRuntimeProfile::Small,
+        mcp_enabled: false,
+        managed_upgrade: false,
+    };
+    let plan = crate::storage::database::upgrade::UpgradeManager::new(config.clone())
+        .run(crate::storage::database::upgrade::UpgradeMode::PlanOnly)
+        .await
+        .expect("read-only upgrade planning should remain available");
+    assert!(plan.is_some());
+
+    let error = Storage::new_with_config(StorageInitConfig {
+        managed_upgrade: true,
+        ..config
+    })
+    .await
+    .expect_err("runtime writes must fail closed under unsafe durability");
+    assert!(matches!(
+        error,
+        StoreError::Upgrade(ref detail) if detail.contains("synchronous_commit=off")
+    ));
+}
+
 async fn wait_for_postgres(db_url: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     loop {
@@ -636,18 +678,23 @@ async fn seed_provider_finalize_transaction_fixture(
     storage: &Storage,
     op_id: &str,
     delivery_id: &str,
-) {
+) -> String {
     let now = chrono::Utc::now().timestamp_millis();
+    let dedupe_key = format!("op:provider-finalize-scope:{op_id}");
     assert!(matches!(
         storage
-            .reserve_op_dedupe_pending(op_id, delivery_id, now)
+            .reserve_op_dedupe_pending(&dedupe_key, delivery_id, now)
             .await
             .expect("reserve external provider finalization dedupe"),
-        OpDedupeReservation::Reserved
+        OpDedupeReservation::Reserved | OpDedupeReservation::ReservedSubmission { .. }
     ));
+    storage
+        .finalize_provider_dispatch_outcome(&dedupe_key, op_id, delivery_id, true)
+        .await
+        .expect("provider settlement before materialization commit should be a fenced no-op");
     assert!(
         storage
-            .mark_op_dedupe_finalized(op_id, delivery_id, DedupeState::ProviderQueued)
+            .mark_op_dedupe_finalized(&dedupe_key, delivery_id, DedupeState::ProviderQueued)
             .await
             .expect("mark external provider queued")
     );
@@ -665,6 +712,409 @@ async fn seed_provider_finalize_transaction_fixture(
         })
         .await
         .expect("insert external provider queued sender status");
+    dedupe_key
+}
+
+async fn assert_external_live_activity_durable_window_roundtrip(storage: &Storage, backend: &str) {
+    let received_at = chrono::Utc::now().timestamp_millis();
+    let expires_at = received_at + 60 * 60 * 1000;
+    let job_id = format!("{backend}-historical-live-activity-window");
+    assert!(
+        storage
+            .enqueue_provider_dispatch_job(&ProviderDispatchOutboxRecord {
+                job_id: job_id.clone(),
+                provider: "APNS_LIVE_ACTIVITY".to_string(),
+                delivery_id: format!("{backend}-historical-live-activity-delivery"),
+                op_id: None,
+                dedupe_key: None,
+                device_key: format!("{backend}-historical-live-activity-device"),
+                // Represents a payload whose producer event_time predates the
+                // durable receive window by years.
+                payload_blob: br#"{"event_time":1700000000123}"#.to_vec(),
+                state: "pending".to_string(),
+                next_attempt_at: received_at,
+                accepted_at: received_at,
+                expires_at,
+                coalesce_order: 0,
+                coalescible: true,
+            })
+            .await
+            .expect("historical Live Activity job should persist")
+    );
+    let lease = storage
+        .claim_provider_dispatch_job(
+            "APNS_LIVE_ACTIVITY",
+            Some(&job_id),
+            &format!("{backend}-historical-live-activity-owner"),
+            received_at,
+            received_at + 20_000,
+        )
+        .await
+        .expect("historical Live Activity job claim should succeed")
+        .expect("historical payload time must not expire newly received durable work");
+    assert_eq!(lease.record.accepted_at, received_at);
+    assert_eq!(lease.record.expires_at, expires_at);
+    assert_eq!(
+        lease.record.payload_blob,
+        br#"{"event_time":1700000000123}"#
+    );
+}
+
+async fn assert_external_dispatch_total_order_and_latest_state(storage: &Storage, backend: &str) {
+    let accepted_at = 1_800_000_000_000_i64;
+    let make_submission = |suffix: &str| DispatchSubmissionRecord {
+        dedupe_key: format!("op:submission:event:{backend}:{suffix}"),
+        delivery_id: format!("{backend}-total-order-delivery-{suffix}"),
+        op_id: format!("{backend}-total-order-op-{suffix}"),
+        payload_version: 1,
+        payload_blob: br#"{"event":"snapshot"}"#.to_vec(),
+        acceptance_order: 0,
+        accepted_at,
+        expires_at: accepted_at + 60_000,
+    };
+    let first = make_submission("first");
+    let second = make_submission("second");
+    assert!(matches!(
+        storage
+            .reserve_dispatch_submission(None, &first)
+            .await
+            .unwrap(),
+        OpDedupeReservation::Reserved | OpDedupeReservation::ReservedSubmission { .. }
+    ));
+    assert!(matches!(
+        storage
+            .reserve_dispatch_submission(None, &second)
+            .await
+            .unwrap(),
+        OpDedupeReservation::Reserved | OpDedupeReservation::ReservedSubmission { .. }
+    ));
+    let first_order = storage
+        .load_dispatch_submission_acceptance_order(&first.dedupe_key, &first.delivery_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let second_order = storage
+        .load_dispatch_submission_acceptance_order(&second.dedupe_key, &second.delivery_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(second_order > first_order);
+
+    let job_id = format!("{backend}-total-order-widget");
+    let base = ProviderDispatchOutboxRecord {
+        job_id: job_id.clone(),
+        provider: "APNS_WIDGETS".to_string(),
+        delivery_id: first.delivery_id.clone(),
+        op_id: Some(first.op_id.clone()),
+        dedupe_key: Some(first.dedupe_key.clone()),
+        device_key: format!("{backend}-total-order-device"),
+        payload_blob: b"old".to_vec(),
+        state: "pending".to_string(),
+        next_attempt_at: accepted_at,
+        accepted_at,
+        expires_at: accepted_at + 60_000,
+        coalesce_order: first_order,
+        coalescible: true,
+    };
+    assert!(storage.enqueue_provider_dispatch_job(&base).await.unwrap());
+    let newer_after_clock_rollback = ProviderDispatchOutboxRecord {
+        delivery_id: second.delivery_id.clone(),
+        op_id: Some(second.op_id.clone()),
+        dedupe_key: Some(second.dedupe_key.clone()),
+        payload_blob: b"new".to_vec(),
+        next_attempt_at: accepted_at - 1_000,
+        accepted_at: accepted_at - 1_000,
+        expires_at: accepted_at + 59_000,
+        coalesce_order: second_order,
+        ..base.clone()
+    };
+    assert!(
+        storage
+            .enqueue_provider_dispatch_job(&newer_after_clock_rollback)
+            .await
+            .unwrap()
+    );
+    let stale_late_recovery = ProviderDispatchOutboxRecord {
+        payload_blob: b"stale".to_vec(),
+        next_attempt_at: accepted_at + 1,
+        accepted_at: accepted_at + 1,
+        expires_at: accepted_at + 60_001,
+        coalesce_order: first_order,
+        ..base
+    };
+    assert!(
+        !storage
+            .enqueue_provider_dispatch_job(&stale_late_recovery)
+            .await
+            .unwrap()
+    );
+    let lease = storage
+        .claim_provider_dispatch_job(
+            "APNS_WIDGETS",
+            Some(&job_id),
+            &format!("{backend}-total-order-owner"),
+            accepted_at + 2,
+            accepted_at + 20_000,
+        )
+        .await
+        .unwrap()
+        .expect("latest total-order job should remain claimable");
+    assert_eq!(lease.record.payload_blob, b"new");
+    assert_eq!(lease.record.delivery_id, second.delivery_id);
+    assert_eq!(lease.record.expires_at, accepted_at + 59_000);
+    assert_eq!(lease.record.coalesce_order, second_order);
+
+    let legacy_job_id = format!("{backend}-legacy-zero-live-activity");
+    let legacy_winner = ProviderDispatchOutboxRecord {
+        job_id: legacy_job_id.clone(),
+        provider: "APNS_LIVE_ACTIVITY".to_string(),
+        delivery_id: format!("{backend}-legacy-submission-winner"),
+        op_id: Some(format!("{backend}-legacy-op-winner")),
+        dedupe_key: Some(format!("op:submission:event:{backend}:legacy-winner")),
+        device_key: format!("{backend}-legacy-device"),
+        payload_blob: b"legacy-winner".to_vec(),
+        state: "pending".to_string(),
+        next_attempt_at: accepted_at,
+        accepted_at,
+        expires_at: accepted_at + 60_000,
+        coalesce_order: 0,
+        coalescible: true,
+    };
+    assert!(
+        storage
+            .enqueue_provider_dispatch_job(&legacy_winner)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .enqueue_provider_dispatch_job(&ProviderDispatchOutboxRecord {
+                payload_blob: b"legacy-idempotent".to_vec(),
+                ..legacy_winner.clone()
+            })
+            .await
+            .unwrap(),
+        "{backend}: same legacy submission should remain idempotent"
+    );
+    assert!(
+        !storage
+            .enqueue_provider_dispatch_job(&ProviderDispatchOutboxRecord {
+                delivery_id: format!("{backend}-legacy-submission-stale"),
+                op_id: Some(format!("{backend}-legacy-op-stale")),
+                dedupe_key: Some(format!("op:submission:event:{backend}:legacy-stale")),
+                payload_blob: b"legacy-stale".to_vec(),
+                accepted_at: accepted_at + 1,
+                next_attempt_at: accepted_at + 1,
+                expires_at: accepted_at + 1,
+                ..legacy_winner
+            })
+            .await
+            .unwrap(),
+        "{backend}: another legacy submission must not replace the current winner"
+    );
+    let legacy_lease = storage
+        .claim_provider_dispatch_job(
+            "APNS_LIVE_ACTIVITY",
+            Some(&legacy_job_id),
+            &format!("{backend}-legacy-owner"),
+            accepted_at + 2,
+            accepted_at + 20_000,
+        )
+        .await
+        .unwrap()
+        .expect("legacy winner should remain claimable");
+    assert_eq!(legacy_lease.record.payload_blob, b"legacy-idempotent");
+    assert_eq!(legacy_lease.record.expires_at, accepted_at + 60_000);
+}
+
+async fn assert_postgres_acceptance_watermark_self_heals(db_url: &str) {
+    let mut conn = PgConnection::connect(db_url).await.unwrap();
+    let expected: i64 = sqlx::query_scalar(
+        "SELECT GREATEST((SELECT COALESCE(MAX(acceptance_order),0) FROM dispatch_submission), \
+                         (SELECT COALESCE(MAX(coalesce_order),0) FROM provider_dispatch_outbox))",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert!(expected > 0);
+    sqlx::query("UPDATE dispatch_acceptance_sequence SET current_value=0 WHERE singleton=1")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO dispatch_op_dedupe (dedupe_key,delivery_id,state,created_at,updated_at) \
+         VALUES ('postgres-legacy-zero-key','postgres-legacy-zero-delivery','pending',1,1)",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO dispatch_submission \
+         (dedupe_key,delivery_id,op_id,payload_version,payload_blob,acceptance_order,accepted_at,expires_at) \
+         VALUES ('postgres-legacy-zero-key','postgres-legacy-zero-delivery','postgres-legacy-zero-op',1,$1,0,1,2)",
+    )
+    .bind(br#"{}"#.as_slice())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    conn.close().await.unwrap();
+    let error = Storage::new(Some(db_url))
+        .await
+        .expect_err("postgres unordered pending v12 work must fail closed");
+    assert!(matches!(
+        error,
+        StoreError::LegacyAcceptanceOrderPending { pending: 1 }
+    ));
+    let mut conn = PgConnection::connect(db_url).await.unwrap();
+    sqlx::query("DELETE FROM dispatch_submission WHERE dedupe_key='postgres-legacy-zero-key'")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM dispatch_op_dedupe WHERE dedupe_key='postgres-legacy-zero-key'")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+    let _reopened = Storage::new(Some(db_url))
+        .await
+        .expect("postgres v12 ordering watermark should self-heal");
+    let mut conn = PgConnection::connect(db_url).await.unwrap();
+    let actual: i64 = sqlx::query_scalar(
+        "SELECT current_value FROM dispatch_acceptance_sequence WHERE singleton=1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert!(actual >= expected);
+}
+
+async fn assert_mysql_acceptance_watermark_self_heals(db_url: &str) {
+    let mut conn = MySqlConnection::connect(db_url).await.unwrap();
+    let expected: i64 = sqlx::query_scalar(
+        "SELECT GREATEST((SELECT COALESCE(MAX(acceptance_order),0) FROM dispatch_submission), \
+                         (SELECT COALESCE(MAX(coalesce_order),0) FROM provider_dispatch_outbox))",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert!(expected > 0);
+    sqlx::query("UPDATE dispatch_acceptance_sequence SET current_value=0 WHERE singleton=1")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO dispatch_op_dedupe (dedupe_key,delivery_id,state,created_at,updated_at) \
+         VALUES ('mysql-legacy-zero-key','mysql-legacy-zero-delivery','pending',1,1)",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO dispatch_submission \
+         (dedupe_key,delivery_id,op_id,payload_version,payload_blob,acceptance_order,accepted_at,expires_at) \
+         VALUES ('mysql-legacy-zero-key','mysql-legacy-zero-delivery','mysql-legacy-zero-op',1,?,0,1,2)",
+    )
+    .bind(br#"{}"#.as_slice())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    conn.close().await.unwrap();
+    let error = Storage::new(Some(db_url))
+        .await
+        .expect_err("mysql unordered pending v12 work must fail closed");
+    assert!(matches!(
+        error,
+        StoreError::LegacyAcceptanceOrderPending { pending: 1 }
+    ));
+    let mut conn = MySqlConnection::connect(db_url).await.unwrap();
+    sqlx::query("DELETE FROM dispatch_submission WHERE dedupe_key='mysql-legacy-zero-key'")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM dispatch_op_dedupe WHERE dedupe_key='mysql-legacy-zero-key'")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+    let _reopened = Storage::new(Some(db_url))
+        .await
+        .expect("mysql v12 ordering watermark should self-heal");
+    let mut conn = MySqlConnection::connect(db_url).await.unwrap();
+    let actual: i64 = sqlx::query_scalar(
+        "SELECT current_value FROM dispatch_acceptance_sequence WHERE singleton=1",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert!(actual >= expected);
+}
+
+async fn assert_external_terminal_provider_recovery_bypasses_live_operation_lease(
+    storage: &Storage,
+    backend: &str,
+) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let op_id = format!("{backend}-terminal-provider-recovery-op");
+    let delivery_id = format!("{backend}-terminal-provider-recovery-delivery");
+    let dedupe_key =
+        seed_provider_finalize_transaction_fixture(storage, &op_id, &delivery_id).await;
+    assert!(
+        storage
+            .enqueue_provider_dispatch_job(&ProviderDispatchOutboxRecord {
+                job_id: format!("{backend}-terminal-provider-recovery-job"),
+                provider: "FCM".to_string(),
+                delivery_id: delivery_id.clone(),
+                op_id: Some(op_id.clone()),
+                dedupe_key: Some(dedupe_key.clone()),
+                device_key: format!("{backend}-terminal-provider-recovery-device"),
+                payload_blob: b"external-terminal-provider-payload".to_vec(),
+                state: "pending".to_string(),
+                next_attempt_at: now,
+                accepted_at: now,
+                expires_at: now + 60_000,
+                coalesce_order: 0,
+                coalescible: false,
+            })
+            .await
+            .expect("external terminal provider job should persist")
+    );
+    let lease = storage
+        .claim_provider_dispatch_job(
+            "FCM",
+            None,
+            &format!("{backend}-terminal-provider-recovery-owner"),
+            now,
+            now + 30_000,
+        )
+        .await
+        .expect("external terminal provider job claim should succeed")
+        .expect("external terminal provider job should be claimable");
+    assert!(
+        storage
+            .settle_provider_dispatch_job(
+                &lease,
+                ProviderDispatchSettlement::Accepted,
+                now + 1,
+                200,
+                None,
+                now + 1,
+            )
+            .await
+            .expect("external terminal provider job should settle")
+    );
+    assert_eq!(
+        storage
+            .recover_interrupted_provider_dispatches(now + 2)
+            .await
+            .expect("external terminal provider recovery should succeed"),
+        1
+    );
+    let sender = storage
+        .load_sender_submit_status(&op_id)
+        .await
+        .expect("external terminal provider sender status should load")
+        .expect("external terminal provider sender status should exist");
+    assert_eq!(sender.status, SenderSubmitStatusKind::Sent);
 }
 
 async fn seed_provider_raw_discard_fixture(
@@ -742,9 +1192,9 @@ async fn assert_provider_raw_discard_invariants(
     assert_eq!(candidate.payload.as_ref(), [0xff, 0x00, 0x7f]);
     assert_eq!(
         storage
-            .discard_invalid_provider_items(device_id, &[outer_delivery_id.to_string()], now,)
+            .discard_invalid_provider_candidates(device_id, std::slice::from_ref(&candidate), now,)
             .await
-            .expect("invalid provider row should delete by outer ID only"),
+            .expect("exact invalid provider candidate should delete"),
         1
     );
     assert!(
@@ -772,10 +1222,77 @@ async fn assert_provider_raw_discard_invariants(
     );
 }
 
+async fn seed_stale_invalid_provider_candidate(
+    storage: &Storage,
+    device_id: DeviceId,
+    delivery_id: &str,
+) -> (i64, ProviderPullCandidate, Vec<u8>) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut invalid_data = hashbrown::HashMap::new();
+    invalid_data.insert("delivery_id", delivery_id);
+    let invalid_payload = postcard::to_allocvec(&TestPrivatePayloadEnvelope {
+        payload_version: 2,
+        data: invalid_data,
+    })
+    .expect("unsupported provider payload should encode");
+    storage
+        .enqueue_provider_pull_item(
+            device_id,
+            delivery_id,
+            &PrivateMessage {
+                payload: invalid_payload.clone().into(),
+                size: invalid_payload.len(),
+                sent_at: now,
+                expires_at: now + 300_000,
+            },
+            Platform::ANDROID,
+            "stale-invalid-provider-token",
+        )
+        .await
+        .expect("stale invalid provider candidate should insert");
+    let stale = storage
+        .peek_provider_candidate(device_id, delivery_id, now)
+        .await
+        .expect("stale invalid provider candidate lookup should succeed")
+        .expect("stale invalid provider candidate should exist");
+    let mut data = hashbrown::HashMap::new();
+    data.insert("delivery_id", delivery_id);
+    let valid_payload = postcard::to_allocvec(&TestPrivatePayloadEnvelope {
+        payload_version: 1,
+        data,
+    })
+    .expect("valid recache payload should encode");
+    (now, stale, valid_payload)
+}
+
+async fn assert_stale_invalid_discard_preserves_valid_recache(
+    storage: &Storage,
+    device_id: DeviceId,
+    delivery_id: &str,
+    stale: &ProviderPullCandidate,
+    valid_payload: &[u8],
+    now: i64,
+) {
+    assert_eq!(
+        storage
+            .discard_invalid_provider_candidates(device_id, std::slice::from_ref(stale), now + 1)
+            .await
+            .expect("stale invalid provider candidate discard should complete"),
+        0,
+        "a stale invalid candidate must not delete a valid recache"
+    );
+    let current = storage
+        .peek_provider_candidate(device_id, delivery_id, now + 1)
+        .await
+        .expect("valid recache lookup should succeed")
+        .expect("valid recache must remain queued");
+    assert_eq!(current.payload.as_ref(), valid_payload);
+}
+
 async fn assert_postgres_provider_finalize_transaction_rollback(storage: &Storage, db_url: &str) {
     let op_id = "postgres-provider-finalize-rollback-op";
     let delivery_id = "postgres-provider-finalize-rollback-delivery";
-    seed_provider_finalize_transaction_fixture(storage, op_id, delivery_id).await;
+    let dedupe_key = seed_provider_finalize_transaction_fixture(storage, op_id, delivery_id).await;
     let mut conn = PgConnection::connect(db_url)
         .await
         .expect("postgres finalization trigger connection should succeed");
@@ -801,7 +1318,7 @@ async fn assert_postgres_provider_finalize_transaction_rollback(storage: &Storag
     .expect("postgres finalization failure trigger should install");
     assert!(
         storage
-            .finalize_provider_dispatch_outcome(op_id, delivery_id, true)
+            .finalize_provider_dispatch_outcome(&dedupe_key, op_id, delivery_id, true)
             .await
             .is_err()
     );
@@ -825,7 +1342,7 @@ async fn assert_postgres_provider_finalize_transaction_rollback(storage: &Storag
         .await
         .expect("postgres finalization function should drop");
     storage
-        .finalize_provider_dispatch_outcome(op_id, delivery_id, true)
+        .finalize_provider_dispatch_outcome(&dedupe_key, op_id, delivery_id, true)
         .await
         .expect("postgres finalization should recover after trigger removal");
 }
@@ -833,7 +1350,7 @@ async fn assert_postgres_provider_finalize_transaction_rollback(storage: &Storag
 async fn assert_mysql_provider_finalize_transaction_rollback(storage: &Storage, db_url: &str) {
     let op_id = "mysql-provider-finalize-rollback-op";
     let delivery_id = "mysql-provider-finalize-rollback-delivery";
-    seed_provider_finalize_transaction_fixture(storage, op_id, delivery_id).await;
+    let dedupe_key = seed_provider_finalize_transaction_fixture(storage, op_id, delivery_id).await;
     let mut conn = MySqlConnection::connect(db_url)
         .await
         .expect("mysql finalization trigger connection should succeed");
@@ -851,7 +1368,7 @@ async fn assert_mysql_provider_finalize_transaction_rollback(storage: &Storage, 
     .expect("mysql finalization failure trigger should install");
     assert!(
         storage
-            .finalize_provider_dispatch_outcome(op_id, delivery_id, true)
+            .finalize_provider_dispatch_outcome(&dedupe_key, op_id, delivery_id, true)
             .await
             .is_err()
     );
@@ -871,7 +1388,7 @@ async fn assert_mysql_provider_finalize_transaction_rollback(storage: &Storage, 
         .await
         .expect("mysql finalization trigger should drop");
     storage
-        .finalize_provider_dispatch_outcome(op_id, delivery_id, true)
+        .finalize_provider_dispatch_outcome(&dedupe_key, op_id, delivery_id, true)
         .await
         .expect("mysql finalization should recover after trigger removal");
 }
@@ -928,12 +1445,21 @@ async fn postgres_exact_beta1_schema_migrates_to_formal_release() {
         sentinel
     );
     assert_postgres_provider_finalize_transaction_rollback(&migrated, &db_url).await;
+    assert_external_live_activity_durable_window_roundtrip(&migrated, "postgres").await;
+    assert_external_dispatch_total_order_and_latest_state(&migrated, "postgres").await;
+    assert_postgres_acceptance_watermark_self_heals(&db_url).await;
+    assert_external_terminal_provider_recovery_bypasses_live_operation_lease(&migrated, "postgres")
+        .await;
     let raw_device_id = [44; 16];
     let raw_outer_id = "postgres-raw-discard-outer";
     let raw_innocent_id = "postgres-raw-discard-innocent";
     let raw_now =
         seed_provider_raw_discard_fixture(&migrated, raw_device_id, raw_outer_id, raw_innocent_id)
             .await;
+    let stale_device_id = [46; 16];
+    let stale_delivery_id = "postgres-stale-invalid-discard";
+    let (stale_now, stale_candidate, valid_recache) =
+        seed_stale_invalid_provider_candidate(&migrated, stale_device_id, stale_delivery_id).await;
     let mut raw_conn = PgConnection::connect(&db_url)
         .await
         .expect("postgres raw discard mutation connection should succeed");
@@ -946,6 +1472,17 @@ async fn postgres_exact_beta1_schema_migrates_to_formal_release() {
     .execute(&mut raw_conn)
     .await
     .expect("postgres unsupported historical platform should seed");
+    sqlx::query(
+        "UPDATE private_payloads SET payload_blob = $1, payload_size = $2, updated_at = $3 \
+         WHERE delivery_id = $4",
+    )
+    .bind(&valid_recache)
+    .bind(valid_recache.len() as i64)
+    .bind(stale_now + 1)
+    .bind(stale_delivery_id)
+    .execute(&mut raw_conn)
+    .await
+    .expect("postgres valid provider payload should recache");
     raw_conn
         .close()
         .await
@@ -956,6 +1493,15 @@ async fn postgres_exact_beta1_schema_migrates_to_formal_release() {
         raw_outer_id,
         raw_innocent_id,
         raw_now,
+    )
+    .await;
+    assert_stale_invalid_discard_preserves_valid_recache(
+        &migrated,
+        stale_device_id,
+        stale_delivery_id,
+        &stale_candidate,
+        &valid_recache,
+        stale_now,
     )
     .await;
     let mut verify = PgConnection::connect(&db_url)
@@ -1225,12 +1771,21 @@ async fn mysql_exact_beta1_schema_repairs_identity_and_migrates_to_formal_releas
         sentinel
     );
     assert_mysql_provider_finalize_transaction_rollback(&migrated, &db_url).await;
+    assert_external_live_activity_durable_window_roundtrip(&migrated, "mysql").await;
+    assert_external_dispatch_total_order_and_latest_state(&migrated, "mysql").await;
+    assert_mysql_acceptance_watermark_self_heals(&db_url).await;
+    assert_external_terminal_provider_recovery_bypasses_live_operation_lease(&migrated, "mysql")
+        .await;
     let raw_device_id = [45; 16];
     let raw_outer_id = "mysql-raw-discard-outer";
     let raw_innocent_id = "mysql-raw-discard-innocent";
     let raw_now =
         seed_provider_raw_discard_fixture(&migrated, raw_device_id, raw_outer_id, raw_innocent_id)
             .await;
+    let stale_device_id = [47; 16];
+    let stale_delivery_id = "mysql-stale-invalid-discard";
+    let (stale_now, stale_candidate, valid_recache) =
+        seed_stale_invalid_provider_candidate(&migrated, stale_device_id, stale_delivery_id).await;
     let mut raw_conn = MySqlConnection::connect(&db_url)
         .await
         .expect("mysql raw discard mutation connection should succeed");
@@ -1243,6 +1798,17 @@ async fn mysql_exact_beta1_schema_repairs_identity_and_migrates_to_formal_releas
     .execute(&mut raw_conn)
     .await
     .expect("mysql unsupported historical platform should seed");
+    sqlx::query(
+        "UPDATE private_payloads SET payload_blob = ?, payload_size = ?, updated_at = ? \
+         WHERE delivery_id = ?",
+    )
+    .bind(&valid_recache)
+    .bind(valid_recache.len() as i64)
+    .bind(stale_now + 1)
+    .bind(stale_delivery_id)
+    .execute(&mut raw_conn)
+    .await
+    .expect("mysql valid provider payload should recache");
     raw_conn
         .close()
         .await
@@ -1253,6 +1819,15 @@ async fn mysql_exact_beta1_schema_repairs_identity_and_migrates_to_formal_releas
         raw_outer_id,
         raw_innocent_id,
         raw_now,
+    )
+    .await;
+    assert_stale_invalid_discard_preserves_valid_recache(
+        &migrated,
+        stale_device_id,
+        stale_delivery_id,
+        &stale_candidate,
+        &valid_recache,
+        stale_now,
     )
     .await;
     migrated

@@ -182,17 +182,17 @@ pub(crate) async fn messages_pull_v2(
 
         let raw_item_count = raw_items.len() as u64;
         let mut items = Vec::with_capacity(raw_items.len());
-        let mut invalid_delivery_ids = Vec::new();
+        let mut invalid_candidates = Vec::new();
         let mut has_unreturned_valid = false;
         for item in raw_items {
-            let delivery_id = item.delivery_id;
+            let delivery_id = item.delivery_id.as_str();
             let Some(envelope) = ProviderPullEnvelope::decode_postcard(item.payload.as_ref())
             else {
-                invalid_delivery_ids.push(delivery_id);
+                invalid_candidates.push(item);
                 continue;
             };
             if !envelope.is_supported_version() {
-                invalid_delivery_ids.push(delivery_id);
+                invalid_candidates.push(item);
                 continue;
             }
             let mut response_payload = envelope.data;
@@ -200,14 +200,14 @@ pub(crate) async fn messages_pull_v2(
                 .get("delivery_id")
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty());
-            if embedded_delivery_id != Some(delivery_id.as_str()) {
-                invalid_delivery_ids.push(delivery_id);
+            if embedded_delivery_id != Some(delivery_id) {
+                invalid_candidates.push(item);
                 continue;
             }
             if items.len() < V2_PULL_LIMIT {
                 response_payload.remove("delivery_id");
                 items.push(PullItem {
-                    delivery_id,
+                    delivery_id: item.delivery_id,
                     payload: response_payload,
                 });
             } else {
@@ -217,7 +217,7 @@ pub(crate) async fn messages_pull_v2(
 
         let discarded = state
             .store
-            .discard_invalid_provider_items(device_id, &invalid_delivery_ids, now)
+            .discard_invalid_provider_candidates(device_id, &invalid_candidates, now)
             .await?;
         ::tracing::event!(
             target: "gateway.trace_event",

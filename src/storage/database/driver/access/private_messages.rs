@@ -49,6 +49,13 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         )
     }
 
+    async fn list_acked_private_outbox_devices(
+        &self,
+        delivery_id: &str,
+    ) -> StoreResult<Vec<DeviceId>> {
+        delegate_db_async!(self, list_acked_private_outbox_devices(delivery_id))
+    }
+
     async fn list_private_outbox(
         &self,
         device_id: DeviceId,
@@ -187,7 +194,7 @@ impl PrivateMessageDatabaseAccess for DatabaseDriver {
         &self,
         device_id: DeviceId,
         delivery_id: &str,
-    ) -> StoreResult<()> {
+    ) -> StoreResult<bool> {
         delegate_db_async!(self, ack_private_delivery(device_id, delivery_id))
     }
 

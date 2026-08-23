@@ -19,9 +19,8 @@ impl FallbackAttemptPolicy {
     }
 
     pub(super) fn should_drop_attempt(self, next_attempt: u32, budget: AttemptBudget) -> bool {
-        matches!(budget, AttemptBudget::Enforced)
-            && self.max_attempts > 0
-            && next_attempt >= self.max_attempts
+        let _ = (self.max_attempts, next_attempt, budget);
+        false
     }
 
     pub(super) fn should_drop_outbox(self, outbox: &PrivateOutboxEntry) -> bool {
@@ -701,14 +700,14 @@ mod tests {
     }
 
     #[test]
-    fn attempt_budget_can_disable_drop_logic() {
+    fn attempt_budget_never_drops_unexpired_delivery() {
         let policy = FallbackAttemptPolicy {
             max_attempts: 3,
             ack_timeout_secs: 1,
             max_backoff_secs: 1,
         };
         assert!(!policy.should_drop_attempt(10, AttemptBudget::Unlimited));
-        assert!(policy.should_drop_attempt(3, AttemptBudget::Enforced));
+        assert!(!policy.should_drop_attempt(3, AttemptBudget::Enforced));
     }
 
     #[tokio::test]

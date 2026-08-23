@@ -10,6 +10,8 @@ mod outbox;
 mod private_channels;
 #[path = "access/provider.rs"]
 mod provider;
+#[path = "access/provider_dispatch.rs"]
+mod provider_dispatch;
 #[path = "access/routes.rs"]
 pub(super) mod routes;
 #[path = "access/subscriptions.rs"]

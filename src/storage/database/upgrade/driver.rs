@@ -44,6 +44,14 @@ impl DatabaseDriver {
             Self::MySql(inner) => inner.inspect_upgrade_plan().await,
         }
     }
+
+    pub(crate) async fn validate_runtime_durability(&self) -> StoreResult<()> {
+        match self {
+            Self::Sqlite(_) => Ok(()),
+            Self::Postgres(inner) => inner.validate_durability().await,
+            Self::MySql(inner) => inner.validate_durability().await,
+        }
+    }
 }
 
 impl UpgradeStateAccess for DatabaseDriver {

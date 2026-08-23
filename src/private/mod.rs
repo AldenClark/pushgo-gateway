@@ -190,14 +190,14 @@ mod tests {
     }
 
     #[test]
-    fn retry_attempt_budget_applies_when_enabled() {
+    fn retry_attempt_budget_does_not_override_ttl() {
         let policy = FallbackAttemptPolicy {
             max_attempts: 5,
             ack_timeout_secs: 1,
             max_backoff_secs: 1,
         };
         assert!(!policy.should_drop_attempt(4, AttemptBudget::Enforced));
-        assert!(policy.should_drop_attempt(5, AttemptBudget::Enforced));
+        assert!(!policy.should_drop_attempt(5, AttemptBudget::Enforced));
     }
 
     #[test]

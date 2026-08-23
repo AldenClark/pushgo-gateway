@@ -1,15 +1,17 @@
-use argon2::password_hash::{
-    PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
-};
-use argon2::{Algorithm, Argon2, Params, Version};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use argon2::Argon2;
+use argon2::password_hash::{PasswordHash, PasswordVerifier};
 #[cfg(test)]
+use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
+#[cfg(test)]
+use argon2::{Algorithm, Params, Version};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 use super::{StoreError, StoreResult};
 
-pub const STORAGE_SCHEMA_VERSION: &str = "2026-08-08-gateway-v11";
+pub const STORAGE_SCHEMA_VERSION: &str = "2026-08-20-gateway-v12";
+pub const STORAGE_SCHEMA_VERSION_CONCURRENCY_V11: &str = "2026-08-08-gateway-v11";
 pub const STORAGE_SCHEMA_VERSION_FORMAL_RELEASE: &str = "2026-08-05-gateway-v10";
 pub const STORAGE_SCHEMA_VERSION_BETA1: &str = "2026-04-22-gateway-v9";
 pub const STORAGE_SCHEMA_VERSION_MIGRATABLE: &str = "2026-04-17-gateway-v8";
@@ -23,10 +25,6 @@ const BLAKE3_PASSWORD_VERSION: &str = "v=1";
 const BLAKE3_PASSWORD_SALT_BYTES: usize = 16;
 const BLAKE3_PASSWORD_DIGEST_BYTES: usize = blake3::OUT_LEN;
 const BLAKE3_PASSWORD_DOMAIN: &[u8] = b"pushgo.gateway.channel.password.v1";
-const ARGON2_MEMORY_KIB: u32 = 19_456;
-const ARGON2_ITERATIONS: u32 = 2;
-const ARGON2_LANES: u32 = 1;
-const CURRENT_ARGON2_PREFIX: &str = "$argon2id$v=19$m=19456,t=2,p=1$";
 
 #[derive(Debug, Clone)]
 pub struct ChannelInfo {
@@ -85,44 +83,38 @@ impl ChannelPasswordVerifyOutcome {
     }
 }
 
+pub fn channel_password_uses_current_scheme(password_hash: &str) -> bool {
+    password_hash.starts_with("$pushgo-blake3$")
+}
+
 pub fn verify_channel_password(
     password_hash: &str,
     password: &str,
 ) -> StoreResult<ChannelPasswordVerifyOutcome> {
     if password_hash.starts_with("$pushgo-blake3$") {
         verify_blake3_password(password_hash, password)?;
-        return Ok(ChannelPasswordVerifyOutcome::VerifiedNeedsUpgrade);
+        return Ok(ChannelPasswordVerifyOutcome::Verified);
     }
 
     let parsed = PasswordHash::new(password_hash)?;
-    channel_password_argon2()?
+    Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .map_err(|_| StoreError::ChannelPasswordMismatch)?;
-    if password_hash.starts_with(CURRENT_ARGON2_PREFIX) {
-        Ok(ChannelPasswordVerifyOutcome::Verified)
-    } else {
-        Ok(ChannelPasswordVerifyOutcome::VerifiedNeedsUpgrade)
-    }
+    Ok(ChannelPasswordVerifyOutcome::VerifiedNeedsUpgrade)
 }
 
 pub fn hash_channel_password(password: &str) -> StoreResult<String> {
-    hash_channel_password_argon2(password)
-}
-
-pub fn hash_channel_password_argon2(password: &str) -> StoreResult<String> {
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = channel_password_argon2()?.hash_password(password.as_bytes(), &salt)?;
-    Ok(hash.to_string())
-}
-
-fn channel_password_argon2() -> StoreResult<Argon2<'static>> {
-    let params = Params::new(ARGON2_MEMORY_KIB, ARGON2_ITERATIONS, ARGON2_LANES, None)
-        .map_err(|err| StoreError::PasswordHash(err.to_string()))?;
-    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
+    Ok(hash_channel_password_blake3(password))
 }
 
 #[cfg(test)]
-pub(crate) fn hash_channel_password_blake3(password: &str) -> String {
+pub(crate) fn hash_channel_password_argon2(password: &str) -> StoreResult<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default().hash_password(password.as_bytes(), &salt)?;
+    Ok(hash.to_string())
+}
+
+fn hash_channel_password_blake3(password: &str) -> String {
     let mut salt = [0u8; BLAKE3_PASSWORD_SALT_BYTES];
     rand::rng().fill(&mut salt);
     let digest = blake3_password_digest(&salt, password);
@@ -207,20 +199,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_blake3_roundtrip_requests_upgrade() {
+    fn current_blake3_roundtrip_does_not_request_upgrade() {
         let password = "pass-123";
-        let hash = hash_channel_password_blake3(password);
+        let hash = hash_channel_password(password).expect("blake3 hash");
         let outcome = verify_channel_password(&hash, password).expect("verify");
-        assert_eq!(outcome, ChannelPasswordVerifyOutcome::VerifiedNeedsUpgrade);
+        assert_eq!(outcome, ChannelPasswordVerifyOutcome::Verified);
     }
 
     #[test]
-    fn new_argon2id_hash_does_not_request_upgrade() {
+    fn legacy_argon2id_hash_requests_upgrade() {
         let password = "pass-argon2";
-        let hash = hash_channel_password(password).expect("argon2 hash");
+        let hash = hash_channel_password_argon2(password).expect("argon2 hash");
         assert!(hash.starts_with("$argon2id$v=19$"));
         let outcome = verify_channel_password(&hash, password).expect("verify");
-        assert_eq!(outcome, ChannelPasswordVerifyOutcome::Verified);
+        assert_eq!(outcome, ChannelPasswordVerifyOutcome::VerifiedNeedsUpgrade);
     }
 
     #[test]
@@ -239,11 +231,28 @@ mod tests {
     }
 
     #[test]
-    fn legacy_blake3_rejects_wrong_password() {
-        let hash = hash_channel_password_blake3("correct-password");
+    fn current_blake3_rejects_wrong_password() {
+        let hash = hash_channel_password("correct-password").expect("blake3 hash");
         assert!(matches!(
             verify_channel_password(&hash, "wrong-password"),
             Err(StoreError::ChannelPasswordMismatch)
         ));
+    }
+
+    #[test]
+    fn beta1_fixed_blake3_fixture_remains_byte_compatible() {
+        let fixture =
+            "$pushgo-blake3$v=1$AAECAwQFBgcICQoLDA0ODw$dudo90o0OYkucVQlQoZqZy5iEIWqU7BP-_2q_owHdUM";
+        assert_eq!(
+            verify_channel_password(fixture, "beta1-compat-input").expect("verify fixture"),
+            ChannelPasswordVerifyOutcome::Verified
+        );
+    }
+
+    #[test]
+    fn unknown_and_malformed_hash_schemes_never_authenticate() {
+        let unknown = "$pbkdf2-sha256$i=600000,l=32$c2FsdA$YWJj";
+        assert!(verify_channel_password(unknown, "input").is_err());
+        assert!(verify_channel_password("not-a-phc-string", "input").is_err());
     }
 }

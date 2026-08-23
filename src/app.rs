@@ -19,6 +19,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::Instant as TokioInstant;
 
 #[derive(Clone)]
@@ -64,6 +65,8 @@ pub struct AppRuntime {
 
 pub struct AppShutdown {
     private: Option<Arc<PrivateState>>,
+    storage_maintenance: Option<StorageMaintenanceWorker>,
+    submission_recovery: SubmissionRecoveryWorker,
     dispatch_workers: DispatchWorkerTasks,
     runtime_counters: Arc<RuntimeCounterCollector>,
 }
@@ -87,10 +90,24 @@ impl AppShutdown {
     pub async fn shutdown_until(self, deadline: TokioInstant) -> AppShutdownReport {
         let AppShutdown {
             private,
+            storage_maintenance,
+            submission_recovery,
             dispatch_workers,
             runtime_counters,
         } = self;
         let mut report = AppShutdownReport::default();
+
+        if let Some(storage_maintenance) = storage_maintenance {
+            let maintenance_report = storage_maintenance.shutdown_until(deadline).await;
+            report.joined = report.joined.saturating_add(maintenance_report.joined);
+            report.panicked = report.panicked.saturating_add(maintenance_report.panicked);
+            report.aborted = report.aborted.saturating_add(maintenance_report.aborted);
+        }
+
+        let submission_report = submission_recovery.shutdown_until(deadline).await;
+        report.joined = report.joined.saturating_add(submission_report.joined);
+        report.panicked = report.panicked.saturating_add(submission_report.panicked);
+        report.aborted = report.aborted.saturating_add(submission_report.aborted);
 
         if let Some(private) = private {
             let private_report = private
@@ -103,9 +120,9 @@ impl AppShutdown {
         }
 
         // Private/MQTT producers are gone. HTTP graceful shutdown runs in
-        // parallel and eventually drops its remaining dispatch senders;
-        // workers then drain every accepted job, including provider outcome
-        // finalization, before their receivers report closure.
+        // parallel and eventually drops its remaining dispatch senders.
+        // Workers finish claims already in flight, then stop claiming; every
+        // unclaimed accepted job remains in the durable outbox for restart.
         let dispatch_report = dispatch_workers.shutdown_until(deadline).await;
         report.joined = report.joined.saturating_add(dispatch_report.joined);
         report.panicked = report.panicked.saturating_add(dispatch_report.panicked);
@@ -127,6 +144,156 @@ impl AppShutdown {
             aborted = (report.aborted as u64)
         );
         report
+    }
+}
+
+struct StorageMaintenanceWorker {
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    handle: JoinHandle<()>,
+}
+
+impl StorageMaintenanceWorker {
+    fn spawn(store: Storage, config: MaintenanceCleanupConfig, interval: Duration) -> Self {
+        let (shutdown, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval.max(Duration::from_secs(1)));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    _ = ticker.tick() => {
+                        if let Err(err) = store
+                            .run_maintenance_cleanup(chrono::Utc::now().timestamp_millis(), config)
+                            .await
+                        {
+                            ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::WARN,
+                                event = "storage.maintenance_worker_tick_failed",
+                                error = %(err.to_string())
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        Self { shutdown, handle }
+    }
+
+    async fn shutdown_until(self, deadline: TokioInstant) -> AppShutdownReport {
+        let _ = self.shutdown.send(());
+        let mut handle = self.handle;
+        match tokio::time::timeout_at(deadline, &mut handle).await {
+            Ok(Ok(())) => AppShutdownReport {
+                joined: 1,
+                ..AppShutdownReport::default()
+            },
+            Ok(Err(_)) => AppShutdownReport {
+                panicked: 1,
+                ..AppShutdownReport::default()
+            },
+            Err(_) => {
+                handle.abort();
+                let _ = handle.await;
+                AppShutdownReport {
+                    aborted: 1,
+                    ..AppShutdownReport::default()
+                }
+            }
+        }
+    }
+}
+
+struct SubmissionRecoveryWorker {
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    handle: JoinHandle<()>,
+}
+
+impl SubmissionRecoveryWorker {
+    fn spawn(state: AppState) -> Self {
+        let (shutdown, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        let capacity_recovery = state.store.private_capacity_recovery_notifier();
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    _ = interval.tick() => {
+                        if let Err(err) = state.store
+                            .expedite_private_capacity_recovery(None, 64).await
+                        {
+                            ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::WARN,
+                                event = "dispatch.submission_capacity_accelerator_retry_failed",
+                                error = %(err.to_string())
+                            );
+                        }
+                        let accepted_before = chrono::Utc::now()
+                            .timestamp_millis()
+                            .saturating_sub(1_000);
+                        if let Err(err) = crate::api::handlers::message::
+                            recover_pending_dispatch_submissions_before(&state, accepted_before).await
+                        {
+                            ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::WARN,
+                                event = "dispatch.submission_recovery_sweep_failed",
+                                error = %(err.to_string())
+                            );
+                        }
+                    }
+                    _ = capacity_recovery.notified() => {
+                        if let Err(err) = state.store
+                            .expedite_private_capacity_recovery(None, 64).await
+                        {
+                            ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::WARN,
+                                event = "dispatch.submission_capacity_accelerator_failed",
+                                error = %(err.to_string())
+                            );
+                        }
+                        if let Err(err) = crate::api::handlers::message::
+                            recover_pending_dispatch_submissions_before(&state, i64::MAX).await
+                        {
+                            ::tracing::event!(
+                                target: "gateway.trace_event",
+                                ::tracing::Level::WARN,
+                                event = "dispatch.submission_capacity_recovery_failed",
+                                error = %(err.to_string())
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        Self { shutdown, handle }
+    }
+
+    async fn shutdown_until(self, deadline: TokioInstant) -> AppShutdownReport {
+        let _ = self.shutdown.send(());
+        let mut handle = self.handle;
+        match tokio::time::timeout_at(deadline, &mut handle).await {
+            Ok(Ok(())) => AppShutdownReport {
+                joined: 1,
+                ..AppShutdownReport::default()
+            },
+            Ok(Err(_)) => AppShutdownReport {
+                panicked: 1,
+                ..AppShutdownReport::default()
+            },
+            Err(_) => {
+                handle.abort();
+                let _ = handle.await;
+                AppShutdownReport {
+                    aborted: 1,
+                    ..AppShutdownReport::default()
+                }
+            }
+        }
     }
 }
 
@@ -328,6 +495,9 @@ pub async fn build_app(
         gateway_token: args.token.clone(),
     }
     .normalized();
+    let maintenance_cleanup = private_config.maintenance_cleanup;
+    let maintenance_interval =
+        Duration::from_secs(runtime_tuning.private.maintenance_interval_secs.max(1) as u64);
     let private = if private_channel_enabled {
         Some(Arc::new(PrivateState::new(
             store.clone(),
@@ -436,6 +606,28 @@ pub async fn build_app(
     }
     .spawn(receivers);
 
+    let recovered_submissions =
+        crate::api::handlers::message::recover_pending_dispatch_submissions(&state).await?;
+    if recovered_submissions > 0 {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::WARN,
+            event = "dispatch.submissions_recovered",
+            recovered = (recovered_submissions as u64)
+        );
+    }
+    let submission_recovery = SubmissionRecoveryWorker::spawn(state.clone());
+    // Private deployments already run this cleanup inside their persistent
+    // fallback worker. Provider-only deployments still need expiry/dedupe/
+    // sender-status cleanup, otherwise durable state grows without bound.
+    let storage_maintenance = private.is_none().then(|| {
+        StorageMaintenanceWorker::spawn(
+            state.store.clone(),
+            maintenance_cleanup,
+            maintenance_interval,
+        )
+    });
+
     let router = build_router(state.clone(), docs_html);
 
     ::tracing::event!(
@@ -447,6 +639,8 @@ pub async fn build_app(
         router,
         shutdown: AppShutdown {
             private,
+            storage_maintenance,
+            submission_recovery,
             dispatch_workers,
             runtime_counters,
         },

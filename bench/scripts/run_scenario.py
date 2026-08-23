@@ -141,25 +141,25 @@ SCENARIOS: dict[str, dict[str, str]] = {
         "next_steps": "Inspect device_operation_guards and subscription audit persistence.",
     },
     "offline_pull_ack": {
-        "purpose": "Measure offline queue pull, empty pull, single/batch-like pull, and ACK write cost.",
-        "pressure_model": "Send message -> /messages/pull -> /messages/ack, with periodic empty pulls.",
-        "expected_bottlenecks": "Provider/private outbox query, limit handling, ACK status update, DB indexes.",
+        "purpose": "Measure the provider recovery queue pull and ACK write cost.",
+        "pressure_model": "Send to a provider-routed device -> /v2/messages/pull -> /v2/messages/ack, with periodic empty pulls.",
+        "expected_bottlenecks": "provider_pull_queue query, limit handling, ACK status update, DB indexes.",
         "metrics": "Pull item count, ack removed rate, p95/p99, WAL growth, CPU.",
-        "judgement": "Empty pulls should be cheap; ack p99 growth indicates update/index pressure.",
-        "next_steps": "Inspect provider_pull/private_outbox access paths and pull limit settings.",
+        "judgement": "Every send must be observable by pull before ACK; an empty pull is a semantic failure even when HTTP returned 200.",
+        "next_steps": "Inspect provider_pull_queue materialization, pull limits, and ACK indexes.",
     },
     "offline_empty_pull": {
-        "purpose": "Measure empty offline queue pull cost without message writes.",
-        "pressure_model": "Repeated /messages/pull for a registered private device with no pending messages.",
-        "expected_bottlenecks": "Outbox lookup and empty-result serialization.",
+        "purpose": "Measure an empty provider recovery queue pull without message writes.",
+        "pressure_model": "Repeated /v2/messages/pull for a provider-routed device with no pending recovery messages.",
+        "expected_bottlenecks": "provider_pull_queue lookup and empty-result serialization.",
         "metrics": "Pull status/latency, CPU, DB read pressure, TCP/fd stability.",
         "judgement": "Empty pulls should stay low-latency with no WAL growth.",
-        "next_steps": "If empty pulls are slow, inspect private outbox query indexes.",
+        "next_steps": "If empty pulls are slow, inspect provider_pull_queue indexes.",
     },
     "offline_pull_ack_batch": {
-        "purpose": "Measure larger write -> pull -> many ack batches.",
-        "pressure_model": "Per operation sends PUSHGO_BENCH_PULL_BATCH_SIZE messages, pulls the batch, then ACKs returned delivery ids.",
-        "expected_bottlenecks": "Bulk outbox insert/query, response serialization, ACK update loop, WAL growth.",
+        "purpose": "Measure larger provider recovery queue write -> pull -> many ACK batches.",
+        "pressure_model": "Per operation sends PUSHGO_BENCH_PULL_BATCH_SIZE messages to a provider route, pulls the batch, then ACKs returned delivery ids.",
+        "expected_bottlenecks": "Bulk provider pull cache insert/query, response serialization, ACK update loop, WAL growth.",
         "metrics": "Total HTTP latency/status across send/pull/ack, DB/WAL growth, CPU/RSS.",
         "judgement": "Batch size increases should not create nonlinear ACK p99 or WAL growth.",
         "next_steps": "If batch ACK dominates, inspect ack_provider_item and private outbox indexes.",
@@ -534,7 +534,13 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
         return op
 
     if name == "dispatch_private_broadcast":
-        devices = max(10, env_int("PUSHGO_BENCH_DEVICE_COUNT", max(config.vus * 10, 50)))
+        # A channel currently accepts at most 32 subscribers. Exercise the
+        # full supported fanout without making the benchmark fail while
+        # seeding an impossible topology.
+        devices = min(
+            32,
+            max(10, env_int("PUSHGO_BENCH_DEVICE_COUNT", max(config.vus * 10, 32))),
+        )
         seed = ensure_seed(client, config, channels=1, devices=devices, scenario=name)
         channel = seed["channels"][0]
 
@@ -616,83 +622,146 @@ def scenario_operation(name: str, client: HttpClient, config: BenchConfig) -> Op
         return op
 
     if name == "offline_pull_ack":
-        seed = ensure_seed(client, config, channels=1, devices=1, scenario=name)
+        seed = ensure_seed(
+            client,
+            config,
+            channels=1,
+            devices=1,
+            private_route=False,
+            scenario=name,
+        )
         channel = seed["channels"][0]
         device_key = seed["devices"][0]["device_key"]
 
         def op(i: int) -> list[dict[str, Any]]:
-            rows = [
-                client.request(
-                    "POST",
-                    "/message",
-                    message_payload(
-                        channel["channel_id"],
-                        channel["password"],
-                        i,
-                        payload_size=config.payload_size,
-                        variant="pull_ack",
-                    ),
-                )
-            ]
-            pulled = client.request("POST", "/messages/pull", {"device_key": device_key})
+            submit = client.request(
+                "POST",
+                "/message",
+                message_payload(
+                    channel["channel_id"],
+                    channel["password"],
+                    i,
+                    payload_size=config.payload_size,
+                    variant="pull_ack",
+                ),
+            )
+            rows = [submit]
+            expected_message_id = extract_data(submit).get("message_id")
+            pulled = client.request("POST", "/v2/messages/pull", {"device_key": device_key})
             rows.append(pulled)
             items = (((pulled.get("response") or {}).get("data") or {}).get("items") or [])
-            if items:
-                rows.append(
-                    client.request(
-                        "POST",
-                        "/messages/ack",
-                        {"device_key": device_key, "delivery_id": items[0]["delivery_id"]},
-                    )
+            matching = [
+                item
+                for item in items
+                if (item.get("payload") or {}).get("message_id") == expected_message_id
+            ]
+            if not expected_message_id or not matching:
+                pulled["ok"] = False
+                pulled["error"] = (
+                    "semantic_failure: newly accepted message missing from provider pull queue"
                 )
+            if matching:
+                acked = client.request(
+                    "POST",
+                    "/v2/messages/ack",
+                    {
+                        "device_key": device_key,
+                        "delivery_ids": [matching[0]["delivery_id"]],
+                    },
+                )
+                rows.append(acked)
+                removed_count = extract_data(acked).get("removed_count")
+                if removed_count != 1:
+                    acked["ok"] = False
+                    acked["error"] = (
+                        f"semantic_failure: ACK removed {removed_count!r} items instead of 1"
+                    )
             if i % 5 == 0:
-                rows.append(client.request("POST", "/messages/pull", {"device_key": device_key}))
+                rows.append(
+                    client.request("POST", "/v2/messages/pull", {"device_key": device_key})
+                )
             return rows
 
         return op
 
     if name == "offline_empty_pull":
-        seed = ensure_seed(client, config, channels=1, devices=1, scenario=name)
+        seed = ensure_seed(
+            client,
+            config,
+            channels=1,
+            devices=1,
+            private_route=False,
+            scenario=name,
+        )
         device_key = seed["devices"][0]["device_key"]
 
         def op(i: int) -> list[dict[str, Any]]:
-            return [client.request("POST", "/messages/pull", {"device_key": device_key})]
+            return [client.request("POST", "/v2/messages/pull", {"device_key": device_key})]
 
         return op
 
     if name == "offline_pull_ack_batch":
-        seed = ensure_seed(client, config, channels=1, devices=1, scenario=name)
+        seed = ensure_seed(
+            client,
+            config,
+            channels=1,
+            devices=1,
+            private_route=False,
+            scenario=name,
+        )
         channel = seed["channels"][0]
         device_key = seed["devices"][0]["device_key"]
         batch_size = max(1, env_int("PUSHGO_BENCH_PULL_BATCH_SIZE", 16))
 
         def op(i: int) -> list[dict[str, Any]]:
             rows: list[dict[str, Any]] = []
+            expected_message_ids: set[str] = set()
             for n in range(batch_size):
-                rows.append(
-                    client.request(
-                        "POST",
-                        "/message",
-                        message_payload(
-                            channel["channel_id"],
-                            channel["password"],
-                            i * batch_size + n,
-                            payload_size=config.payload_size,
-                            variant="pull_ack_batch",
-                        ),
-                    )
+                submit = client.request(
+                    "POST",
+                    "/message",
+                    message_payload(
+                        channel["channel_id"],
+                        channel["password"],
+                        i * batch_size + n,
+                        payload_size=config.payload_size,
+                        variant="pull_ack_batch",
+                    ),
                 )
-            pulled = client.request("POST", "/messages/pull", {"device_key": device_key})
+                rows.append(submit)
+                message_id = extract_data(submit).get("message_id")
+                if message_id:
+                    expected_message_ids.add(message_id)
+            pulled = client.request("POST", "/v2/messages/pull", {"device_key": device_key})
             rows.append(pulled)
             items = (((pulled.get("response") or {}).get("data") or {}).get("items") or [])
-            for item in items:
-                rows.append(
-                    client.request(
-                        "POST",
-                        "/messages/ack",
-                        {"device_key": device_key, "delivery_id": item["delivery_id"]},
-                    )
+            matching = [
+                item
+                for item in items
+                if (item.get("payload") or {}).get("message_id") in expected_message_ids
+            ]
+            if len(matching) != len(expected_message_ids) or len(expected_message_ids) != batch_size:
+                pulled["ok"] = False
+                pulled["error"] = (
+                    "semantic_failure: provider pull returned "
+                    f"{len(matching)} of {batch_size} newly accepted messages"
                 )
+            for item in matching:
+                acked = client.request(
+                    "POST",
+                    "/v2/messages/ack",
+                    {
+                        "device_key": device_key,
+                        "delivery_ids": [item["delivery_id"]],
+                    },
+                )
+                rows.append(acked)
+                removed_count = extract_data(acked).get("removed_count")
+                if removed_count != 1:
+                    acked["ok"] = False
+                    acked["error"] = (
+                        f"semantic_failure: ACK removed {removed_count!r} items instead of 1"
+                    )
             return rows
 
         return op

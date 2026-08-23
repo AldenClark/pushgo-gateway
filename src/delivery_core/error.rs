@@ -8,6 +8,8 @@ pub(crate) enum CoreError {
     Conflict { message: String, code: &'static str },
     #[error("{message}")]
     Auth { message: String, code: &'static str },
+    #[error("server is busy, please try again later")]
+    TooBusy,
     #[error("{0}")]
     Store(String),
     #[error("{0}")]
@@ -56,6 +58,9 @@ impl From<crate::value::ValueError> for CoreError {
 
 impl From<crate::storage::StoreError> for CoreError {
     fn from(value: crate::storage::StoreError) -> Self {
-        Self::Store(value.to_string())
+        match value {
+            crate::storage::StoreError::PasswordKdfBusy => Self::TooBusy,
+            other => Self::Store(other.to_string()),
+        }
     }
 }

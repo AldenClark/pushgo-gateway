@@ -34,6 +34,8 @@ impl PrivateHub {
             hot_order: Mutex::new(VecDeque::new()),
             resume_state: DashMap::new(),
             enqueue_gate: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            payload_conflict_events: AtomicUsize::new(0),
         }
     }
 

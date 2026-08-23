@@ -86,7 +86,8 @@ impl SubmitRuntime for AppState {
                 DispatchAlert::new(input.title, input.body, None, None),
                 DispatchEntityPayload::event(input.event_id, input.custom_data, input.extra_fields),
                 input.delivery_policy,
-            ),
+            )
+            .with_live_activity(input.live_activity),
         )
         .await
         .map_err(core_error_from_api)
@@ -121,6 +122,7 @@ pub(crate) fn core_error_to_api_error(value: CoreError) -> Error {
             code: code.into(),
         },
         CoreError::Auth { message, code } => Error::validation_code(message, code),
+        CoreError::TooBusy => Error::TooBusy,
         CoreError::Store(message) | CoreError::Internal(message) => Error::Internal(message),
     }
 }
@@ -142,10 +144,12 @@ fn core_error_from_api(error: Error) -> CoreError {
         | Error::StoreError(crate::storage::StoreError::ChannelPasswordMismatch) => {
             CoreError::auth("channel not authorized", "channel_not_authorized")
         }
+        Error::StoreError(crate::storage::StoreError::PasswordKdfBusy) | Error::TooBusy => {
+            CoreError::TooBusy
+        }
         Error::StoreError(err) => CoreError::Store(err.to_string()),
         Error::Internal(message) => CoreError::Internal(message),
         Error::Unauthorized => CoreError::auth("authentication failed", "authentication_failed"),
-        Error::TooBusy => CoreError::internal("server is busy, please try again later"),
         Error::RateLimited => CoreError::internal("request rate limited"),
         Error::Upstream { message, .. } => CoreError::internal(message),
     }
@@ -160,5 +164,26 @@ fn stable_error_code(code: &str) -> Option<&'static str> {
         "op_id_not_allowed" => Some("op_id_not_allowed"),
         "op_id_payload_conflict" => Some("op_id_payload_conflict"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::StoreError;
+
+    #[test]
+    fn password_kdf_overload_survives_the_delivery_core_adapter_round_trip() {
+        let core = core_error_from_api(Error::StoreError(StoreError::PasswordKdfBusy));
+        assert!(matches!(core, CoreError::TooBusy));
+        assert!(matches!(core_error_to_api_error(core), Error::TooBusy));
+    }
+
+    #[test]
+    fn direct_store_conversion_preserves_password_kdf_overload() {
+        assert!(matches!(
+            CoreError::from(StoreError::PasswordKdfBusy),
+            CoreError::TooBusy
+        ));
     }
 }

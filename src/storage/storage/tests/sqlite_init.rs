@@ -719,6 +719,66 @@ async fn sqlite_dispatch_sidecar_migrates_legacy_dedupe_and_handles_new_writes()
 }
 
 #[tokio::test]
+async fn sqlite_dispatch_sidecar_backfills_request_fingerprint_on_current_schema() {
+    let dir = tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("pushgo.sqlite");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
+    let dispatch_url = format!(
+        "sqlite://{}?mode=rwc",
+        dir.path().join("pushgo.dispatch.sqlite").to_string_lossy()
+    );
+
+    let storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(db_url.clone()),
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .expect("current sqlite schema should initialize");
+    drop(storage);
+
+    let mut dispatch_conn = SqliteConnection::connect(&dispatch_url)
+        .await
+        .expect("dispatch sidecar should open");
+    sqlx::query("ALTER TABLE dispatch_op_dedupe DROP COLUMN request_fingerprint")
+        .execute(&mut dispatch_conn)
+        .await
+        .expect("legacy sidecar fixture should omit request_fingerprint");
+    drop(dispatch_conn);
+
+    let storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(db_url),
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .expect("current schema should backfill the dispatch sidecar");
+
+    storage
+        .reserve_op_dedupe_pending_with_fingerprint(
+            "sidecar-backfill-key",
+            "sidecar-backfill-delivery",
+            Some("sidecar-backfill-fingerprint"),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .expect("fingerprinted dedupe reservation should succeed after sidecar backfill");
+
+    let mut dispatch_conn = SqliteConnection::connect(&dispatch_url)
+        .await
+        .expect("dispatch sidecar should reopen");
+    let fingerprint: Option<String> = sqlx::query_scalar(
+        "SELECT request_fingerprint FROM dispatch_op_dedupe WHERE dedupe_key = ?",
+    )
+    .bind("sidecar-backfill-key")
+    .fetch_one(&mut dispatch_conn)
+    .await
+    .expect("backfilled request_fingerprint should be readable");
+    assert_eq!(fingerprint.as_deref(), Some("sidecar-backfill-fingerprint"));
+}
+
+#[tokio::test]
 async fn sqlite_init_accepts_previous_schema_version_and_upgrades_meta() {
     let ctx = setup_sqlite_storage_with_custom_schema(
         "sqlite-schema-version-upgrade",
@@ -890,6 +950,184 @@ async fn sqlite_managed_upgrade_noop_does_not_write_upgrade_run() {
         .await
         .expect("upgrade run count should remain readable");
     assert_eq!(after, before, "noop upgrade must not insert run metadata");
+}
+
+#[tokio::test]
+async fn sqlite_v12_emergency_plan_preserves_durable_provider_backlog() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-v12-emergency-plan").await;
+    let received_at = chrono::Utc::now().timestamp_millis();
+    let job = ProviderDispatchOutboxRecord {
+        job_id: "v12-emergency-plan-job".to_string(),
+        provider: "APNS_LIVE_ACTIVITY".to_string(),
+        delivery_id: "v12-emergency-plan-delivery".to_string(),
+        op_id: None,
+        dedupe_key: None,
+        device_key: "v12-emergency-plan-device".to_string(),
+        payload_blob: br#"{"event_time":1700000000123}"#.to_vec(),
+        state: "pending".to_string(),
+        next_attempt_at: received_at,
+        accepted_at: received_at,
+        expires_at: received_at + 60 * 60 * 1000,
+        coalesce_order: 0,
+        coalescible: true,
+    };
+    assert!(
+        ctx.storage
+            .enqueue_provider_dispatch_job(&job)
+            .await
+            .expect("emergency fixture job should persist")
+    );
+
+    crate::storage::database::upgrade::UpgradeManager::new(StorageInitConfig {
+        db_url: Some(ctx.db_url.clone()),
+        managed_upgrade: false,
+        ..StorageInitConfig::default()
+    })
+    .run(crate::storage::database::upgrade::UpgradeMode::PlanOnly)
+    .await
+    .expect("v12 emergency artifact should inspect the current schema");
+
+    let lease = ctx
+        .storage
+        .claim_provider_dispatch_job(
+            "APNS_LIVE_ACTIVITY",
+            Some(&job.job_id),
+            "v12-emergency-plan-owner",
+            received_at,
+            received_at + 20_000,
+        )
+        .await
+        .expect("durable backlog should remain readable")
+        .expect("read-only emergency inspection must preserve pending work");
+    assert_eq!(lease.record.payload_blob, job.payload_blob);
+    assert_eq!(lease.record.accepted_at, received_at);
+}
+
+#[tokio::test]
+async fn sqlite_existing_v12_self_heals_total_order_schema_additions() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-v12-total-order-self-heal").await;
+    let db_url = ctx.db_url.clone();
+    let dispatch_db_url = ctx.dispatch_db_url.clone();
+    drop(ctx.storage);
+    let mut dispatch = SqliteConnection::connect(&dispatch_db_url)
+        .await
+        .expect("dispatch sidecar should open");
+    sqlx::query("ALTER TABLE dispatch_submission DROP COLUMN acceptance_order")
+        .execute(&mut dispatch)
+        .await
+        .expect("old v12 submission shape should be restorable");
+    sqlx::query("ALTER TABLE provider_dispatch_outbox DROP COLUMN coalesce_order")
+        .execute(&mut dispatch)
+        .await
+        .expect("old v12 outbox shape should be restorable");
+    sqlx::query("DROP TABLE dispatch_acceptance_sequence")
+        .execute(&mut dispatch)
+        .await
+        .expect("old v12 should not contain the ordering sequence");
+    drop(dispatch);
+
+    let reopened = Storage::new(Some(&db_url))
+        .await
+        .expect("existing v12 should self-heal without a version bump");
+    let mut dispatch = SqliteConnection::connect(&dispatch_db_url)
+        .await
+        .expect("healed dispatch sidecar should open");
+    for (table, column) in [
+        ("dispatch_submission", "acceptance_order"),
+        ("provider_dispatch_outbox", "coalesce_order"),
+    ] {
+        let present: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(1) FROM pragma_table_info('{table}') WHERE name='{column}'"
+        ))
+        .fetch_one(&mut dispatch)
+        .await
+        .expect("healed column should be queryable");
+        assert_eq!(present, 1, "{table}.{column} must self-heal");
+    }
+    let sequence_present: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='dispatch_acceptance_sequence'",
+    )
+    .fetch_one(&mut dispatch)
+    .await
+    .expect("sequence table should be queryable");
+    assert_eq!(sequence_present, 1);
+
+    sqlx::query(
+        "INSERT INTO dispatch_submission \
+         (dedupe_key,delivery_id,op_id,payload_version,payload_blob,acceptance_order,accepted_at,expires_at) \
+         VALUES ('watermark-submission','watermark-delivery','watermark-op',1,X'7B7D',73,1,2)",
+    )
+    .execute(&mut dispatch)
+    .await
+    .expect("positive submission order fixture should persist");
+    sqlx::query(
+        "INSERT INTO provider_dispatch_outbox \
+         (job_id,provider,delivery_id,device_key,payload_blob,state,next_attempt_at,accepted_at,expires_at,coalesce_order,updated_at) \
+         VALUES ('watermark-job','APNS_WIDGETS','watermark-delivery','watermark-device',X'7B7D','pending',1,1,2,91,1)",
+    )
+    .execute(&mut dispatch)
+    .await
+    .expect("positive outbox order fixture should persist");
+    sqlx::query("UPDATE dispatch_acceptance_sequence SET current_value=1 WHERE singleton=1")
+        .execute(&mut dispatch)
+        .await
+        .expect("stale sequence watermark fixture should persist");
+    drop(dispatch);
+    drop(reopened);
+
+    let healed_again = Storage::new(Some(&db_url))
+        .await
+        .expect("existing v12 watermark should self-heal");
+    let mut dispatch = SqliteConnection::connect(&dispatch_db_url)
+        .await
+        .expect("healed dispatch sidecar should reopen");
+    let watermark: i64 = sqlx::query_scalar(
+        "SELECT current_value FROM dispatch_acceptance_sequence WHERE singleton=1",
+    )
+    .fetch_one(&mut dispatch)
+    .await
+    .expect("healed sequence watermark should be readable");
+    assert_eq!(
+        watermark, 91,
+        "watermark must cover every persisted positive order"
+    );
+    drop(healed_again);
+}
+
+#[tokio::test]
+async fn sqlite_existing_v12_fails_closed_for_unordered_pending_submissions() {
+    let ctx = setup_sqlite_storage_without_bootstrap("sqlite-v12-unordered-pending").await;
+    let db_url = ctx.db_url.clone();
+    let dispatch_db_url = ctx.dispatch_db_url.clone();
+    drop(ctx.storage);
+    let mut dispatch = SqliteConnection::connect(&dispatch_db_url)
+        .await
+        .expect("dispatch sidecar should open");
+    sqlx::query(
+        "INSERT INTO dispatch_op_dedupe \
+         (dedupe_key,delivery_id,state,created_at,updated_at) \
+         VALUES ('legacy-unordered-key','legacy-unordered-delivery','pending',1,1)",
+    )
+    .execute(&mut dispatch)
+    .await
+    .expect("legacy pending dedupe should persist");
+    sqlx::query(
+        "INSERT INTO dispatch_submission \
+         (dedupe_key,delivery_id,op_id,payload_version,payload_blob,acceptance_order,accepted_at,expires_at) \
+         VALUES ('legacy-unordered-key','legacy-unordered-delivery','legacy-unordered-op',1,X'7B7D',0,1,2)",
+    )
+    .execute(&mut dispatch)
+    .await
+    .expect("legacy unordered submission should persist");
+    drop(dispatch);
+
+    let error = Storage::new(Some(&db_url))
+        .await
+        .expect_err("unordered pending v12 work must fail closed");
+    assert!(matches!(
+        error,
+        StoreError::LegacyAcceptanceOrderPending { pending: 1 }
+    ));
 }
 
 #[tokio::test]

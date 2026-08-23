@@ -6,9 +6,9 @@ use crate::delivery_core::execution::private::{
 pub(super) async fn enqueue_private_deliveries(
     prepared: &PreparedDispatch<'_>,
     progress: &mut DispatchProgress,
-) {
+) -> Result<(), Error> {
     let Some(private_dispatch) = prepared.private_dispatch.as_ref() else {
-        return;
+        return Ok(());
     };
     let private_expires_at = prepared
         .effective_ttl
@@ -25,6 +25,7 @@ pub(super) async fn enqueue_private_deliveries(
     })
     .await;
 
+    let mut first_failure = None;
     for attempt in report.attempts {
         match attempt.outcome {
             PrivateDeliveryAttemptOutcome::Enqueued => {
@@ -42,7 +43,14 @@ pub(super) async fn enqueue_private_deliveries(
                     attempt.device_id,
                     &err,
                 );
+                if first_failure.is_none() {
+                    first_failure = Some(err);
+                }
             }
         }
+    }
+    match first_failure {
+        Some(err) => Err(err),
+        None => Ok(()),
     }
 }

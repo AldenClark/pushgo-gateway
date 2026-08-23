@@ -9,7 +9,10 @@ use super::{
         thing::{ThingCommand, ThingPatch},
     },
     error::CoreError,
-    execution::request::{DispatchEventInput, DispatchMessageInput, DispatchThingInput},
+    execution::request::{
+        DispatchEventInput, DispatchLiveActivityIntent, DispatchLiveActivityUpdate,
+        DispatchMessageInput, DispatchThingInput,
+    },
     response::{DeliveryDispatchStatus, DeliverySummary, EntityRef, SubmitResult},
     source::IngressSource,
     store::{idempotency::IdempotencyStore, sender_status::SenderStatusStore},
@@ -75,6 +78,7 @@ pub(crate) trait SubmitRuntime: Send + Sync {
 #[derive(Debug, Clone)]
 pub(crate) struct EventInput {
     pub(crate) command: EventCommand<EventPatch>,
+    pub(crate) live_activity: Option<DispatchLiveActivityIntent>,
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +272,7 @@ async fn submit_event(
     input: EventInput,
 ) -> Result<SubmitResult, CoreError> {
     let authorized_channel = resolve_authorized_channel(runtime, channel, auth).await?;
+    let live_activity = input.live_activity;
     let normalized = input
         .command
         .normalize(
@@ -310,6 +315,15 @@ async fn submit_event(
             extra_fields: projection.extra_fields,
             delivery_policy,
             event_id: event_id.clone(),
+            live_activity: live_activity.map(|activity| DispatchLiveActivityUpdate {
+                event_id: event_id.clone(),
+                action: activity.action,
+                title: activity.title,
+                state: activity.state,
+                severity: activity.severity,
+                accepted_at_millis: now_millis,
+                updated_at_millis: activity.updated_at_millis,
+            }),
         })
         .await
     {
@@ -515,8 +529,11 @@ async fn record_sender_status_failed(
         .map_err(|err| CoreError::Store(err.to_string()))
 }
 
-fn sender_status_from_dispatch(status: DeliveryDispatchStatus) -> SenderSubmitStatusKind {
+pub(crate) fn sender_status_from_dispatch(
+    status: DeliveryDispatchStatus,
+) -> SenderSubmitStatusKind {
     match status {
+        DeliveryDispatchStatus::MaterializationPending => SenderSubmitStatusKind::Processing,
         DeliveryDispatchStatus::ProviderQueued => SenderSubmitStatusKind::ProviderQueued,
         DeliveryDispatchStatus::AttemptedAccepted => SenderSubmitStatusKind::Sent,
         DeliveryDispatchStatus::AttemptedPartialFailure => SenderSubmitStatusKind::PartiallyFailed,

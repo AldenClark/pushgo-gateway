@@ -12,13 +12,15 @@ impl SqliteDb {
 
         let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-        let rows = sqlx::query("SELECT delivery_id FROM private_outbox WHERE device_id = ?")
-            .bind(&device_id[..])
-            .fetch_all(&mut *tx)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT delivery_id FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
+        )
+        .bind(&device_id[..])
+        .fetch_all(&mut *tx)
+        .await?;
         let delivery_ids: Vec<String> = rows.into_iter().map(|r| r.get("delivery_id")).collect();
 
-        sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
+        sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'")
             .bind(&device_id[..])
             .execute(&mut *tx)
             .await?;
@@ -27,7 +29,7 @@ impl SqliteDb {
             sqlx::query(
                 "DELETE FROM private_payloads \
                  WHERE delivery_id = ? \
-                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id AND private_outbox.status <> 'acked') \
                    AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
             )
             .bind(delivery_id)
@@ -49,8 +51,7 @@ impl SqliteDb {
         sqlx::query(
             "INSERT INTO private_payloads (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (delivery_id) DO UPDATE SET \
-             payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, updated_at = EXCLUDED.updated_at",
+             ON CONFLICT (delivery_id) DO NOTHING",
         )
         .bind(delivery_id)
         .bind(message.payload.as_ref())
@@ -87,7 +88,10 @@ impl SqliteDb {
             "INSERT INTO private_outbox (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, last_error_code, last_error_detail, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
-                 status = EXCLUDED.status, attempts = EXCLUDED.attempts, updated_at = EXCLUDED.updated_at, next_attempt_at = EXCLUDED.next_attempt_at",
+                 status = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.status ELSE EXCLUDED.status END, \
+                 attempts = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.attempts ELSE EXCLUDED.attempts END, \
+                 updated_at = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.updated_at ELSE EXCLUDED.updated_at END, \
+                 next_attempt_at = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.next_attempt_at ELSE EXCLUDED.next_attempt_at END",
         )
         .bind(&device_id[..])
         .bind(&entry.delivery_id)
@@ -115,41 +119,56 @@ impl SqliteDb {
         entries: &[PrivateOutboxBatchEntry],
         max_pending_per_device: usize,
         global_max_pending: usize,
-        protected_delivery_id: Option<&str>,
+        _protected_delivery_id: Option<&str>,
     ) -> StoreResult<usize> {
         if entries.is_empty() {
             return Ok(0);
         }
-        let mut pruned = 0usize;
-        for chunk in entries.chunks(SQLITE_PRIVATE_WRITE_BATCH_ROWS) {
-            let mut conn = self.delivery_pool().acquire().await?;
-            let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-            insert_private_outbox_sqlite_tx(&mut tx, chunk).await?;
-            let mut pruned_delivery_ids = Vec::new();
-            for device_id in unique_batch_device_ids(chunk) {
-                pruned_delivery_ids.extend(
-                    prune_sqlite_device_outbox_overflow(
-                        &mut tx,
-                        device_id,
-                        max_pending_per_device,
-                        protected_delivery_id,
-                    )
-                    .await?,
-                );
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        insert_private_outbox_sqlite_tx(&mut tx, entries).await?;
+        for device_id in unique_batch_device_ids(entries) {
+            let pending: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox WHERE device_id=? AND status IN ('pending','claimed','sent')")
+                .bind(device_id.as_slice()).fetch_one(&mut *tx).await?;
+            if pending > max_pending_per_device as i64 {
+                return Err(StoreError::PrivateOutboxCapacityExceeded {
+                    pending: pending as usize,
+                    capacity: max_pending_per_device,
+                });
             }
-            pruned_delivery_ids.extend(
-                prune_sqlite_global_outbox_overflow(
-                    &mut tx,
-                    global_max_pending,
-                    protected_delivery_id,
-                )
-                .await?,
-            );
-            cleanup_sqlite_pruned_payloads(&mut tx, &pruned_delivery_ids).await?;
-            pruned = pruned.saturating_add(pruned_delivery_ids.len());
-            tx.commit().await?;
         }
-        Ok(pruned)
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM private_outbox WHERE status IN ('pending','claimed','sent')",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if total > global_max_pending as i64 {
+            return Err(StoreError::PrivateOutboxCapacityExceeded {
+                pending: total as usize,
+                capacity: global_max_pending,
+            });
+        }
+        tx.commit().await?;
+        Ok(0)
+    }
+
+    pub(super) async fn list_acked_private_outbox_devices(
+        &self,
+        delivery_id: &str,
+    ) -> StoreResult<Vec<DeviceId>> {
+        let rows = sqlx::query(
+            "SELECT device_id FROM private_outbox WHERE delivery_id = ? AND status = ?",
+        )
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_ACKED)
+        .fetch_all(self.delivery_pool())
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let raw: Vec<u8> = row.get("device_id");
+                raw.try_into().map_err(|_| StoreError::BinaryError)
+            })
+            .collect()
     }
 
     pub(crate) async fn enqueue_private_outbox_messages_batch(
@@ -179,22 +198,22 @@ impl SqliteDb {
             })
             .collect::<Vec<_>>();
         insert_private_outbox_sqlite_tx(&mut tx, &outbox).await?;
-
-        let mut pruned_delivery_ids = Vec::new();
         for device_id in unique_batch_device_ids(&outbox) {
-            pruned_delivery_ids.extend(
-                prune_sqlite_device_outbox_overflow(
-                    &mut tx,
-                    device_id,
-                    max_pending_per_device,
-                    None,
-                )
-                .await?,
-            );
+            let pending: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM private_outbox WHERE device_id=? AND status IN ('pending','claimed','sent')",
+            )
+            .bind(device_id.as_slice())
+            .fetch_one(&mut *tx)
+            .await?;
+            if pending > max_pending_per_device as i64 {
+                return Err(StoreError::PrivateOutboxCapacityExceeded {
+                    pending: pending as usize,
+                    capacity: max_pending_per_device,
+                });
+            }
         }
-        cleanup_sqlite_pruned_payloads(&mut tx, &pruned_delivery_ids).await?;
         tx.commit().await?;
-        Ok(pruned_delivery_ids.len())
+        Ok(0)
     }
 
     pub(super) async fn list_private_outbox(
@@ -362,11 +381,13 @@ impl SqliteDb {
                 .execute(&mut *tx)
                 .await?;
             removed = removed.saturating_add(
-                sqlx::query("DELETE FROM private_outbox WHERE delivery_id = ?")
-                    .bind(&delivery_id)
-                    .execute(&mut *tx)
-                    .await?
-                    .rows_affected() as usize,
+                sqlx::query(
+                    "DELETE FROM private_outbox WHERE delivery_id = ? AND status <> 'acked'",
+                )
+                .bind(&delivery_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected() as usize,
             );
         }
         tx.commit().await?;
@@ -383,7 +404,7 @@ impl SqliteDb {
             "SELECT o.device_id, o.delivery_id \
              FROM private_outbox o \
              LEFT JOIN private_payloads m ON m.delivery_id = o.delivery_id \
-             WHERE m.delivery_id IS NULL \
+             WHERE m.delivery_id IS NULL AND o.status <> 'acked' \
              LIMIT ?",
         )
         .bind(limit as i64)
@@ -456,6 +477,14 @@ impl SqliteDb {
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
+        sqlx::query(
+            "DELETE FROM dispatch_submission WHERE expires_at <= ? AND NOT EXISTS (\
+                SELECT 1 FROM dispatch_op_dedupe d WHERE d.dedupe_key = dispatch_submission.dedupe_key AND d.state = 'pending'\
+             )",
+        )
+        .bind(before_ts)
+        .execute(self.dispatch_pool())
+        .await?;
         let removed = sqlx::query(
             "DELETE FROM dispatch_op_dedupe \
              WHERE dedupe_key IN (\
@@ -463,6 +492,7 @@ impl SqliteDb {
                     SELECT dedupe_key \
                     FROM dispatch_op_dedupe \
                     WHERE created_at <= ? AND state = ? \
+                      AND NOT EXISTS (SELECT 1 FROM dispatch_submission s WHERE s.dedupe_key = dispatch_op_dedupe.dedupe_key) \
                     ORDER BY created_at ASC \
                     LIMIT ?\
                 ) AS t\
@@ -580,10 +610,7 @@ async fn insert_private_messages_sqlite_tx(
                 .push_bind(now)
                 .push_bind(now);
         });
-        query.push(
-            " ON CONFLICT (delivery_id) DO UPDATE SET \
-             payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, updated_at = EXCLUDED.updated_at",
-        );
+        query.push(" ON CONFLICT (delivery_id) DO NOTHING");
         query.build().execute(&mut **tx).await?;
     }
     Ok(())
@@ -617,7 +644,10 @@ async fn insert_private_outbox_sqlite_tx(
         });
         query.push(
             " ON CONFLICT (device_id, delivery_id) DO UPDATE SET \
-             status = EXCLUDED.status, attempts = EXCLUDED.attempts, updated_at = EXCLUDED.updated_at, next_attempt_at = EXCLUDED.next_attempt_at",
+             status = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.status ELSE EXCLUDED.status END, \
+             attempts = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.attempts ELSE EXCLUDED.attempts END, \
+             updated_at = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.updated_at ELSE EXCLUDED.updated_at END, \
+             next_attempt_at = CASE WHEN private_outbox.status IN ('acked','claimed','sent') THEN private_outbox.next_attempt_at ELSE EXCLUDED.next_attempt_at END",
         );
         query.build().execute(&mut **tx).await?;
     }
@@ -645,130 +675,6 @@ fn private_outbox_entry_from_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> Privat
     }
 }
 
-async fn prune_sqlite_device_outbox_overflow(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    device_id: DeviceId,
-    max_pending_per_device: usize,
-    protected_delivery_id: Option<&str>,
-) -> StoreResult<Vec<String>> {
-    let active_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(1) FROM private_outbox WHERE device_id = ? AND status IN (?, ?, ?)",
-    )
-    .bind(&device_id[..])
-    .bind(OUTBOX_STATUS_PENDING)
-    .bind(OUTBOX_STATUS_CLAIMED)
-    .bind(OUTBOX_STATUS_SENT)
-    .fetch_one(&mut **tx)
-    .await?;
-    let max_pending_per_device = max_pending_per_device.min(i64::MAX as usize) as i64;
-    let excess = active_count.saturating_sub(max_pending_per_device);
-    if excess <= 0 {
-        return Ok(Vec::new());
-    }
-
-    let rows = if let Some(protected_delivery_id) = protected_delivery_id {
-        sqlx::query(
-            "SELECT delivery_id FROM private_outbox \
-             WHERE device_id = ? AND status = ? AND delivery_id <> ? \
-             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
-             LIMIT ?",
-        )
-        .bind(&device_id[..])
-        .bind(OUTBOX_STATUS_PENDING)
-        .bind(protected_delivery_id)
-        .bind(excess)
-        .fetch_all(&mut **tx)
-        .await?
-    } else {
-        sqlx::query(
-            "SELECT delivery_id FROM private_outbox \
-             WHERE device_id = ? AND status = ? \
-             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
-             LIMIT ?",
-        )
-        .bind(&device_id[..])
-        .bind(OUTBOX_STATUS_PENDING)
-        .bind(excess)
-        .fetch_all(&mut **tx)
-        .await?
-    };
-    let delivery_ids = rows
-        .into_iter()
-        .map(|row| row.get("delivery_id"))
-        .collect::<Vec<String>>();
-    for delivery_id in &delivery_ids {
-        sqlx::query(
-            "DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND status = ?",
-        )
-        .bind(&device_id[..])
-        .bind(delivery_id)
-        .bind(OUTBOX_STATUS_PENDING)
-        .execute(&mut **tx)
-        .await?;
-    }
-    Ok(delivery_ids)
-}
-
-async fn prune_sqlite_global_outbox_overflow(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    global_max_pending: usize,
-    protected_delivery_id: Option<&str>,
-) -> StoreResult<Vec<String>> {
-    let active_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox WHERE status IN (?, ?, ?)")
-            .bind(OUTBOX_STATUS_PENDING)
-            .bind(OUTBOX_STATUS_CLAIMED)
-            .bind(OUTBOX_STATUS_SENT)
-            .fetch_one(&mut **tx)
-            .await?;
-    let global_max_pending = global_max_pending.min(i64::MAX as usize) as i64;
-    let excess = active_count.saturating_sub(global_max_pending);
-    if excess <= 0 {
-        return Ok(Vec::new());
-    }
-
-    let rows = if let Some(protected_delivery_id) = protected_delivery_id {
-        sqlx::query(
-            "SELECT device_id, delivery_id FROM private_outbox \
-             WHERE status = ? AND delivery_id <> ? \
-             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
-             LIMIT ?",
-        )
-        .bind(OUTBOX_STATUS_PENDING)
-        .bind(protected_delivery_id)
-        .bind(excess)
-        .fetch_all(&mut **tx)
-        .await?
-    } else {
-        sqlx::query(
-            "SELECT device_id, delivery_id FROM private_outbox \
-             WHERE status = ? \
-             ORDER BY occurred_at ASC, created_at ASC, delivery_id ASC \
-             LIMIT ?",
-        )
-        .bind(OUTBOX_STATUS_PENDING)
-        .bind(excess)
-        .fetch_all(&mut **tx)
-        .await?
-    };
-
-    let mut delivery_ids = Vec::with_capacity(rows.len());
-    for row in rows {
-        let device_id: Vec<u8> = row.get("device_id");
-        let delivery_id: String = row.get("delivery_id");
-        sqlx::query(
-            "DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND status = ?",
-        )
-        .bind(&device_id)
-        .bind(&delivery_id)
-        .bind(OUTBOX_STATUS_PENDING)
-        .execute(&mut **tx)
-        .await?;
-        delivery_ids.push(delivery_id);
-    }
-    Ok(delivery_ids)
-}
-
 async fn cleanup_sqlite_pruned_payloads(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     delivery_ids: &[String],
@@ -777,7 +683,7 @@ async fn cleanup_sqlite_pruned_payloads(
         sqlx::query(
             "DELETE FROM private_payloads \
              WHERE delivery_id = ? \
-               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id AND private_outbox.status <> 'acked') \
                AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
         )
         .bind(delivery_id)

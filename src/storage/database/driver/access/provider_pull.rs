@@ -100,6 +100,18 @@ impl ProviderPullDatabaseAccess for DatabaseDriver {
             discard_provider_items_by_outer_ids(device_id, delivery_ids, now)
         )
     }
+
+    async fn discard_provider_items_if_candidates_match(
+        &self,
+        device_id: DeviceId,
+        candidates: &[ProviderPullCandidate],
+        now: i64,
+    ) -> StoreResult<usize> {
+        delegate_db_async!(
+            self,
+            discard_provider_items_if_candidates_match(device_id, candidates, now)
+        )
+    }
 }
 
 impl DatabaseDriver {

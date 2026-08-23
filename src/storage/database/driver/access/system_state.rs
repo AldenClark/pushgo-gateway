@@ -100,13 +100,14 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
 
     async fn finalize_provider_dispatch_outcome(
         &self,
+        dedupe_key: &str,
         op_id: &str,
         delivery_id: &str,
         success: bool,
     ) -> StoreResult<()> {
         delegate_db_async!(
             self,
-            finalize_provider_dispatch_outcome(op_id, delivery_id, success)
+            finalize_provider_dispatch_outcome(dedupe_key, op_id, delivery_id, success)
         )
     }
 
@@ -136,9 +137,13 @@ impl SystemStateDatabaseAccess for DatabaseDriver {
     async fn cleanup_stale_private_outbox(
         &self,
         before_ts: i64,
+        acked_before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
-        delegate_db_async!(self, cleanup_stale_private_outbox(before_ts, limit))
+        delegate_db_async!(
+            self,
+            cleanup_stale_private_outbox(before_ts, acked_before_ts, limit)
+        )
     }
 
     async fn cleanup_orphan_devices(&self, before_ts: i64, limit: usize) -> StoreResult<usize> {

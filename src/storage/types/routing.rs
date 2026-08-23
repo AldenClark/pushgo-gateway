@@ -136,7 +136,7 @@ impl From<DeviceChannelType> for RouteChannelType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DispatchTarget {
     Provider {
         platform: Platform,

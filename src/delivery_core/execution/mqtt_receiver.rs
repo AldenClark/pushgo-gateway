@@ -53,40 +53,60 @@ pub(crate) struct MqttReceiverDeliveryExecution<'a> {
 pub(crate) async fn execute_mqtt_receiver_deliveries(
     execution: MqttReceiverDeliveryExecution<'_>,
     progress: &mut DispatchProgress,
-) {
-    for target in execution.targets {
-        if let Err(err) = execution
-            .private_state
-            .enqueue_private_delivery(
-                target.device_id,
-                execution.delivery_id,
-                Arc::clone(&execution.payload),
-                execution.sent_at,
-                execution.expires_at,
-            )
-            .await
-        {
-            progress.record_mqtt_failure();
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::WARN,
-                event = "dispatch.mqtt_receiver_outbox_enqueue_failed",
-                correlation_id = %(crate::util::redact_text(execution.correlation_id)),
-                delivery_id = %(crate::util::redact_text(execution.delivery_id)),
-                channel_id = %(crate::util::redact_text(execution.channel_id)),
-                device_id = %(crate::util::redact_text(crate::util::encode_lower_hex_128(&target.device_id))),
-                error = %(err.to_string())
-            );
+) -> Result<(), crate::Error> {
+    let device_ids = execution
+        .targets
+        .iter()
+        .map(|target| target.device_id)
+        .collect::<Vec<_>>();
+    let outcomes = execution
+        .private_state
+        .enqueue_private_deliveries(
+            &device_ids,
+            execution.delivery_id,
+            Arc::clone(&execution.payload),
+            execution.sent_at,
+            execution.expires_at,
+        )
+        .await;
+    let mut first_failure = None;
+    for (device_id, outcome) in outcomes {
+        let Some(target) = execution
+            .targets
+            .iter()
+            .find(|target| target.device_id == device_id)
+        else {
             continue;
-        }
+        };
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                progress.record_mqtt_failure();
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::WARN,
+                    event = "dispatch.mqtt_receiver_outbox_enqueue_failed",
+                    correlation_id = %(crate::util::redact_text(execution.correlation_id)),
+                    delivery_id = %(crate::util::redact_text(execution.delivery_id)),
+                    channel_id = %(crate::util::redact_text(execution.channel_id)),
+                    device_id = %(crate::util::redact_text(crate::util::encode_lower_hex_128(&target.device_id))),
+                    error = %(err.to_string())
+                );
+                if first_failure.is_none() {
+                    first_failure = Some(err);
+                }
+                continue;
+            }
+        };
 
-        let realtime_delivered = execution.private_state.hub.try_deliver_to_mqtt_device(
-            target.device_id,
-            crate::private::protocol::DeliverEnvelope {
-                delivery_id: execution.delivery_id.to_string(),
-                payload: Arc::clone(&execution.payload),
-            },
-        );
+        let realtime_delivered = outcome.accepted_for_delivery
+            && execution.private_state.hub.try_deliver_to_mqtt_device(
+                target.device_id,
+                crate::private::protocol::DeliverEnvelope {
+                    delivery_id: execution.delivery_id.to_string(),
+                    payload: Arc::clone(&outcome.canonical_payload),
+                },
+            );
         progress.record_mqtt_success(target.device_id);
         ::tracing::event!(
             target: "gateway.trace_event",
@@ -111,5 +131,9 @@ pub(crate) async fn execute_mqtt_receiver_deliveries(
                 )
                 .await;
         });
+    }
+    match first_failure {
+        Some(err) => Err(err),
+        None => Ok(()),
     }
 }

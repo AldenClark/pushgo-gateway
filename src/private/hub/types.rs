@@ -16,6 +16,8 @@ pub struct PrivateHub {
     hot_order: Mutex<VecDeque<String>>,
     resume_state: DashMap<DeviceId, ResumeState>,
     enqueue_gate: tokio::sync::Mutex<()>,
+    #[cfg(test)]
+    payload_conflict_events: AtomicUsize,
 }
 
 #[derive(Debug, Clone)]

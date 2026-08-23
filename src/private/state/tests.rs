@@ -3,6 +3,76 @@ use crate::routing::derive_private_device_id;
 use crate::storage::{MaintenanceCleanupConfig, OUTBOX_STATUS_CLAIMED};
 use tempfile::{TempDir, tempdir};
 
+struct OrderedPayloadMap<'a>(&'a [(&'a str, &'a str)]);
+
+impl serde::Serialize for OrderedPayloadMap<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in self.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+#[derive(serde::Serialize)]
+struct OrderedPayloadEnvelope<'a> {
+    payload_version: u8,
+    data: OrderedPayloadMap<'a>,
+}
+
+fn encode_ordered_private_payload(entries: &[(&str, &str)]) -> Vec<u8> {
+    postcard::to_allocvec(&OrderedPayloadEnvelope {
+        payload_version: crate::private::protocol::PRIVATE_PAYLOAD_VERSION_V1,
+        data: OrderedPayloadMap(entries),
+    })
+    .expect("ordered private payload should encode")
+}
+
+fn private_message(payload: Vec<u8>, sent_at: i64, expires_at: i64) -> PrivateMessage {
+    PrivateMessage {
+        size: payload.len(),
+        payload: Arc::from(payload),
+        sent_at,
+        expires_at,
+    }
+}
+
+#[test]
+fn private_payload_conflict_checks_full_semantics_and_timestamps() {
+    let ascending = encode_ordered_private_payload(&[("a", "one"), ("b", "two")]);
+    let descending = encode_ordered_private_payload(&[("b", "two"), ("a", "one")]);
+    assert_ne!(
+        ascending, descending,
+        "fixture must differ at the byte level"
+    );
+    let canonical = private_message(ascending, 100, 200);
+    assert!(!crate::private::hub::private_messages_conflict(
+        &canonical,
+        &private_message(descending, 100, 200)
+    ));
+    assert!(crate::private::hub::private_messages_conflict(
+        &canonical,
+        &private_message(
+            encode_ordered_private_payload(&[("a", "changed")]),
+            100,
+            200,
+        )
+    ));
+    assert!(crate::private::hub::private_messages_conflict(
+        &canonical,
+        &private_message(encode_ordered_private_payload(&[("a", "one")]), 101, 200)
+    ));
+    assert!(crate::private::hub::private_messages_conflict(
+        &canonical,
+        &private_message(encode_ordered_private_payload(&[("a", "one")]), 100, 201)
+    ));
+}
+
 struct StateTestContext {
     _dir: TempDir,
     state: PrivateState,
@@ -144,7 +214,123 @@ async fn full_connection_queue_never_blocks_other_private_delivery_work() {
 }
 
 #[tokio::test]
-async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_full() {
+async fn cold_cache_conflicting_replay_uses_durable_canonical_payload_everywhere() {
+    let ctx = StateTestContext::new().await;
+    let device_id = derive_private_device_id("canonical-replay-device");
+    let delivery_id = "canonical-replay-delivery";
+    let now = chrono::Utc::now().timestamp_millis();
+    let original = PrivateMessage {
+        payload: Arc::from(b"canonical-a".as_slice()),
+        size: b"canonical-a".len(),
+        sent_at: now,
+        expires_at: now + 60_000,
+    };
+    ctx.state
+        .hub
+        .store()
+        .insert_private_message(delivery_id, &original)
+        .await
+        .expect("original payload should pre-exist outside the cold hub cache");
+
+    let outcomes = ctx
+        .state
+        .enqueue_private_deliveries(
+            &[device_id],
+            delivery_id,
+            Arc::from(b"conflicting-b".as_slice()),
+            now + 1,
+            now + 120_000,
+        )
+        .await;
+    let (_, outcome) = outcomes.into_iter().next().expect("one enqueue outcome");
+    let outcome = outcome.expect("conflicting replay should converge on canonical bytes");
+    assert_eq!(outcome.canonical_payload.as_ref(), b"canonical-a");
+
+    let (tx, rx) = flume::bounded(1);
+    ctx.state
+        .hub
+        .register_connection(device_id, 1, TransportKind::Tcp, tx);
+    assert!(ctx.state.hub.try_deliver_to_device(
+        device_id,
+        crate::private::protocol::DeliverEnvelope {
+            delivery_id: delivery_id.to_string(),
+            payload: Arc::clone(&outcome.canonical_payload),
+        },
+    ));
+    let realtime = rx
+        .recv_async()
+        .await
+        .expect("realtime envelope should arrive");
+    assert_eq!(realtime.payload.as_ref(), b"canonical-a");
+
+    let cached = ctx
+        .state
+        .hub
+        .load_private_message(delivery_id)
+        .await
+        .expect("cache lookup should succeed")
+        .expect("canonical payload should remain cached");
+    assert_eq!(cached.payload.as_ref(), b"canonical-a");
+    let fallback = ctx
+        .state
+        .hub
+        .pull_outbox(device_id, 1)
+        .await
+        .expect("fallback pull should succeed");
+    assert_eq!(fallback.len(), 1);
+    assert_eq!(fallback[0].1.payload.as_ref(), b"canonical-a");
+}
+
+#[tokio::test]
+async fn repeated_legacy_map_order_replay_emits_no_payload_conflict_events() {
+    let ctx = StateTestContext::new().await;
+    let device_id = derive_private_device_id("semantic-replay-device");
+    let delivery_id = "semantic-replay-delivery";
+    let now = chrono::Utc::now().timestamp_millis();
+    let canonical = encode_ordered_private_payload(&[("a", "one"), ("b", "two")]);
+    let replay = encode_ordered_private_payload(&[("b", "two"), ("a", "one")]);
+    assert_ne!(
+        canonical, replay,
+        "fixture must reproduce old byte instability"
+    );
+    ctx.state
+        .hub
+        .store()
+        .insert_private_message(
+            delivery_id,
+            &PrivateMessage {
+                size: canonical.len(),
+                payload: Arc::from(canonical),
+                sent_at: now,
+                expires_at: now + 60_000,
+            },
+        )
+        .await
+        .expect("legacy canonical payload should persist");
+
+    for _ in 0..100 {
+        let outcomes = ctx
+            .state
+            .enqueue_private_deliveries(
+                &[device_id],
+                delivery_id,
+                Arc::from(replay.clone()),
+                now,
+                now + 60_000,
+            )
+            .await;
+        assert!(outcomes[0].1.is_ok());
+    }
+
+    assert_eq!(
+        ctx.state.hub.payload_conflict_events(),
+        0,
+        "semantic replays must stay idle instead of emitting a warning per recovery poll"
+    );
+}
+
+#[tokio::test]
+async fn enqueue_private_delivery_rejects_before_evicting_accepted_work() {
     let ctx = StateTestContext::new().await;
     let device_id = derive_private_device_id("capacity-evict-device");
     let now = chrono::Utc::now().timestamp_millis();
@@ -162,7 +348,8 @@ async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_
             .expect("initial enqueue should succeed");
     }
 
-    ctx.state
+    let err = ctx
+        .state
         .enqueue_private_delivery(
             device_id,
             "delivery-new",
@@ -171,7 +358,8 @@ async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_
             now + 600_000,
         )
         .await
-        .expect("new enqueue should evict oldest pending instead of failing");
+        .expect_err("capacity must reject new work without evicting accepted work");
+    assert!(matches!(err, crate::Error::TooBusy));
 
     let store = ctx.state.hub.store();
     assert_eq!(
@@ -186,8 +374,8 @@ async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_
             .load_private_outbox_entry(device_id, "delivery-old-00")
             .await
             .expect("oldest lookup should succeed")
-            .is_none(),
-        "oldest pending entry should be evicted"
+            .is_some(),
+        "oldest accepted entry must be preserved"
     );
     assert!(
         store
@@ -202,8 +390,8 @@ async fn enqueue_private_delivery_evicts_oldest_pending_when_device_capacity_is_
             .load_private_outbox_entry(device_id, "delivery-new")
             .await
             .expect("new delivery lookup should succeed")
-            .is_some(),
-        "new delivery should be enqueued"
+            .is_none(),
+        "rejected delivery must not be partially enqueued"
     );
 }
 
@@ -271,5 +459,51 @@ async fn enqueue_private_delivery_does_not_evict_claimed_entries_for_capacity() 
             .expect("new delivery lookup should succeed")
             .is_none(),
         "claimed entries must not be evicted to admit new delivery"
+    );
+}
+
+#[tokio::test]
+async fn acknowledged_delivery_replay_is_not_accepted_for_realtime_acceleration() {
+    let ctx = StateTestContext::new().await;
+    let device_id = derive_private_device_id("terminal-replay-device");
+    let delivery_id = "terminal-replay-delivery";
+    let now = chrono::Utc::now().timestamp_millis();
+
+    ctx.state
+        .enqueue_private_delivery(
+            device_id,
+            delivery_id,
+            Arc::from([1u8, 2, 3]),
+            now,
+            now + 60_000,
+        )
+        .await
+        .expect("initial delivery should enqueue");
+    assert!(
+        ctx.state
+            .complete_terminal_delivery(device_id, delivery_id, None)
+            .await
+            .expect("terminal ACK should succeed")
+    );
+
+    let outcomes = ctx
+        .state
+        .enqueue_private_deliveries(
+            &[device_id],
+            delivery_id,
+            Arc::from([9u8, 9, 9]),
+            now + 1,
+            now + 60_000,
+        )
+        .await;
+    let outcome = outcomes
+        .into_iter()
+        .next()
+        .expect("target result should exist")
+        .1
+        .expect("terminal replay should be an idempotent success");
+    assert!(
+        !outcome.accepted_for_delivery,
+        "terminal replay must suppress realtime and MQTT accelerators"
     );
 }

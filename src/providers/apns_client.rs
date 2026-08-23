@@ -1,18 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
-use tokio::{sync::Semaphore, time::sleep};
 
 use crate::{
     Error,
     providers::{
-        ApnsClient, ApnsTokenProvider, BoxFuture, DispatchResult, ProviderFailure,
-        ProviderFailureKind, TokenInfo,
+        ApnsClient, ApnsTokenProvider, BoxFuture, DispatchResult, PROVIDER_CONNECT_TIMEOUT,
+        PROVIDER_REQUEST_TIMEOUT, ProviderFailure, ProviderFailureKind, TokenInfo,
         apns::{ApnsPayload, ApnsPushType},
-        error::trimmed_body_text,
+        error::{parse_retry_after_millis, trimmed_body_text},
     },
-    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
+    runtime_config::GatewayRuntimeProfile,
     storage::Platform,
 };
 
@@ -20,15 +19,10 @@ const IOS_TOPIC: &str = "io.ethan.pushgo";
 const MACOS_TOPIC: &str = "io.ethan.pushgo";
 const WATCHOS_TOPIC: &str = "io.ethan.pushgo.watchkitapp";
 
-const APNS_TIMEOUT: Duration = Duration::from_secs(60);
-const APNS_MAX_RETRY: usize = 3;
-const APNS_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
-
-/// APNs client with token caching and bounded retries.
+/// APNs transport adapter. Durable scheduling owns retries and concurrency.
 pub struct ApnsService {
     token_provider: Arc<dyn ApnsTokenProvider>,
     client: Client,
-    limiter: Arc<Semaphore>,
     endpoint: Arc<str>,
 }
 
@@ -40,22 +34,18 @@ impl ApnsService {
     pub fn new_with_profile(
         token_provider: Arc<dyn ApnsTokenProvider>,
         endpoint: &str,
-        runtime_profile: GatewayRuntimeProfile,
+        _runtime_profile: GatewayRuntimeProfile,
     ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent(concat!("pushgo-gateway/", env!("CARGO_PKG_VERSION")))
-            .timeout(APNS_TIMEOUT)
+            .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
+            .timeout(PROVIDER_REQUEST_TIMEOUT)
             .build()
             .map_err(|err| Error::Internal(err.to_string()))?;
-
-        let max_in_flight = RuntimeTuning::for_profile(runtime_profile)
-            .provider
-            .apns_max_in_flight;
 
         Ok(Self {
             token_provider,
             client,
-            limiter: Arc::new(Semaphore::new(max_in_flight)),
             endpoint: Arc::from(endpoint.trim_end_matches('/')),
         })
     }
@@ -115,37 +105,8 @@ impl ApnsService {
             None => default_topic.to_string(),
         };
 
-        self.send_with_retry(device_token, &topic, payload, collapse_id)
+        self.send_once(device_token, &topic, payload, collapse_id)
             .await
-    }
-
-    async fn send_with_retry(
-        &self,
-        device_token: &str,
-        topic: &str,
-        payload: Arc<ApnsPayload>,
-        collapse_id: Option<Arc<str>>,
-    ) -> DispatchResult {
-        let mut attempt = 0;
-        let mut backoff = APNS_INITIAL_BACKOFF;
-
-        loop {
-            attempt += 1;
-            let dispatch = self
-                .send_once(device_token, topic, payload.clone(), collapse_id.clone())
-                .await;
-
-            let retryable =
-                dispatch.is_retryable() && attempt < APNS_MAX_RETRY && !dispatch.success;
-
-            if retryable {
-                sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(5));
-                continue;
-            }
-
-            return dispatch;
-        }
     }
 
     async fn send_once(
@@ -156,19 +117,9 @@ impl ApnsService {
         collapse_id: Option<Arc<str>>,
     ) -> DispatchResult {
         let request_uri = format!("{}/3/device/{device_token}", self.endpoint.as_ref());
-        // Bound APNs calls to avoid unbounded fan-out.
-        let _permit = match self.limiter.clone().acquire_owned().await {
-            Ok(p) => p,
-            Err(_) => {
-                return DispatchResult::from_error(
-                    0,
-                    Error::Internal("APNs concurrency limiter closed".to_string()),
-                );
-            }
-        };
-        let mut auth_token = match self.current_token().await {
+        let auth_token = match self.current_token().await {
             Ok(token) => token,
-            Err(err) => return DispatchResult::from_error(0, err),
+            Err(err) => return DispatchResult::provider_access_failure(err),
         };
 
         let body = match payload.encoded_body() {
@@ -191,52 +142,31 @@ impl ApnsService {
             request = request.header("apns-expiration", expiration.to_string());
         }
 
-        let mut response = match request.body(body.as_ref().to_vec()).send().await {
+        let response = match request.body(body.as_ref().to_vec()).send().await {
             Ok(resp) => resp,
             Err(err) => return DispatchResult::transport(Error::Internal(err.to_string())),
         };
 
-        let mut status = response.status();
-        let mut status_code = status.as_u16();
-        let mut response_body = response.bytes().await.unwrap_or_default();
-        let mut reason = parse_apns_reason(&response_body);
+        let status = response.status();
+        let status_code = status.as_u16();
+        let retry_after_millis = normalize_apns_retry_after(
+            status,
+            parse_retry_after_millis(
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok()),
+            ),
+        );
+        let response_body = response.bytes().await.unwrap_or_default();
+        let reason = parse_apns_reason(&response_body);
 
-        // Retry once if APNs reports an expired provider token.
+        // Refresh cached credentials for the scheduler's next durable attempt;
+        // this adapter never performs a second provider send inline.
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && matches!(reason.as_deref(), Some("ExpiredProviderToken"))
         {
-            match self.refresh_token_now().await {
-                Ok(new_token) => {
-                    auth_token = new_token;
-                    let mut request = self
-                        .client
-                        .post(&request_uri)
-                        .header("authorization", format!("bearer {auth_token}"))
-                        .header("apns-topic", topic)
-                        .header("content-type", "application/json")
-                        .header("apns-push-type", payload.push_type_header())
-                        .header("apns-priority", payload.priority().to_string());
-                    if let Some(ref id) = collapse_id {
-                        request = request.header("apns-collapse-id", id.as_ref());
-                    }
-                    if let Some(expiration) = payload.expiration {
-                        request = request.header("apns-expiration", expiration.to_string());
-                    }
-
-                    response = match request.body(body.as_ref().to_vec()).send().await {
-                        Ok(resp) => resp,
-                        Err(err) => {
-                            return DispatchResult::transport(Error::Internal(err.to_string()));
-                        }
-                    };
-
-                    status = response.status();
-                    status_code = status.as_u16();
-                    response_body = response.bytes().await.unwrap_or_default();
-                    reason = parse_apns_reason(&response_body);
-                }
-                Err(err) => return DispatchResult::from_error(status_code, err),
-            }
+            let _ = self.refresh_token_now().await;
         }
 
         if status == StatusCode::OK {
@@ -244,7 +174,8 @@ impl ApnsService {
         } else {
             DispatchResult::upstream(
                 "APNs",
-                classify_apns_failure(status, reason.as_deref(), &response_body),
+                classify_apns_failure(status, reason.as_deref(), &response_body)
+                    .with_retry_after_millis(retry_after_millis),
             )
         }
     }
@@ -255,6 +186,22 @@ impl ApnsService {
 
     async fn refresh_token_now(&self) -> Result<Arc<str>, Error> {
         self.token_provider.refresh_now().await
+    }
+}
+
+fn normalize_apns_retry_after(status: StatusCode, retry_after_millis: Option<i64>) -> Option<i64> {
+    // Apple asks providers to wait 15 minutes before retrying 5xx responses.
+    // Enforce that floor even when APNs omits Retry-After so a local worker
+    // scale-up cannot amplify an APNs incident.
+    const APNS_SERVER_ERROR_RETRY_MILLIS: i64 = 15 * 60 * 1_000;
+    if status.is_server_error() {
+        Some(
+            retry_after_millis
+                .unwrap_or_default()
+                .max(APNS_SERVER_ERROR_RETRY_MILLIS),
+        )
+    } else {
+        retry_after_millis
     }
 }
 
@@ -285,10 +232,7 @@ fn classify_apns_failure(
         ProviderFailureKind::CredentialsExpired
     } else if status == StatusCode::TOO_MANY_REQUESTS {
         ProviderFailureKind::RateLimited
-    } else if matches!(
-        status,
-        StatusCode::INTERNAL_SERVER_ERROR | StatusCode::SERVICE_UNAVAILABLE
-    ) {
+    } else if status == StatusCode::REQUEST_TIMEOUT || status.is_server_error() {
         ProviderFailureKind::TemporarilyUnavailable
     } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
         ProviderFailureKind::Unauthorized
@@ -334,7 +278,7 @@ fn parse_apns_reason(body: &[u8]) -> Option<String> {
 mod tests {
     use reqwest::StatusCode;
 
-    use super::{ProviderFailureKind, classify_apns_failure};
+    use super::{ProviderFailureKind, classify_apns_failure, normalize_apns_retry_after};
 
     #[test]
     fn apns_classifies_expired_provider_token() {
@@ -364,5 +308,29 @@ mod tests {
             br#"{"reason":"PayloadTooLarge"}"#,
         );
         assert_eq!(failure.kind, ProviderFailureKind::PayloadTooLarge);
+    }
+
+    #[test]
+    fn apns_retries_gateway_and_timeout_responses() {
+        for status in [StatusCode::REQUEST_TIMEOUT, StatusCode::BAD_GATEWAY] {
+            let failure = classify_apns_failure(status, None, b"");
+            assert_eq!(failure.kind, ProviderFailureKind::TemporarilyUnavailable);
+        }
+    }
+
+    #[test]
+    fn apns_server_failures_wait_at_least_fifteen_minutes() {
+        assert_eq!(
+            normalize_apns_retry_after(StatusCode::SERVICE_UNAVAILABLE, None),
+            Some(15 * 60 * 1_000)
+        );
+        assert_eq!(
+            normalize_apns_retry_after(StatusCode::SERVICE_UNAVAILABLE, Some(20 * 60 * 1_000)),
+            Some(20 * 60 * 1_000)
+        );
+        assert_eq!(
+            normalize_apns_retry_after(StatusCode::TOO_MANY_REQUESTS, None),
+            None
+        );
     }
 }

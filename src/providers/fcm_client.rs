@@ -1,27 +1,23 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use reqwest::Client;
 use serde::Deserialize;
-use tokio::{sync::Semaphore, time::sleep};
 
 use crate::{
     Error,
     providers::{
-        BoxFuture, DispatchResult, FcmClient, FcmTokenProvider, ProviderFailure,
-        ProviderFailureKind, TokenInfo, error::trimmed_body_text, fcm::FcmPayload,
+        BoxFuture, DispatchResult, FcmClient, FcmTokenProvider, PROVIDER_CONNECT_TIMEOUT,
+        PROVIDER_REQUEST_TIMEOUT, ProviderFailure, ProviderFailureKind, TokenInfo,
+        error::{parse_retry_after_millis, trimmed_body_text},
+        fcm::FcmPayload,
     },
-    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
+    runtime_config::GatewayRuntimeProfile,
 };
-
-const FCM_TIMEOUT: Duration = Duration::from_secs(60);
-const FCM_MAX_RETRY: usize = 3;
-const FCM_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 
 pub struct FcmService {
     client: Client,
     token_provider: Arc<dyn FcmTokenProvider>,
     base_url: Arc<str>,
-    limiter: Arc<Semaphore>,
 }
 
 impl FcmService {
@@ -32,23 +28,19 @@ impl FcmService {
     pub fn new_with_profile(
         token_provider: Arc<dyn FcmTokenProvider>,
         base_url: &str,
-        runtime_profile: GatewayRuntimeProfile,
+        _runtime_profile: GatewayRuntimeProfile,
     ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
-            .timeout(FCM_TIMEOUT)
+            .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
+            .timeout(PROVIDER_REQUEST_TIMEOUT)
             .build()
             .map_err(|err| Error::Internal(err.to_string()))?;
         let normalized_base_url = normalize_base_url(base_url)?;
-        let max_in_flight = RuntimeTuning::for_profile(runtime_profile)
-            .provider
-            .fcm_max_in_flight;
-
         Ok(Self {
             client,
             token_provider,
             base_url: Arc::from(normalized_base_url),
-            limiter: Arc::new(Semaphore::new(max_in_flight)),
         })
     }
 
@@ -68,43 +60,15 @@ impl FcmService {
             },
         };
 
-        let mut attempt = 0usize;
-        let mut backoff = FCM_INITIAL_BACKOFF;
-        let mut force_fresh_token = false;
-
-        loop {
-            attempt += 1;
-            let access = match if force_fresh_token {
-                self.token_provider.token_info_fresh().await
-            } else {
-                self.token_provider.token_info().await
-            } {
-                Ok(access) => access,
-                Err(err) => return DispatchResult::from_error(0, err),
-            };
-
-            let dispatch = self.send_once(&access, body.as_ref()).await;
-            if dispatch.success {
-                return dispatch;
-            }
-
-            if dispatch.should_refresh_credentials()
-                && !force_fresh_token
-                && attempt < FCM_MAX_RETRY
-            {
-                force_fresh_token = true;
-                continue;
-            }
-
-            let retryable = dispatch.is_retryable() && attempt < FCM_MAX_RETRY;
-            if !retryable {
-                return dispatch;
-            }
-
-            force_fresh_token = false;
-            sleep(backoff).await;
-            backoff = (backoff * 2).min(Duration::from_secs(5));
+        let access = match self.token_provider.token_info().await {
+            Ok(access) => access,
+            Err(err) => return DispatchResult::provider_access_failure(err),
+        };
+        let dispatch = self.send_once(&access, body.as_ref()).await;
+        if dispatch.should_refresh_credentials() {
+            let _ = self.token_provider.token_info_fresh().await;
         }
+        dispatch
     }
 
     async fn send_once(&self, access: &crate::providers::FcmAccess, body: &[u8]) -> DispatchResult {
@@ -112,16 +76,6 @@ impl FcmService {
             "{}/v1/projects/{}/messages:send",
             self.base_url, access.project_id
         );
-        let _permit = match self.limiter.clone().acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => {
-                return DispatchResult::from_error(
-                    0,
-                    Error::Internal("FCM concurrency limiter closed".to_string()),
-                );
-            }
-        };
-
         let response = match self
             .client
             .post(&endpoint)
@@ -137,13 +91,24 @@ impl FcmService {
 
         let status = response.status();
         let status_code = status.as_u16();
+        let retry_after_millis = parse_retry_after_millis(
+            response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+        );
         let response_body = response.bytes().await.unwrap_or_default();
 
         if status.is_success() {
             return DispatchResult::success(status_code);
         }
 
-        DispatchResult::upstream("FCM", classify_fcm_failure(status_code, &response_body))
+        let retry_after_millis = normalize_fcm_retry_after(status_code, retry_after_millis);
+        DispatchResult::upstream(
+            "FCM",
+            classify_fcm_failure(status_code, &response_body)
+                .with_retry_after_millis(retry_after_millis),
+        )
     }
 
     pub async fn token_info(&self) -> Result<TokenInfo, Error> {
@@ -157,10 +122,23 @@ impl FcmService {
     }
 }
 
+fn normalize_fcm_retry_after(status_code: u16, retry_after_millis: Option<i64>) -> Option<i64> {
+    if status_code == 429 {
+        // FCM explicitly specifies a one-minute default for quota responses.
+        Some(retry_after_millis.unwrap_or_default().max(60_000))
+    } else if status_code == 408 || (500..=599).contains(&status_code) {
+        // FCM recommends waiting at least ten seconds before retrying a failed
+        // request. The durable scheduler adds exponential backoff and jitter.
+        Some(retry_after_millis.unwrap_or_default().max(10_000))
+    } else {
+        retry_after_millis
+    }
+}
+
 fn classify_fcm_failure(status_code: u16, body: &[u8]) -> ProviderFailure {
     let message =
         trimmed_body_text(body).unwrap_or_else(|| format!("FCM error, status {status_code}"));
-    let kind = if is_fcm_token_invalid(status_code, body) {
+    let kind = if is_fcm_token_invalid(body) {
         ProviderFailureKind::InvalidToken
     } else if is_fcm_payload_too_large(status_code, body) {
         ProviderFailureKind::PayloadTooLarge
@@ -168,7 +146,7 @@ fn classify_fcm_failure(status_code: u16, body: &[u8]) -> ProviderFailure {
         ProviderFailureKind::CredentialsExpired
     } else if status_code == 429 {
         ProviderFailureKind::RateLimited
-    } else if matches!(status_code, 500 | 503 | 504) {
+    } else if status_code == 408 || (500..=599).contains(&status_code) {
         ProviderFailureKind::TemporarilyUnavailable
     } else {
         ProviderFailureKind::Rejected
@@ -215,10 +193,7 @@ impl FcmClient for FcmService {
     }
 }
 
-fn is_fcm_token_invalid(status_code: u16, body: &[u8]) -> bool {
-    if status_code == 404 {
-        return true;
-    }
+fn is_fcm_token_invalid(body: &[u8]) -> bool {
     let Some(error) = parse_fcm_error(body).and_then(|value| value.error) else {
         let haystack = String::from_utf8_lossy(body).to_ascii_lowercase();
         return haystack.contains("unregistered")
@@ -292,7 +267,7 @@ struct FcmErrorDetail {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderFailureKind, classify_fcm_failure};
+    use super::{ProviderFailureKind, classify_fcm_failure, normalize_fcm_retry_after};
 
     #[test]
     fn fcm_classifies_unregistered_token() {
@@ -305,6 +280,12 @@ mod tests {
         }"#;
         let failure = classify_fcm_failure(404, body);
         assert_eq!(failure.kind, ProviderFailureKind::InvalidToken);
+    }
+
+    #[test]
+    fn fcm_does_not_delete_a_token_for_an_unstructured_not_found_response() {
+        let failure = classify_fcm_failure(404, b"");
+        assert_eq!(failure.kind, ProviderFailureKind::Rejected);
     }
 
     #[test]
@@ -321,7 +302,17 @@ mod tests {
 
     #[test]
     fn fcm_classifies_retryable_server_failure() {
-        let failure = classify_fcm_failure(503, b"");
-        assert_eq!(failure.kind, ProviderFailureKind::TemporarilyUnavailable);
+        for status in [408, 502, 503] {
+            let failure = classify_fcm_failure(status, b"");
+            assert_eq!(failure.kind, ProviderFailureKind::TemporarilyUnavailable);
+        }
+    }
+
+    #[test]
+    fn fcm_retry_delays_respect_provider_minimums() {
+        assert_eq!(normalize_fcm_retry_after(429, None), Some(60_000));
+        assert_eq!(normalize_fcm_retry_after(503, None), Some(10_000));
+        assert_eq!(normalize_fcm_retry_after(503, Some(30_000)), Some(30_000));
+        assert_eq!(normalize_fcm_retry_after(400, None), None);
     }
 }

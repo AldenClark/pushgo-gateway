@@ -7,11 +7,10 @@ use crate::{
         execution::dedupe::{
             DispatchDedupeError, DispatchDedupeResult, DispatchDedupeStore,
             DispatchOpGuard as CoreDispatchOpGuard,
-            DispatchOpGuardStart as CoreDispatchOpGuardStart,
         },
         response::{DeliveryDispatchStatus, DeliverySummary},
     },
-    storage::{DedupeState, OpDedupeReservation},
+    storage::{DedupeState, DispatchSubmissionRecord, OpDedupeReservation},
 };
 
 pub(crate) type NotificationDispatchSummary = DeliverySummary;
@@ -43,6 +42,17 @@ impl DispatchDedupeStore for AppState {
             .map_err(DispatchDedupeError::from)
     }
 
+    async fn reserve_submission(
+        &self,
+        request_fingerprint: Option<&str>,
+        submission: &DispatchSubmissionRecord,
+    ) -> DispatchDedupeResult<OpDedupeReservation> {
+        self.store
+            .reserve_dispatch_submission(request_fingerprint, submission)
+            .await
+            .map_err(DispatchDedupeError::from)
+    }
+
     async fn mark_op_finalized(
         &self,
         dedupe_key: &str,
@@ -53,7 +63,9 @@ impl DispatchDedupeStore for AppState {
             DeliveryDispatchStatus::ProviderQueued => DedupeState::ProviderQueued,
             DeliveryDispatchStatus::AttemptedAccepted => DedupeState::Sent,
             DeliveryDispatchStatus::AttemptedPartialFailure => DedupeState::PartialFailure,
-            DeliveryDispatchStatus::NotAttempted | DeliveryDispatchStatus::PrivateQueueTooBusy => {
+            DeliveryDispatchStatus::MaterializationPending
+            | DeliveryDispatchStatus::NotAttempted
+            | DeliveryDispatchStatus::PrivateQueueTooBusy => {
                 return Err(DispatchDedupeError::new(
                     "only attempted dispatches can be finalized",
                 ));
@@ -75,49 +87,66 @@ impl DispatchDedupeStore for AppState {
             .await
             .map_err(DispatchDedupeError::from)
     }
+
+    async fn has_durable_dispatch_side_effects(
+        &self,
+        delivery_id: &str,
+    ) -> DispatchDedupeResult<bool> {
+        self.store
+            .has_durable_dispatch_side_effects(delivery_id)
+            .await
+            .map_err(DispatchDedupeError::from)
+    }
 }
 
 impl DispatchOpGuard {
-    pub(crate) async fn begin(
+    pub(crate) fn acceptance_order(&self) -> i64 {
+        self.0.acceptance_order()
+    }
+
+    pub(crate) async fn begin_submission(
         state: &AppState,
-        dedupe_key: String,
-        reserved_delivery_id: String,
+        submission: &DispatchSubmissionRecord,
         request_fingerprint: Option<&str>,
-        created_at: i64,
         channel_id: String,
         op_id: String,
     ) -> Result<DispatchOpGuardStart, Error> {
-        match CoreDispatchOpGuard::begin(
+        match CoreDispatchOpGuard::begin_submission(
             state,
-            dedupe_key,
-            reserved_delivery_id,
+            submission,
             request_fingerprint,
-            created_at,
             channel_id,
             op_id,
         )
         .await
         .map_err(api_error_from_dedupe)?
         {
-            CoreDispatchOpGuardStart::Proceed(guard) => {
+            crate::delivery_core::execution::dedupe::DispatchOpGuardStart::Proceed(guard) => {
                 Ok(DispatchOpGuardStart::Proceed(Self(guard)))
             }
-            CoreDispatchOpGuardStart::Complete(summary) => {
+            crate::delivery_core::execution::dedupe::DispatchOpGuardStart::Complete(summary) => {
                 Ok(DispatchOpGuardStart::Complete(summary))
             }
         }
     }
 
-    pub(crate) async fn finish(
+    pub(crate) async fn finish_submission(
         self,
         state: &AppState,
         dispatch_result: Result<NotificationDispatchSummary, Error>,
     ) -> Result<NotificationDispatchSummary, Error> {
-        self.0.finish(state, dispatch_result).await
+        self.0.finish_recoverable(state, dispatch_result).await
+    }
+
+    pub(crate) fn resume_submission(dedupe_key: String, delivery_id: String) -> Self {
+        Self(CoreDispatchOpGuard::resume(dedupe_key, delivery_id))
     }
 }
 
 fn api_error_from_dedupe(err: DispatchDedupeError) -> Error {
+    if err.is_too_busy() {
+        return Error::TooBusy;
+    }
     if err.is_fingerprint_conflict() {
         return Error::Conflict {
             message: err.into_message().into(),

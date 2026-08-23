@@ -13,6 +13,11 @@ use crate::{
     value::ProviderTokenRef,
 };
 
+pub(crate) use crate::delivery_core::execution::request::{
+    DispatchLiveActivityAction as EventActivityAction,
+    DispatchLiveActivityUpdate as EventActivityUpdate,
+};
+
 const ACTIVITY_KEY_MAX_LEN: usize = 255;
 const ACTIVITY_TOKEN_MAX_LEN: usize = 512;
 const IOS_LIVE_ACTIVITY_TOPIC: &str = "io.ethan.pushgo.push-type.liveactivity";
@@ -67,34 +72,17 @@ pub(crate) async fn activity_unregister(
     Ok(ok(ActivityUnregisterResponse { deleted }))
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct EventActivityUpdate {
-    pub(crate) event_id: String,
-    pub(crate) action: EventActivityAction,
-    pub(crate) title: Option<String>,
-    pub(crate) state: Option<String>,
-    pub(crate) severity: Option<String>,
-    pub(crate) updated_at_millis: i64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EventActivityAction {
-    Update,
-    End,
-}
-
-pub(crate) async fn dispatch_event_activity_update(state: AppState, update: EventActivityUpdate) {
+pub(crate) async fn dispatch_event_activity_update(
+    state: AppState,
+    update: EventActivityUpdate,
+    acceptance_order: i64,
+    submission_delivery_id: &str,
+) -> Result<(), Error> {
     let activity_key = format!("event:{}", update.event_id);
-    let tokens = match state.store.list_live_activity_tokens(&activity_key).await {
-        Ok(tokens) => tokens,
-        Err(err) => {
-            emit_activity_dispatch_skipped(&activity_key, "store_error", Some(err.to_string()));
-            return;
-        }
-    };
+    let tokens = state.store.list_live_activity_tokens(&activity_key).await?;
     if tokens.is_empty() {
         emit_activity_dispatch_skipped(&activity_key, "no_registered_tokens", None);
-        return;
+        return Ok(());
     }
     let title = normalized_text(update.title.as_deref()).unwrap_or_else(|| update.event_id.clone());
     let state_text = normalized_text(update.state.as_deref());
@@ -117,9 +105,27 @@ pub(crate) async fn dispatch_event_activity_update(state: AppState, update: Even
             Some(update.updated_at_millis / 1000 + 60),
         )),
     };
+    let mut first_error = None;
     for token in tokens {
-        dispatch_activity_token(&state, &activity_key, token, Arc::clone(&payload));
+        if let Err(err) = dispatch_activity_token(
+            &state,
+            &activity_key,
+            token,
+            Arc::clone(&payload),
+            update.accepted_at_millis,
+            acceptance_order,
+            submission_delivery_id,
+        )
+        .await
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
     }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Ok(())
 }
 
 impl ActivityRegisterRequest {
@@ -208,23 +214,33 @@ fn normalize_token(value: &str) -> Result<String, Error> {
     })
 }
 
-fn dispatch_activity_token(
+async fn dispatch_activity_token(
     state: &AppState,
     activity_key: &str,
     record: LiveActivityTokenRecord,
     payload: Arc<ApnsPayload>,
-) {
+    accepted_at: i64,
+    acceptance_order: i64,
+    submission_delivery_id: &str,
+) -> Result<(), Error> {
     let platform = match record.platform.parse::<Platform>() {
         Ok(Platform::IOS) => Platform::IOS,
         _ => {
             emit_activity_dispatch_skipped(activity_key, "unsupported_platform", None);
-            return;
+            return Ok(());
         }
     };
     let channel_id = record.channel_id.unwrap_or([0_u8; 16]);
     let correlation_id = Arc::<str>::from(format!("{activity_key}:{}", record.updated_at));
     let delivery_id = Arc::<str>::from(format!("liveactivity:{activity_key}"));
-    let device_key = Arc::<str>::from(format!("liveactivity:{activity_key}"));
+    // A Live Activity can be registered on more than one device. Keep latest-
+    // wins coalescing per (activity, token), not merely per activity, otherwise
+    // every token maps to the same durable job ID and all but one are lost.
+    let token_digest = blake3::hash(record.token.as_bytes()).to_hex();
+    let device_key = Arc::<str>::from(format!(
+        "liveactivity:{activity_key}:{}",
+        &token_digest.as_str()[..32]
+    ));
     let device_token = Arc::<str>::from(record.token);
     let job = ApnsJob {
         channel_id,
@@ -239,18 +255,29 @@ fn dispatch_activity_token(
         initial_path: ProviderDeliveryPath::Direct,
         wakeup_payload_within_limit: false,
         collapse_id: Some(Arc::from(activity_key.to_string())),
+        route_fenced: false,
+        coalescible: true,
         outcome: None,
     };
-    if let Err(err) = state.dispatch.try_send_apns(job) {
-        emit_activity_dispatch_skipped(activity_key, dispatch_error_reason(&err), None);
-    }
-}
-
-fn dispatch_error_reason(err: &crate::dispatch::DispatchError) -> &'static str {
-    match err {
-        crate::dispatch::DispatchError::QueueFull => "apns_queue_full",
-        crate::dispatch::DispatchError::ChannelClosed => "apns_queue_closed",
-    }
+    let durable = crate::dispatch::DurableProviderJob::from_apns(&job);
+    let mut record = durable
+        .to_record(
+            "pending",
+            accepted_at,
+            accepted_at.saturating_add(60 * 60 * 1000),
+        )
+        .map_err(|err| Error::Internal(format!("encode Live Activity dispatch: {err}")))?;
+    // Keep latest-state ActivityKit updates out of the user-alert APNs lane.
+    // They share the HTTP client but have independent adaptive scheduling.
+    record.provider = "APNS_LIVE_ACTIVITY".to_string();
+    // The APNs payload uses a stable per-activity delivery identity, but the
+    // outbox must retain the frozen core submission generation. Equal-order
+    // idempotence is safe only within that exact committed generation.
+    record.delivery_id = submission_delivery_id.to_string();
+    record.coalesce_order = acceptance_order;
+    state.store.enqueue_provider_dispatch_job(&record).await?;
+    let _ = state.dispatch.try_send_live_activity(job);
+    Ok(())
 }
 
 fn normalized_text(value: Option<&str>) -> Option<String> {

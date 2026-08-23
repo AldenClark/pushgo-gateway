@@ -129,6 +129,10 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
         global_max_pending: usize,
         protected_delivery_id: Option<&str>,
     ) -> StoreResult<usize>;
+    async fn list_acked_private_outbox_devices(
+        &self,
+        delivery_id: &str,
+    ) -> StoreResult<Vec<DeviceId>>;
     async fn list_private_outbox(
         &self,
         device_id: DeviceId,
@@ -194,8 +198,11 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
         worker_id: &str,
         claim_generation: u64,
     ) -> StoreResult<bool>;
-    async fn ack_private_delivery(&self, device_id: DeviceId, delivery_id: &str)
-    -> StoreResult<()>;
+    async fn ack_private_delivery(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+    ) -> StoreResult<bool>;
     async fn clear_private_outbox_for_device(
         &self,
         device_id: DeviceId,
@@ -226,6 +233,14 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
 #[async_trait]
 pub trait DeviceRouteDatabaseAccess: Send + Sync {
     async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>>;
+    async fn provider_route_is_current(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        channel_type: RouteChannelType,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool>;
     async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()>;
     async fn touch_device_activity(&self, device_id: DeviceId, at_ts: i64) -> StoreResult<()>;
     async fn persist_device_route_change(&self, route: &DeviceRouteRecordRow) -> StoreResult<()>;
@@ -313,6 +328,74 @@ pub trait ProviderPullDatabaseAccess: Send + Sync {
         delivery_ids: &[String],
         now: i64,
     ) -> StoreResult<usize>;
+    async fn discard_provider_items_if_candidates_match(
+        &self,
+        device_id: DeviceId,
+        candidates: &[ProviderPullCandidate],
+        now: i64,
+    ) -> StoreResult<usize>;
+}
+
+#[async_trait]
+pub trait ProviderDispatchDatabaseAccess: Send + Sync {
+    async fn enqueue_provider_dispatch_job(
+        &self,
+        record: &ProviderDispatchOutboxRecord,
+        hard_capacity: usize,
+    ) -> StoreResult<bool>;
+    async fn activate_provider_dispatch_jobs(
+        &self,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<usize>;
+    async fn cancel_preparing_provider_dispatch_jobs(
+        &self,
+        delivery_id: &str,
+        now: i64,
+    ) -> StoreResult<usize>;
+    async fn reconcile_preparing_provider_dispatch_jobs(&self, now: i64) -> StoreResult<usize>;
+    async fn claim_provider_dispatch_job(
+        &self,
+        provider: &str,
+        job_id: Option<&str>,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<Option<ProviderDispatchOutboxLease>>;
+    async fn renew_provider_dispatch_job_lease(
+        &self,
+        lease: &ProviderDispatchOutboxLease,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<bool>;
+    async fn claim_due_provider_dispatch_retry_job(
+        &self,
+        provider: &str,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<Option<ProviderDispatchOutboxLease>>;
+    async fn settle_provider_dispatch_job(
+        &self,
+        lease: &ProviderDispatchOutboxLease,
+        settlement: ProviderDispatchSettlement,
+        next_attempt_at: i64,
+        status_code: u16,
+        error_code: Option<&str>,
+        now: i64,
+    ) -> StoreResult<bool>;
+    async fn count_pending_provider_dispatch_jobs(&self, provider: &str) -> StoreResult<usize>;
+    async fn provider_dispatch_terminal_success(
+        &self,
+        delivery_id: &str,
+    ) -> StoreResult<Option<bool>>;
+    async fn has_durable_dispatch_side_effects(&self, delivery_id: &str) -> StoreResult<bool>;
+    async fn recover_expired_provider_dispatch_leases(&self, now: i64) -> StoreResult<usize>;
+    async fn cleanup_terminal_provider_dispatch_jobs(
+        &self,
+        before_ts: i64,
+        limit: usize,
+    ) -> StoreResult<usize>;
 }
 
 #[async_trait]
@@ -338,7 +421,50 @@ pub trait DedupeDatabaseAccess: Send + Sync {
         delivery_id: &str,
         request_fingerprint: Option<&str>,
         created_at: i64,
+        submission: Option<&DispatchSubmissionRecord>,
+        submission_hard_capacity: usize,
     ) -> StoreResult<OpDedupeReservation>;
+    async fn list_pending_dispatch_submissions(
+        &self,
+        limit: usize,
+        now: i64,
+    ) -> StoreResult<Vec<DispatchSubmissionRecord>>;
+    async fn load_dispatch_submission_acceptance_order(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+    ) -> StoreResult<Option<i64>>;
+    async fn claim_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<bool>;
+    async fn renew_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<bool>;
+    async fn release_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+    ) -> StoreResult<bool>;
+    async fn terminalize_unrecoverable_dispatch_submission(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        op_id: &str,
+        reason: &str,
+        now: i64,
+    ) -> StoreResult<bool>;
     async fn mark_op_dedupe_sent(
         &self,
         dedupe_key: &str,
@@ -396,6 +522,7 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
     ) -> StoreResult<()>;
     async fn finalize_provider_dispatch_outcome(
         &self,
+        dedupe_key: &str,
         op_id: &str,
         delivery_id: &str,
         success: bool,
@@ -414,6 +541,7 @@ pub trait SystemStateDatabaseAccess: Send + Sync {
     async fn cleanup_stale_private_outbox(
         &self,
         before_ts: i64,
+        acked_before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize>;
     async fn cleanup_orphan_devices(&self, before_ts: i64, limit: usize) -> StoreResult<usize>;
@@ -442,6 +570,7 @@ pub trait DatabaseAccess:
     + PrivateMessageDatabaseAccess
     + DeviceRouteDatabaseAccess
     + ProviderPullDatabaseAccess
+    + ProviderDispatchDatabaseAccess
     + DedupeDatabaseAccess
     + SystemStateDatabaseAccess
     + Send
@@ -454,6 +583,7 @@ impl<T> DatabaseAccess for T where
         + PrivateMessageDatabaseAccess
         + DeviceRouteDatabaseAccess
         + ProviderPullDatabaseAccess
+        + ProviderDispatchDatabaseAccess
         + DedupeDatabaseAccess
         + SystemStateDatabaseAccess
         + Send

@@ -122,6 +122,7 @@ pub struct MaintenanceCleanupStats {
     pub private_sessions_pruned: usize,
     pub private_outbox_pruned: usize,
     pub provider_pull_pruned: usize,
+    pub provider_dispatch_pruned: usize,
     pub sender_status_pruned: usize,
     pub orphan_devices_pruned: usize,
     pub stale_subscriptions_pruned: usize,
@@ -186,6 +187,11 @@ impl MaintenanceCleanupConfig {
 
     pub fn private_stale_outbox_before(self, now: i64) -> i64 {
         before_from_ttl(now, self.private_stale_outbox_ttl_secs)
+    }
+
+    /// ACK tombstones outlive the 35-day frozen-submission retention window.
+    pub fn ack_tombstone_before(self, now: i64) -> i64 {
+        before_from_ttl(now, 36 * 24 * 60 * 60)
     }
 
     pub fn orphan_device_before(self, now: i64) -> i64 {

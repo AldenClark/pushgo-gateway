@@ -43,6 +43,10 @@ impl UpgradeReporter {
         }
     }
 
+    pub fn unsafe_durability_warning(&self, error: &str) {
+        println!("[upgrade] warning=unsafe_durability detail=\"{error}\"");
+    }
+
     pub fn status(&self, status: UpgradeRunStatus) {
         println!("[upgrade] status={}", status.as_str());
     }

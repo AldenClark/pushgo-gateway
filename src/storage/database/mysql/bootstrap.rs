@@ -10,7 +10,10 @@ const MYSQL_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, payload_blob BLOB NOT NULL, payload_size INT NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (delivery_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, request_fingerprint VARCHAR(64) NULL, state VARCHAR(32) NOT NULL, provider_run_token VARCHAR(64) NULL, provider_owner VARCHAR(128) NULL, provider_lease_until BIGINT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS dispatch_submission (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, op_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, payload_version INT NOT NULL, payload_blob LONGBLOB NOT NULL, acceptance_order BIGINT NOT NULL DEFAULT 0, accepted_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (dedupe_key), UNIQUE KEY dispatch_submission_delivery_uidx (delivery_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS dispatch_acceptance_sequence (singleton TINYINT NOT NULL, current_value BIGINT NOT NULL, PRIMARY KEY (singleton)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, semantic_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, source VARCHAR(64) NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT NULL, expires_at BIGINT NULL, PRIMARY KEY (dedupe_key), UNIQUE KEY semantic_id_registry_semantic_idx (semantic_id)) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS provider_dispatch_outbox (job_id VARCHAR(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, provider VARCHAR(32) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, op_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, dedupe_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, payload_blob LONGBLOB NOT NULL, state VARCHAR(32) NOT NULL, attempt_count INT NOT NULL DEFAULT 0, next_attempt_at BIGINT NOT NULL, lease_owner VARCHAR(128) NULL, lease_until BIGINT NULL, lease_generation BIGINT NOT NULL DEFAULT 0, provider_status INT NULL, provider_error_code VARCHAR(128) NULL, accepted_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, coalesce_order BIGINT NOT NULL DEFAULT 0, completed_at BIGINT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (job_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, channel_id BINARY(16) NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64) NULL, provider_run_token VARCHAR(64) NULL, accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (op_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token VARCHAR(512) NOT NULL, channel_id BINARY(16) NULL, platform VARCHAR(32) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NULL, PRIMARY KEY (activity_key, token)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family)) ENGINE=InnoDB",
@@ -35,8 +38,13 @@ const MYSQL_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
     "CREATE INDEX dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
+    "CREATE INDEX dispatch_submission_expires_idx ON dispatch_submission (expires_at)",
     "CREATE INDEX semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
+    "CREATE INDEX provider_dispatch_outbox_due_idx ON provider_dispatch_outbox (provider, state, next_attempt_at, accepted_at)",
+    "CREATE INDEX provider_dispatch_outbox_retry_expiry_idx ON provider_dispatch_outbox (provider, state, expires_at, next_attempt_at, accepted_at)",
+    "CREATE INDEX provider_dispatch_outbox_lease_idx ON provider_dispatch_outbox (state, lease_until)",
+    "CREATE INDEX provider_dispatch_outbox_delivery_idx ON provider_dispatch_outbox (delivery_id)",
     "CREATE INDEX sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
     "CREATE INDEX live_activity_tokens_channel_idx ON live_activity_tokens (channel_id, updated_at)",
     "CREATE INDEX live_activity_tokens_expires_idx ON live_activity_tokens (expires_at)",
@@ -98,6 +106,7 @@ impl MySqlDb {
             .max_lifetime(tuning.max_lifetime)
             .connect(db_url)
             .await?;
+        validate_mysql_durability(&pool).await?;
         let this = Self { pool };
         this.init_schema().await?;
         Ok(this)
@@ -202,6 +211,55 @@ impl MySqlDb {
             "ALTER TABLE sender_submit_status ADD COLUMN provider_run_token VARCHAR(64) NULL",
         )
         .await?;
+        self.ensure_mysql_column(
+            "provider_dispatch_outbox",
+            "op_id",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN op_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_dispatch_outbox",
+            "dedupe_key",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN dedupe_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "dispatch_submission",
+            "acceptance_order",
+            "ALTER TABLE dispatch_submission ADD COLUMN acceptance_order BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "provider_dispatch_outbox",
+            "coalesce_order",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN coalesce_order BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        sqlx::query(
+            "INSERT IGNORE INTO dispatch_acceptance_sequence (singleton,current_value) VALUES (1,0)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE dispatch_acceptance_sequence SET current_value=GREATEST(\
+                current_value,\
+                (SELECT COALESCE(MAX(acceptance_order),0) FROM dispatch_submission),\
+                (SELECT COALESCE(MAX(coalesce_order),0) FROM provider_dispatch_outbox)\
+             ) WHERE singleton=1",
+        )
+        .execute(&self.pool)
+        .await?;
+        let legacy_pending: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM dispatch_submission s JOIN dispatch_op_dedupe d ON d.dedupe_key=s.dedupe_key \
+             WHERE s.acceptance_order=0 AND d.state='pending'",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        if legacy_pending > 0 {
+            return Err(StoreError::LegacyAcceptanceOrderPending {
+                pending: legacy_pending as usize,
+            });
+        }
 
         self.ensure_mysql_column(
             "devices",
@@ -1069,6 +1127,54 @@ impl MySqlDb {
     }
 }
 
+async fn validate_mysql_durability(pool: &MySqlPool) -> StoreResult<()> {
+    let flush_log: String =
+        sqlx::query_scalar("SELECT CAST(@@GLOBAL.innodb_flush_log_at_trx_commit AS CHAR)")
+            .fetch_one(pool)
+            .await?;
+    let doublewrite: String =
+        sqlx::query_scalar("SELECT CAST(@@GLOBAL.innodb_doublewrite AS CHAR)")
+            .fetch_one(pool)
+            .await?;
+    let log_bin: String = sqlx::query_scalar("SELECT CAST(@@GLOBAL.log_bin AS CHAR)")
+        .fetch_one(pool)
+        .await?;
+    let sync_binlog: String = sqlx::query_scalar("SELECT CAST(@@GLOBAL.sync_binlog AS CHAR)")
+        .fetch_one(pool)
+        .await?;
+    if mysql_durability_settings_are_safe(
+        flush_log.as_str(),
+        doublewrite.as_str(),
+        log_bin.as_str(),
+        sync_binlog.as_str(),
+    ) {
+        return Ok(());
+    }
+    Err(StoreError::UnsafeDurabilityConfiguration(format!(
+        "MySQL requires innodb_flush_log_at_trx_commit=1, innodb_doublewrite=on, and sync_binlog=1 when binary logging is enabled (actual flush_log={flush_log}, doublewrite={doublewrite}, log_bin={log_bin}, sync_binlog={sync_binlog})"
+    )))
+}
+
+fn mysql_durability_settings_are_safe(
+    flush_log: &str,
+    doublewrite: &str,
+    log_bin: &str,
+    sync_binlog: &str,
+) -> bool {
+    let enabled = |value: &str| {
+        value.eq_ignore_ascii_case("on") || value.eq_ignore_ascii_case("true") || value == "1"
+    };
+    let durable_doublewrite =
+        enabled(doublewrite) || doublewrite.eq_ignore_ascii_case("detect_and_recover");
+    flush_log == "1" && durable_doublewrite && (!enabled(log_bin) || sync_binlog == "1")
+}
+
+impl MySqlDb {
+    pub(crate) async fn validate_durability(&self) -> StoreResult<()> {
+        validate_mysql_durability(&self.pool).await
+    }
+}
+
 pub(crate) struct MySqlUpgradeLockGuard {
     // MySQL named locks are owned by the connection that acquired them. Keep a
     // dedicated physical session alive for the complete upgrade operation.
@@ -1438,5 +1544,31 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for MySqlDb 
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::mysql_durability_settings_are_safe;
+
+    #[test]
+    fn rejects_mysql_settings_that_can_ack_before_redo_or_binlog_sync() {
+        assert!(mysql_durability_settings_are_safe("1", "ON", "OFF", "0"));
+        assert!(mysql_durability_settings_are_safe("1", "ON", "ON", "1"));
+        assert!(mysql_durability_settings_are_safe(
+            "1",
+            "DETECT_AND_RECOVER",
+            "ON",
+            "1"
+        ));
+        assert!(!mysql_durability_settings_are_safe("2", "ON", "OFF", "0"));
+        assert!(!mysql_durability_settings_are_safe("1", "OFF", "OFF", "0"));
+        assert!(!mysql_durability_settings_are_safe(
+            "1",
+            "DETECT_ONLY",
+            "OFF",
+            "0"
+        ));
+        assert!(!mysql_durability_settings_are_safe("1", "ON", "ON", "0"));
     }
 }

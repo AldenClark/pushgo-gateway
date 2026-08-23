@@ -53,10 +53,14 @@ pub(crate) enum DeliveryDedupeStatus {
 pub(crate) enum DeliveryDedupeSettleAction {
     FinalizeSent,
     ClearPending,
+    KeepPending,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeliveryDispatchStatus {
+    /// The immutable submission manifest is committed, while transient
+    /// storage pressure postponed target materialization to recovery.
+    MaterializationPending,
     NotAttempted,
     ProviderQueued,
     AttemptedAccepted,
@@ -85,7 +89,7 @@ impl DeliveryDispatchStatus {
     }
 
     pub(crate) fn has_dispatch_attempt(self) -> bool {
-        !matches!(self, Self::NotAttempted)
+        !matches!(self, Self::MaterializationPending | Self::NotAttempted)
     }
 
     pub(crate) fn is_operational_failure(self) -> bool {
@@ -97,6 +101,7 @@ impl DeliveryDispatchStatus {
 
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::MaterializationPending => "materialization_pending",
             Self::NotAttempted => "not_attempted",
             Self::ProviderQueued => "provider_queued",
             Self::AttemptedAccepted => "attempted_accepted",
@@ -138,6 +143,7 @@ impl DeliverySummary {
             return Some("notification dispatch is already pending");
         }
         match self.dispatch_status {
+            DeliveryDispatchStatus::MaterializationPending => None,
             DeliveryDispatchStatus::ProviderQueued => None,
             DeliveryDispatchStatus::AttemptedAccepted => None,
             DeliveryDispatchStatus::AttemptedPartialFailure => {
@@ -160,6 +166,9 @@ impl DeliverySummary {
 
     pub(crate) fn dedupe_settle_action(&self) -> DeliveryDedupeSettleAction {
         match self.dispatch_status {
+            DeliveryDispatchStatus::MaterializationPending => {
+                DeliveryDedupeSettleAction::KeepPending
+            }
             DeliveryDispatchStatus::NotAttempted | DeliveryDispatchStatus::PrivateQueueTooBusy => {
                 DeliveryDedupeSettleAction::ClearPending
             }
@@ -244,6 +253,25 @@ mod tests {
             Some("notification dispatch was not attempted")
         );
         assert_eq!(summary.submit_acceptance(), SubmitAcceptance::New);
+    }
+
+    #[test]
+    fn committed_manifest_pending_materialization_is_accepted_without_an_attempt() {
+        let summary = DeliverySummary::new(
+            "channel".to_string(),
+            "op".to_string(),
+            "delivery".to_string(),
+            DeliveryDedupeStatus::New,
+            DeliveryDispatchStatus::MaterializationPending,
+        );
+
+        assert_eq!(summary.submit_acceptance(), SubmitAcceptance::New);
+        assert_eq!(summary.failure_error_message(), None);
+        assert!(!summary.has_dispatch_attempt);
+        assert_eq!(
+            summary.dedupe_settle_action(),
+            DeliveryDedupeSettleAction::KeepPending
+        );
     }
 
     #[test]

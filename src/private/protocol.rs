@@ -217,7 +217,7 @@ pub struct DeliverFrame {
     pub payload: Vec<u8>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivatePayloadEnvelope {
     pub payload_version: u8,
     pub data: HashMap<String, String>,

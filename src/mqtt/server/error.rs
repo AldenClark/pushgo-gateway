@@ -37,7 +37,7 @@ pub(super) fn mqtt_error_from_api(err: Error) -> MqttError {
     let message = Box::leak(text.into_boxed_str());
     let code = match &err {
         Error::Unauthorized => "not_authorized",
-        Error::TooBusy => "too_busy",
+        Error::TooBusy | Error::StoreError(StoreError::PasswordKdfBusy) => "server_busy",
         Error::Validation {
             code: Some(code), ..
         } => Box::leak(code.clone().into_owned().into_boxed_str()),
@@ -49,7 +49,7 @@ pub(super) fn mqtt_error_from_api(err: Error) -> MqttError {
         Error::Unauthorized
         | Error::StoreError(StoreError::ChannelNotFound)
         | Error::StoreError(StoreError::ChannelPasswordMismatch) => MqttErrorKind::Auth,
-        Error::TooBusy => MqttErrorKind::Quota,
+        Error::TooBusy | Error::StoreError(StoreError::PasswordKdfBusy) => MqttErrorKind::Quota,
         Error::Validation {
             code: Some(code), ..
         } if code.contains("topic") || code.as_ref() == "channel_id_invalid" => {
@@ -106,5 +106,36 @@ pub(super) fn publish_disconnect_reason(err: &MqttError) -> Option<DisconnectRea
         MqttErrorKind::Retain => Some(DisconnectReasonCode::RetainNotSupported),
         MqttErrorKind::TopicAlias => Some(DisconnectReasonCode::TopicAliasInvalid),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_kdf_overload_maps_to_mqtt_quota() {
+        let mapped = mqtt_error_from_api(Error::StoreError(StoreError::PasswordKdfBusy));
+        assert_eq!(mapped.code, "server_busy");
+        assert_eq!(mapped.kind, MqttErrorKind::Quota);
+        assert_eq!(
+            subscribe_reason_for_error(&mapped),
+            SubscribeReasonCode::QuotaExceeded
+        );
+        assert_eq!(
+            puback_reason_for_error(&mapped),
+            PubAckReason::QuotaExceeded
+        );
+    }
+
+    #[test]
+    fn delivery_core_busy_maps_to_mqtt_quota() {
+        let mapped = mqtt_error_from_api(Error::TooBusy);
+        assert_eq!(mapped.code, "server_busy");
+        assert_eq!(mapped.kind, MqttErrorKind::Quota);
+        assert_eq!(
+            puback_reason_for_error(&mapped),
+            PubAckReason::QuotaExceeded
+        );
     }
 }

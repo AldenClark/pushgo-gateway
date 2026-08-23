@@ -7,6 +7,26 @@ impl DeviceRouteDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, load_device_routes())
     }
 
+    async fn provider_route_is_current(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        channel_type: RouteChannelType,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            provider_route_is_current(
+                device_key,
+                platform,
+                channel_type,
+                provider_token,
+                route_updated_at
+            )
+        )
+    }
+
     async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()> {
         delegate_db_async!(self, upsert_device_route(route))
     }

@@ -32,6 +32,20 @@ pub enum StoreError {
         "Device route migration requires {pending} pending slots, but only {capacity} are available"
     )]
     RouteMigrationCapacityExceeded { pending: usize, capacity: usize },
+    #[error("Provider dispatch durable capacity is exhausted ({pending}/{capacity})")]
+    ProviderDispatchCapacityExceeded { pending: usize, capacity: usize },
+    #[error("Dispatch submission durable capacity is exhausted ({pending}/{capacity})")]
+    DispatchSubmissionCapacityExceeded { pending: usize, capacity: usize },
+    #[error(
+        "Legacy v12 has {pending} pending dispatch submission(s) without a durable acceptance order; drain them with the prior Gateway before retrying the forward fix"
+    )]
+    LegacyAcceptanceOrderPending { pending: usize },
+    #[error("Private outbox durable capacity is exhausted ({pending}/{capacity})")]
+    PrivateOutboxCapacityExceeded { pending: usize, capacity: usize },
+    #[error("Private payload is missing after durable insert")]
+    PrivatePayloadMissingAfterInsert,
+    #[error("Database durability configuration is unsafe: {0}")]
+    UnsafeDurabilityConfiguration(String),
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
     #[error("Password hash error: {0}")]
@@ -42,6 +56,9 @@ pub enum StoreError {
     SchemaVersionMismatch { expected: String, actual: String },
     #[error("Database upgrade failed: {0}")]
     Upgrade(String),
+    #[cfg(test)]
+    #[error("Injected test storage failure: {0}")]
+    InjectedTestFailure(&'static str),
 }
 
 impl From<argon2::password_hash::Error> for StoreError {

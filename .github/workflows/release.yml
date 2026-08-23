@@ -19,7 +19,7 @@ env:
   CARGO_AUDIT_VERSION: "0.22.2"
   CARGO_DENY_VERSION: "0.20.2"
   CROSS_VERSION: "0.2.5"
-  SYFT_VERSION: "1.50.0"
+  SYFT_VERSION: "1.51.0"
   RUSTSEC_ADVISORY_DB_REV: 1237bbe09d2701e14e6593a630fbaf28928df712
   DEBIAN_RUNTIME_IMAGE: debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
   ALPINE_RUNTIME_IMAGE: alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
@@ -36,7 +36,7 @@ jobs:
       notes_section: ${{ steps.contract.outputs.notes_section }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -106,12 +106,25 @@ jobs:
           REQUIRE_CLEAN_WORKTREE: "1"
         run: scripts/preflight_release_audit.sh all
 
-      - name: Upload preflight evidence
+      - name: Run exact v11/v12 rollback and restore-clone drill
+        env:
+          V11_SOURCE_COMMIT: 6c26f420114823a827caa0274a0bbc3739d91211
+          V12_BIN: target/release/pushgo-gateway
+          EVIDENCE_FILE: evidence/rollback/v12-single-instance.json
+        run: scripts/v12_single_instance_rollback_drill.sh
+
+      - name: Run three-round SQLite MySQL PostgreSQL parity
+        env:
+          ROUNDS: "3"
+          REPORT_DIR: evidence/crossdb
+        run: scripts/storage_crossdb_parity.sh
+
+      - name: Upload release-gate evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pushgo-preflight-evidence
-          path: evidence/preflight
+          name: pushgo-release-gate-evidence
+          path: evidence
           if-no-files-found: error
           retention-days: 30
 
@@ -126,16 +139,16 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             arch: amd64
-            image: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main@sha256:bd64b44f22afa7ec8ba332f4fd9943a4b43252d9f1174a10214d960423dd7732
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main@sha256:5a2831afe0b368edc94c249ce9fa325af19c447a72cd08c7592e0546dba1cf04
           - target: aarch64-unknown-linux-gnu
             arch: arm64
-            image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main@sha256:86fb5b55fbada2eeca29a4da135a2bec274caa4bc561791d6c2207fdd217a34b
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main@sha256:1edb02d16ff2eaa4839c63a87dfbd546192dae9e59012c117679f465997e5267
           - target: armv7-unknown-linux-gnueabihf
             arch: armv7
-            image: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main@sha256:067e4cd778a1f5bba7fd4328e1478b4744f6341cbc2571f9b9f06e68486bc9bc
+            image: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main@sha256:ff8092f70424871282fe81f1e34597e2dda9d38dc328e2d76a5c01170f630a5b
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -170,7 +183,7 @@ jobs:
           chmod 0755 out-gnu/*
 
       - name: Upload GNU binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-gnu-${{ matrix.arch }}
           path: out-gnu
@@ -188,16 +201,16 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             arch: amd64
-            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main@sha256:dfb72a59029f50787396e5fe1c3d26b57cab78e326f434578e8719f0e12a8ecd
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main@sha256:d54fdde7f1b680901a0bb21a2952e4921172b94c17e48603ccbbaeca8b5ef7e8
           - target: aarch64-unknown-linux-musl
             arch: arm64
-            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main@sha256:e148c4bc7bc3f5dfb252d2b546dafbc79f2d7eeba2d371b28a7b149270ffc331
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main@sha256:f604e399cbb2154ddeb013db99eb4f123d24f09a579c7e8d6ed631d15ffa8b12
           - target: armv7-unknown-linux-musleabihf
             arch: armv7
-            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main@sha256:60661244162f05c27ed4a6c8427dbdbb3a8b298ba55b8dcce1b6f1d9069d5d7c
+            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main@sha256:1b30949c63dc54b52caf364dc02653c6f770d7576d7b1370bac85ce4b47bd3c4
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -232,7 +245,7 @@ jobs:
           chmod 0755 out-musl/*
 
       - name: Upload musl binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-musl-${{ matrix.arch }}
           path: out-musl
@@ -246,19 +259,19 @@ jobs:
     needs: [build-gnu-binaries, build-musl-binaries]
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Download GNU binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: pushgo-gnu-*
           merge-multiple: true
           path: inputs/gnu
 
       - name: Download musl binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: pushgo-musl-*
           merge-multiple: true
@@ -281,7 +294,7 @@ jobs:
           .github/scripts/verify_release_assets.sh dist evidence
 
       - name: Generate binary SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           path: dist
           format: spdx-json
@@ -291,7 +304,7 @@ jobs:
           upload-release-assets: false
 
       - name: Upload release binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-release-binaries
           path: dist
@@ -299,7 +312,7 @@ jobs:
           retention-days: 30
 
       - name: Upload release metadata
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-release-metadata
           path: evidence
@@ -307,7 +320,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Docker binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-docker-binaries
           path: dist-docker
@@ -343,14 +356,14 @@ jobs:
             runtime: alpine
     steps:
       - name: Download release binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pushgo-release-binaries
           path: dist
 
       - name: Set up QEMU
         if: matrix.platform != 'linux/amd64'
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Execute exact binary under target runtime
         env:
@@ -379,7 +392,7 @@ jobs:
             > "evidence/binary-smoke-${TARGET}.json"
 
       - name: Upload binary smoke evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binary-smoke-${{ matrix.target }}
           path: evidence
@@ -397,13 +410,13 @@ jobs:
       attestations: write
     steps:
       - name: Download verified release binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pushgo-release-binaries
           path: dist
 
       - name: Create GitHub build provenance
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/${{ env.BINARY_NAME }}-linux-*
 
@@ -421,24 +434,24 @@ jobs:
       candidate: ${{ steps.candidate.outputs.ref }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Download prebuilt Docker binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pushgo-docker-binaries
           path: dist
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.3.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -456,7 +469,7 @@ jobs:
 
       - name: Build and push isolated candidate with SBOM and provenance
         id: publish
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile.gha
@@ -494,13 +507,13 @@ jobs:
     steps:
       - name: Set up QEMU
         if: matrix.platform != 'linux/amd64'
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.3.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -535,7 +548,7 @@ jobs:
             > "evidence/docker-smoke-${SLUG}.json"
 
       - name: Upload image smoke evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: docker-smoke-${{ matrix.slug }}
           path: evidence
@@ -549,25 +562,31 @@ jobs:
     needs: [release-gate, binary-smoke, attest-binaries, docker, docker-smoke]
     steps:
       - name: Checkout source contract
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Download release metadata
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pushgo-release-metadata
           path: evidence
 
+      - name: Download release-gate database evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pushgo-release-gate-evidence
+          path: evidence/gate
+
       - name: Download binary smoke records
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: binary-smoke-*
           merge-multiple: true
           path: evidence/smoke
 
       - name: Download image smoke records
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: docker-smoke-*
           merge-multiple: true
@@ -584,6 +603,10 @@ jobs:
           mapfile -t docker_records < <(find evidence/smoke -type f -name 'docker-smoke-*.json' | LC_ALL=C sort)
           test "${#binary_records[@]}" -eq 6
           test "${#docker_records[@]}" -eq 3
+          jq -e '.synthetic_database == true and .production_validation == false and .snapshot_restore_clone == "PASS" and .v11_rejects_v12_schema == "PASS" and .v12_backlog_preserved == "PASS"' \
+            evidence/gate/rollback/v12-single-instance.json >/dev/null
+          test "$(grep -c 'API_CROSS .* MATCH' evidence/gate/crossdb/summary.txt)" -eq 9
+          test "$(grep -c 'DB_CROSS .* MATCH' evidence/gate/crossdb/summary.txt)" -eq 9
           cargo_lock_sha256="$(sha256sum Cargo.lock | awk '{print $1}')"
           workflow_sha256="$(sha256sum .github/workflows/release.yml | awk '{print $1}')"
           dockerfile_sha256="$(sha256sum Dockerfile.gha | awk '{print $1}')"
@@ -608,12 +631,14 @@ jobs:
             --arg image_digest "${IMAGE_DIGEST}" \
             --arg asset_manifest_sha256 "${asset_manifest_sha256}" \
             --arg sbom_sha256 "${sbom_sha256}" \
-            '{schema_version: 1, status: "passed", git_sha: $git_sha, git_ref: $git_ref, channel: $channel, image_digest: $image_digest, asset_manifest_sha256: $asset_manifest_sha256, sbom_sha256: $sbom_sha256, binary_target_count: 6, image_platform_count: 3}' \
+            '{schema_version: 1, status: "passed", git_sha: $git_sha, git_ref: $git_ref, channel: $channel, image_digest: $image_digest, asset_manifest_sha256: $asset_manifest_sha256, sbom_sha256: $sbom_sha256, binary_target_count: 6, image_platform_count: 3, synthetic_restore_clone: "passed", crossdb_parity_rounds: 3, production_validation: "not_run_not_required_for_release"}' \
             > evidence/release-verification.json
-          sha256sum evidence/release-assets.json evidence/pushgo-gateway-binaries.spdx.json evidence/release-verification.json evidence/smoke/*.json | LC_ALL=C sort -k2 > evidence/EVIDENCE_SHA256SUMS
+          find evidence/gate evidence/smoke -type f -print0 | sort -z | xargs -0 sha256sum > evidence/EVIDENCE_SHA256SUMS
+          sha256sum evidence/release-assets.json evidence/pushgo-gateway-binaries.spdx.json evidence/release-verification.json >> evidence/EVIDENCE_SHA256SUMS
+          LC_ALL=C sort -k2 -o evidence/EVIDENCE_SHA256SUMS evidence/EVIDENCE_SHA256SUMS
 
       - name: Upload final release evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-release-verification
           path: evidence
@@ -630,15 +655,15 @@ jobs:
       packages: write
     steps:
       - name: Checkout promotion contract
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.3.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -646,7 +671,7 @@ jobs:
 
       - name: Log in to Docker Hub when explicitly enabled
         if: vars.PUBLISH_DOCKERHUB == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -696,7 +721,7 @@ jobs:
           (cd promotion && sha256sum image-promotion.json > PROMOTION_SHA256SUMS)
 
       - name: Upload immutable promotion evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-image-promotion
           path: promotion
@@ -712,7 +737,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -729,19 +754,19 @@ jobs:
           } >> "${GITHUB_ENV}"
 
       - name: Download verified binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pushgo-release-binaries
           path: dist
 
       - name: Download final evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pushgo-release-verification
           path: evidence
 
       - name: Download image promotion evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pushgo-image-promotion
           path: evidence/promotion
@@ -804,7 +829,7 @@ jobs:
 
       - name: Create immutable GitHub Release
         if: steps.release-state.outputs.create == 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
@@ -907,11 +932,11 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.decision.outputs.promote == 'true'
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.3.0
 
       - name: Log in to GHCR
         if: steps.decision.outputs.promote == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -919,7 +944,7 @@ jobs:
 
       - name: Log in to Docker Hub when explicitly enabled
         if: steps.decision.outputs.promote == 'true' && vars.PUBLISH_DOCKERHUB == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -955,7 +980,7 @@ jobs:
 
       - name: Upload stable channel evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-stable-channel-promotion
           path: promotion

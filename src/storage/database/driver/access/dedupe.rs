@@ -45,10 +45,111 @@ impl DedupeDatabaseAccess for DatabaseDriver {
         delivery_id: &str,
         request_fingerprint: Option<&str>,
         created_at: i64,
+        submission: Option<&DispatchSubmissionRecord>,
+        submission_hard_capacity: usize,
     ) -> StoreResult<OpDedupeReservation> {
         delegate_db_async!(
             self,
-            reserve_op_dedupe_pending(dedupe_key, delivery_id, request_fingerprint, created_at)
+            reserve_op_dedupe_pending(
+                dedupe_key,
+                delivery_id,
+                request_fingerprint,
+                created_at,
+                submission,
+                submission_hard_capacity
+            )
+        )
+    }
+
+    async fn list_pending_dispatch_submissions(
+        &self,
+        limit: usize,
+        now: i64,
+    ) -> StoreResult<Vec<DispatchSubmissionRecord>> {
+        delegate_db_async!(self, list_pending_dispatch_submissions(limit, now))
+    }
+
+    async fn load_dispatch_submission_acceptance_order(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+    ) -> StoreResult<Option<i64>> {
+        delegate_db_async!(
+            self,
+            load_dispatch_submission_acceptance_order(dedupe_key, delivery_id)
+        )
+    }
+
+    async fn claim_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            claim_dispatch_submission_materialization(
+                dedupe_key,
+                delivery_id,
+                owner,
+                now,
+                lease_until
+            )
+        )
+    }
+
+    async fn renew_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+        lease_until: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            renew_dispatch_submission_materialization(
+                dedupe_key,
+                delivery_id,
+                owner,
+                now,
+                lease_until
+            )
+        )
+    }
+
+    async fn release_dispatch_submission_materialization(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        owner: &str,
+        now: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            release_dispatch_submission_materialization(dedupe_key, delivery_id, owner, now)
+        )
+    }
+
+    async fn terminalize_unrecoverable_dispatch_submission(
+        &self,
+        dedupe_key: &str,
+        delivery_id: &str,
+        op_id: &str,
+        reason: &str,
+        now: i64,
+    ) -> StoreResult<bool> {
+        delegate_db_async!(
+            self,
+            terminalize_unrecoverable_dispatch_submission(
+                dedupe_key,
+                delivery_id,
+                op_id,
+                reason,
+                now
+            )
         )
     }
 

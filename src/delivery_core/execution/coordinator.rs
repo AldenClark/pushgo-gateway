@@ -22,18 +22,16 @@ use crate::{
         payload::{MAX_PROVIDER_TTL_SECONDS, NotificationSeverity},
         planning::plan::DeliveryPlan,
         response::{DeliveryDedupeStatus, DeliveryDispatchStatus, DeliverySummary},
-        store::{channel::ChannelStore, counters::RuntimeCounterSink},
+        store::counters::RuntimeCounterSink,
     },
     dispatch::{DispatchChannels, ProviderDispatchOutcome},
     private::PrivateState,
     routing::DeviceRegistry,
-    storage::{Storage, StoreError},
+    storage::{DispatchTarget, Storage, StoreError},
     util::generate_hex_id_128,
 };
 
 pub(crate) trait DispatchExecutionRuntime: Send + Sync {
-    fn channel_store(&self) -> &(dyn ChannelStore + Send + Sync);
-
     fn storage(&self) -> &Storage;
 
     fn dispatch_channels(&self) -> &DispatchChannels;
@@ -43,10 +41,6 @@ pub(crate) trait DispatchExecutionRuntime: Send + Sync {
     fn counter_sink(&self) -> &(dyn RuntimeCounterSink + Send + Sync);
 
     fn private_state(&self) -> Option<&PrivateState>;
-
-    fn private_channel_enabled(&self) -> bool;
-
-    fn public_base_url(&self) -> Option<&str>;
 }
 
 pub(crate) trait DispatchExecutionDelegate {
@@ -65,11 +59,16 @@ pub(crate) struct DispatchExecutionInput {
     pub(crate) channel_id: [u8; 16],
     pub(crate) channel_id_text: String,
     pub(crate) sent_at: i64,
+    pub(crate) acceptance_order: i64,
     pub(crate) delivery_id: String,
     pub(crate) op_id: String,
     pub(crate) entity_type: &'static str,
     pub(crate) entity_id: String,
     pub(crate) request: DispatchRequest,
+    pub(crate) dispatch_targets: Vec<DispatchTarget>,
+    pub(crate) private_enabled: bool,
+    pub(crate) private_default_ttl_secs: i64,
+    pub(crate) public_base_url: Option<String>,
     pub(crate) provider_outcome: Arc<ProviderDispatchOutcome>,
 }
 
@@ -83,6 +82,7 @@ pub(crate) struct PreparedDispatch<'a> {
     pub(crate) delivery_id_ref: Arc<str>,
     pub(crate) correlation_id: Arc<str>,
     pub(crate) sent_at: i64,
+    pub(crate) acceptance_order: i64,
     pub(crate) resolved_title: Option<String>,
     pub(crate) resolved_body: Option<String>,
     pub(crate) severity: NotificationSeverity,
@@ -113,6 +113,10 @@ impl<'a> PreparedDispatch<'a> {
     async fn build(
         runtime: &'a dyn DispatchExecutionRuntime,
         request: DispatchRequest,
+        dispatch_targets: Vec<DispatchTarget>,
+        private_enabled: bool,
+        private_default_ttl_secs: i64,
+        public_base_url: Option<String>,
         context: DispatchBuildContext,
     ) -> Result<Self, DispatchExecutionError> {
         let DispatchRequest {
@@ -122,40 +126,29 @@ impl<'a> PreparedDispatch<'a> {
             alert,
             payload,
             delivery_policy,
+            live_activity: _,
         } = request;
         let DispatchBuildContext {
             channel_id,
             channel_id_value,
             sent_at,
+            acceptance_order,
             delivery_id,
             correlation_id,
             delivery_id_ref,
             entity_type,
             provider_outcome,
         } = context;
-        let dispatch_targets = runtime
-            .channel_store()
-            .list_channel_dispatch_targets(channel_id, sent_at)
-            .await
-            .inspect_err(|err| {
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::ERROR,
-                    event = "dispatch.list_channel_targets_failed",
-                    channel_id = %(crate::util::redact_text(channel_id_value.as_str())),
-                    op_id = %(crate::util::redact_text(op_id.as_str())),
-                    correlation_id = %(crate::util::redact_text(correlation_id.as_ref())),
-                    delivery_id = %(crate::util::redact_text(delivery_id_ref.as_ref())),
-                    error = %(err.to_string())
-                );
-            })?;
-
         let private_state = runtime.private_state();
-        let private_enabled = runtime.private_channel_enabled() && private_state.is_some();
-        let private_default_ttl_secs = private_state
-            .map(|private| private.config.default_ttl_secs)
-            .unwrap_or(MAX_PROVIDER_TTL_SECONDS)
-            .clamp(0, MAX_PROVIDER_TTL_SECONDS);
+        let requires_private_runtime = dispatch_targets
+            .iter()
+            .any(|target| matches!(target, DispatchTarget::Private { .. }));
+        if private_enabled && requires_private_runtime && private_state.is_none() {
+            return Err(DispatchExecutionError {
+                message: "frozen dispatch requires the private runtime".to_string(),
+            });
+        }
+        let private_default_ttl_secs = private_default_ttl_secs.clamp(0, MAX_PROVIDER_TTL_SECONDS);
         let prepared_core = prepare_dispatch_core(DispatchPreparationInput {
             channel_id: channel_id_value.clone(),
             op_id,
@@ -169,7 +162,7 @@ impl<'a> PreparedDispatch<'a> {
             dispatch_targets,
             private_enabled,
             private_default_ttl_secs,
-            public_base_url: runtime.public_base_url().map(ToString::to_string),
+            public_base_url,
         })?;
         let private_dispatch =
             private_state
@@ -197,6 +190,7 @@ impl<'a> PreparedDispatch<'a> {
             delivery_id_ref,
             correlation_id: Arc::from(prepared_core.correlation_id.into_boxed_str()),
             sent_at: prepared_core.sent_at,
+            acceptance_order,
             resolved_title: prepared_core.resolved_title,
             resolved_body: prepared_core.resolved_body,
             severity: prepared_core.severity,
@@ -276,6 +270,7 @@ struct DispatchBuildContext {
     channel_id: [u8; 16],
     channel_id_value: String,
     sent_at: i64,
+    acceptance_order: i64,
     delivery_id: String,
     correlation_id: Arc<str>,
     delivery_id_ref: Arc<str>,
@@ -314,11 +309,16 @@ where
         channel_id,
         channel_id_text,
         sent_at,
+        acceptance_order,
         delivery_id,
         op_id,
         entity_type,
         entity_id,
         request,
+        dispatch_targets,
+        private_enabled,
+        private_default_ttl_secs,
+        public_base_url,
         provider_outcome,
     } = input;
     let trace_id = generate_hex_id_128();
@@ -340,10 +340,15 @@ where
         let prepared = PreparedDispatch::build(
             runtime,
             request,
+            dispatch_targets,
+            private_enabled,
+            private_default_ttl_secs,
+            public_base_url,
             DispatchBuildContext {
                 channel_id,
                 channel_id_value: channel_id_text,
                 sent_at,
+                acceptance_order,
                 delivery_id,
                 correlation_id: Arc::clone(&correlation_id),
                 delivery_id_ref: Arc::clone(&delivery_id_ref),
@@ -425,6 +430,20 @@ fn emit_dispatch_request_failed<D>(
 ) where
     D: DispatchExecutionDelegate,
 {
+    let error_code = delegate.error_code(err);
+    if matches!(error_code, "private_outbox_capacity" | "too_busy") {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::DEBUG,
+            event = "dispatch.request_deferred",
+            correlation_id = %(crate::util::redact_text(correlation_id)),
+            delivery_id = %(crate::util::redact_text(delivery_id)),
+            channel_id = %(crate::util::redact_text(channel_id)),
+            op_id = %(crate::util::redact_text(op_id)),
+            reason = %(error_code)
+        );
+        return;
+    }
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::WARN,
@@ -433,7 +452,7 @@ fn emit_dispatch_request_failed<D>(
         delivery_id = %(crate::util::redact_text(delivery_id)),
         channel_id = %(crate::util::redact_text(channel_id)),
         op_id = %(crate::util::redact_text(op_id)),
-        error_code = %(delegate.error_code(err))
+        error_code = %(error_code)
     );
 }
 

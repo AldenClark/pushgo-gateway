@@ -1,17 +1,21 @@
 mod channel;
 mod device;
+mod dispatch_submission;
 mod error;
 mod idempotency;
 mod platform;
 mod private;
+mod provider_dispatch;
 mod routing;
 mod system;
 
 pub use channel::*;
 pub use device::*;
+pub use dispatch_submission::*;
 pub use error::*;
 pub use idempotency::*;
 pub use platform::*;
 pub use private::*;
+pub use provider_dispatch::*;
 pub use routing::*;
 pub use system::*;

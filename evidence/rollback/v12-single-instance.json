@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-08-23T03:46:30Z",
+  "synthetic_database": true,
+  "production_validation": false,
+  "v11_source_commit": "6c26f420114823a827caa0274a0bbc3739d91211",
+  "v11_schema": "2026-08-08-gateway-v11",
+  "v12_schema": "2026-08-20-gateway-v12",
+  "v11_binary_sha256": "db78e9abeb154533bdad7bbe7ca4c1b86b77d2053f235b8cf311f75e40f58238",
+  "v12_binary_sha256": "f08cd0aa60545adae0d6bce92e5b25dcdf9a4bba41bcb526df5344eac8b0313a",
+  "restored_v11_family_sha256": "50ef63dac27d1f379324bbb9e14008c5fb22cb3fb3cfae022a60a30e8dc76ae3",
+  "snapshot_restore_clone": "PASS",
+  "v11_rejects_v12_schema": "PASS",
+  "v12_backlog_preserved": "PASS"
+}

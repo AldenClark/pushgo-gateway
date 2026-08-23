@@ -186,6 +186,248 @@ async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
 }
 
 #[tokio::test]
+async fn full_private_lane_does_not_block_healthy_provider_materialization() {
+    let state = build_private_test_state().await;
+    let channel_secret = format!("mixed-lane-{}", std::process::id());
+    let provider_token = "a".repeat(64);
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "mixed-lane-provider-device",
+        "mixed-lane-channel",
+        channel_secret.as_str(),
+        provider_token.as_str(),
+        Platform::IOS,
+    )
+    .await;
+    let channel_bytes = crate::api::parse_channel_id(&channel_id).expect("channel id should parse");
+    let private_device_key = "mixed-lane-private-device";
+    let private_route = DeviceRouteRecord {
+        platform: Platform::IOS,
+        channel_type: DeviceChannelType::Private,
+        provider_token: None,
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    state
+        .device_registry
+        .restore_route(private_device_key, private_route.clone())
+        .expect("private route restore should succeed");
+    state
+        .store
+        .upsert_device_route(&DeviceRouteRecordRow::from_registry_record(
+            private_device_key,
+            &private_route,
+        ))
+        .await
+        .expect("private route should persist");
+    let private_device_id = derive_private_device_id(private_device_key);
+    state
+        .store
+        .private_subscribe_channel(channel_bytes, private_device_id)
+        .await
+        .expect("private subscriber should persist");
+
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    for index in 0..16 {
+        let (status, body) = post_json(
+            app.clone(),
+            "/message",
+            json!({
+                "channel_id": channel_id,
+                "password": channel_secret,
+                "title": format!("fill private lane {index}")
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "fill submit {index}: {body:?}");
+    }
+    assert_eq!(
+        state
+            .store
+            .list_private_outbox(private_device_id, 32)
+            .await
+            .expect("private outbox should list")
+            .len(),
+        16
+    );
+    let provider_jobs_before = state
+        .store
+        .count_pending_provider_dispatch_jobs("APNS")
+        .await
+        .expect("provider jobs should count");
+
+    let (status, body) = post_json(
+        app,
+        "/message",
+        json!({
+            "channel_id": channel_id,
+            "password": channel_secret,
+            "title": "provider must survive private capacity"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "capacity submit: {body:?}");
+    let op_id = response_data(&body)
+        .get("op_id")
+        .and_then(Value::as_str)
+        .expect("accepted response should contain op_id");
+    let sender = state
+        .store
+        .load_sender_submit_status(op_id)
+        .await
+        .expect("sender status should load")
+        .expect("sender status should exist");
+    assert_eq!(
+        sender.status,
+        crate::storage::SenderSubmitStatusKind::Processing,
+        "the frozen submission must remain replayable for the full private lane"
+    );
+    assert_eq!(
+        state
+            .store
+            .count_pending_provider_dispatch_jobs("APNS")
+            .await
+            .expect("provider jobs should count after partial materialization"),
+        provider_jobs_before + 1,
+        "the healthy APNs target must be activated independently"
+    );
+}
+
+#[tokio::test]
+async fn private_ack_releases_capacity_and_recovery_completes_frozen_submission() {
+    let state = build_private_test_state().await;
+    let channel_secret = format!("ack-recovery-{}", std::process::id());
+    let provider_token = "b".repeat(64);
+    let channel_id = seed_provider_channel_for_router_test(
+        &state,
+        "ack-recovery-provider-device",
+        "ack-recovery-channel",
+        channel_secret.as_str(),
+        provider_token.as_str(),
+        Platform::IOS,
+    )
+    .await;
+    let channel_bytes = crate::api::parse_channel_id(&channel_id).expect("channel id should parse");
+    let private_device_key = "ack-recovery-private-device";
+    let private_route = DeviceRouteRecord {
+        platform: Platform::IOS,
+        channel_type: DeviceChannelType::Private,
+        provider_token: None,
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    state
+        .device_registry
+        .restore_route(private_device_key, private_route.clone())
+        .expect("private route restore should succeed");
+    state
+        .store
+        .upsert_device_route(&DeviceRouteRecordRow::from_registry_record(
+            private_device_key,
+            &private_route,
+        ))
+        .await
+        .expect("private route should persist");
+    let private_device_id = derive_private_device_id(private_device_key);
+    state
+        .store
+        .private_subscribe_channel(channel_bytes, private_device_id)
+        .await
+        .expect("private subscriber should persist");
+
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    for index in 0..16 {
+        let (status, body) = post_json(
+            app.clone(),
+            "/message",
+            json!({
+                "channel_id": channel_id,
+                "password": channel_secret,
+                "title": format!("fill private lane {index}")
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "fill submit {index}: {body:?}");
+    }
+
+    let (status, body) = post_json(
+        app,
+        "/message",
+        json!({
+            "channel_id": channel_id,
+            "password": channel_secret,
+            "title": "must materialize after private ACK"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "capacity submit: {body:?}");
+    let op_id = response_data(&body)
+        .get("op_id")
+        .and_then(Value::as_str)
+        .expect("accepted response should contain op_id");
+
+    let queued = state
+        .store
+        .list_private_outbox(private_device_id, 32)
+        .await
+        .expect("private outbox should list");
+    assert_eq!(queued.len(), 16);
+    let capacity_notifier = state.store.private_capacity_recovery_notifier();
+    let capacity_signal = capacity_notifier.notified();
+    tokio::pin!(capacity_signal);
+    state
+        .private
+        .as_ref()
+        .expect("private state should exist")
+        .hub
+        .ack_delivery(private_device_id, queued[0].delivery_id.as_str())
+        .await
+        .expect("private ACK should release one durable slot");
+    tokio::time::timeout(std::time::Duration::from_millis(500), &mut capacity_signal)
+        .await
+        .expect("ACK must immediately notify the owned recovery worker");
+
+    assert_eq!(
+        crate::api::handlers::message::recover_pending_dispatch_submissions_before(
+            &state,
+            i64::MAX,
+        )
+        .await
+        .expect("recovery sweep should succeed"),
+        1
+    );
+    assert_eq!(
+        state
+            .store
+            .list_private_outbox(private_device_id, 32)
+            .await
+            .expect("private outbox should refill")
+            .len(),
+        16,
+        "the frozen delivery must consume the slot released by ACK"
+    );
+    assert!(
+        state
+            .store
+            .list_pending_dispatch_submissions(10, i64::MAX)
+            .await
+            .expect("pending submissions should list")
+            .iter()
+            .all(|record| record.op_id != op_id),
+        "successful replay must leave no pending frozen manifest"
+    );
+    let sender = state
+        .store
+        .load_sender_submit_status(op_id)
+        .await
+        .expect("sender status should load")
+        .expect("sender status should exist");
+    assert_eq!(
+        sender.status,
+        crate::storage::SenderSubmitStatusKind::ProviderQueued,
+        "the recovered operation should advance out of processing"
+    );
+}
+
+#[tokio::test]
 async fn message_route_generates_new_op_and_entity_for_repeated_submit() {
     let state = build_test_state().await;
     let channel_id = seed_provider_channel_for_router_test(
@@ -445,7 +687,10 @@ async fn send_status_route_returns_sender_facing_status_by_op_id() {
         .and_then(Value::as_str)
         .expect("status should be present");
     assert!(
-        matches!(status, "sent" | "partially_failed" | "failed"),
+        matches!(
+            status,
+            "provider_queued" | "sent" | "partially_failed" | "failed"
+        ),
         "unexpected sender-facing status: {status}"
     );
     assert_eq!(data.get("model").and_then(Value::as_str), Some("message"));

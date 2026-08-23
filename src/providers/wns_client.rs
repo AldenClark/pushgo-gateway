@@ -1,28 +1,25 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use reqwest::Client;
-use tokio::{sync::Semaphore, time::sleep};
 
 use crate::{
     Error,
     providers::{
-        BoxFuture, DispatchResult, ProviderFailure, ProviderFailureKind, TokenInfo, WnsClient,
-        WnsTokenProvider, error::trimmed_body_text, wns::WnsPayload,
+        BoxFuture, DispatchResult, PROVIDER_CONNECT_TIMEOUT, PROVIDER_REQUEST_TIMEOUT,
+        ProviderFailure, ProviderFailureKind, TokenInfo, WnsClient, WnsTokenProvider,
+        error::{parse_retry_after_millis, trimmed_body_text},
+        wns::WnsPayload,
     },
-    runtime_config::{GatewayRuntimeProfile, RuntimeTuning},
+    runtime_config::GatewayRuntimeProfile,
 };
 
-const WNS_TIMEOUT: Duration = Duration::from_secs(60);
 const WNS_TYPE: &str = "wns/raw";
 // WNS requires this media type for raw notifications even when the app payload is UTF-8 JSON.
 const WNS_CONTENT_TYPE: &str = "application/octet-stream";
-const WNS_MAX_RETRY: usize = 3;
-const WNS_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 
 pub struct WnsService {
     client: Client,
     token_provider: Arc<dyn WnsTokenProvider>,
-    limiter: Arc<Semaphore>,
 }
 
 impl WnsService {
@@ -32,21 +29,17 @@ impl WnsService {
 
     pub fn new_with_profile(
         token_provider: Arc<dyn WnsTokenProvider>,
-        runtime_profile: GatewayRuntimeProfile,
+        _runtime_profile: GatewayRuntimeProfile,
     ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
-            .timeout(WNS_TIMEOUT)
+            .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
+            .timeout(PROVIDER_REQUEST_TIMEOUT)
             .build()
             .map_err(|err| Error::Internal(err.to_string()))?;
-        let max_in_flight = RuntimeTuning::for_profile(runtime_profile)
-            .provider
-            .wns_max_in_flight;
-
         Ok(Self {
             client,
             token_provider,
-            limiter: Arc::new(Semaphore::new(max_in_flight)),
         })
     }
 
@@ -62,51 +55,23 @@ impl WnsService {
 
         let priority = payload.priority();
         let ttl_seconds = payload.ttl_seconds();
-        let mut attempt = 0usize;
-        let mut backoff = WNS_INITIAL_BACKOFF;
-        let mut force_fresh_token = false;
-
-        loop {
-            attempt += 1;
-            let token = match if force_fresh_token {
-                self.token_provider.token_info_fresh().await
-            } else {
-                self.token_provider.token_info().await
-            } {
-                Ok(info) => info,
-                Err(err) => return DispatchResult::from_error(0, err),
-            };
-
-            let dispatch = self
-                .send_request(
-                    device_token,
-                    token.token.as_ref(),
-                    body.clone(),
-                    priority,
-                    ttl_seconds,
-                )
-                .await;
-            if dispatch.success {
-                return dispatch;
-            }
-
-            if dispatch.should_refresh_credentials()
-                && !force_fresh_token
-                && attempt < WNS_MAX_RETRY
-            {
-                force_fresh_token = true;
-                continue;
-            }
-
-            let retryable = dispatch.is_retryable() && attempt < WNS_MAX_RETRY;
-            if !retryable {
-                return dispatch;
-            }
-
-            force_fresh_token = false;
-            sleep(backoff).await;
-            backoff = (backoff * 2).min(Duration::from_secs(5));
+        let token = match self.token_provider.token_info().await {
+            Ok(info) => info,
+            Err(err) => return DispatchResult::provider_access_failure(err),
+        };
+        let dispatch = self
+            .send_request(
+                device_token,
+                token.token.as_ref(),
+                body,
+                priority,
+                ttl_seconds,
+            )
+            .await;
+        if dispatch.should_refresh_credentials() {
+            let _ = self.token_provider.token_info_fresh().await;
         }
+        dispatch
     }
 
     async fn send_request(
@@ -117,15 +82,6 @@ impl WnsService {
         priority: Option<u8>,
         ttl_seconds: Option<u32>,
     ) -> DispatchResult {
-        let _permit = match self.limiter.clone().acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => {
-                return DispatchResult::from_error(
-                    0,
-                    Error::Internal("WNS concurrency limiter closed".to_string()),
-                );
-            }
-        };
         let mut request = self
             .client
             .post(device_token)
@@ -146,10 +102,23 @@ impl WnsService {
 
         let status = response.status();
         let status_code = status.as_u16();
+        let retry_after_millis = normalize_wns_retry_after(
+            status_code,
+            parse_retry_after_millis(
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok()),
+            ),
+        );
         let body = response.bytes().await.unwrap_or_default();
 
         if !status.is_success() {
-            return DispatchResult::upstream("WNS", classify_wns_failure(status_code, &body));
+            return DispatchResult::upstream(
+                "WNS",
+                classify_wns_failure(status_code, &body)
+                    .with_retry_after_millis(retry_after_millis),
+            );
         }
 
         DispatchResult::success(status_code)
@@ -161,6 +130,19 @@ impl WnsService {
 
     pub async fn token_info_fresh(&self) -> Result<TokenInfo, Error> {
         self.token_provider.token_info_fresh().await
+    }
+}
+
+fn normalize_wns_retry_after(status_code: u16, retry_after_millis: Option<i64>) -> Option<i64> {
+    if matches!(status_code, 406 | 429) {
+        // 406 is WNS per-sender throttling; 429 is monthly quota pressure.
+        // Retry-After is authoritative. Use a conservative default when the
+        // response omits it instead of creating a tight retry loop.
+        Some(retry_after_millis.unwrap_or_default().max(60_000))
+    } else if status_code == 408 || (500..=599).contains(&status_code) {
+        Some(retry_after_millis.unwrap_or_default().max(10_000))
+    } else {
+        retry_after_millis
     }
 }
 
@@ -189,8 +171,8 @@ fn classify_wns_failure(status_code: u16, body: &[u8]) -> ProviderFailure {
         401 => ProviderFailureKind::CredentialsExpired,
         404 | 410 => ProviderFailureKind::InvalidToken,
         413 => ProviderFailureKind::PayloadTooLarge,
-        429 => ProviderFailureKind::RateLimited,
-        500 | 503 | 504 => ProviderFailureKind::TemporarilyUnavailable,
+        406 | 429 => ProviderFailureKind::RateLimited,
+        408 | 500..=599 => ProviderFailureKind::TemporarilyUnavailable,
         403 => ProviderFailureKind::Unauthorized,
         _ => ProviderFailureKind::Rejected,
     };
@@ -199,7 +181,7 @@ fn classify_wns_failure(status_code: u16, body: &[u8]) -> ProviderFailure {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderFailureKind, classify_wns_failure};
+    use super::{ProviderFailureKind, classify_wns_failure, normalize_wns_retry_after};
 
     #[test]
     fn wns_classifies_expired_credentials() {
@@ -217,5 +199,22 @@ mod tests {
     fn wns_classifies_payload_too_large() {
         let failure = classify_wns_failure(413, b"too large");
         assert_eq!(failure.kind, ProviderFailureKind::PayloadTooLarge);
+    }
+
+    #[test]
+    fn wns_retries_gateway_and_timeout_responses() {
+        for status in [408, 502, 503] {
+            let failure = classify_wns_failure(status, b"");
+            assert_eq!(failure.kind, ProviderFailureKind::TemporarilyUnavailable);
+        }
+    }
+
+    #[test]
+    fn wns_throttling_is_retryable_and_respects_retry_after() {
+        let failure = classify_wns_failure(406, b"throttled");
+        assert_eq!(failure.kind, ProviderFailureKind::RateLimited);
+        assert_eq!(normalize_wns_retry_after(406, None), Some(60_000));
+        assert_eq!(normalize_wns_retry_after(503, None), Some(10_000));
+        assert_eq!(normalize_wns_retry_after(503, Some(30_000)), Some(30_000));
     }
 }

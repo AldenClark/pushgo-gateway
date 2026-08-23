@@ -12,7 +12,21 @@ PushGo Gateway policy:
   - release tags read `[vX.Y.Z]`
 - Engineering implementation history stays in `release/CHANGELOG.md`.
 
-## [v1.3.0] - 2026-08-04
+## [Unreleased]
+
+## [v1.3.0] - 2026-08-23
+
+### Fixed
+- Decoupled Live Activity durable `accepted_at`/expiry from producer `event_time`; historical event timestamps remain in the ActivityKit payload while Gateway receive time owns scheduling and the one-hour durable window.
+- Made the Live Activity update snapshot part of the core durable dispatch submission. A first-pass supplemental enqueue failure preserves the accepted HTTP response, leaves the submission pending, and is automatically replayed into the idempotent `APNS_LIVE_ACTIVITY` outbox without duplicating the main event delivery.
+- Added a database-issued durable acceptance order for every latest-state provider materialization, including Widget and Live Activity. It remains total across same-millisecond concurrency, single-instance restart, and wall-clock rollback; equal orders are idempotent only for the same frozen submission generation, so older recovery cannot replace newer payload or expiry state.
+- Updated transitive `h2` from `0.4.15` to patched `0.4.16`.
+
+### Changed
+- Closed the v12 single-instance rollback contract: v11 fails closed on schema v12, pre-v12 rollback requires restoring the v11 snapshot, and any post-acceptance recovery uses the preserved v12-aware emergency forward-fix artifact. Existing v12 databases self-heal the order watermark above all persisted positive orders but never invent order for legacy zero-order work; startup fails closed when such a submission is still pending. Added an executable temporary-database compatibility drill and operator runbook.
+
+### Test
+- Added SQLite router/fault-injection coverage for historical Live Activity time, durable supplemental recovery to a claimable job, old payload-v1 serde compatibility, multi-token and Widget latest-state coalescing, total ordering across restart/clock rollback, equal-generation idempotence, legacy-zero unequal-generation fencing, expiry non-regression, existing-v12 watermark self-healing, and unordered-pending fail-closed admission; SQLite emergency-plan backlog preservation; and live PostgreSQL/MySQL durable-window, total-order, legacy-fence, and watermark round-trip coverage.
 
 ### Changed
 - Finalized package/runtime version `1.3.0` and retained the destructive legacy `/messages/pull` route solely for beta client compatibility.

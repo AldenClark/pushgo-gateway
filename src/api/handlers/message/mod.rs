@@ -24,7 +24,10 @@ pub(crate) use compat::{
     compat_ntfy_post, compat_ntfy_put, compat_serverchan_get, compat_serverchan_post,
     message_to_channel_get,
 };
-pub(crate) use dispatch::dispatch_entity_notification;
+pub(crate) use dispatch::{
+    dispatch_entity_notification, recover_pending_dispatch_submissions,
+    recover_pending_dispatch_submissions_before,
+};
 pub(crate) use ids::OpId;
 
 #[derive(Debug, Clone, Deserialize)]

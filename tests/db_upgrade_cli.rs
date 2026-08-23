@@ -2,7 +2,7 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-const STORAGE_SCHEMA_VERSION: &str = "2026-08-08-gateway-v11";
+const STORAGE_SCHEMA_VERSION: &str = "2026-08-20-gateway-v12";
 const STORAGE_SCHEMA_VERSION_BETA1: &str = "2026-04-22-gateway-v9";
 const STORAGE_SCHEMA_VERSION_MIGRATABLE: &str = "2026-04-17-gateway-v8";
 const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-04-16-gateway-v7";
@@ -225,8 +225,8 @@ fn db_upgrade_run_migrates_beta1_v9_to_current_schema() {
     let plan_stdout = String::from_utf8_lossy(&plan.stdout);
     assert!(
         plan_stdout
-            .contains("current schema=2026-04-22-gateway-v9 action=backfill_current pending=2"),
-        "beta1 must expose the formal and fencing migrations: {plan_stdout}"
+            .contains("current schema=2026-04-22-gateway-v9 action=backfill_current pending=3"),
+        "beta1 must expose the formal, fencing, and durable-dispatch migrations: {plan_stdout}"
     );
 
     let run = run_gateway(&["--db-url", db_url.as_str(), "--db-upgrade", "run"]);

@@ -2,6 +2,8 @@ use super::*;
 use crate::storage::database::sqlite::access::maintenance::delete_orphan_private_payload_in_sqlite_tx;
 use std::sync::Arc;
 
+use super::outbox::mark_provider_delivery_consumed_sqlite_tx;
+
 impl SqliteDb {
     pub(super) async fn load_private_message(
         &self,
@@ -42,6 +44,17 @@ impl SqliteDb {
         provider_token: &str,
     ) -> StoreResult<()> {
         let now = Utc::now().timestamp_millis();
+        let terminal: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND status = ?",
+        )
+        .bind(device_id.as_slice())
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_ACKED)
+        .fetch_one(self.delivery_pool())
+        .await?;
+        if terminal > 0 {
+            return Ok(());
+        }
         self.insert_private_message(delivery_id, message).await?;
         sqlx::query(
             "INSERT INTO provider_pull_queue \
@@ -76,8 +89,22 @@ impl SqliteDb {
         let now = Utc::now().timestamp_millis();
         let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let mut accepted = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let terminal: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM private_outbox WHERE device_id = ? AND delivery_id = ? AND status = ?",
+            )
+            .bind(entry.device_id.as_slice())
+            .bind(&entry.delivery_id)
+            .bind(OUTBOX_STATUS_ACKED)
+            .fetch_one(&mut *tx)
+            .await?;
+            if terminal == 0 {
+                accepted.push(entry);
+            }
+        }
 
-        for chunk in entries.chunks(64) {
+        for chunk in accepted.chunks(64) {
             let mut payload_query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
                 "INSERT INTO private_payloads \
                  (delivery_id, payload_blob, payload_size, sent_at, expires_at, created_at, updated_at) ",
@@ -91,14 +118,11 @@ impl SqliteDb {
                     .push_bind(now)
                     .push_bind(now);
             });
-            payload_query.push(
-                " ON CONFLICT (delivery_id) DO UPDATE SET \
-                 payload_blob = EXCLUDED.payload_blob, payload_size = EXCLUDED.payload_size, updated_at = EXCLUDED.updated_at",
-            );
+            payload_query.push(" ON CONFLICT (delivery_id) DO NOTHING");
             payload_query.build().execute(&mut *tx).await?;
         }
 
-        for chunk in entries.chunks(64) {
+        for chunk in accepted.chunks(64) {
             let mut queue_query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
                 "INSERT INTO provider_pull_queue \
                  (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) ",
@@ -155,11 +179,13 @@ impl SqliteDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_sqlite_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_sqlite_tx(&mut tx, &original_delivery_id).await?;
             }
             sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
@@ -167,6 +193,7 @@ impl SqliteDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            mark_provider_delivery_consumed_sqlite_tx(&mut tx, device_id, delivery_id, now).await?;
             delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
@@ -218,11 +245,13 @@ impl SqliteDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_sqlite_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_sqlite_tx(&mut tx, &original_delivery_id).await?;
             }
             out.push(ProviderPullItem {
@@ -242,6 +271,7 @@ impl SqliteDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            mark_provider_delivery_consumed_sqlite_tx(&mut tx, device_id, delivery_id, now).await?;
             delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
         }
         tx.commit().await?;
@@ -388,11 +418,13 @@ impl SqliteDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_sqlite_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_sqlite_tx(&mut tx, &original_delivery_id).await?;
             }
             sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
@@ -400,6 +432,7 @@ impl SqliteDb {
                 .bind(delivery_id)
                 .execute(&mut *tx)
                 .await?;
+            mark_provider_delivery_consumed_sqlite_tx(&mut tx, device_id, delivery_id, now).await?;
             delete_orphan_private_payload_in_sqlite_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
@@ -458,17 +491,21 @@ impl SqliteDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(item.payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_sqlite_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_sqlite_tx(&mut tx, &original_delivery_id).await?;
             }
             sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = ? AND delivery_id = ?")
                 .bind(device_id.as_slice())
                 .bind(&delivery_id)
                 .execute(&mut *tx)
+                .await?;
+            mark_provider_delivery_consumed_sqlite_tx(&mut tx, device_id, &delivery_id, now)
                 .await?;
             delete_orphan_private_payload_in_sqlite_tx(&mut tx, &delivery_id).await?;
             out.push(item);
@@ -512,6 +549,43 @@ impl SqliteDb {
             delete_orphan_private_payload_in_sqlite_tx(&mut tx, &delivery_id).await?;
         }
         let removed = rows.len();
+        tx.commit().await?;
+        Ok(removed)
+    }
+
+    pub(super) async fn discard_provider_items_if_candidates_match(
+        &self,
+        device_id: DeviceId,
+        candidates: &[ProviderPullCandidate],
+        now: i64,
+    ) -> StoreResult<usize> {
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let mut removed = 0usize;
+        for candidate in candidates {
+            let result = sqlx::query(
+                "DELETE FROM provider_pull_queue \
+                 WHERE device_id = ? AND delivery_id = ? AND expires_at > ? \
+                   AND COALESCE( \
+                       (SELECT payload_blob FROM private_payloads \
+                        WHERE delivery_id = provider_pull_queue.delivery_id), \
+                       provider_pull_queue.payload_blob \
+                   ) = ?",
+            )
+            .bind(device_id.as_slice())
+            .bind(&candidate.delivery_id)
+            .bind(now)
+            .bind(candidate.payload.as_ref())
+            .execute(&mut *tx)
+            .await?;
+            if result.rows_affected() == 1 {
+                delete_orphan_private_payload_in_sqlite_tx(&mut tx, &candidate.delivery_id).await?;
+                removed = removed.saturating_add(1);
+            }
+        }
         tx.commit().await?;
         Ok(removed)
     }

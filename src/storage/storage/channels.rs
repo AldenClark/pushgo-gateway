@@ -2,41 +2,329 @@ use super::*;
 use crate::storage::database::{
     ChannelQueryDatabaseAccess, PrivateChannelDatabaseAccess, ProviderSubscriptionDatabaseAccess,
 };
-use std::sync::{Arc, LazyLock};
-use tokio::sync::Semaphore;
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
+};
+use tokio::sync::{Notify, Semaphore};
 
 const DISPATCH_TARGETS_CACHE_EFFECTIVE_AT_SKEW_MS: i64 = 5;
-#[cfg(not(test))]
 const PASSWORD_KDF_CONCURRENCY: usize = 4;
-#[cfg(test)]
-const PASSWORD_KDF_CONCURRENCY: usize = 64;
+const PASSWORD_KDF_MAX_PENDING_UNIQUE: usize = 128;
+const PASSWORD_KDF_PERMIT_WAIT: Duration = Duration::from_secs(3);
+const PASSWORD_SINGLEFLIGHT_WAIT: Duration = Duration::from_secs(10);
+const PASSWORD_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(5);
+const PASSWORD_SUCCESS_CACHE_CAPACITY: usize = 4_096;
 static PASSWORD_KDF_PERMITS: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(PASSWORD_KDF_CONCURRENCY)));
+static PASSWORD_KDF_PENDING_PERMITS: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(PASSWORD_KDF_MAX_PENDING_UNIQUE)));
 
-async fn hash_channel_password_async(password: &str) -> StoreResult<String> {
-    let permit = Arc::clone(&PASSWORD_KDF_PERMITS)
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ChannelPasswordProof {
+    channel_id: [u8; 16],
+    proof: [u8; blake3::OUT_LEN],
+}
+
+#[derive(Clone)]
+enum SharedPasswordResult {
+    Verified(String),
+    Mismatch,
+    Busy,
+    Failed(String),
+}
+
+impl SharedPasswordResult {
+    fn into_store_result(self) -> StoreResult<String> {
+        match self {
+            Self::Verified(password_hash) => Ok(password_hash),
+            Self::Mismatch => Err(StoreError::ChannelPasswordMismatch),
+            Self::Busy => Err(StoreError::PasswordKdfBusy),
+            Self::Failed(detail) => Err(StoreError::PasswordHash(detail)),
+        }
+    }
+
+    fn from_store_result(result: &StoreResult<String>) -> Self {
+        match result {
+            Ok(password_hash) => Self::Verified(password_hash.clone()),
+            Err(StoreError::ChannelPasswordMismatch) => Self::Mismatch,
+            Err(StoreError::PasswordKdfBusy) => Self::Busy,
+            Err(StoreError::PasswordHash(detail)) => Self::Failed(detail.clone()),
+            Err(err) => Self::Failed(err.to_string()),
+        }
+    }
+}
+
+struct ChannelPasswordFlight {
+    result: Mutex<Option<SharedPasswordResult>>,
+    completed: Notify,
+}
+
+impl ChannelPasswordFlight {
+    fn new() -> Self {
+        Self {
+            result: Mutex::new(None),
+            completed: Notify::new(),
+        }
+    }
+
+    fn result(&self) -> Option<SharedPasswordResult> {
+        self.result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn complete(&self, result: SharedPasswordResult) {
+        *self
+            .result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result);
+        self.completed.notify_waiters();
+    }
+}
+
+pub(super) struct ChannelPasswordGate {
+    proof_key: [u8; blake3::KEY_LEN],
+    successes: Mutex<HashMap<ChannelPasswordProof, (Instant, String)>>,
+    flights: Mutex<HashMap<ChannelPasswordProof, Arc<ChannelPasswordFlight>>>,
+    #[cfg(test)]
+    kdf_runs: std::sync::atomic::AtomicUsize,
+}
+
+impl std::fmt::Debug for ChannelPasswordGate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let success_count = self
+            .successes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        let flight_count = self
+            .flights
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        formatter
+            .debug_struct("ChannelPasswordGate")
+            .field("success_count", &success_count)
+            .field("flight_count", &flight_count)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ChannelPasswordGate {
+    pub(super) fn new() -> Self {
+        Self {
+            proof_key: rand::random(),
+            successes: Mutex::new(HashMap::new()),
+            flights: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            kdf_runs: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn proof(
+        &self,
+        channel_id: [u8; 16],
+        password_hash: &str,
+        password: &str,
+    ) -> ChannelPasswordProof {
+        let mut hasher = blake3::Hasher::new_keyed(&self.proof_key);
+        hasher.update(b"pushgo.gateway.channel.password.success.v1");
+        hasher.update(&channel_id);
+        hasher.update(&(password_hash.len() as u64).to_le_bytes());
+        hasher.update(password_hash.as_bytes());
+        hasher.update(&(password.len() as u64).to_le_bytes());
+        hasher.update(password.as_bytes());
+        ChannelPasswordProof {
+            channel_id,
+            proof: *hasher.finalize().as_bytes(),
+        }
+    }
+
+    fn cached_success(&self, proof: ChannelPasswordProof) -> Option<String> {
+        let now = Instant::now();
+        let mut successes = self
+            .successes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match successes.get(&proof).cloned() {
+            Some((expires_at, password_hash)) if expires_at > now => Some(password_hash),
+            Some(_) => {
+                successes.remove(&proof);
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn cache_success(&self, proof: ChannelPasswordProof, password_hash: String) {
+        let now = Instant::now();
+        let mut successes = self
+            .successes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        successes.retain(|_, (expires_at, _)| *expires_at > now);
+        if successes.len() >= PASSWORD_SUCCESS_CACHE_CAPACITY
+            && let Some(evicted) = successes.keys().next().copied()
+        {
+            successes.remove(&evicted);
+        }
+        successes.insert(proof, (now + PASSWORD_SUCCESS_CACHE_TTL, password_hash));
+    }
+
+    fn invalidate_channel(&self, channel_id: [u8; 16]) {
+        self.successes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|proof, _| proof.channel_id != channel_id);
+    }
+
+    fn join_or_start(&self, proof: ChannelPasswordProof) -> (Arc<ChannelPasswordFlight>, bool) {
+        let mut flights = self
+            .flights
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(flight) = flights.get(&proof) {
+            return (Arc::clone(flight), false);
+        }
+        let flight = Arc::new(ChannelPasswordFlight::new());
+        flights.insert(proof, Arc::clone(&flight));
+        (flight, true)
+    }
+
+    fn finish(
+        &self,
+        proof: ChannelPasswordProof,
+        flight: &Arc<ChannelPasswordFlight>,
+        result: SharedPasswordResult,
+    ) {
+        flight.complete(result);
+        let mut flights = self
+            .flights
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if flights
+            .get(&proof)
+            .is_some_and(|current| Arc::ptr_eq(current, flight))
+        {
+            flights.remove(&proof);
+        }
+    }
+
+    #[cfg(test)]
+    fn record_kdf_run(&self) {
+        self.kdf_runs
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(not(test))]
+    fn record_kdf_run(&self) {}
+
+    #[cfg(test)]
+    pub(super) fn reset_kdf_runs(&self) {
+        self.kdf_runs.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(super) fn kdf_runs(&self) -> usize {
+        self.kdf_runs.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+struct ChannelPasswordFlightGuard {
+    gate: Arc<ChannelPasswordGate>,
+    proof: ChannelPasswordProof,
+    flight: Arc<ChannelPasswordFlight>,
+    armed: bool,
+}
+
+impl ChannelPasswordFlightGuard {
+    fn new(
+        gate: Arc<ChannelPasswordGate>,
+        proof: ChannelPasswordProof,
+        flight: Arc<ChannelPasswordFlight>,
+    ) -> Self {
+        Self {
+            gate,
+            proof,
+            flight,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ChannelPasswordFlightGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.gate
+                .finish(self.proof, &self.flight, SharedPasswordResult::Busy);
+        }
+    }
+}
+
+async fn wait_for_password_flight(flight: &ChannelPasswordFlight) -> StoreResult<String> {
+    loop {
+        let notified = flight.completed.notified();
+        if let Some(result) = flight.result() {
+            return result.into_store_result();
+        }
+        tokio::time::timeout(PASSWORD_SINGLEFLIGHT_WAIT, notified)
+            .await
+            .map_err(|_| StoreError::PasswordKdfBusy)?;
+    }
+}
+
+async fn acquire_password_kdf_permits() -> StoreResult<(
+    tokio::sync::OwnedSemaphorePermit,
+    tokio::sync::OwnedSemaphorePermit,
+)> {
+    let pending = Arc::clone(&PASSWORD_KDF_PENDING_PERMITS)
         .try_acquire_owned()
         .map_err(|_| StoreError::PasswordKdfBusy)?;
+    let execution = tokio::time::timeout(
+        PASSWORD_KDF_PERMIT_WAIT,
+        Arc::clone(&PASSWORD_KDF_PERMITS).acquire_owned(),
+    )
+    .await
+    .map_err(|_| StoreError::PasswordKdfBusy)?
+    .map_err(|_| StoreError::PasswordKdfBusy)?;
+    Ok((pending, execution))
+}
+
+#[allow(dead_code)]
+async fn encode_channel_auth_input_async(
+    _gate: Arc<ChannelPasswordGate>,
+    password: &str,
+) -> StoreResult<String> {
+    let (pending, execution) = acquire_password_kdf_permits().await?;
     let password = password.to_string();
     tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+        let _pending = pending;
+        let _execution = execution;
         hash_channel_password(&password)
     })
     .await
-    .map_err(|err| StoreError::PasswordHash(format!("password hashing task failed: {err}")))?
+    .map_err(|err| StoreError::PasswordHash(err.to_string()))?
 }
 
 async fn verify_channel_password_async(
+    gate: Arc<ChannelPasswordGate>,
     password_hash: &str,
     password: &str,
 ) -> StoreResult<ChannelPasswordVerifyOutcome> {
-    let permit = Arc::clone(&PASSWORD_KDF_PERMITS)
-        .try_acquire_owned()
-        .map_err(|_| StoreError::PasswordKdfBusy)?;
+    let (pending, execution) = acquire_password_kdf_permits().await?;
     let password_hash = password_hash.to_string();
     let password = password.to_string();
     tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+        let _pending = pending;
+        let _execution = execution;
+        gate.record_kdf_run();
         verify_channel_password(&password_hash, &password)
     })
     .await
@@ -69,7 +357,7 @@ impl Storage {
             )
             .await?
         } else {
-            hash_channel_password_async(password).await?
+            hash_channel_password(password)?
         };
 
         let outcome = self
@@ -206,14 +494,18 @@ impl Storage {
         password: &str,
     ) -> StoreResult<Option<ChannelInfo>> {
         if let Some(info) = self.cache.get_channel_info(channel_id) {
-            self.verify_channel_password_and_maybe_upgrade(
-                channel_id,
-                &info.password_hash,
-                password,
-                Some(&info.alias),
-            )
-            .await?;
-            return Ok(Some(info));
+            let password_hash = self
+                .verify_channel_password_and_maybe_upgrade(
+                    channel_id,
+                    &info.password_hash,
+                    password,
+                    Some(&info.alias),
+                )
+                .await?;
+            return Ok(Some(ChannelInfo {
+                alias: info.alias,
+                password_hash,
+            }));
         }
         let Some(info) = self.load_channel_info_for_password(channel_id).await? else {
             return Ok(None);
@@ -282,7 +574,7 @@ impl Storage {
             )
             .await?
         } else {
-            hash_channel_password_async(password).await?
+            hash_channel_password(password)?
         };
         let outcome = self
             .db
@@ -340,12 +632,37 @@ impl Storage {
         password: &str,
         alias: Option<&str>,
     ) -> StoreResult<String> {
-        let verify_outcome = verify_channel_password_async(password_hash, password).await?;
-        if verify_outcome.needs_upgrade() {
-            let upgraded_hash = hash_channel_password_async(password).await?;
+        if channel_password_uses_current_scheme(password_hash) {
+            verify_channel_password(password_hash, password)?;
+            return Ok(password_hash.to_string());
+        }
+
+        let gate = Arc::clone(&self.channel_password_gate);
+        let proof = gate.proof(channel_id, password_hash, password);
+        if let Some(cached_hash) = gate.cached_success(proof) {
+            return Ok(cached_hash);
+        }
+
+        let (flight, leader) = gate.join_or_start(proof);
+        if !leader {
+            return wait_for_password_flight(&flight).await;
+        }
+        let mut flight_guard =
+            ChannelPasswordFlightGuard::new(Arc::clone(&gate), proof, Arc::clone(&flight));
+
+        let result = async {
+            let verify_outcome =
+                verify_channel_password_async(Arc::clone(&gate), password_hash, password).await?;
+            if !verify_outcome.needs_upgrade() {
+                gate.cache_success(proof, password_hash.to_string());
+                return Ok(password_hash.to_string());
+            }
+
+            let upgraded_hash = hash_channel_password(password)?;
             self.db
                 .update_channel_password_hash(channel_id, upgraded_hash.as_str())
                 .await?;
+            gate.invalidate_channel(channel_id);
             if let Some(alias) = alias {
                 self.cache.put_channel_info(
                     channel_id,
@@ -357,9 +674,15 @@ impl Storage {
             } else {
                 self.cache.invalidate_channel_info(channel_id);
             }
-            return Ok(upgraded_hash);
+            gate.cache_success(proof, upgraded_hash.clone());
+            Ok(upgraded_hash)
         }
-        Ok(password_hash.to_string())
+        .await;
+
+        let shared = SharedPasswordResult::from_store_result(&result);
+        gate.finish(proof, &flight, shared);
+        flight_guard.disarm();
+        result
     }
 
     async fn load_channel_info_for_password(

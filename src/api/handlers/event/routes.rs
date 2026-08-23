@@ -5,7 +5,7 @@ use crate::{
     app::AppState,
     delivery_core::{
         auth::SubmitAuth,
-        response::EntityRef,
+        execution::request::{DispatchLiveActivityAction, DispatchLiveActivityIntent},
         source::IngressSource,
         submit::{
             ChannelSelector, DomainCommandInput, EventInput, ResponseMode, SubmitCommand,
@@ -15,9 +15,7 @@ use crate::{
 };
 
 use super::{
-    super::activity::{
-        EventActivityAction, EventActivityUpdate, dispatch_event_activity_update, json_scalar_text,
-    },
+    super::activity::json_scalar_text,
     super::channel_auth::{AuthorizedChannel, authorize_channel_by_password},
     super::delivery_core_adapter::{authorized_channel_context, core_error_to_api_error},
     EventCloseRequest, EventCommand, EventCreateRequest, EventUpdateRequest,
@@ -46,6 +44,7 @@ async fn event_to_channel_with_command(
     authorized_channel: AuthorizedChannel,
     command: EventCommand,
     activity: Option<PendingEventActivityUpdate>,
+    received_at_millis: i64,
 ) -> HttpResult {
     let action_name = command.action_name();
     let has_thing_id = command.thing_id().is_some();
@@ -55,28 +54,28 @@ async fn event_to_channel_with_command(
         has_thing_id
     );
     let fut = async move {
+        // One server-owned timestamp captured at route entry defines both core
+        // acceptance and any post-core Live Activity durability window.
+        // Producer event_time remains payload history only.
         let authorized_context = authorized_channel_context(authorized_channel);
         let result = submit_command(
             SubmitContext {
                 runtime: &state,
-                now_millis: chrono::Utc::now().timestamp_millis(),
+                now_millis: received_at_millis,
             },
             SubmitCommand {
                 source: IngressSource::HttpEvent,
                 auth: SubmitAuth::AuthorizedChannel(authorized_context.clone()),
                 channel: ChannelSelector::Authorized(authorized_context),
-                command: DomainCommandInput::Event(Box::new(EventInput { command })),
+                command: DomainCommandInput::Event(Box::new(EventInput {
+                    command,
+                    live_activity: activity.map(PendingEventActivityUpdate::into_intent),
+                })),
                 response_mode: ResponseMode::HttpJson,
             },
         )
         .await
         .map_err(core_error_to_api_error)?;
-        if let Some(activity) = activity
-            && let EntityRef::Event { event_id, .. } = &result.entity
-        {
-            let update = activity.into_update(event_id.clone());
-            tokio::spawn(dispatch_event_activity_update(state.clone(), update));
-        }
         event_submit_result_to_http(action_name, result)
     };
     tracing::Instrument::instrument(fut, span)
@@ -94,7 +93,7 @@ async fn event_to_channel_with_command(
 
 #[derive(Clone)]
 struct PendingEventActivityUpdate {
-    action: EventActivityAction,
+    action: DispatchLiveActivityAction,
     title: Option<String>,
     state: Option<String>,
     severity: Option<String>,
@@ -104,7 +103,7 @@ struct PendingEventActivityUpdate {
 impl PendingEventActivityUpdate {
     fn create(payload: &EventCreateRequest) -> Option<Self> {
         Self::from_patch(
-            EventActivityAction::Update,
+            DispatchLiveActivityAction::Update,
             &payload.patch,
             payload.event_time,
         )
@@ -112,18 +111,22 @@ impl PendingEventActivityUpdate {
 
     fn update(payload: &EventUpdateRequest) -> Option<Self> {
         Self::from_patch(
-            EventActivityAction::Update,
+            DispatchLiveActivityAction::Update,
             &payload.patch,
             payload.event_time,
         )
     }
 
     fn close(payload: &EventCloseRequest) -> Option<Self> {
-        Self::from_patch(EventActivityAction::End, &payload.patch, payload.event_time)
+        Self::from_patch(
+            DispatchLiveActivityAction::End,
+            &payload.patch,
+            payload.event_time,
+        )
     }
 
     fn from_patch(
-        action: EventActivityAction,
+        action: DispatchLiveActivityAction,
         patch: &EventPatchFields,
         updated_at_millis: Option<i64>,
     ) -> Option<Self> {
@@ -132,7 +135,7 @@ impl PendingEventActivityUpdate {
             .status
             .clone()
             .or_else(|| json_scalar_text(patch.attrs.as_ref().and_then(|attrs| attrs.get("state"))))
-            .or_else(|| (action == EventActivityAction::End).then(|| "closed".to_string()));
+            .or_else(|| (action == DispatchLiveActivityAction::End).then(|| "closed".to_string()));
         Some(Self {
             action,
             title: patch.title.clone(),
@@ -142,9 +145,8 @@ impl PendingEventActivityUpdate {
         })
     }
 
-    fn into_update(self, event_id: String) -> EventActivityUpdate {
-        EventActivityUpdate {
-            event_id,
+    fn into_intent(self) -> DispatchLiveActivityIntent {
+        DispatchLiveActivityIntent {
             action: self.action,
             title: self.title,
             state: self.state,
@@ -175,6 +177,7 @@ pub(crate) async fn event_create_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<EventCreateRequest>,
 ) -> HttpResult {
+    let received_at_millis = chrono::Utc::now().timestamp_millis();
     let activity = PendingEventActivityUpdate::create(&payload);
     let password = payload.common.password.as_deref().ok_or_else(|| {
         ::tracing::event!(
@@ -193,6 +196,7 @@ pub(crate) async fn event_create_to_channel(
         authorized_channel,
         EventCommand::from(payload),
         activity,
+        received_at_millis,
     )
     .await
 }
@@ -213,6 +217,7 @@ pub(crate) async fn event_update_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<EventUpdateRequest>,
 ) -> HttpResult {
+    let received_at_millis = chrono::Utc::now().timestamp_millis();
     let activity = PendingEventActivityUpdate::update(&payload);
     let password = payload.common.password.as_deref().ok_or_else(|| {
         ::tracing::event!(
@@ -231,6 +236,7 @@ pub(crate) async fn event_update_to_channel(
         authorized_channel,
         EventCommand::from(payload),
         activity,
+        received_at_millis,
     )
     .await
 }
@@ -251,6 +257,7 @@ pub(crate) async fn event_close_to_channel(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<EventCloseRequest>,
 ) -> HttpResult {
+    let received_at_millis = chrono::Utc::now().timestamp_millis();
     let activity = PendingEventActivityUpdate::close(&payload);
     let password = payload.common.password.as_deref().ok_or_else(|| {
         ::tracing::event!(
@@ -269,6 +276,7 @@ pub(crate) async fn event_close_to_channel(
         authorized_channel,
         EventCommand::from(payload),
         activity,
+        received_at_millis,
     )
     .await
 }

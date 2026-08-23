@@ -1,8 +1,8 @@
 use crate::storage::{
-    STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1, STORAGE_SCHEMA_VERSION_FORMAL_RELEASE,
-    STORAGE_SCHEMA_VERSION_LEGACY, STORAGE_SCHEMA_VERSION_MIGRATABLE,
-    STORAGE_SCHEMA_VERSION_OLDER_LEGACY, STORAGE_SCHEMA_VERSION_OLDEST_LEGACY,
-    STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
+    STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1, STORAGE_SCHEMA_VERSION_CONCURRENCY_V11,
+    STORAGE_SCHEMA_VERSION_FORMAL_RELEASE, STORAGE_SCHEMA_VERSION_LEGACY,
+    STORAGE_SCHEMA_VERSION_MIGRATABLE, STORAGE_SCHEMA_VERSION_OLDER_LEGACY,
+    STORAGE_SCHEMA_VERSION_OLDEST_LEGACY, STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
 };
 
 pub(crate) const DEVICE_IDENTITY_V8_MIGRATION: SchemaMigrationDefinition =
@@ -52,7 +52,7 @@ pub(crate) const FORMAL_RELEASE_V10_MIGRATION: SchemaMigrationDefinition =
         id: "20260805_001_release_v10",
         description: "Apply the managed 1.3.0 formal-release schema, idempotency collation, and provider-token identity migration",
         checksum: "sha256:f526ca103e36ed4ca6a0e0bddb6ebe2aff757a4c11417ff7d26500e2513b0bb1",
-        target_schema_version: STORAGE_SCHEMA_VERSION,
+        target_schema_version: STORAGE_SCHEMA_VERSION_FORMAL_RELEASE,
         risk: MigrationRisk::DataShapeChange,
         backup_policy: BackupPolicy::Required,
         rollback_policy: RollbackPolicy::RestoreBackup,
@@ -77,7 +77,7 @@ pub(crate) const CONCURRENCY_FENCING_V11_MIGRATION: SchemaMigrationDefinition =
         id: "20260808_001_concurrency_fencing_v11",
         description: "Add durable claim fencing, provider run ownership, and route revisions",
         checksum: "sha256:5ac8609854a01918f99f837fb1240aa74c8543f17fa777cf786520884271296e",
-        target_schema_version: STORAGE_SCHEMA_VERSION,
+        target_schema_version: STORAGE_SCHEMA_VERSION_CONCURRENCY_V11,
         risk: MigrationRisk::AdditiveSchema,
         backup_policy: BackupPolicy::Required,
         rollback_policy: RollbackPolicy::RestoreBackup,
@@ -97,11 +97,41 @@ pub(crate) const CONCURRENCY_FENCING_V11_MIGRATION: SchemaMigrationDefinition =
         ],
     };
 
+pub(crate) const DURABLE_PROVIDER_DISPATCH_V12_MIGRATION: SchemaMigrationDefinition =
+    SchemaMigrationDefinition {
+        id: "20260820_001_durable_provider_dispatch_v12",
+        description: "Add frozen dispatch submissions, durable provider outbox, and fenced retry leases",
+        checksum: "sha256:4ac6e216c2391120ae30ee711bf9c9252f9f0e2478e67327cd257f20ed061c72",
+        target_schema_version: STORAGE_SCHEMA_VERSION,
+        risk: MigrationRisk::AdditiveSchema,
+        backup_policy: BackupPolicy::Required,
+        rollback_policy: RollbackPolicy::RestoreBackup,
+        steps: &[
+            MigrationStepDefinition {
+                id: "create_dispatch_submission",
+                description: "Create the frozen cross-channel submission recovery table",
+            },
+            MigrationStepDefinition {
+                id: "create_provider_dispatch_outbox",
+                description: "Create the provider dispatch intent, retry, and terminal-state table",
+            },
+            MigrationStepDefinition {
+                id: "create_provider_dispatch_indexes",
+                description: "Create due-work, lease-recovery, and delivery lookup indexes",
+            },
+            MigrationStepDefinition {
+                id: "verify_provider_dispatch_contract",
+                description: "Verify durable admission and fenced lease schema invariants",
+            },
+        ],
+    };
+
 pub(crate) const SCHEMA_MIGRATIONS: &[SchemaMigrationDefinition] = &[
     DEVICE_IDENTITY_V8_MIGRATION,
     OBSERVABILITY_V9_MIGRATION,
     FORMAL_RELEASE_V10_MIGRATION,
     CONCURRENCY_FENCING_V11_MIGRATION,
+    DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +248,9 @@ impl SchemaMigrationPlan {
             },
             None => SchemaMigrationAction::FreshInstall,
             Some(version) if version == STORAGE_SCHEMA_VERSION => {
+                SchemaMigrationAction::BackfillCurrent
+            }
+            Some(version) if version == STORAGE_SCHEMA_VERSION_CONCURRENCY_V11 => {
                 SchemaMigrationAction::BackfillCurrent
             }
             Some(version) if version == STORAGE_SCHEMA_VERSION_FORMAL_RELEASE => {
@@ -390,9 +423,9 @@ fn emit_schema_plan_resolved(
 mod tests {
     use super::{
         AppliedSchemaMigration, CONCURRENCY_FENCING_V11_MIGRATION, DEVICE_IDENTITY_V8_MIGRATION,
-        FORMAL_RELEASE_V10_MIGRATION, OBSERVABILITY_V9_MIGRATION, SCHEMA_MIGRATIONS,
-        SchemaMigrationAction, SchemaMigrationPlan, latest_schema_migration,
-        pending_schema_migrations, validate_applied_schema_migrations,
+        DURABLE_PROVIDER_DISPATCH_V12_MIGRATION, FORMAL_RELEASE_V10_MIGRATION,
+        OBSERVABILITY_V9_MIGRATION, SCHEMA_MIGRATIONS, SchemaMigrationAction, SchemaMigrationPlan,
+        latest_schema_migration, pending_schema_migrations, validate_applied_schema_migrations,
     };
     use crate::storage::{
         STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1,
@@ -402,14 +435,17 @@ mod tests {
 
     #[test]
     fn migration_catalog_exposes_latest_schema_version() {
-        assert_eq!(latest_schema_migration(), CONCURRENCY_FENCING_V11_MIGRATION);
+        assert_eq!(
+            latest_schema_migration(),
+            DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
+        );
         assert_eq!(
             latest_schema_migration().target_schema_version,
             STORAGE_SCHEMA_VERSION
         );
         assert_eq!(
             SCHEMA_MIGRATIONS.last(),
-            Some(&CONCURRENCY_FENCING_V11_MIGRATION)
+            Some(&DURABLE_PROVIDER_DISPATCH_V12_MIGRATION)
         );
     }
 
@@ -443,7 +479,7 @@ mod tests {
             plan.action,
             SchemaMigrationAction::HardResetRuntime {
                 reason: "legacy_runtime_without_schema_meta",
-                migration: CONCURRENCY_FENCING_V11_MIGRATION,
+                migration: DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
             }
         );
         assert_eq!(
@@ -452,7 +488,8 @@ mod tests {
                 DEVICE_IDENTITY_V8_MIGRATION,
                 OBSERVABILITY_V9_MIGRATION,
                 FORMAL_RELEASE_V10_MIGRATION,
-                CONCURRENCY_FENCING_V11_MIGRATION
+                CONCURRENCY_FENCING_V11_MIGRATION,
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
             ]
         );
     }
@@ -488,6 +525,11 @@ mod tests {
                 checksum: CONCURRENCY_FENCING_V11_MIGRATION.checksum.to_string(),
                 success: true,
             },
+            AppliedSchemaMigration {
+                id: DURABLE_PROVIDER_DISPATCH_V12_MIGRATION.id.to_string(),
+                checksum: DURABLE_PROVIDER_DISPATCH_V12_MIGRATION.checksum.to_string(),
+                success: true,
+            },
         ];
         let plan = SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION), true, &applied)
             .expect("plan should resolve");
@@ -496,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn v8_schema_version_backfills_through_v11_in_place() {
+    fn v8_schema_version_backfills_through_v12_in_place() {
         let applied = vec![AppliedSchemaMigration {
             id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
             checksum: DEVICE_IDENTITY_V8_MIGRATION.checksum.to_string(),
@@ -511,13 +553,14 @@ mod tests {
             vec![
                 OBSERVABILITY_V9_MIGRATION,
                 FORMAL_RELEASE_V10_MIGRATION,
-                CONCURRENCY_FENCING_V11_MIGRATION
+                CONCURRENCY_FENCING_V11_MIGRATION,
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
             ]
         );
     }
 
     #[test]
-    fn beta1_v9_schema_backfills_to_v11_in_place() {
+    fn beta1_v9_schema_backfills_to_v12_in_place() {
         let applied = vec![
             AppliedSchemaMigration {
                 id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
@@ -538,13 +581,14 @@ mod tests {
             plan.pending_migrations,
             vec![
                 FORMAL_RELEASE_V10_MIGRATION,
-                CONCURRENCY_FENCING_V11_MIGRATION
+                CONCURRENCY_FENCING_V11_MIGRATION,
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
             ]
         );
     }
 
     #[test]
-    fn formal_v10_schema_backfills_concurrency_fencing_in_place() {
+    fn formal_v10_schema_backfills_v11_and_v12_in_place() {
         let applied = vec![
             AppliedSchemaMigration {
                 id: DEVICE_IDENTITY_V8_MIGRATION.id.to_string(),
@@ -571,7 +615,10 @@ mod tests {
         assert_eq!(plan.action, SchemaMigrationAction::BackfillCurrent);
         assert_eq!(
             plan.pending_migrations,
-            vec![CONCURRENCY_FENCING_V11_MIGRATION]
+            vec![
+                CONCURRENCY_FENCING_V11_MIGRATION,
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
+            ]
         );
     }
 
@@ -610,6 +657,11 @@ mod tests {
             AppliedSchemaMigration {
                 id: CONCURRENCY_FENCING_V11_MIGRATION.id.to_string(),
                 checksum: CONCURRENCY_FENCING_V11_MIGRATION.checksum.to_string(),
+                success: true,
+            },
+            AppliedSchemaMigration {
+                id: DURABLE_PROVIDER_DISPATCH_V12_MIGRATION.id.to_string(),
+                checksum: DURABLE_PROVIDER_DISPATCH_V12_MIGRATION.checksum.to_string(),
                 success: true,
             },
         ]);

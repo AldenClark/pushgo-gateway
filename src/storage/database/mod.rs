@@ -33,7 +33,7 @@ pub mod sqlite;
 pub use access::DatabaseAccess;
 pub(crate) use access::{
     ChannelQueryDatabaseAccess, DedupeDatabaseAccess, DeviceRouteDatabaseAccess,
-    PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderPullDatabaseAccess,
-    ProviderSubscriptionDatabaseAccess, SystemStateDatabaseAccess,
+    PrivateChannelDatabaseAccess, PrivateMessageDatabaseAccess, ProviderDispatchDatabaseAccess,
+    ProviderPullDatabaseAccess, ProviderSubscriptionDatabaseAccess, SystemStateDatabaseAccess,
 };
 pub use driver::DatabaseDriver;

@@ -242,7 +242,9 @@ def message_payload(
         "title": f"Bench {variant} message {i}",
         "body": benchmark_text(body_size, f"{variant}-{i}"),
         "severity": "warning" if i % 5 == 0 else "info",
-        "ttl": 3600,
+        # Gateway's public `ttl` field is an absolute Unix expiry (seconds are
+        # accepted for legacy compatibility), not a relative duration.
+        "ttl": int(time.time()) + 3600,
         "url": f"https://example.invalid/pushgo/bench/{variant}/{i}",
         "images": [f"https://example.invalid/assets/{variant}-{i % 8}.png"],
         "tags": ["bench", variant, f"shard-{i % 8}"],

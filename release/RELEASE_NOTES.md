@@ -16,6 +16,7 @@ Policy:
 - Unified APNs, FCM, and WNS token handling across SQLite, PostgreSQL, and MySQL, and corrected APNs expiration timestamps.
 - Strengthened database upgrades with no-write no-op checks, transactional route/widget updates, and byte-verified, recent operator-supplied backup artifacts for PostgreSQL and MySQL; the manifest is admission evidence and does not attest database provenance or restorability.
 - Improved sender retries with payload-bound `op_id` idempotency and forward-compatible public request fields.
+- Hardened Widget and Live Activity latest-state delivery so delayed crash recovery cannot replace a newer update or shorten its durable expiry window, including after restart or wall-clock rollback.
 
 ## [v1.3.0-beta.1]
 

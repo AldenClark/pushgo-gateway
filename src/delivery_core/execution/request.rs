@@ -31,6 +31,34 @@ pub(crate) struct DispatchEventInput {
     pub(crate) extra_fields: HashMap<String, String>,
     pub(crate) delivery_policy: DomainDeliveryPolicy,
     pub(crate) event_id: String,
+    pub(crate) live_activity: Option<DispatchLiveActivityUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DispatchLiveActivityAction {
+    Update,
+    End,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DispatchLiveActivityIntent {
+    pub(crate) action: DispatchLiveActivityAction,
+    pub(crate) title: Option<String>,
+    pub(crate) state: Option<String>,
+    pub(crate) severity: Option<String>,
+    pub(crate) updated_at_millis: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DispatchLiveActivityUpdate {
+    pub(crate) event_id: String,
+    pub(crate) action: DispatchLiveActivityAction,
+    pub(crate) title: Option<String>,
+    pub(crate) state: Option<String>,
+    pub(crate) severity: Option<String>,
+    pub(crate) accepted_at_millis: i64,
+    pub(crate) updated_at_millis: i64,
 }
 
 pub(crate) struct DispatchThingInput {
@@ -45,6 +73,7 @@ pub(crate) struct DispatchThingInput {
     pub(crate) thing_id: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DispatchAlert {
     pub(crate) title: Option<String>,
     pub(crate) body: Option<String>,
@@ -68,6 +97,7 @@ impl DispatchAlert {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DispatchRequest {
     pub(crate) op_id: String,
     pub(crate) request_fingerprint: Option<String>,
@@ -75,6 +105,8 @@ pub(crate) struct DispatchRequest {
     pub(crate) alert: DispatchAlert,
     pub(crate) payload: DispatchEntityPayload,
     pub(crate) delivery_policy: DomainDeliveryPolicy,
+    #[serde(default)]
+    pub(crate) live_activity: Option<DispatchLiveActivityUpdate>,
 }
 
 impl DispatchRequest {
@@ -93,7 +125,13 @@ impl DispatchRequest {
             alert,
             payload,
             delivery_policy,
+            live_activity: None,
         }
+    }
+
+    pub(crate) fn with_live_activity(mut self, value: Option<DispatchLiveActivityUpdate>) -> Self {
+        self.live_activity = value;
+        self
     }
 }
 
@@ -150,6 +188,7 @@ fn fingerprint_part(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(value.as_bytes());
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DispatchEntityPayload {
     Message {
         message_id: String,

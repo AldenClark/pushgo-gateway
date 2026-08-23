@@ -7,6 +7,10 @@ use super::{DeviceId, StoreResult};
 pub const OUTBOX_STATUS_PENDING: &str = "pending";
 pub const OUTBOX_STATUS_CLAIMED: &str = "claimed";
 pub const OUTBOX_STATUS_SENT: &str = "sent";
+/// Terminal acknowledgement tombstone. It consumes no active outbox capacity
+/// but is retained longer than a frozen submission so replay cannot resurrect
+/// an already-consumed delivery.
+pub const OUTBOX_STATUS_ACKED: &str = "acked";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivateDeviceKey {

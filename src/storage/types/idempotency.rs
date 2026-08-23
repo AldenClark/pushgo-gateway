@@ -41,6 +41,7 @@ impl DedupeState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpDedupeReservation {
     Reserved,
+    ReservedSubmission { acceptance_order: i64 },
     FingerprintConflict { delivery_id: String },
     Pending { delivery_id: String },
     ProviderQueued { delivery_id: String },

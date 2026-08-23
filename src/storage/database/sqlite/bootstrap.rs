@@ -10,7 +10,10 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, provider_run_token TEXT, provider_owner TEXT, provider_lease_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS dispatch_submission (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL UNIQUE, op_id TEXT NOT NULL, payload_version INTEGER NOT NULL, payload_blob BLOB NOT NULL, acceptance_order INTEGER NOT NULL DEFAULT 0, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS dispatch_acceptance_sequence (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), current_value INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS provider_dispatch_outbox (job_id TEXT PRIMARY KEY, provider TEXT NOT NULL, delivery_id TEXT NOT NULL, op_id TEXT, dedupe_key TEXT, device_key TEXT NOT NULL, payload_blob BLOB NOT NULL, state TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, lease_owner TEXT, lease_until INTEGER, lease_generation INTEGER NOT NULL DEFAULT 0, provider_status INTEGER, provider_error_code TEXT, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, coalesce_order INTEGER NOT NULL DEFAULT 0, completed_at INTEGER, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id TEXT PRIMARY KEY, channel_id BLOB NOT NULL, model TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL, dispatch_status TEXT, provider_run_token TEXT, accepted_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key TEXT NOT NULL, token TEXT NOT NULL, channel_id BLOB, platform TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER, PRIMARY KEY (activity_key, token))",
     "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key TEXT NOT NULL, platform TEXT NOT NULL, token TEXT NOT NULL, widget_kind TEXT NOT NULL, family TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family))",
@@ -35,8 +38,13 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
+    "CREATE INDEX IF NOT EXISTS dispatch_submission_expires_idx ON dispatch_submission (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_due_idx ON provider_dispatch_outbox (provider, state, next_attempt_at, accepted_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_retry_expiry_idx ON provider_dispatch_outbox (provider, state, expires_at, next_attempt_at, accepted_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_lease_idx ON provider_dispatch_outbox (state, lease_until)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_delivery_idx ON provider_dispatch_outbox (delivery_id)",
     "CREATE INDEX IF NOT EXISTS sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_channel_idx ON live_activity_tokens (channel_id, updated_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_expires_idx ON live_activity_tokens (expires_at)",
@@ -47,7 +55,10 @@ const SQLITE_BASE_INDEX_STATEMENTS: &[&str] = &[
 const SQLITE_DISPATCH_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, provider_run_token TEXT, provider_owner TEXT, provider_lease_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS dispatch_submission (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL UNIQUE, op_id TEXT NOT NULL, payload_version INTEGER NOT NULL, payload_blob BLOB NOT NULL, acceptance_order INTEGER NOT NULL DEFAULT 0, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS dispatch_acceptance_sequence (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), current_value INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS provider_dispatch_outbox (job_id TEXT PRIMARY KEY, provider TEXT NOT NULL, delivery_id TEXT NOT NULL, op_id TEXT, dedupe_key TEXT, device_key TEXT NOT NULL, payload_blob BLOB NOT NULL, state TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, lease_owner TEXT, lease_until INTEGER, lease_generation INTEGER NOT NULL DEFAULT 0, provider_status INTEGER, provider_error_code TEXT, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, coalesce_order INTEGER NOT NULL DEFAULT 0, completed_at INTEGER, updated_at INTEGER NOT NULL)",
 ];
 
 const SQLITE_DISPATCH_INDEX_STATEMENTS: &[&str] = &[
@@ -56,8 +67,13 @@ const SQLITE_DISPATCH_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
+    "CREATE INDEX IF NOT EXISTS dispatch_submission_expires_idx ON dispatch_submission (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_due_idx ON provider_dispatch_outbox (provider, state, next_attempt_at, accepted_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_retry_expiry_idx ON provider_dispatch_outbox (provider, state, expires_at, next_attempt_at, accepted_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_lease_idx ON provider_dispatch_outbox (state, lease_until)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_delivery_idx ON provider_dispatch_outbox (delivery_id)",
 ];
 
 const SQLITE_DELIVERY_TABLE_STATEMENTS: &[&str] = &[
@@ -225,7 +241,13 @@ impl SqliteDb {
         sqlx::query("PRAGMA journal_mode = DELETE")
             .execute(&self.pool)
             .await?;
-        sqlx::query("PRAGMA synchronous = NORMAL")
+        // The Gateway acknowledges correctness-bearing writes only after the
+        // transaction commits. In rollback-journal DELETE mode, SQLite's
+        // NORMAL setting does not preserve that durability contract across an
+        // OS crash or power loss. EXTRA also syncs the directory after the
+        // journal unlink, so an acknowledged commit cannot silently roll back
+        // merely because the host lost power immediately afterwards.
+        sqlx::query("PRAGMA synchronous = EXTRA")
             .execute(&self.pool)
             .await?;
         sqlx::query("PRAGMA foreign_keys = ON")
@@ -312,6 +334,31 @@ impl SqliteDb {
             "ALTER TABLE sender_submit_status ADD COLUMN provider_run_token TEXT",
         )
         .await?;
+        self.ensure_sqlite_column(
+            "provider_dispatch_outbox",
+            "op_id",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN op_id TEXT",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_dispatch_outbox",
+            "dedupe_key",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN dedupe_key TEXT",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "dispatch_submission",
+            "acceptance_order",
+            "ALTER TABLE dispatch_submission ADD COLUMN acceptance_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "provider_dispatch_outbox",
+            "coalesce_order",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN coalesce_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        reconcile_sqlite_acceptance_sequence(&self.pool).await?;
 
         self.ensure_sqlite_column(
             "devices",
@@ -585,6 +632,10 @@ impl SqliteDb {
         }
         for (column, ddl) in [
             (
+                "request_fingerprint",
+                "ALTER TABLE dispatch_op_dedupe ADD COLUMN request_fingerprint TEXT",
+            ),
+            (
                 "provider_run_token",
                 "ALTER TABLE dispatch_op_dedupe ADD COLUMN provider_run_token TEXT",
             ),
@@ -600,6 +651,34 @@ impl SqliteDb {
             ensure_sqlite_column_in_pool(&self.dispatch_pool, "dispatch_op_dedupe", column, ddl)
                 .await?;
         }
+        ensure_sqlite_column_in_pool(
+            &self.dispatch_pool,
+            "provider_dispatch_outbox",
+            "op_id",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN op_id TEXT",
+        )
+        .await?;
+        ensure_sqlite_column_in_pool(
+            &self.dispatch_pool,
+            "dispatch_submission",
+            "acceptance_order",
+            "ALTER TABLE dispatch_submission ADD COLUMN acceptance_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        ensure_sqlite_column_in_pool(
+            &self.dispatch_pool,
+            "provider_dispatch_outbox",
+            "coalesce_order",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN coalesce_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        ensure_sqlite_column_in_pool(
+            &self.dispatch_pool,
+            "provider_dispatch_outbox",
+            "dedupe_key",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN dedupe_key TEXT",
+        )
+        .await?;
         for stmt in SQLITE_DISPATCH_INDEX_STATEMENTS {
             sqlx::query(stmt).execute(&self.dispatch_pool).await?;
         }
@@ -614,7 +693,9 @@ impl SqliteDb {
                 "semantic_id_registry",
             ],
         )
-        .await
+        .await?;
+        reconcile_sqlite_acceptance_sequence(&self.dispatch_pool).await?;
+        reject_sqlite_legacy_pending_submissions(&self.dispatch_pool).await
     }
 
     async fn init_delivery_sidecar(
@@ -1744,7 +1825,7 @@ async fn connect_sqlite_pool(
     let sqlite_page_cache_kib = tuning.page_cache_kib;
     let connect_options = SqliteConnectOptions::from_str(db_url)?
         .journal_mode(SqliteJournalMode::Delete)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Extra)
         .foreign_keys(true)
         .statement_cache_capacity(tuning.statement_cache_capacity)
         .busy_timeout(tuning.busy_timeout);
@@ -1842,6 +1923,39 @@ async fn ensure_sqlite_column_in_pool(
     Ok(())
 }
 
+async fn reconcile_sqlite_acceptance_sequence(pool: &SqlitePool) -> StoreResult<()> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO dispatch_acceptance_sequence (singleton,current_value) VALUES (1,0)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE dispatch_acceptance_sequence SET current_value=MAX(\
+            current_value,\
+            (SELECT COALESCE(MAX(acceptance_order),0) FROM dispatch_submission),\
+            (SELECT COALESCE(MAX(coalesce_order),0) FROM provider_dispatch_outbox)\
+         ) WHERE singleton=1",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn reject_sqlite_legacy_pending_submissions(pool: &SqlitePool) -> StoreResult<()> {
+    let legacy_pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM dispatch_submission s JOIN dispatch_op_dedupe d ON d.dedupe_key=s.dedupe_key \
+         WHERE s.acceptance_order=0 AND d.state='pending'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if legacy_pending > 0 {
+        return Err(StoreError::LegacyAcceptanceOrderPending {
+            pending: legacy_pending as usize,
+        });
+    }
+    Ok(())
+}
+
 async fn sqlite_attached_column_exists(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     schema: &str,
@@ -1895,4 +2009,38 @@ fn sqlite_path_from_url(db_url: &str) -> Option<String> {
             .unwrap_or(raw_path)
             .to_string(),
     )
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn every_sqlite_pool_uses_power_loss_durable_sync() {
+        let directory = tempfile::tempdir().expect("temporary SQLite directory should exist");
+        let database = directory.path().join("durability.sqlite");
+        let database_url = format!("sqlite://{}?mode=rwc", database.to_string_lossy());
+        let tuning = RuntimeTuning::for_profile(GatewayRuntimeProfile::Small).sqlite;
+        let pool = connect_sqlite_pool(
+            database_url.as_str(),
+            1,
+            std::time::Duration::from_secs(5),
+            tuning,
+        )
+        .await
+        .expect("SQLite pool should open");
+
+        let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .expect("journal mode should be queryable");
+        let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+            .fetch_one(&pool)
+            .await
+            .expect("synchronous mode should be queryable");
+
+        assert_eq!(journal_mode.to_ascii_lowercase(), "delete");
+        assert_eq!(synchronous, 3, "DELETE journal durability requires EXTRA");
+        pool.close().await;
+    }
 }

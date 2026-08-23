@@ -459,14 +459,22 @@ mod tests {
             !channels.contains(&channel_id),
             "channel should be removed from private subscriptions"
         );
-        assert!(
+        let terminal = ctx
+            .state
+            .store
+            .load_private_outbox_entry(device_id, delivery_id)
+            .await
+            .expect("outbox entry should load")
+            .expect("settlement should retain a replay-suppression tombstone");
+        assert_eq!(terminal.status, crate::storage::OUTBOX_STATUS_ACKED);
+        assert_eq!(
             ctx.state
                 .store
-                .load_private_outbox_entry(device_id, delivery_id)
+                .count_private_outbox_for_device(device_id)
                 .await
-                .expect("outbox entry should load")
-                .is_none(),
-            "matching pending delivery should be settled"
+                .expect("active outbox count should load"),
+            0,
+            "settled tombstones must consume no active capacity"
         );
     }
 }

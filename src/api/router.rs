@@ -102,23 +102,6 @@ async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> 
     with_api_request_scope(&headers, request_id.clone(), async move {
         let method = req.method().to_string();
         let bypass_auth = state.mcp.is_some() && is_mcp_or_oauth_path(req.uri().path());
-        if is_password_sensitive_route(&route_pattern) || is_password_sensitive_path(&request_path)
-        {
-            let peer_ip = req
-                .extensions()
-                .get::<ConnectInfo<SocketAddr>>()
-                .map(|connect| connect.0.ip());
-            if !PASSWORD_RATE_LIMITER.allow(peer_ip, current_minute()) {
-                emit_auth_rejected(
-                    &method,
-                    &route_pattern,
-                    &request_id,
-                    "password_rate_limited",
-                );
-                return Ok(Error::RateLimited.into_response());
-            }
-        }
-
         fn constant_time_equals(a: &str, b: &str) -> bool {
             constant_time_eq(a.as_bytes(), b.as_bytes())
         }
@@ -139,6 +122,32 @@ async fn middleware(State(state): State<AppState>, req: Request, next: Next) -> 
                     );
                     return Ok(err.into_response());
                 }
+            }
+        }
+
+        // A successfully authenticated gateway request is already protected by
+        // the deployment-wide shared secret. Applying the small, process-local
+        // password-guessing budget to those requests would cap legitimate
+        // senders at one request per second per source IP, vary the effective
+        // limit with replica count, and let unauthenticated traffic consume the
+        // budget before authentication. Keep the guard for public and
+        // independently authenticated MCP/OAuth surfaces only.
+        if should_apply_password_rate_limit(&state.auth, bypass_auth)
+            && (is_password_sensitive_route(&route_pattern)
+                || is_password_sensitive_path(&request_path))
+        {
+            let peer_ip = req
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|connect| connect.0.ip());
+            if !PASSWORD_RATE_LIMITER.allow(peer_ip, current_minute()) {
+                emit_auth_rejected(
+                    &method,
+                    &route_pattern,
+                    &request_id,
+                    "password_rate_limited",
+                );
+                return Ok(Error::RateLimited.into_response());
             }
         }
 
@@ -213,6 +222,10 @@ fn current_minute() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() / 60)
         .unwrap_or_default()
+}
+
+fn should_apply_password_rate_limit(auth: &AuthMode, bypass_auth: bool) -> bool {
+    bypass_auth || matches!(auth, AuthMode::Disabled)
 }
 
 fn is_password_sensitive_route(route: &str) -> bool {
@@ -338,11 +351,11 @@ mod tests;
 #[cfg(test)]
 mod trace_tests {
     use super::{
-        PASSWORD_REQUESTS_PER_IP_PER_MINUTE, PasswordRateLimiter, is_password_sensitive_path,
-        is_password_sensitive_route, should_emit_client_error_trace,
-        should_emit_server_error_trace,
+        AuthMode, PASSWORD_REQUESTS_PER_IP_PER_MINUTE, PasswordRateLimiter,
+        is_password_sensitive_path, is_password_sensitive_route, should_apply_password_rate_limit,
+        should_emit_client_error_trace, should_emit_server_error_trace,
     };
-    use std::net::IpAddr;
+    use std::{net::IpAddr, sync::Arc};
 
     #[test]
     fn server_error_trace_sampling_matches_expected_pattern() {
@@ -377,6 +390,19 @@ mod trace_tests {
         assert!(!limiter.allow(Some(first), 42));
         assert!(limiter.allow(Some(second), 42));
         assert!(limiter.allow(Some(first), 43));
+    }
+
+    #[test]
+    fn authenticated_gateway_traffic_does_not_consume_public_password_budget() {
+        assert!(!should_apply_password_rate_limit(
+            &AuthMode::SharedToken(Arc::from("test-gateway-token")),
+            false,
+        ));
+        assert!(should_apply_password_rate_limit(&AuthMode::Disabled, false));
+        assert!(should_apply_password_rate_limit(
+            &AuthMode::SharedToken(Arc::from("test-gateway-token")),
+            true,
+        ));
     }
 
     #[test]

@@ -10,7 +10,10 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id VARCHAR(128) PRIMARY KEY, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS dispatch_delivery_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT)",
     "CREATE TABLE IF NOT EXISTS dispatch_op_dedupe (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL, request_fingerprint VARCHAR(64), state VARCHAR(32) NOT NULL, provider_run_token VARCHAR(64), provider_owner VARCHAR(128), provider_lease_until BIGINT, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, sent_at BIGINT, expires_at BIGINT)",
+    "CREATE TABLE IF NOT EXISTS dispatch_submission (dedupe_key VARCHAR(255) PRIMARY KEY, delivery_id VARCHAR(128) NOT NULL UNIQUE, op_id VARCHAR(128) NOT NULL, payload_version INTEGER NOT NULL, payload_blob BYTEA NOT NULL, acceptance_order BIGINT NOT NULL DEFAULT 0, accepted_at BIGINT NOT NULL, expires_at BIGINT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS dispatch_acceptance_sequence (singleton SMALLINT PRIMARY KEY CHECK (singleton = 1), current_value BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS semantic_id_registry (dedupe_key VARCHAR(255) PRIMARY KEY, semantic_id VARCHAR(128) NOT NULL UNIQUE, source VARCHAR(64), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_seen_at BIGINT, expires_at BIGINT)",
+    "CREATE TABLE IF NOT EXISTS provider_dispatch_outbox (job_id VARCHAR(160) PRIMARY KEY, provider VARCHAR(32) NOT NULL, delivery_id VARCHAR(128) NOT NULL, op_id VARCHAR(128), dedupe_key VARCHAR(512), device_key VARCHAR(255) NOT NULL, payload_blob BYTEA NOT NULL, state VARCHAR(32) NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at BIGINT NOT NULL, lease_owner VARCHAR(128), lease_until BIGINT, lease_generation BIGINT NOT NULL DEFAULT 0, provider_status INTEGER, provider_error_code VARCHAR(128), accepted_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, coalesce_order BIGINT NOT NULL DEFAULT 0, completed_at BIGINT, updated_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS sender_submit_status (op_id VARCHAR(128) PRIMARY KEY, channel_id BYTEA NOT NULL, model VARCHAR(16) NOT NULL, entity_id VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL, dispatch_status VARCHAR(64), provider_run_token VARCHAR(64), accepted_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS live_activity_tokens (activity_key VARCHAR(255) NOT NULL, token TEXT NOT NULL, channel_id BYTEA, platform VARCHAR(32) NOT NULL, schema_version INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT, PRIMARY KEY (activity_key, token))",
     "CREATE TABLE IF NOT EXISTS widget_push_subscriptions (device_key VARCHAR(128) NOT NULL, platform VARCHAR(32) NOT NULL, token VARCHAR(128) NOT NULL, widget_kind VARCHAR(128) NOT NULL, family VARCHAR(64) NOT NULL, schema_version INTEGER NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family))",
@@ -35,8 +38,13 @@ const PG_BASE_INDEX_STATEMENTS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)",
     "CREATE INDEX IF NOT EXISTS dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)",
+    "CREATE INDEX IF NOT EXISTS dispatch_submission_expires_idx ON dispatch_submission (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)",
     "CREATE INDEX IF NOT EXISTS semantic_id_registry_created_idx ON semantic_id_registry (created_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_due_idx ON provider_dispatch_outbox (provider, state, next_attempt_at, accepted_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_retry_expiry_idx ON provider_dispatch_outbox (provider, state, expires_at, next_attempt_at, accepted_at)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_lease_idx ON provider_dispatch_outbox (state, lease_until)",
+    "CREATE INDEX IF NOT EXISTS provider_dispatch_outbox_delivery_idx ON provider_dispatch_outbox (delivery_id)",
     "CREATE INDEX IF NOT EXISTS sender_submit_status_expires_idx ON sender_submit_status (expires_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_channel_idx ON live_activity_tokens (channel_id, updated_at)",
     "CREATE INDEX IF NOT EXISTS live_activity_tokens_expires_idx ON live_activity_tokens (expires_at)",
@@ -98,6 +106,7 @@ impl PostgresDb {
             .max_lifetime(tuning.max_lifetime)
             .connect(db_url)
             .await?;
+        validate_postgres_durability(&pool).await?;
         let this = Self { pool };
         this.init_schema().await?;
         Ok(this)
@@ -197,6 +206,56 @@ impl PostgresDb {
             "ALTER TABLE sender_submit_status ADD COLUMN provider_run_token VARCHAR(64)",
         )
         .await?;
+        self.ensure_pg_column(
+            "provider_dispatch_outbox",
+            "op_id",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN op_id VARCHAR(128)",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_dispatch_outbox",
+            "dedupe_key",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN dedupe_key VARCHAR(512)",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "dispatch_submission",
+            "acceptance_order",
+            "ALTER TABLE dispatch_submission ADD COLUMN acceptance_order BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "provider_dispatch_outbox",
+            "coalesce_order",
+            "ALTER TABLE provider_dispatch_outbox ADD COLUMN coalesce_order BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        sqlx::query(
+            "INSERT INTO dispatch_acceptance_sequence (singleton,current_value) VALUES (1,0) \
+             ON CONFLICT(singleton) DO NOTHING",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE dispatch_acceptance_sequence SET current_value=GREATEST(\
+                current_value,\
+                (SELECT COALESCE(MAX(acceptance_order),0) FROM dispatch_submission),\
+                (SELECT COALESCE(MAX(coalesce_order),0) FROM provider_dispatch_outbox)\
+             ) WHERE singleton=1",
+        )
+        .execute(&self.pool)
+        .await?;
+        let legacy_pending: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM dispatch_submission s JOIN dispatch_op_dedupe d ON d.dedupe_key=s.dedupe_key \
+             WHERE s.acceptance_order=0 AND d.state='pending'",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        if legacy_pending > 0 {
+            return Err(StoreError::LegacyAcceptanceOrderPending {
+                pending: legacy_pending as usize,
+            });
+        }
 
         self.ensure_pg_column(
             "devices",
@@ -860,6 +919,42 @@ impl PostgresDb {
     }
 }
 
+impl PostgresDb {
+    pub(crate) async fn validate_durability(&self) -> StoreResult<()> {
+        validate_postgres_durability(&self.pool).await
+    }
+}
+
+async fn validate_postgres_durability(pool: &PgPool) -> StoreResult<()> {
+    let synchronous_commit: String = sqlx::query_scalar("SHOW synchronous_commit")
+        .fetch_one(pool)
+        .await?;
+    let fsync: String = sqlx::query_scalar("SHOW fsync").fetch_one(pool).await?;
+    let full_page_writes: String = sqlx::query_scalar("SHOW full_page_writes")
+        .fetch_one(pool)
+        .await?;
+    if postgres_durability_settings_are_safe(
+        synchronous_commit.as_str(),
+        fsync.as_str(),
+        full_page_writes.as_str(),
+    ) {
+        return Ok(());
+    }
+    Err(StoreError::UnsafeDurabilityConfiguration(format!(
+        "PostgreSQL requires synchronous_commit!=off, fsync=on, full_page_writes=on (actual synchronous_commit={synchronous_commit}, fsync={fsync}, full_page_writes={full_page_writes})"
+    )))
+}
+
+fn postgres_durability_settings_are_safe(
+    synchronous_commit: &str,
+    fsync: &str,
+    full_page_writes: &str,
+) -> bool {
+    !synchronous_commit.eq_ignore_ascii_case("off")
+        && fsync.eq_ignore_ascii_case("on")
+        && full_page_writes.eq_ignore_ascii_case("on")
+}
+
 pub(crate) struct PgUpgradeLockGuard {
     // PostgreSQL advisory locks are session-scoped. Owning the raw connection
     // guarantees the lock cannot be returned to, or reaped from, a pool while
@@ -1196,5 +1291,19 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for Postgres
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use super::postgres_durability_settings_are_safe;
+
+    #[test]
+    fn rejects_postgres_settings_that_can_ack_before_durable_wal() {
+        assert!(postgres_durability_settings_are_safe("on", "on", "on"));
+        assert!(postgres_durability_settings_are_safe("local", "on", "on"));
+        assert!(!postgres_durability_settings_are_safe("off", "on", "on"));
+        assert!(!postgres_durability_settings_are_safe("on", "off", "on"));
+        assert!(!postgres_durability_settings_are_safe("on", "on", "off"));
     }
 }

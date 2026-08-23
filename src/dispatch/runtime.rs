@@ -1,5 +1,43 @@
 use super::*;
 use crate::runtime_counters::{OPS_METRIC_DISPATCH_PROVIDER_SEND_FAILED, RuntimeCounterCollector};
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+#[derive(Default)]
+struct ProviderFailureLogWindow {
+    minute: u64,
+    counts: HashMap<String, u64>,
+}
+
+impl ProviderFailureLogWindow {
+    fn sample_count(&mut self, provider: &str, failure_kind: &str, minute: u64) -> Option<u64> {
+        if self.minute != minute {
+            self.minute = minute;
+            self.counts.clear();
+        }
+        let key = format!("{provider}\0{failure_kind}");
+        let count = self.counts.entry(key).or_default();
+        *count = count.saturating_add(1);
+        (*count <= 8 || count.is_power_of_two()).then_some(*count)
+    }
+}
+
+static PROVIDER_FAILURE_LOG_WINDOW: LazyLock<Mutex<ProviderFailureLogWindow>> =
+    LazyLock::new(|| Mutex::new(ProviderFailureLogWindow::default()));
+
+fn provider_failure_log_sample_count(provider: &str, failure_kind: &str) -> Option<u64> {
+    let minute = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() / 60)
+        .unwrap_or_default();
+    PROVIDER_FAILURE_LOG_WINDOW
+        .lock()
+        .ok()
+        .and_then(|mut window| window.sample_count(provider, failure_kind, minute))
+}
 
 #[derive(Clone)]
 pub(super) struct DispatchWorkerRuntime {
@@ -27,6 +65,7 @@ impl DispatchWorkerRuntime {
         };
         self.store
             .finalize_provider_dispatch_outcome_durably(
+                outcome.dedupe_key(),
                 outcome.op_id(),
                 outcome.delivery_id(),
                 success,
@@ -41,6 +80,11 @@ impl DispatchWorkerRuntime {
     ) {
         self.runtime_counters
             .record_ops_counter_now(OPS_METRIC_DISPATCH_PROVIDER_SEND_FAILED, 1);
+        let failure_kind = dispatch.failure_kind_name();
+        let Some(sample_count) = provider_failure_log_sample_count(failure.provider, failure_kind)
+        else {
+            return;
+        };
         let error = dispatch
             .error
             .as_ref()
@@ -57,7 +101,8 @@ impl DispatchWorkerRuntime {
             platform = %(failure.platform.map(Platform::name).unwrap_or("unknown")),
             device_token = %(crate::util::redact_text(redact_device_token(failure.device_token))),
             status_code = (u64::from(dispatch.status_code)),
-            failure_kind = %(dispatch.failure_kind_name()),
+            failure_kind = %(failure_kind),
+            sample_count = sample_count,
             invalid_token = (dispatch.is_invalid_token()),
             payload_too_large = (dispatch.is_payload_too_large()),
             error = %(error)
@@ -112,4 +157,21 @@ impl DispatchWorkerRuntime {
 fn redact_device_token(token: &str) -> String {
     let visible = 8usize.min(token.len());
     format!("...{}", &token[token.len().saturating_sub(visible)..])
+}
+
+#[cfg(test)]
+mod failure_log_tests {
+    use super::ProviderFailureLogWindow;
+
+    #[test]
+    fn provider_failure_logs_are_bounded_per_kind_and_reset_each_minute() {
+        let mut window = ProviderFailureLogWindow::default();
+        let emitted = (1..=100)
+            .filter(|_| window.sample_count("APNS", "network", 42).is_some())
+            .count();
+        assert_eq!(emitted, 11, "first eight plus powers of two through 64");
+        assert_eq!(window.sample_count("FCM", "network", 42), Some(1));
+        assert_eq!(window.sample_count("APNS", "invalid_token", 42), Some(1));
+        assert_eq!(window.sample_count("APNS", "network", 43), Some(1));
+    }
 }

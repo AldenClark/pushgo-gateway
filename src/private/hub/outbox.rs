@@ -10,106 +10,53 @@ impl PrivateHub {
         // Serialize capacity check + enqueue to avoid TOCTOU over-admission.
         let _enqueue_gate = self.enqueue_gate.lock().await;
         let now = chrono::Utc::now().timestamp_millis();
-        let mut private_outbox_pruned = 0usize;
-        let mut device_pending = self
+        let private_outbox_pruned = self
+            .store
+            .cleanup_private_expired_data(now, 4096)
+            .await
+            .map_err(crate::Error::StoreError)?;
+        let device_pending = self
             .store
             .count_private_outbox_for_device(device_id)
             .await
-            .map_err(|err| crate::Error::Internal(err.to_string()))?;
-        while device_pending >= self.max_pending_per_device {
-            let Some(evicted_delivery_id) = self
-                .store
-                .evict_oldest_pending_private_outbox_for_device(device_id)
-                .await
-                .map_err(|err| crate::Error::Internal(err.to_string()))?
-            else {
-                emit_private_enqueue_rejected(
-                    "per_device_capacity",
-                    device_id,
-                    device_pending,
-                    self.max_pending_per_device,
-                    None,
-                    self.global_max_pending,
-                );
-                return Err(crate::Error::TooBusy);
-            };
-            private_outbox_pruned = private_outbox_pruned.saturating_add(1);
-            emit_private_outbox_evicted(
+            .map_err(crate::Error::StoreError)?;
+        if device_pending >= self.max_pending_per_device {
+            emit_private_enqueue_rejected(
                 "per_device_capacity",
                 device_id,
-                evicted_delivery_id.as_str(),
+                device_pending,
+                self.max_pending_per_device,
+                None,
+                self.global_max_pending,
             );
-            device_pending = self
-                .store
-                .count_private_outbox_for_device(device_id)
-                .await
-                .map_err(|err| crate::Error::Internal(err.to_string()))?;
+            return Err(crate::Error::TooBusy);
         }
-        let mut total_pending = self
+        let total_pending = self
             .store
             .count_private_outbox_total()
             .await
-            .map_err(|err| crate::Error::Internal(err.to_string()))?;
-        while total_pending >= self.global_max_pending {
-            private_outbox_pruned = private_outbox_pruned.saturating_add(
-                self
-                    .store
-                    .cleanup_private_expired_data(now, 4096)
-                    .await
-                    .map_err(|err| crate::Error::Internal(err.to_string()))?,
-            );
-            total_pending = self
-                .store
-                .count_private_outbox_total()
-                .await
-                .map_err(|err| crate::Error::Internal(err.to_string()))?;
-            if total_pending < self.global_max_pending {
-                break;
-            }
-            let Some((evicted_device_id, evicted_delivery_id)) = self
-                .store
-                .evict_oldest_pending_private_outbox_global()
-                .await
-                .map_err(|err| crate::Error::Internal(err.to_string()))?
-            else {
-                emit_private_enqueue_rejected(
-                    "global_capacity",
-                    device_id,
-                    device_pending,
-                    self.max_pending_per_device,
-                    Some(total_pending),
-                    self.global_max_pending,
-                );
-                return Err(crate::Error::TooBusy);
-            };
-            private_outbox_pruned = private_outbox_pruned.saturating_add(1);
-            emit_private_outbox_evicted(
+            .map_err(crate::Error::StoreError)?;
+        if total_pending >= self.global_max_pending {
+            emit_private_enqueue_rejected(
                 "global_capacity",
-                evicted_device_id,
-                evicted_delivery_id.as_str(),
+                device_id,
+                device_pending,
+                self.max_pending_per_device,
+                Some(total_pending),
+                self.global_max_pending,
             );
-            total_pending = self
-                .store
-                .count_private_outbox_total()
-                .await
-                .map_err(|err| crate::Error::Internal(err.to_string()))?;
+            return Err(crate::Error::TooBusy);
         }
 
-        let should_persist_message = !self.hot_messages.contains_key(delivery_id);
-        if should_persist_message {
-            let size = payload.len();
-            let message = PrivateMessage {
-                payload: payload.clone(),
-                size,
-                sent_at,
-                expires_at,
-            };
-            self.store
-                .insert_private_message(delivery_id, &message)
-                .await
-                .map_err(|err| crate::Error::Internal(err.to_string()))?;
-            self.cache_put(delivery_id, &message);
-        }
+        let candidate = PrivateMessage {
+            payload: payload.clone(),
+            size: payload.len(),
+            sent_at,
+            expires_at,
+        };
+        let canonical = self
+            .canonical_private_message(delivery_id, &candidate)
+            .await?;
 
         let entry = PrivateOutboxEntry {
             delivery_id: delivery_id.to_string(),
@@ -129,12 +76,20 @@ impl PrivateHub {
             last_error_detail: None,
             updated_at: now,
         };
-        self.store
-            .enqueue_private_outbox(device_id, &entry)
+        let accepted_for_delivery = self
+            .store
+            .enqueue_private_outbox_observed(device_id, &entry)
             .await
-            .map_err(|err| crate::Error::Internal(err.to_string()))?;
+            .map_err(|err| match err {
+                crate::storage::StoreError::PrivateOutboxCapacityExceeded { .. } => {
+                    crate::Error::TooBusy
+                }
+                other => crate::Error::StoreError(other),
+            })?;
         Ok(EnqueuePrivateMessageOutcome {
             private_outbox_pruned,
+            accepted_for_delivery,
+            canonical_payload: canonical.payload,
         })
     }
 
@@ -181,6 +136,8 @@ impl PrivateHub {
                 device_id,
                 Ok(EnqueuePrivateMessageOutcome {
                     private_outbox_pruned: 0,
+                    accepted_for_delivery: true,
+                    canonical_payload: Arc::clone(&payload),
                 }),
             ));
         }
@@ -189,38 +146,56 @@ impl PrivateHub {
             return results;
         }
 
-        let should_persist_message = !self.hot_messages.contains_key(delivery_id);
-        let message = PrivateMessage {
+        let candidate = PrivateMessage {
             payload: payload.clone(),
             size: payload.len(),
             sent_at,
             expires_at,
         };
-        if should_persist_message
-            && let Err(err) = self.store.insert_private_message(delivery_id, &message).await
+        let canonical = match self
+            .canonical_private_message(delivery_id, &candidate)
+            .await
         {
-            let error = err.to_string();
-            for index in batch_result_indexes {
-                results[index].1 = Err(crate::Error::Internal(error.clone()));
+            Ok(message) => message,
+            Err(err) => {
+                let error = err.to_string();
+                for index in batch_result_indexes {
+                    results[index].1 = Err(crate::Error::Internal(error.clone()));
+                }
+                return results;
             }
-            return results;
+        };
+        for index in &batch_result_indexes {
+            if let Ok(outcome) = &mut results[*index].1 {
+                outcome.canonical_payload = Arc::clone(&canonical.payload);
+            }
         }
 
-        let private_outbox_pruned = match self
+        let (private_outbox_pruned, terminal_targets) = match self
             .store
-            .enqueue_private_outbox_batch(
+            .enqueue_private_outbox_batch_observed(
                 &batch,
                 self.max_pending_per_device,
                 self.global_max_pending,
                 Some(delivery_id),
+                delivery_id,
             )
             .await
         {
             Ok(pruned) => pruned,
             Err(err) => {
-                let error = err.to_string();
-                for index in batch_result_indexes {
-                    results[index].1 = Err(crate::Error::Internal(error.clone()));
+                match err {
+                    crate::storage::StoreError::PrivateOutboxCapacityExceeded { .. } => {
+                        for index in batch_result_indexes {
+                            results[index].1 = Err(crate::Error::TooBusy);
+                        }
+                    }
+                    other => {
+                        let error = other.to_string();
+                        for index in batch_result_indexes {
+                            results[index].1 = Err(crate::Error::Internal(error.clone()));
+                        }
+                    }
                 }
                 return results;
             }
@@ -231,10 +206,14 @@ impl PrivateHub {
         {
             outcome.private_outbox_pruned = private_outbox_pruned;
         }
-
-        if should_persist_message {
-            self.cache_put(delivery_id, &message);
+        for (device_id, result) in &mut results {
+            if terminal_targets.contains(device_id)
+                && let Ok(outcome) = result
+            {
+                outcome.accepted_for_delivery = false;
+            }
         }
+
         results
     }
 
@@ -362,7 +341,7 @@ impl PrivateHub {
         &self,
         device_id: DeviceId,
         delivery_id: &str,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<bool, crate::Error> {
         self.store
             .ack_private_delivery(device_id, delivery_id)
             .await
@@ -524,6 +503,42 @@ impl PrivateHub {
         self.load_message_cached(delivery_id).await
     }
 
+    async fn canonical_private_message(
+        &self,
+        delivery_id: &str,
+        candidate: &PrivateMessage,
+    ) -> Result<PrivateMessage, crate::Error> {
+        let canonical = if let Some(item) = self.hot_messages.get(delivery_id) {
+            item.clone()
+        } else {
+            let canonical = self
+                .store
+                .insert_private_message_canonical(delivery_id, candidate)
+                .await
+                .map_err(crate::Error::StoreError)?;
+            self.cache_put(delivery_id, &canonical);
+            canonical
+        };
+        if private_messages_conflict(&canonical, candidate) {
+            #[cfg(test)]
+            self.payload_conflict_events.fetch_add(1, Ordering::Relaxed);
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "private.payload_conflict_replay",
+                delivery_id = %(crate::util::redact_text(delivery_id)),
+                canonical_size = (canonical.size as u64),
+                candidate_size = (candidate.size as u64)
+            );
+        }
+        Ok(canonical)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn payload_conflict_events(&self) -> usize {
+        self.payload_conflict_events.load(Ordering::Relaxed)
+    }
+
     async fn load_message_cached(
         &self,
         delivery_id: &str,
@@ -543,15 +558,29 @@ impl PrivateHub {
     }
 }
 
-fn emit_private_outbox_evicted(reason: &'static str, device_id: DeviceId, delivery_id: &str) {
-        ::tracing::event!(
-        target: "gateway.trace_event",
-        ::tracing::Level::INFO,
-        event = "private.outbox_evicted",
-        reason = %(reason),
-        device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
-        delivery_id = %(crate::util::redact_text(delivery_id))
-    );
+pub(super) fn private_messages_conflict(
+    canonical: &PrivateMessage,
+    candidate: &PrivateMessage,
+) -> bool {
+    canonical.sent_at != candidate.sent_at
+        || canonical.expires_at != candidate.expires_at
+        || !private_payloads_semantically_equal(
+            canonical.payload.as_ref(),
+            candidate.payload.as_ref(),
+        )
+}
+
+fn private_payloads_semantically_equal(canonical: &[u8], candidate: &[u8]) -> bool {
+    if canonical == candidate {
+        return true;
+    }
+    match (
+        crate::private::protocol::PrivatePayloadEnvelope::decode_postcard(canonical),
+        crate::private::protocol::PrivatePayloadEnvelope::decode_postcard(candidate),
+    ) {
+        (Some(canonical), Some(candidate)) => canonical == candidate,
+        _ => false,
+    }
 }
 
 fn emit_private_enqueue_rejected(

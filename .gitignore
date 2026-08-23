@@ -6,10 +6,17 @@
 /scripts/*
 !/scripts/preflight_release_audit.sh
 !/scripts/storage_crossdb_parity.sh
+!/scripts/v12_single_instance_rollback_drill.sh
 bench/results/*
 !bench/results/.gitkeep
 /.cargo/
+**/__pycache__/
+*.pyc
 /.env
 /.env.*
 !/.env.example
 /*.log
+/evidence/crossdb/*
+!/evidence/crossdb/summary.txt
+/evidence/rollback/*
+!/evidence/rollback/v12-single-instance.json

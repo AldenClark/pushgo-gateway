@@ -2,6 +2,9 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{Error, storage::Platform};
 
+pub(crate) const PROVIDER_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const PROVIDER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 pub mod apns;
 pub mod apns_client;
 pub mod error;
@@ -37,6 +40,7 @@ pub struct DispatchResult {
     #[allow(dead_code)]
     pub error: Option<Error>,
     pub failure_kind: Option<ProviderFailureKind>,
+    pub retry_after_millis: Option<i64>,
 }
 
 impl DispatchResult {
@@ -46,6 +50,7 @@ impl DispatchResult {
             status_code,
             error: None,
             failure_kind: None,
+            retry_after_millis: None,
         }
     }
 
@@ -55,6 +60,7 @@ impl DispatchResult {
             status_code,
             error: Some(error),
             failure_kind: None,
+            retry_after_millis: None,
         }
     }
 
@@ -64,6 +70,21 @@ impl DispatchResult {
             status_code: 0,
             error: Some(error),
             failure_kind: Some(ProviderFailureKind::Transport),
+            retry_after_millis: None,
+        }
+    }
+
+    pub(crate) fn provider_access_failure(error: Error) -> Self {
+        Self {
+            success: false,
+            status_code: 0,
+            error: Some(error),
+            // Credential/token acquisition can fail because its remote service
+            // or local signer is temporarily unavailable. A durable delivery
+            // must stay retryable instead of being finalized as a permanent
+            // provider failure before any provider request was attempted.
+            failure_kind: Some(ProviderFailureKind::TemporarilyUnavailable),
+            retry_after_millis: None,
         }
     }
 
@@ -77,6 +98,7 @@ impl DispatchResult {
                 message: failure.message,
             }),
             failure_kind: Some(failure.kind),
+            retry_after_millis: failure.retry_after_millis,
         }
     }
 
@@ -160,4 +182,18 @@ pub trait WnsClient: Send + Sync {
     fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>>;
 
     fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DispatchResult;
+
+    #[test]
+    fn provider_access_failure_remains_retryable() {
+        let result = DispatchResult::provider_access_failure(crate::Error::Internal(
+            "injected token service outage".to_string(),
+        ));
+        assert!(result.is_retryable());
+        assert!(!result.success);
+    }
 }

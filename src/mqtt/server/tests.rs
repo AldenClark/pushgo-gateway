@@ -667,14 +667,23 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         write_client_packet(&mut stream, ClientPacket::PubAck(PubAck::new(extra.pkid))).await;
         acknowledged_downlinks = acknowledged_downlinks.saturating_add(1);
     }
+    let terminal = ctx
+        .state
+        .store
+        .load_private_outbox_entry(device_id, delivery_id.as_str())
+        .await
+        .expect("outbox should load")
+        .expect("PUBACK should retain a replay-suppression tombstone");
+    assert_eq!(terminal.status, crate::storage::OUTBOX_STATUS_ACKED);
+    let active = ctx
+        .state
+        .store
+        .list_private_outbox(device_id, 128)
+        .await
+        .expect("active outbox should load");
     assert!(
-        ctx.state
-            .store
-            .load_private_outbox_entry(device_id, delivery_id.as_str())
-            .await
-            .expect("outbox should load")
-            .is_none(),
-        "PUBACK should clear the durable MQTT outbox record"
+        active.iter().all(|entry| entry.delivery_id != delivery_id),
+        "the PUBACK tombstone must not remain in the active outbox"
     );
 
     let mut unsubscribe = Unsubscribe::new(MqttMessageTopic::format(channel_id.as_str()));

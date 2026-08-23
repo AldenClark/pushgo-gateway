@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use crate::{
     delivery_core::error::CoreError,
-    dispatch::{ApnsJob, DispatchChannels, DispatchError, FcmJob, ProviderDeliveryPath, WnsJob},
+    dispatch::{
+        ApnsJob, DispatchChannels, DispatchError, DurableProviderJob, FcmJob, ProviderDeliveryPath,
+        WnsJob,
+    },
     private::PrivateState,
     providers::{
         apns::{ApnsExpirationEpochSeconds, ApnsPayload},
@@ -203,8 +206,7 @@ pub(crate) fn prepare_provider_target(
         device.info.platform,
         device.info.token_str(),
         input.delivery_id,
-    )
-    .filter(|_| input.execution_target.wakeup_pull_ref.is_some());
+    );
 
     ResolvedProviderTarget {
         device: device.info.clone(),
@@ -269,12 +271,16 @@ pub(crate) fn provider_targets_from_plan(
 
 pub(crate) struct ProviderDispatchContext<'a> {
     pub(crate) dispatch: &'a DispatchChannels,
+    pub(crate) store: &'a Storage,
     pub(crate) channel_id: [u8; 16],
     pub(crate) correlation_id: Arc<str>,
     pub(crate) delivery_id: Arc<str>,
     pub(crate) device_key: Arc<str>,
     pub(crate) device_token: Arc<str>,
     pub(crate) route_updated_at: i64,
+    pub(crate) accepted_at: i64,
+    pub(crate) acceptance_order: i64,
+    pub(crate) expires_at: i64,
     pub(crate) outcome: Arc<crate::dispatch::ProviderDispatchOutcome>,
 }
 
@@ -482,7 +488,7 @@ impl ProviderDispatchPayload {
     }
 }
 
-pub(crate) fn enqueue_provider_dispatch(
+pub(crate) async fn enqueue_provider_dispatch(
     context: ProviderDispatchContext<'_>,
     payload: ProviderDispatchPayload,
 ) -> Result<(), DispatchError> {
@@ -494,21 +500,29 @@ pub(crate) fn enqueue_provider_dispatch(
             initial_path,
             wakeup_payload_within_limit,
             collapse_id,
-        } => context.dispatch.try_send_apns(ApnsJob {
-            channel_id: context.channel_id,
-            correlation_id: Arc::clone(&context.correlation_id),
-            delivery_id: Arc::clone(&context.delivery_id),
-            device_key: Arc::clone(&context.device_key),
-            device_token: Arc::clone(&context.device_token),
-            route_updated_at: context.route_updated_at,
-            platform,
-            direct_payload,
-            wakeup_payload: Some(wakeup_payload),
-            initial_path,
-            wakeup_payload_within_limit,
-            outcome: Some(context.outcome),
-            collapse_id,
-        }),
+        } => {
+            let job = ApnsJob {
+                channel_id: context.channel_id,
+                correlation_id: Arc::clone(&context.correlation_id),
+                delivery_id: Arc::clone(&context.delivery_id),
+                device_key: Arc::clone(&context.device_key),
+                device_token: Arc::clone(&context.device_token),
+                route_updated_at: context.route_updated_at,
+                platform,
+                direct_payload,
+                wakeup_payload: Some(wakeup_payload),
+                initial_path,
+                wakeup_payload_within_limit,
+                route_fenced: true,
+                coalescible: false,
+                outcome: Some(Arc::clone(&context.outcome)),
+                collapse_id,
+            };
+            let durable = DurableProviderJob::from_apns(&job);
+            persist_provider_job(&context, &durable).await?;
+            let _ = context.dispatch.try_send_apns(job);
+            Ok(())
+        }
         ProviderDispatchPayload::Fcm {
             direct_payload,
             direct_body,
@@ -516,40 +530,70 @@ pub(crate) fn enqueue_provider_dispatch(
             wakeup_body,
             initial_path,
             wakeup_payload_within_limit,
-        } => context.dispatch.try_send_fcm(FcmJob {
-            channel_id: context.channel_id,
-            correlation_id: Arc::clone(&context.correlation_id),
-            delivery_id: Arc::clone(&context.delivery_id),
-            device_key: Arc::clone(&context.device_key),
-            device_token: Arc::clone(&context.device_token),
-            route_updated_at: context.route_updated_at,
-            direct_payload,
-            direct_body,
-            wakeup_payload: Some(wakeup_payload),
-            wakeup_body,
-            initial_path,
-            wakeup_payload_within_limit,
-            outcome: Some(context.outcome),
-        }),
+        } => {
+            let job = FcmJob {
+                channel_id: context.channel_id,
+                correlation_id: Arc::clone(&context.correlation_id),
+                delivery_id: Arc::clone(&context.delivery_id),
+                device_key: Arc::clone(&context.device_key),
+                device_token: Arc::clone(&context.device_token),
+                route_updated_at: context.route_updated_at,
+                direct_payload,
+                direct_body,
+                wakeup_payload: Some(wakeup_payload),
+                wakeup_body,
+                initial_path,
+                wakeup_payload_within_limit,
+                outcome: Some(Arc::clone(&context.outcome)),
+            };
+            let durable = DurableProviderJob::from_fcm(&job);
+            persist_provider_job(&context, &durable).await?;
+            let _ = context.dispatch.try_send_fcm(job);
+            Ok(())
+        }
         ProviderDispatchPayload::Wns {
             direct_payload,
             wakeup_payload,
             initial_path,
             wakeup_payload_within_limit,
-        } => context.dispatch.try_send_wns(WnsJob {
-            channel_id: context.channel_id,
-            correlation_id: context.correlation_id,
-            delivery_id: context.delivery_id,
-            device_key: context.device_key,
-            device_token: context.device_token,
-            route_updated_at: context.route_updated_at,
-            direct_payload,
-            wakeup_payload: Some(wakeup_payload),
-            initial_path,
-            wakeup_payload_within_limit,
-            outcome: Some(context.outcome),
-        }),
+        } => {
+            let job = WnsJob {
+                channel_id: context.channel_id,
+                correlation_id: Arc::clone(&context.correlation_id),
+                delivery_id: Arc::clone(&context.delivery_id),
+                device_key: Arc::clone(&context.device_key),
+                device_token: Arc::clone(&context.device_token),
+                route_updated_at: context.route_updated_at,
+                direct_payload,
+                wakeup_payload: Some(wakeup_payload),
+                initial_path,
+                wakeup_payload_within_limit,
+                outcome: Some(Arc::clone(&context.outcome)),
+            };
+            let durable = DurableProviderJob::from_wns(&job);
+            persist_provider_job(&context, &durable).await?;
+            let _ = context.dispatch.try_send_wns(job);
+            Ok(())
+        }
     }
+}
+
+async fn persist_provider_job(
+    context: &ProviderDispatchContext<'_>,
+    durable: &DurableProviderJob,
+) -> Result<(), DispatchError> {
+    let mut record = durable
+        .to_record("preparing", context.accepted_at, context.expires_at)
+        .map_err(|err| DispatchError::DurableEncoding(err.to_string()))?;
+    if record.coalescible {
+        record.coalesce_order = context.acceptance_order;
+    }
+    context
+        .store
+        .enqueue_provider_dispatch_job(&record)
+        .await
+        .map_err(|err| DispatchError::DurableStorage(err.to_string()))?;
+    Ok(())
 }
 
 pub(crate) struct ProviderPullCacheRequest<'a> {
@@ -696,7 +740,14 @@ fn redact_device_token(token: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::direct_data_with_provider_ack_source;
+    use super::{
+        ProviderDispatchDevice, ProviderExecutionTarget, ProviderRouteResolver,
+        ProviderTargetPreparation, direct_data_with_provider_ack_source, prepare_provider_target,
+    };
+    use crate::{
+        routing::derive_private_device_id,
+        storage::{DeviceInfo, Platform},
+    };
     use hashbrown::HashMap;
 
     #[test]
@@ -734,5 +785,48 @@ mod tests {
         let data = direct_data_with_provider_ack_source(&custom_data, "   ");
 
         assert!(!data.contains_key("provider_device_key"));
+    }
+
+    struct FrozenRoute;
+
+    impl ProviderRouteResolver for FrozenRoute {
+        fn resolve_provider_route(
+            &self,
+            _platform: Platform,
+            _token: &str,
+            dispatch_device_key: &str,
+        ) -> String {
+            dispatch_device_key.to_string()
+        }
+    }
+
+    #[test]
+    fn direct_only_provider_target_still_has_server_side_recovery_copy() {
+        let execution_target = ProviderExecutionTarget {
+            device: ProviderDispatchDevice {
+                info: DeviceInfo::from_token(Platform::IOS, &"a".repeat(64))
+                    .expect("APNs token should parse"),
+                device_key: "direct-apple-device".to_string(),
+                route_updated_at: 7,
+            },
+            allow_inline: true,
+            wakeup_pull_ref: None,
+        };
+
+        let resolved = prepare_provider_target(ProviderTargetPreparation {
+            resolver: &FrozenRoute,
+            delivery_id: "direct-delivery",
+            wakeup_data: &HashMap::new(),
+            execution_target: &execution_target,
+        });
+
+        let recovery = resolved
+            .provider_pull_target
+            .expect("direct delivery must retain a pull-cache recovery identity");
+        assert_eq!(recovery.delivery_id, "direct-delivery");
+        assert_eq!(
+            recovery.device_id,
+            derive_private_device_id("direct-apple-device")
+        );
     }
 }

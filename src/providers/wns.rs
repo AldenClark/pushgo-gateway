@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use hashbrown::HashMap;
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{util::SharedStringMap, value::NotificationSeverity};
@@ -17,7 +17,7 @@ const CLIENT_LOCAL_ROUTING_FIELDS: &[&str] = &[
     "provider_device_key",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WnsEnvelopeKind {
     Notification,
@@ -50,7 +50,36 @@ pub struct WnsPayload {
     encoded_body_cache: Mutex<Option<Arc<[u8]>>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct WnsPayloadSnapshot {
+    data: HashMap<String, String>,
+    delivery_id: String,
+    kind: WnsEnvelopeKind,
+    priority: Option<u8>,
+    ttl_seconds: Option<u32>,
+}
+
 impl WnsPayload {
+    pub(crate) fn snapshot(&self) -> WnsPayloadSnapshot {
+        WnsPayloadSnapshot {
+            data: self.data.as_map().clone(),
+            delivery_id: self.delivery_id.to_string(),
+            kind: self.kind,
+            priority: self.priority,
+            ttl_seconds: self.ttl_seconds,
+        }
+    }
+
+    pub(crate) fn from_snapshot(snapshot: WnsPayloadSnapshot) -> Self {
+        Self {
+            data: snapshot.data.into(),
+            delivery_id: Arc::from(snapshot.delivery_id),
+            kind: snapshot.kind,
+            priority: snapshot.priority,
+            ttl_seconds: snapshot.ttl_seconds,
+            encoded_body_cache: Mutex::new(None),
+        }
+    }
     pub fn new(
         data: impl Into<SharedStringMap>,
         delivery_id: &str,

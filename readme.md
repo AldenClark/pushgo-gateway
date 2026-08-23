@@ -461,6 +461,14 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 5. MQTT deployments must publish `1883/tcp` for plain MQTT or terminate TLS at the edge on `8883/tcp`. If gateway terminates MQTT/TLS directly, set `PUSHGO_MQTT_TLS_ENABLED=true` and provide `PUSHGO_PRIVATE_TLS_CERT` / `PUSHGO_PRIVATE_TLS_KEY`.
 6. For cross-database upgrade validation, run `scripts/storage_crossdb_parity.sh`. The script uses Docker when available and falls back to Apple container when `CONTAINER_CLI=container` or Docker is absent.
 
+## v12 Single-Instance Rollback Boundary
+
+Schema `2026-08-20-gateway-v12` adds durable submissions and provider outbox state. The audited v11 binary is not a reader for that state and must fail closed. Before any v12 durable write, rollback requires restoring the verified v11 snapshot. After v12 accepts work, preserve the database and recover forward with the exact v12-aware emergency artifact; never relabel the schema or delete pending rows.
+
+The forward fix also maintains a server-issued total order for latest-state Widget and Live Activity materialization. Existing positive orders advance the sequence watermark; legacy zero-order pending submissions are never timestamp-backfilled and cause startup to fail closed until the exact prior v12 artifact drains them with ingress stopped. Existing materialized zero-order winners remain fenced from different legacy submissions.
+
+The complete operator contract and temporary-database drill are in [`release/V12_SINGLE_INSTANCE_ROLLBACK.md`](release/V12_SINGLE_INSTANCE_ROLLBACK.md). The drill does not authorize or execute a production migration.
+
 ## Production Recommendations
 
 1. Enable QUIC + Raw TCP together, and keep WSS as a compatibility path for restricted networks.

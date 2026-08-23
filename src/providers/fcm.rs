@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use hashbrown::HashMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{util::SharedStringMap, value::NotificationSeverity};
 
@@ -12,7 +12,30 @@ pub struct FcmPayload {
     ttl_seconds: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FcmPayloadSnapshot {
+    data: HashMap<String, String>,
+    priority: String,
+    ttl_seconds: Option<u32>,
+}
+
 impl FcmPayload {
+    pub(crate) fn snapshot(&self) -> FcmPayloadSnapshot {
+        FcmPayloadSnapshot {
+            data: self.data.as_map().clone(),
+            priority: self.priority.to_string(),
+            ttl_seconds: self.ttl_seconds,
+        }
+    }
+
+    pub(crate) fn from_snapshot(snapshot: FcmPayloadSnapshot) -> Self {
+        let priority = if snapshot.priority.eq_ignore_ascii_case("HIGH") {
+            "HIGH"
+        } else {
+            "NORMAL"
+        };
+        Self::new(snapshot.data, priority, snapshot.ttl_seconds)
+    }
     pub fn new(
         data: impl Into<SharedStringMap>,
         priority: &'static str,

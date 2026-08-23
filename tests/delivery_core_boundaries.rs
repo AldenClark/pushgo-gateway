@@ -1380,8 +1380,8 @@ fn dispatch_op_dedupe_state_machine_is_owned_by_delivery_core() {
 
     for required in [
         "impl DispatchDedupeStore for AppState",
-        "CoreDispatchOpGuard::begin",
-        ".finish(state, dispatch_result)",
+        "CoreDispatchOpGuard::begin_submission",
+        ".finish_recoverable(state, dispatch_result)",
     ] {
         if !api_lifecycle_source.contains(required) {
             violations.push(format!(

@@ -53,6 +53,10 @@ impl UpgradeManager {
         .await?;
         let plan = db.inspect_upgrade_plan().await?;
         self.reporter.plan(&plan);
+        if let Err(err) = db.validate_runtime_durability().await {
+            self.reporter
+                .unsafe_durability_warning(err.to_string().as_str());
+        }
         Ok(plan)
     }
 
@@ -71,8 +75,13 @@ impl UpgradeManager {
         let plan = db.inspect_upgrade_plan().await?;
         self.reporter.plan(&plan);
         if matches!(mode, UpgradeMode::PlanOnly) {
+            if let Err(err) = db.validate_runtime_durability().await {
+                self.reporter
+                    .unsafe_durability_warning(err.to_string().as_str());
+            }
             return Ok(Some(plan));
         }
+        db.validate_runtime_durability().await?;
         if matches!(plan.action, UpgradeAction::Noop) {
             self.reporter.verify_started();
             db.verify_upgrade(plan.target_schema_version.as_str())

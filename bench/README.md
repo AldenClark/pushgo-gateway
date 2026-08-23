@@ -131,9 +131,9 @@ The data contains mock channels, devices, subscriptions, normal messages, markdo
 | Event create/update/close and repeated lifecycle | `event_lifecycle` |
 | Thing create/update/archive/delete, hot object updates, message associated with thing | `thing_lifecycle` |
 | Device register, channel route, subscribe, unsubscribe churn | `device_subscription_churn` |
-| Offline pull and ACK, empty and non-empty pulls | `offline_pull_ack` |
+| Provider recovery queue v2 pull and ACK, empty and non-empty pulls | `offline_pull_ack`, `offline_empty_pull`, `offline_pull_ack_batch` |
 | ntfy, ServerChan, Bark compatibility paths | `compat_ingress` |
-| Private WSS profile, websocket handshake/hold path when enabled, with fallback pressure covered by pull/ack | `private_wss_profile`, `offline_pull_ack` |
+| Private WSS profile and websocket handshake/hold path when enabled | `private_wss_profile`; durable redelivery/ACK is covered by `blackbox_private_fallback` integration tests |
 | Stepped load breakpoint | `ramp_message` |
 | Spike traffic and recovery | `spike_message` |
 | Long-running stability | `soak_message` with `PUSHGO_BENCH_DURATION=600` or `1800` |

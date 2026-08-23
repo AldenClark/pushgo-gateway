@@ -36,7 +36,7 @@ pub(crate) struct AlertHint {
     pub(crate) ttl: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DomainDeliveryPolicy {
     pub(crate) allow_private_realtime: bool,
     pub(crate) allow_private_outbox: bool,

@@ -39,6 +39,7 @@ async fn widget_push_subscription_registers_current_widgets() {
 #[tokio::test]
 async fn message_dispatch_queues_widget_push_for_matching_widgets() {
     let (state, receivers) = build_test_state_with_receivers().await;
+    let storage = state.store.clone();
     let channel_id = seed_provider_channel_for_router_test(
         &state,
         "widget-message-device",
@@ -99,5 +100,21 @@ async fn message_dispatch_queues_widget_push_for_matching_widgets() {
         job.widget_kinds
             .iter()
             .any(|kind| kind == "io.ethan.pushgo.widgets.unread")
+    );
+    let now = chrono::Utc::now().timestamp_millis();
+    let durable = storage
+        .claim_provider_dispatch_job(
+            "APNS_WIDGETS",
+            None,
+            "widget-order-observer",
+            now,
+            now + 20_000,
+        )
+        .await
+        .expect("Widget durable job should be readable")
+        .expect("Widget durable job should be claimable");
+    assert!(
+        durable.record.coalesce_order > 0,
+        "Widget latest-state work must inherit the core submission order"
     );
 }

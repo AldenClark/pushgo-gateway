@@ -115,31 +115,10 @@ pub(crate) async fn execute_private_deliveries(
     let mut queued_devices = Vec::with_capacity(execution.targets.len());
     for target in execution.targets {
         let device_id = target.device_id;
-        if target.kind.allow_realtime()
-            && execution.private_state.config.online_fast_path_enabled
-            && execution.private_state.hub.is_online(device_id)
-            && !execution
-                .private_state
-                .hub
-                .has_active_mqtt_connection(device_id)
-        {
-            let delivered = execution.private_state.hub.try_deliver_to_device(
-                device_id,
-                crate::private::protocol::DeliverEnvelope {
-                    delivery_id: execution.delivery_id.to_string(),
-                    payload: Arc::clone(&execution.payload),
-                },
-            );
-            if delivered {
-                report.attempts.push(PrivateDeliveryAttempt {
-                    device_id,
-                    outcome: PrivateDeliveryAttemptOutcome::Enqueued,
-                    realtime_delivered: true,
-                });
-                continue;
-            }
-        }
-        if target.kind.allow_outbox() {
+        // Realtime delivery is only an accelerator. Every accepted private
+        // target must first have a durable outbox row so process loss, socket
+        // races, and a client ACK lost in flight cannot erase the delivery.
+        if target.kind.allow_outbox() || target.kind.allow_realtime() {
             queued_devices.push(device_id);
         }
     }
@@ -157,8 +136,13 @@ pub(crate) async fn execute_private_deliveries(
 
     for (device_id, result) in enqueue_results {
         match result {
-            Ok(()) => {
-                let realtime_delivered = deliver_enqueued_private_realtime(&execution, device_id);
+            Ok(outcome) => {
+                let realtime_delivered = outcome.accepted_for_delivery
+                    && deliver_enqueued_private_realtime(
+                        &execution,
+                        device_id,
+                        Arc::clone(&outcome.canonical_payload),
+                    );
                 report.attempts.push(PrivateDeliveryAttempt {
                     device_id,
                     outcome: PrivateDeliveryAttemptOutcome::Enqueued,
@@ -167,16 +151,35 @@ pub(crate) async fn execute_private_deliveries(
             }
             Err(err) => {
                 execution.private_state.metrics.mark_enqueue_failure();
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::WARN,
-                    event = "dispatch.private_enqueue_failed",
-                    correlation_id = %(crate::util::redact_text(execution.correlation_id)),
-                    delivery_id = %(crate::util::redact_text(execution.delivery_id)),
-                    channel_id = %(crate::util::redact_text(execution.channel_id)),
-                    device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
-                    error = %(err.to_string())
-                );
+                if matches!(
+                    &err,
+                    crate::Error::TooBusy
+                        | crate::Error::StoreError(
+                            crate::storage::StoreError::PrivateOutboxCapacityExceeded { .. }
+                        )
+                ) {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::DEBUG,
+                        event = "dispatch.private_enqueue_deferred",
+                        correlation_id = %(crate::util::redact_text(execution.correlation_id)),
+                        delivery_id = %(crate::util::redact_text(execution.delivery_id)),
+                        channel_id = %(crate::util::redact_text(execution.channel_id)),
+                        device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+                        reason = "private_outbox_capacity"
+                    );
+                } else {
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::WARN,
+                        event = "dispatch.private_enqueue_failed",
+                        correlation_id = %(crate::util::redact_text(execution.correlation_id)),
+                        delivery_id = %(crate::util::redact_text(execution.delivery_id)),
+                        channel_id = %(crate::util::redact_text(execution.channel_id)),
+                        device_id = %(crate::util::redact_text(encode_lower_hex_128(&device_id))),
+                        error = %(err.to_string())
+                    );
+                }
                 report.attempts.push(PrivateDeliveryAttempt {
                     device_id,
                     outcome: PrivateDeliveryAttemptOutcome::Failed(err),
@@ -192,12 +195,13 @@ pub(crate) async fn execute_private_deliveries(
 fn deliver_enqueued_private_realtime(
     execution: &PrivateDeliveryExecution<'_>,
     device_id: DeviceId,
+    canonical_payload: Arc<[u8]>,
 ) -> bool {
-    if (execution.private_state.config.online_fast_path_enabled
-        && !execution
+    if !execution.private_state.config.online_fast_path_enabled
+        || execution
             .private_state
             .hub
-            .has_active_mqtt_connection(device_id))
+            .has_active_mqtt_connection(device_id)
         || !execution.private_state.hub.is_online(device_id)
     {
         return false;
@@ -207,7 +211,7 @@ fn deliver_enqueued_private_realtime(
         device_id,
         crate::private::protocol::DeliverEnvelope {
             delivery_id: execution.delivery_id.to_string(),
-            payload: Arc::clone(&execution.payload),
+            payload: canonical_payload,
         },
     );
     if !delivered {

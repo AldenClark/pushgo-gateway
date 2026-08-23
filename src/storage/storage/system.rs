@@ -117,6 +117,7 @@ impl Storage {
 
     pub async fn finalize_provider_dispatch_outcome(
         &self,
+        dedupe_key: &str,
         op_id: &str,
         delivery_id: &str,
         success: bool,
@@ -128,12 +129,13 @@ impl Storage {
             )));
         }
         self.db
-            .finalize_provider_dispatch_outcome(op_id, delivery_id, success)
+            .finalize_provider_dispatch_outcome(dedupe_key, op_id, delivery_id, success)
             .await
     }
 
     pub(crate) async fn finalize_provider_dispatch_outcome_durably(
         &self,
+        dedupe_key: &str,
         op_id: &str,
         delivery_id: &str,
         success: bool,
@@ -141,7 +143,7 @@ impl Storage {
         let mut failures = 0usize;
         loop {
             match self
-                .finalize_provider_dispatch_outcome(op_id, delivery_id, success)
+                .finalize_provider_dispatch_outcome(dedupe_key, op_id, delivery_id, success)
                 .await
             {
                 Ok(()) => {
@@ -197,8 +199,21 @@ impl Storage {
     }
 
     pub async fn delete_private_device_state(&self, device_id: DeviceId) -> StoreResult<()> {
+        let pending = self.count_private_outbox_for_device(device_id).await?;
         self.db.delete_private_device_state(device_id).await?;
         self.cache.invalidate_all_channel_devices();
+        if pending > 0
+            && let Err(err) = self
+                .note_private_capacity_released(Some(device_id), pending)
+                .await
+        {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "dispatch.private_capacity_recovery_signal_failed",
+                error = %(err.to_string())
+            );
+        }
         Ok(())
     }
 
@@ -213,6 +228,25 @@ impl Storage {
 
     pub async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>> {
         self.db.load_device_routes().await
+    }
+
+    pub(crate) async fn provider_route_is_current(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        channel_type: RouteChannelType,
+        provider_token: &str,
+        route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        self.db
+            .provider_route_is_current(
+                device_key,
+                platform,
+                channel_type,
+                provider_token,
+                route_updated_at,
+            )
+            .await
     }
 
     pub async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()> {
@@ -337,6 +371,7 @@ impl Storage {
                 private_sessions_pruned = 0_u64,
                 private_outbox_pruned = 0_u64,
                 provider_pull_pruned = 0_u64,
+                provider_dispatch_pruned = 0_u64,
                 sender_status_pruned = 0_u64,
                 orphan_devices_pruned = 0_u64,
                 stale_subscriptions_pruned = 0_u64,
@@ -360,6 +395,7 @@ impl Storage {
             .db
             .cleanup_stale_private_outbox(
                 config.private_stale_outbox_before(now),
+                config.ack_tombstone_before(now),
                 config.delete_batch,
             )
             .await?;
@@ -377,6 +413,9 @@ impl Storage {
         let pending_dedupe_elapsed_ms = phase_started.elapsed().as_millis() as u64;
         phase_started = Instant::now();
         let dedupe_before = config.dedupe_before(now);
+        let provider_dispatch_pruned = self
+            .cleanup_terminal_provider_dispatch_jobs(dedupe_before, config.delete_batch)
+            .await?;
         let _semantic_dedupe_pruned = self
             .cleanup_semantic_id_dedupe(dedupe_before, config.delete_batch)
             .await?;
@@ -462,6 +501,7 @@ impl Storage {
             private_sessions_pruned = (private_sessions_pruned as u64),
             private_outbox_pruned = (private_outbox_pruned as u64),
             provider_pull_pruned = (provider_pull_pruned as u64),
+            provider_dispatch_pruned = (provider_dispatch_pruned as u64),
             sender_status_pruned = (sender_status_pruned as u64),
             orphan_devices_pruned = (orphan_devices_pruned as u64),
             stale_subscriptions_pruned = (stale_subscriptions_pruned as u64),
@@ -486,6 +526,7 @@ impl Storage {
             private_sessions_pruned,
             private_outbox_pruned,
             provider_pull_pruned,
+            provider_dispatch_pruned,
             sender_status_pruned,
             orphan_devices_pruned,
             stale_subscriptions_pruned,

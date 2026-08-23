@@ -104,7 +104,7 @@ async fn cleanup_orphan_private_payloads_in_tx(
         sqlx::query(
             "DELETE FROM private_payloads \
              WHERE delivery_id = ? \
-               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id AND private_outbox.status <> 'acked') \
                AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
         )
         .bind(delivery_id)
@@ -174,7 +174,7 @@ pub(in crate::storage::database::mysql) async fn coalesce_duplicate_provider_rou
              (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
              SELECT ?, o.delivery_id, X'', 0, p.sent_at, p.expires_at, ?, ?, p.created_at, p.updated_at \
              FROM private_outbox o JOIN private_payloads p ON p.delivery_id = o.delivery_id \
-             WHERE o.device_id = ? \
+             WHERE o.device_id = ? AND o.status IN ('pending','claimed','sent') \
              ON DUPLICATE KEY UPDATE \
                sent_at = LEAST(provider_pull_queue.sent_at, VALUES(sent_at)), \
                expires_at = GREATEST(provider_pull_queue.expires_at, VALUES(expires_at)), \
@@ -195,7 +195,7 @@ pub(in crate::storage::database::mysql) async fn coalesce_duplicate_provider_rou
         for statement in [
             "DELETE FROM provider_pull_queue WHERE device_id = ?",
             "DELETE FROM private_bindings WHERE device_id = ?",
-            "DELETE FROM private_outbox WHERE device_id = ?",
+            "DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
             "DELETE FROM private_sessions WHERE device_id = ?",
             "DELETE FROM private_device_keys WHERE device_id = ?",
         ] {
@@ -217,6 +217,29 @@ pub(in crate::storage::database::mysql) async fn coalesce_duplicate_provider_rou
 }
 
 impl MySqlDb {
+    pub(super) async fn provider_route_is_current(
+        &self,
+        device_key: &str,
+        platform: Platform,
+        channel_type: RouteChannelType,
+        provider_token: &str,
+        _route_updated_at: i64,
+    ) -> StoreResult<bool> {
+        let canonical = ProviderTokenRef::canonicalize_for_platform(provider_token, platform)
+            .map_err(|_| StoreError::InvalidDeviceToken)?;
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE device_key = ? AND platform = ? \
+             AND channel_type = ? AND provider_token = ?)",
+        )
+        .bind(device_key)
+        .bind(platform.name())
+        .bind(channel_type.as_str())
+        .bind(canonical)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists != 0)
+    }
+
     pub(super) async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>> {
         let rows = sqlx::query(
             "SELECT device_key, platform, channel_type, provider_token, route_updated_at \
@@ -373,7 +396,7 @@ impl MySqlDb {
                  (device_id, delivery_id, payload_blob, payload_size, sent_at, expires_at, platform, provider_token, created_at, updated_at) \
                  SELECT o.device_id, o.delivery_id, X'', 0, p.sent_at, p.expires_at, ?, ?, ?, ? \
                  FROM private_outbox o JOIN private_payloads p ON p.delivery_id = o.delivery_id \
-                 WHERE o.device_id = ? \
+                 WHERE o.device_id = ? AND o.status IN ('pending','claimed','sent') \
                  ON DUPLICATE KEY UPDATE \
                    sent_at = VALUES(sent_at), expires_at = VALUES(expires_at), \
                    platform = VALUES(platform), provider_token = VALUES(provider_token), \
@@ -386,7 +409,7 @@ impl MySqlDb {
             .bind(values.device_id.as_slice())
             .execute(&mut *tx)
             .await?;
-            sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
+            sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'")
                 .bind(values.device_id.as_slice())
                 .execute(&mut *tx)
                 .await?;
@@ -532,7 +555,7 @@ impl MySqlDb {
                 "DELETE FROM channel_subscriptions WHERE device_id = ?",
                 "DELETE FROM provider_pull_queue WHERE device_id = ?",
                 "DELETE FROM private_bindings WHERE device_id = ?",
-                "DELETE FROM private_outbox WHERE device_id = ?",
+                "DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
                 "DELETE FROM private_sessions WHERE device_id = ?",
                 "DELETE FROM private_device_keys WHERE device_id = ?",
             ] {
@@ -576,7 +599,7 @@ impl MySqlDb {
             "DELETE FROM channel_subscriptions WHERE device_id = ?",
             "DELETE FROM provider_pull_queue WHERE device_id = ?",
             "DELETE FROM private_bindings WHERE device_id = ?",
-            "DELETE FROM private_outbox WHERE device_id = ?",
+            "DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
             "DELETE FROM private_sessions WHERE device_id = ?",
             "DELETE FROM private_device_keys WHERE device_id = ?",
         ] {

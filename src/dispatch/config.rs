@@ -1,17 +1,47 @@
 use crate::runtime_config::GatewayRuntimeProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProviderLaneConfig {
+    pub(super) minimum: usize,
+    pub(super) maximum: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DispatchRuntimeConfig {
-    pub(super) worker_count: usize,
     pub(super) queue_capacity: usize,
+    pub(super) apns: ProviderLaneConfig,
+    pub(super) live_activity: ProviderLaneConfig,
+    pub(super) widgets: ProviderLaneConfig,
+    pub(super) fcm: ProviderLaneConfig,
+    pub(super) wns: ProviderLaneConfig,
 }
 
 impl DispatchRuntimeConfig {
-    pub(super) fn from_profile(profile: GatewayRuntimeProfile) -> Self {
-        let tuning = crate::runtime_config::RuntimeTuning::for_profile(profile).dispatch;
+    pub(super) fn from_profile(_profile: GatewayRuntimeProfile) -> Self {
+        // Provider throughput is independent from storage/cache deployment
+        // profiles. Stable tasks sit behind a small adaptive logical limit.
         Self {
-            worker_count: tuning.worker_count,
-            queue_capacity: tuning.queue_capacity,
+            queue_capacity: 1_024,
+            apns: ProviderLaneConfig {
+                minimum: 2,
+                maximum: 64,
+            },
+            live_activity: ProviderLaneConfig {
+                minimum: 1,
+                maximum: 8,
+            },
+            widgets: ProviderLaneConfig {
+                minimum: 1,
+                maximum: 8,
+            },
+            fcm: ProviderLaneConfig {
+                minimum: 2,
+                maximum: 64,
+            },
+            wns: ProviderLaneConfig {
+                minimum: 1,
+                maximum: 32,
+            },
         }
     }
 }
@@ -22,13 +52,13 @@ mod tests {
     use crate::runtime_config::GatewayRuntimeProfile;
 
     #[test]
-    fn dispatch_runtime_config_comes_from_profile() {
+    fn provider_lanes_are_profile_independent_and_provider_scoped() {
         let small = DispatchRuntimeConfig::from_profile(GatewayRuntimeProfile::Small);
-        assert_eq!(small.worker_count, 2);
-        assert_eq!(small.queue_capacity, 256);
-
         let public = DispatchRuntimeConfig::from_profile(GatewayRuntimeProfile::Public);
-        assert!(public.worker_count >= 4);
-        assert!(public.queue_capacity >= 2_048);
+        assert_eq!(small, public);
+        assert!(small.apns.maximum > small.widgets.maximum);
+        assert!(small.apns.maximum > small.live_activity.maximum);
+        assert!(small.fcm.maximum > small.wns.maximum);
+        assert!(small.apns.minimum < small.apns.maximum);
     }
 }

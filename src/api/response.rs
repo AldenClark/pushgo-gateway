@@ -1348,4 +1348,16 @@ mod tests {
         assert!(!text.contains("super-secret"));
         assert!(text.contains("internal_error"));
     }
+
+    #[tokio::test]
+    async fn password_kdf_overload_is_a_retryable_service_unavailable() {
+        let response = Error::StoreError(StoreError::PasswordKdfBusy).into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("response body");
+        let text = String::from_utf8(body.to_vec()).expect("UTF-8 response");
+        assert!(text.contains("server_busy"));
+        assert!(!text.contains("Password hashing capacity"));
+    }
 }

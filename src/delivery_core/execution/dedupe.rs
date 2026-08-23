@@ -4,7 +4,7 @@ use crate::{
     delivery_core::response::{
         DeliveryDedupeSettleAction, DeliveryDedupeStatus, DeliveryDispatchStatus, DeliverySummary,
     },
-    storage::{OpDedupeReservation, StoreError},
+    storage::{DispatchSubmissionRecord, OpDedupeReservation, StoreError},
 };
 
 pub(crate) type DispatchDedupeResult<T> = Result<T, DispatchDedupeError>;
@@ -13,6 +13,7 @@ pub(crate) type DispatchDedupeResult<T> = Result<T, DispatchDedupeError>;
 pub(crate) struct DispatchDedupeError {
     message: String,
     fingerprint_conflict: bool,
+    too_busy: bool,
 }
 
 impl DispatchDedupeError {
@@ -20,6 +21,7 @@ impl DispatchDedupeError {
         Self {
             message: message.into(),
             fingerprint_conflict: false,
+            too_busy: false,
         }
     }
 
@@ -27,11 +29,16 @@ impl DispatchDedupeError {
         Self {
             message: format!("op_id payload conflicts with delivery {delivery_id}"),
             fingerprint_conflict: true,
+            too_busy: false,
         }
     }
 
     pub(crate) fn is_fingerprint_conflict(&self) -> bool {
         self.fingerprint_conflict
+    }
+
+    pub(crate) fn is_too_busy(&self) -> bool {
+        self.too_busy
     }
 
     pub(crate) fn into_message(self) -> String {
@@ -41,7 +48,17 @@ impl DispatchDedupeError {
 
 impl From<StoreError> for DispatchDedupeError {
     fn from(value: StoreError) -> Self {
-        Self::new(value.to_string())
+        let too_busy = matches!(
+            value,
+            StoreError::DispatchSubmissionCapacityExceeded { .. }
+                | StoreError::ProviderDispatchCapacityExceeded { .. }
+                | StoreError::PrivateOutboxCapacityExceeded { .. }
+        );
+        Self {
+            message: value.to_string(),
+            fingerprint_conflict: false,
+            too_busy,
+        }
     }
 }
 
@@ -53,6 +70,12 @@ pub(crate) trait DispatchDedupeStore: Send + Sync {
         delivery_id: &str,
         request_fingerprint: Option<&str>,
         created_at: i64,
+    ) -> DispatchDedupeResult<OpDedupeReservation>;
+
+    async fn reserve_submission(
+        &self,
+        request_fingerprint: Option<&str>,
+        submission: &DispatchSubmissionRecord,
     ) -> DispatchDedupeResult<OpDedupeReservation>;
 
     async fn mark_op_finalized(
@@ -67,12 +90,18 @@ pub(crate) trait DispatchDedupeStore: Send + Sync {
         dedupe_key: &str,
         delivery_id: &str,
     ) -> DispatchDedupeResult<()>;
+
+    async fn has_durable_dispatch_side_effects(
+        &self,
+        delivery_id: &str,
+    ) -> DispatchDedupeResult<bool>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DispatchOpGuard {
     dedupe_key: String,
     reserved_delivery_id: String,
+    acceptance_order: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +122,18 @@ pub(crate) enum DispatchOpGuardStart {
 }
 
 impl DispatchOpGuard {
+    pub(crate) fn resume(dedupe_key: String, reserved_delivery_id: String) -> Self {
+        Self {
+            dedupe_key,
+            reserved_delivery_id,
+            acceptance_order: 0,
+        }
+    }
+
+    pub(crate) fn acceptance_order(&self) -> i64 {
+        self.acceptance_order
+    }
+
     fn already_finalized_summary(
         channel_id: String,
         op_id: String,
@@ -144,6 +185,18 @@ impl DispatchOpGuard {
                 );
             })?;
 
+        let decision =
+            Self::decision_from_reservation(reservation, dedupe_key, reserved_delivery_id)?;
+        emit_dispatch_reservation_trace(&decision);
+
+        Ok(decision)
+    }
+
+    fn decision_from_reservation(
+        reservation: OpDedupeReservation,
+        dedupe_key: String,
+        reserved_delivery_id: String,
+    ) -> DispatchDedupeResult<DispatchOpGuardDecision> {
         let decision = match reservation {
             OpDedupeReservation::Sent { delivery_id } => {
                 DispatchOpGuardDecision::AlreadyFinalized {
@@ -169,14 +222,42 @@ impl DispatchOpGuard {
             OpDedupeReservation::FingerprintConflict { delivery_id } => {
                 return Err(DispatchDedupeError::fingerprint_conflict(&delivery_id));
             }
+            OpDedupeReservation::ReservedSubmission { acceptance_order } => {
+                DispatchOpGuardDecision::Proceed(Self {
+                    dedupe_key,
+                    reserved_delivery_id,
+                    acceptance_order,
+                })
+            }
             OpDedupeReservation::Reserved => DispatchOpGuardDecision::Proceed(Self {
                 dedupe_key,
                 reserved_delivery_id,
+                acceptance_order: 0,
             }),
         };
-        emit_dispatch_reservation_trace(&decision);
-
         Ok(decision)
+    }
+
+    fn start_from_decision(
+        decision: DispatchOpGuardDecision,
+        channel_id: String,
+        op_id: String,
+    ) -> DispatchOpGuardStart {
+        match decision {
+            DispatchOpGuardDecision::AlreadyFinalized {
+                delivery_id,
+                dispatch_status,
+            } => DispatchOpGuardStart::Complete(Self::already_finalized_summary(
+                channel_id,
+                op_id,
+                delivery_id,
+                dispatch_status,
+            )),
+            DispatchOpGuardDecision::Pending { delivery_id } => DispatchOpGuardStart::Complete(
+                Self::pending_summary(channel_id, op_id, delivery_id),
+            ),
+            DispatchOpGuardDecision::Proceed(guard) => DispatchOpGuardStart::Proceed(guard),
+        }
     }
 
     pub(crate) async fn begin(
@@ -188,26 +269,34 @@ impl DispatchOpGuard {
         channel_id: String,
         op_id: String,
     ) -> DispatchDedupeResult<DispatchOpGuardStart> {
-        match Self::reserve(
+        let decision = Self::reserve(
             store,
             dedupe_key,
             reserved_delivery_id,
             request_fingerprint,
             created_at,
         )
-        .await?
-        {
-            DispatchOpGuardDecision::AlreadyFinalized {
-                delivery_id,
-                dispatch_status,
-            } => Ok(DispatchOpGuardStart::Complete(
-                Self::already_finalized_summary(channel_id, op_id, delivery_id, dispatch_status),
-            )),
-            DispatchOpGuardDecision::Pending { delivery_id } => Ok(DispatchOpGuardStart::Complete(
-                Self::pending_summary(channel_id, op_id, delivery_id),
-            )),
-            DispatchOpGuardDecision::Proceed(guard) => Ok(DispatchOpGuardStart::Proceed(guard)),
-        }
+        .await?;
+        Ok(Self::start_from_decision(decision, channel_id, op_id))
+    }
+
+    pub(crate) async fn begin_submission(
+        store: &(dyn DispatchDedupeStore + Send + Sync),
+        submission: &DispatchSubmissionRecord,
+        request_fingerprint: Option<&str>,
+        channel_id: String,
+        op_id: String,
+    ) -> DispatchDedupeResult<DispatchOpGuardStart> {
+        let reservation = store
+            .reserve_submission(request_fingerprint, submission)
+            .await?;
+        let decision = Self::decision_from_reservation(
+            reservation,
+            submission.dedupe_key.clone(),
+            submission.delivery_id.clone(),
+        )?;
+        emit_dispatch_reservation_trace(&decision);
+        Ok(Self::start_from_decision(decision, channel_id, op_id))
     }
 
     async fn settle_summary(
@@ -305,6 +394,16 @@ impl DispatchOpGuard {
                     reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str()))
                 );
             }
+            DeliveryDedupeSettleAction::KeepPending => {
+                ::tracing::event!(
+                    target: "gateway.trace_event",
+                    ::tracing::Level::INFO,
+                    event = "dispatch.dedupe_settled",
+                    action = %("keep_pending"),
+                    dedupe_key = %(crate::util::redact_text(self.dedupe_key.as_str())),
+                    reserved_delivery_id = %(crate::util::redact_text(self.reserved_delivery_id.as_str()))
+                );
+            }
         }
         Ok(())
     }
@@ -323,9 +422,44 @@ impl DispatchOpGuard {
                 Ok(summary)
             }
             Err(err) => {
-                let _ = self.clear_pending(store).await;
+                let has_side_effects = store
+                    .has_durable_dispatch_side_effects(&self.reserved_delivery_id)
+                    .await
+                    .unwrap_or(true);
+                if has_side_effects {
+                    let _ = self
+                        .settle(
+                            store,
+                            DeliveryDedupeSettleAction::FinalizeSent,
+                            Some(&self.reserved_delivery_id),
+                            Some(DeliveryDispatchStatus::AttemptedPartialFailure),
+                        )
+                        .await;
+                } else {
+                    let _ = self.clear_pending(store).await;
+                }
                 Err(err)
             }
+        }
+    }
+
+    /// A committed submission manifest is the retry source of truth. A
+    /// transient materialization error must leave both it and the pending
+    /// dedupe identity intact so a restart can replay the frozen target set.
+    pub(crate) async fn finish_recoverable<E>(
+        self,
+        store: &(dyn DispatchDedupeStore + Send + Sync),
+        dispatch_result: Result<DeliverySummary, E>,
+    ) -> Result<DeliverySummary, E>
+    where
+        E: From<DispatchDedupeError>,
+    {
+        match dispatch_result {
+            Ok(summary) => {
+                self.settle_summary(store, &summary).await?;
+                Ok(summary)
+            }
+            Err(err) => Err(err),
         }
     }
 }

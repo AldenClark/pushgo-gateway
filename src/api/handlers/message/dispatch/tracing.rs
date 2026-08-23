@@ -62,10 +62,20 @@ pub(super) async fn record_provider_enqueue_failed(
         path = %(path.as_str()),
         device_token = %(crate::util::redact_text(target.device.token_str())),
         error_code = %(dispatch_error_code(err)),
-        error = %(dispatch_error_detail(err))
+        error = %(dispatch_error_detail(err)),
+        cause = %(crate::util::redact_text(dispatch_error_cause(err).unwrap_or("none")))
     );
     if matches!(err, DispatchError::ChannelClosed) {
         progress.dispatch_closed = true;
+    }
+}
+
+fn dispatch_error_cause(error: &DispatchError) -> Option<&str> {
+    match error {
+        DispatchError::DurableEncoding(cause) | DispatchError::DurableStorage(cause) => {
+            Some(cause.as_str())
+        }
+        DispatchError::QueueFull | DispatchError::ChannelClosed => None,
     }
 }
 
@@ -94,6 +104,8 @@ pub(super) fn dispatch_error_detail(error: &DispatchError) -> &'static str {
     match error {
         DispatchError::QueueFull => "dispatch queue is full",
         DispatchError::ChannelClosed => "dispatch worker channel is closed",
+        DispatchError::DurableEncoding(_) => "provider job could not be encoded",
+        DispatchError::DurableStorage(_) => "provider job could not be persisted",
     }
 }
 
@@ -101,5 +113,7 @@ pub(super) fn dispatch_error_code(error: &DispatchError) -> &'static str {
     match error {
         DispatchError::QueueFull => "queue_full",
         DispatchError::ChannelClosed => "channel_closed",
+        DispatchError::DurableEncoding(_) => "durable_encode_failed",
+        DispatchError::DurableStorage(_) => "durable_store_failed",
     }
 }

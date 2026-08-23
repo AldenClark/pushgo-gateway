@@ -2,6 +2,8 @@ use super::*;
 use crate::storage::database::pg::access::maintenance::delete_orphan_private_payload_in_pg_tx;
 use std::sync::Arc;
 
+use super::outbox::mark_provider_delivery_consumed_pg_tx;
+
 impl PostgresDb {
     pub(super) async fn load_private_message(
         &self,
@@ -42,6 +44,17 @@ impl PostgresDb {
         provider_token: &str,
     ) -> StoreResult<()> {
         let now = Utc::now().timestamp_millis();
+        let terminal: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM private_outbox WHERE device_id = $1 AND delivery_id = $2 AND status = $3",
+        )
+        .bind(device_id.as_slice())
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_ACKED)
+        .fetch_one(&self.pool)
+        .await?;
+        if terminal > 0 {
+            return Ok(());
+        }
         self.insert_private_message(delivery_id, message).await?;
         sqlx::query("DELETE FROM provider_pull_queue WHERE device_id = $1 AND expires_at <= $2")
             .bind(device_id.as_slice())
@@ -103,11 +116,13 @@ impl PostgresDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = $1 AND delivery_id = $2")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_pg_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_pg_tx(&mut tx, &original_delivery_id).await?;
             }
             sqlx::query(
@@ -117,6 +132,7 @@ impl PostgresDb {
             .bind(delivery_id)
             .execute(&mut *tx)
             .await?;
+            mark_provider_delivery_consumed_pg_tx(&mut tx, device_id, delivery_id, now).await?;
             delete_orphan_private_payload_in_pg_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
@@ -173,11 +189,13 @@ impl PostgresDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = $1 AND delivery_id = $2")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_pg_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_pg_tx(&mut tx, &original_delivery_id).await?;
             }
             out.push(ProviderPullItem {
@@ -200,6 +218,7 @@ impl PostgresDb {
             .bind(delivery_id)
             .execute(&mut *tx)
             .await?;
+            mark_provider_delivery_consumed_pg_tx(&mut tx, device_id, delivery_id, now).await?;
             delete_orphan_private_payload_in_pg_tx(&mut tx, delivery_id).await?;
         }
 
@@ -348,11 +367,13 @@ impl PostgresDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = $1 AND delivery_id = $2")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_pg_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_pg_tx(&mut tx, &original_delivery_id).await?;
             }
             sqlx::query(
@@ -362,6 +383,7 @@ impl PostgresDb {
             .bind(delivery_id)
             .execute(&mut *tx)
             .await?;
+            mark_provider_delivery_consumed_pg_tx(&mut tx, device_id, delivery_id, now).await?;
             delete_orphan_private_payload_in_pg_tx(&mut tx, delivery_id).await?;
             Some(ProviderPullItem {
                 device_id,
@@ -419,11 +441,13 @@ impl PostgresDb {
             if let Some(original_delivery_id) =
                 crate::storage::database::linked_private_outbox_delivery_id(item.payload.as_ref())
             {
-                sqlx::query("DELETE FROM private_outbox WHERE device_id = $1 AND delivery_id = $2")
-                    .bind(device_id.as_slice())
-                    .bind(&original_delivery_id)
-                    .execute(&mut *tx)
-                    .await?;
+                mark_provider_delivery_consumed_pg_tx(
+                    &mut tx,
+                    device_id,
+                    &original_delivery_id,
+                    now,
+                )
+                .await?;
                 delete_orphan_private_payload_in_pg_tx(&mut tx, &original_delivery_id).await?;
             }
             sqlx::query(
@@ -433,6 +457,7 @@ impl PostgresDb {
             .bind(&delivery_id)
             .execute(&mut *tx)
             .await?;
+            mark_provider_delivery_consumed_pg_tx(&mut tx, device_id, &delivery_id, now).await?;
             delete_orphan_private_payload_in_pg_tx(&mut tx, &delivery_id).await?;
             out.push(item);
         }
@@ -476,6 +501,42 @@ impl PostgresDb {
             delete_orphan_private_payload_in_pg_tx(&mut tx, &delivery_id).await?;
         }
         let removed = rows.len();
+        tx.commit().await?;
+        Ok(removed)
+    }
+
+    pub(super) async fn discard_provider_items_if_candidates_match(
+        &self,
+        device_id: DeviceId,
+        candidates: &[ProviderPullCandidate],
+        now: i64,
+    ) -> StoreResult<usize> {
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self.pool.begin().await?;
+        let mut removed = 0usize;
+        for candidate in candidates {
+            let result = sqlx::query(
+                "DELETE FROM provider_pull_queue \
+                 WHERE device_id = $1 AND delivery_id = $2 AND expires_at > $3 \
+                   AND COALESCE( \
+                       (SELECT payload_blob FROM private_payloads \
+                        WHERE delivery_id = provider_pull_queue.delivery_id), \
+                       provider_pull_queue.payload_blob \
+                   ) = $4",
+            )
+            .bind(device_id.as_slice())
+            .bind(&candidate.delivery_id)
+            .bind(now)
+            .bind(candidate.payload.as_ref())
+            .execute(&mut *tx)
+            .await?;
+            if result.rows_affected() == 1 {
+                delete_orphan_private_payload_in_pg_tx(&mut tx, &candidate.delivery_id).await?;
+                removed = removed.saturating_add(1);
+            }
+        }
         tx.commit().await?;
         Ok(removed)
     }

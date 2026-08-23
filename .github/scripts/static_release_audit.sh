@@ -6,13 +6,30 @@ workflow="$ROOT_DIR/.github/workflows/release.yml"
 dockerfile="$ROOT_DIR/Dockerfile.gha"
 local_dockerfile="$ROOT_DIR/Dockerfile.local"
 preflight="$ROOT_DIR/scripts/preflight_release_audit.sh"
+rollback_drill="$ROOT_DIR/scripts/v12_single_instance_rollback_drill.sh"
+rollback_runbook="$ROOT_DIR/release/V12_SINGLE_INSTANCE_ROLLBACK.md"
+crossdb_parity="$ROOT_DIR/scripts/storage_crossdb_parity.sh"
 
-for file in "$workflow" "$dockerfile" "$local_dockerfile" "$preflight" "$ROOT_DIR/rust-toolchain.toml"; do
+for file in "$workflow" "$dockerfile" "$local_dockerfile" "$preflight" "$rollback_drill" "$rollback_runbook" "$crossdb_parity" "$ROOT_DIR/rust-toolchain.toml"; do
   if [[ ! -f "$file" ]]; then
     echo "missing release contract file: $file" >&2
     exit 1
   fi
 done
+
+bash -n "$rollback_drill"
+grep -Fq '2026-08-20-gateway-v12' "$rollback_runbook"
+grep -Fq '6c26f420114823a827caa0274a0bbc3739d91211' "$rollback_runbook"
+grep -Fq 'scripts/v12_single_instance_rollback_drill.sh' "$workflow"
+grep -Fq 'scripts/storage_crossdb_parity.sh' "$workflow"
+grep -Fq 'ROUNDS: "3"' "$workflow"
+grep -Fq 'EVIDENCE_FILE: evidence/rollback/v12-single-instance.json' "$workflow"
+grep -Fq 'name: pushgo-release-gate-evidence' "$workflow"
+grep -Fq 'production_validation == false' "$workflow"
+grep -Fq 'crossdb_parity_rounds: 3' "$workflow"
+grep -Fq 'SYFT_VERSION: "1.51.0"' "$workflow"
+grep -Fq 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6' "$workflow"
+grep -Fq 'docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a' "$workflow"
 
 for pinned_dockerfile in "$dockerfile" "$local_dockerfile"; do
   from_count="$(grep -Ec '^FROM[[:space:]]+' "$pinned_dockerfile")"

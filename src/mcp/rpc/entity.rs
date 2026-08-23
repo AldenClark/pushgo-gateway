@@ -270,7 +270,7 @@ async fn submit_mcp_event_command(
             source: IngressSource::McpTool,
             auth: SubmitAuth::AuthorizedChannel(authorized_context.clone()),
             channel: ChannelSelector::Authorized(authorized_context),
-            command: DomainCommandInput::Event(Box::new(EventInput { command })),
+            command: DomainCommandInput::Event(Box::new(EventInput { command, live_activity: None })),
             response_mode: ResponseMode::McpJson,
         },
     )

@@ -103,12 +103,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         runtime_tuning.profile,
     )?);
 
-    // Bind before starting any application-owned background task. A bind
-    // failure must not leave a partially-started private runtime behind.
     let addr: SocketAddr = args.http_addr.parse()?;
-    let listener = TcpListener::bind(addr).await?;
     let docs_html = include_str!("api/docs.html");
-    let AppRuntime { router, shutdown } = build_app(&args, apns, fcm, wns, docs_html).await?;
+    let (listener, runtime) = initialize_runtime_then_bind(
+        addr,
+        || build_app(&args, apns, fcm, wns, docs_html),
+        shutdown_app_runtime_after_startup_failure,
+    )
+    .await?;
+    let AppRuntime { router, shutdown } = runtime;
 
     ::tracing::event!(
         target: "gateway.trace_event",
@@ -180,6 +183,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+async fn initialize_runtime_then_bind<R, Init, InitFuture, Cleanup, CleanupFuture>(
+    addr: SocketAddr,
+    initialize: Init,
+    cleanup: Cleanup,
+) -> Result<(TcpListener, R), Box<dyn Error>>
+where
+    Init: FnOnce() -> InitFuture,
+    InitFuture: Future<Output = Result<R, Box<dyn Error>>>,
+    Cleanup: FnOnce(R) -> CleanupFuture,
+    CleanupFuture: Future<Output = ()>,
+{
+    // Storage/bootstrap and every other fallible correctness gate owned by
+    // application initialization must complete before the public socket can
+    // accept a TCP handshake.
+    let runtime = initialize().await?;
+    match TcpListener::bind(addr).await {
+        Ok(listener) => Ok((listener, runtime)),
+        Err(err) => {
+            cleanup(runtime).await;
+            Err(Box::new(err))
+        }
+    }
+}
+
+async fn shutdown_app_runtime_after_startup_failure(runtime: AppRuntime) {
+    let AppRuntime { router, shutdown } = runtime;
+    // Release HTTP-owned dispatch senders before joining provider workers.
+    drop(router);
+    let report = shutdown.shutdown(APP_SHUTDOWN_GRACE).await;
+    let clean = report.panicked == 0 && report.aborted == 0;
+    if clean {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::INFO,
+            event = "gateway.startup_bind_failed_shutdown_finished",
+            joined = (report.joined as u64),
+            panicked = (report.panicked as u64),
+            aborted = (report.aborted as u64)
+        );
+    } else {
+        ::tracing::event!(
+            target: "gateway.trace_event",
+            ::tracing::Level::ERROR,
+            event = "gateway.startup_bind_failed_shutdown_finished",
+            joined = (report.joined as u64),
+            panicked = (report.panicked as u64),
+            aborted = (report.aborted as u64)
+        );
+    }
 }
 
 async fn finish_shutdown_until<S, H, R>(
@@ -311,6 +365,7 @@ fn print_startup_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]
     async fn stalled_http_drain_cannot_extend_the_absolute_shutdown_deadline() {
@@ -335,5 +390,84 @@ mod tests {
             started.elapsed() < std::time::Duration::from_secs(1),
             "a stalled HTTP drain must remain bounded"
         );
+    }
+
+    #[tokio::test]
+    async fn bind_failure_joins_initialized_runtime_and_preserves_bind_error() {
+        let occupied = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("occupied listener should bind");
+        let addr = occupied
+            .local_addr()
+            .expect("occupied address should exist");
+        let joined = Arc::new(AtomicBool::new(false));
+        let joined_after_cleanup = Arc::clone(&joined);
+
+        struct OwnedTask {
+            stop: oneshot::Sender<()>,
+            handle: tokio::task::JoinHandle<()>,
+        }
+
+        let result = initialize_runtime_then_bind(
+            addr,
+            || async {
+                let (stop, stop_rx) = oneshot::channel();
+                let handle = tokio::spawn(async move {
+                    let _ = stop_rx.await;
+                });
+                Ok(OwnedTask { stop, handle })
+            },
+            move |owned| async move {
+                let _ = owned.stop.send(());
+                owned
+                    .handle
+                    .await
+                    .expect("owned startup task should join cleanly");
+                joined_after_cleanup.store(true, Ordering::SeqCst);
+            },
+        )
+        .await;
+        let Err(result) = result else {
+            panic!("occupied HTTP address must fail binding");
+        };
+
+        assert_eq!(
+            result
+                .downcast_ref::<std::io::Error>()
+                .expect("original bind error should be preserved")
+                .kind(),
+            std::io::ErrorKind::AddrInUse
+        );
+        assert!(joined.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn failed_correctness_gate_never_binds_the_http_port() {
+        let probe = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("probe listener should bind");
+        let addr = probe.local_addr().expect("probe address should exist");
+        drop(probe);
+
+        let result = initialize_runtime_then_bind(
+            addr,
+            || async move {
+                let before_gate_failure = TcpListener::bind(addr)
+                    .await
+                    .expect("HTTP port must remain unbound while correctness gates run");
+                drop(before_gate_failure);
+                Err::<(), Box<dyn Error>>(Box::new(std::io::Error::other(
+                    "legacy pending acceptance order",
+                )))
+            },
+            |_| async {},
+        )
+        .await;
+
+        assert!(result.is_err());
+        let after_gate_failure = TcpListener::bind(addr)
+            .await
+            .expect("failed correctness gate must leave the HTTP port unbound");
+        drop(after_gate_failure);
     }
 }

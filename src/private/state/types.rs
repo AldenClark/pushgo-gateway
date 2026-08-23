@@ -27,9 +27,14 @@ impl TerminalDeliveryDisposition {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct EnqueuePrivateMessageOutcome {
     pub(crate) private_outbox_pruned: usize,
+    /// False when an existing terminal ACK tombstone suppressed this replay.
+    pub(crate) accepted_for_delivery: bool,
+    /// Immutable bytes read back from the durable payload row. Realtime and
+    /// MQTT accelerators must use these bytes rather than replay input.
+    pub(crate) canonical_payload: Arc<[u8]>,
 }
 
 #[derive(Debug, Default)]

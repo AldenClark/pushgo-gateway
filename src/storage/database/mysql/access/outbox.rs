@@ -123,25 +123,35 @@ impl MySqlDb {
         &self,
         device_id: DeviceId,
         delivery_id: &str,
-    ) -> StoreResult<()> {
+    ) -> StoreResult<bool> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND delivery_id = ?")
-            .bind(&device_id[..])
-            .bind(delivery_id)
-            .execute(&mut *tx)
-            .await?;
+        let now = Utc::now().timestamp_millis();
+        let acknowledged = sqlx::query(
+            "UPDATE private_outbox SET status = ?, acked_at = ?, claimed_at = NULL, claimed_by = NULL, updated_at = ? \
+             WHERE device_id = ? AND delivery_id = ? AND status IN (?, ?, ?)",
+        )
+        .bind(OUTBOX_STATUS_ACKED)
+        .bind(now)
+        .bind(now)
+        .bind(&device_id[..])
+        .bind(delivery_id)
+        .bind(OUTBOX_STATUS_PENDING)
+        .bind(OUTBOX_STATUS_CLAIMED)
+        .bind(OUTBOX_STATUS_SENT)
+        .execute(&mut *tx)
+        .await?;
 
         sqlx::query(
             "DELETE FROM private_payloads \
              WHERE delivery_id = ? \
-               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+               AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id AND private_outbox.status <> 'acked') \
                AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
         )
         .bind(delivery_id)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(acknowledged.rows_affected() == 1)
     }
 
     pub(super) async fn clear_private_outbox_for_device(
@@ -149,15 +159,17 @@ impl MySqlDb {
         device_id: DeviceId,
     ) -> StoreResult<Vec<String>> {
         let mut tx = self.pool.begin().await?;
-        let rows = sqlx::query("SELECT delivery_id FROM private_outbox WHERE device_id = ?")
-            .bind(&device_id[..])
-            .fetch_all(&mut *tx)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT delivery_id FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
+        )
+        .bind(&device_id[..])
+        .fetch_all(&mut *tx)
+        .await?;
         let ids: Vec<String> = rows
             .into_iter()
             .map(|r| decode_mysql_text(&r, "delivery_id"))
             .collect::<StoreResult<_>>()?;
-        sqlx::query("DELETE FROM private_outbox WHERE device_id = ?")
+        sqlx::query("DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'")
             .bind(&device_id[..])
             .execute(&mut *tx)
             .await?;
@@ -166,7 +178,7 @@ impl MySqlDb {
             sqlx::query(
                 "DELETE FROM private_payloads \
                  WHERE delivery_id = ? \
-                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+                   AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id AND private_outbox.status <> 'acked') \
                    AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
             )
             .bind(delivery_id)
@@ -405,10 +417,38 @@ async fn delete_unreferenced_private_payload(
     sqlx::query(
         "DELETE FROM private_payloads \
          WHERE delivery_id = ? \
-           AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id) \
+           AND NOT EXISTS (SELECT 1 FROM private_outbox WHERE private_outbox.delivery_id = private_payloads.delivery_id AND private_outbox.status <> 'acked') \
            AND NOT EXISTS (SELECT 1 FROM provider_pull_queue WHERE provider_pull_queue.delivery_id = private_payloads.delivery_id)",
     )
     .bind(delivery_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn mark_provider_delivery_consumed_mysql_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    device_id: DeviceId,
+    delivery_id: &str,
+    now: i64,
+) -> StoreResult<()> {
+    sqlx::query(
+        "INSERT INTO private_outbox \
+         (device_id, delivery_id, status, attempts, occurred_at, created_at, claimed_at, claimed_by, \
+          claim_generation, first_sent_at, last_attempt_at, acked_at, fallback_sent_at, next_attempt_at, \
+          last_error_code, last_error_detail, updated_at) \
+         VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, 0, NULL, NULL, ?, NULL, ?, NULL, NULL, ?) \
+         ON DUPLICATE KEY UPDATE status = VALUES(status), acked_at = COALESCE(acked_at, VALUES(acked_at)), \
+           claimed_at = NULL, claimed_by = NULL, updated_at = VALUES(updated_at)",
+    )
+    .bind(device_id.as_slice())
+    .bind(delivery_id)
+    .bind(OUTBOX_STATUS_ACKED)
+    .bind(now)
+    .bind(now)
+    .bind(now)
+    .bind(i64::MAX)
+    .bind(now)
     .execute(&mut **tx)
     .await?;
     Ok(())

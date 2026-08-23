@@ -1,0 +1,27 @@
+[build] cargo build
+[container] starting mysql/postgresql with docker
+[round 1] reset databases + seed partial schema
+round=1 API_CROSS sqlite-mysql MATCH
+round=1 API_CROSS sqlite-pg MATCH
+round=1 API_CROSS mysql-pg MATCH
+round=1 DB_CROSS sqlite-mysql MATCH
+round=1 DB_CROSS sqlite-pg MATCH
+round=1 DB_CROSS mysql-pg MATCH
+round=1 DB_HASH sqlite=97189a5bcfb012989212808acd0af2ce1e419615ec23ab9e47151556a1264c3b mysql=97189a5bcfb012989212808acd0af2ce1e419615ec23ab9e47151556a1264c3b pg=97189a5bcfb012989212808acd0af2ce1e419615ec23ab9e47151556a1264c3b
+[round 2] reset databases + seed partial schema
+round=2 API_CROSS sqlite-mysql MATCH
+round=2 API_CROSS sqlite-pg MATCH
+round=2 API_CROSS mysql-pg MATCH
+round=2 DB_CROSS sqlite-mysql MATCH
+round=2 DB_CROSS sqlite-pg MATCH
+round=2 DB_CROSS mysql-pg MATCH
+round=2 DB_HASH sqlite=19ba90576fdcc117c27351020e7814506dee82227d1912d01bf286e33ba0161c mysql=19ba90576fdcc117c27351020e7814506dee82227d1912d01bf286e33ba0161c pg=19ba90576fdcc117c27351020e7814506dee82227d1912d01bf286e33ba0161c
+[round 3] reset databases + seed partial schema
+round=3 API_CROSS sqlite-mysql MATCH
+round=3 API_CROSS sqlite-pg MATCH
+round=3 API_CROSS mysql-pg MATCH
+round=3 DB_CROSS sqlite-mysql MATCH
+round=3 DB_CROSS sqlite-pg MATCH
+round=3 DB_CROSS mysql-pg MATCH
+round=3 DB_HASH sqlite=135bb5879ffc5e254856ccf93e2affc37d3628ed6338ebf10c28e9bf5bd0474c mysql=135bb5879ffc5e254856ccf93e2affc37d3628ed6338ebf10c28e9bf5bd0474c pg=135bb5879ffc5e254856ccf93e2affc37d3628ed6338ebf10c28e9bf5bd0474c
+DONE report=/Users/ethan/Repo/PushGo/gateway/evidence/crossdb

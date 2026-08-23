@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "mode": "private",
+  "status": "passed",
+  "git_sha": "6c26f420114823a827caa0274a0bbc3739d91211",
+  "cargo_lock_sha256": "bda0d3769e914fe3646dae3413a7a507dd8d5943f10b0d40c77ea473d03d114b",
+  "binary_sha256": "5d7a2bcfca88b15b7a70ab51986cc1243c64e4c85e63deca724c0c9bb79f4201",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "jq": "jq-1.7.1-apple",
+  "sqlite3": "3.54.0",
+  "runner_os": "local",
+  "runner_version": "local",
+  "dirty_worktree": true,
+  "source_drift": false,
+  "metrics": {
+    "private": {
+      "status": "passed",
+      "send_200": 32,
+      "outbox_before_restart": 32,
+      "outbox_after_restart": 32,
+      "max_ttl_millis": 604800000
+    }
+  },
+  "generated_at": "2026-08-22T02:48:20Z"
+}

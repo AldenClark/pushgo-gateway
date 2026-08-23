@@ -28,12 +28,48 @@ impl Storage {
         self.db.insert_private_message(delivery_id, message).await
     }
 
+    /// Insert a delivery payload once and return the immutable canonical bytes.
+    /// A replay may carry conflicting caller bytes, so accelerators must never
+    /// cache or send the candidate until the durable row has been observed.
+    pub async fn insert_private_message_canonical(
+        &self,
+        delivery_id: &str,
+        message: &PrivateMessage,
+    ) -> StoreResult<PrivateMessage> {
+        let _delivery_write = self.durable_write_gate.lock().await;
+        self.db.insert_private_message(delivery_id, message).await?;
+        self.db
+            .load_private_message(delivery_id)
+            .await?
+            .ok_or(StoreError::PrivatePayloadMissingAfterInsert)
+    }
+
     pub async fn enqueue_private_outbox(
         &self,
         device_id: DeviceId,
         entry: &PrivateOutboxEntry,
     ) -> StoreResult<()> {
+        let _delivery_write = self.durable_write_gate.lock().await;
         self.db.enqueue_private_outbox(device_id, entry).await
+    }
+
+    /// Enqueue and observe terminality under the same single-instance write
+    /// gate so a replay cannot mistake an ACK-preserving UPSERT for acceptance.
+    pub async fn enqueue_private_outbox_observed(
+        &self,
+        device_id: DeviceId,
+        entry: &PrivateOutboxEntry,
+    ) -> StoreResult<bool> {
+        let _delivery_write = self.durable_write_gate.lock().await;
+        self.db.enqueue_private_outbox(device_id, entry).await?;
+        Ok(!matches!(
+            self.db
+                .load_private_outbox_entry(device_id, entry.delivery_id.as_str())
+                .await?
+                .as_ref()
+                .map(|stored| stored.status.as_str()),
+            Some(OUTBOX_STATUS_ACKED)
+        ))
     }
 
     pub async fn enqueue_private_outbox_batch(
@@ -46,6 +82,7 @@ impl Storage {
         if entries.is_empty() {
             return Ok(0);
         }
+        let _delivery_write = self.durable_write_gate.lock().await;
         self.db
             .enqueue_private_outbox_batch(
                 entries,
@@ -54,6 +91,39 @@ impl Storage {
                 protected_delivery_id,
             )
             .await
+    }
+
+    /// Enqueue a single-delivery batch and report targets already protected by
+    /// terminal ACK tombstones while holding the single-instance write gate.
+    /// The caller must suppress every accelerator for those targets.
+    pub async fn enqueue_private_outbox_batch_observed(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+        max_pending_per_device: usize,
+        global_max_pending: usize,
+        protected_delivery_id: Option<&str>,
+        delivery_id: &str,
+    ) -> StoreResult<(usize, hashbrown::HashSet<DeviceId>)> {
+        if entries.is_empty() {
+            return Ok((0, hashbrown::HashSet::new()));
+        }
+        let _delivery_write = self.durable_write_gate.lock().await;
+        let pruned = self
+            .db
+            .enqueue_private_outbox_batch(
+                entries,
+                max_pending_per_device,
+                global_max_pending,
+                protected_delivery_id,
+            )
+            .await?;
+        let terminal = self
+            .db
+            .list_acked_private_outbox_devices(delivery_id)
+            .await?
+            .into_iter()
+            .collect();
+        Ok((pruned, terminal))
     }
 
     pub async fn list_private_outbox(
@@ -68,15 +138,32 @@ impl Storage {
         &self,
         device_id: DeviceId,
     ) -> StoreResult<Option<String>> {
-        self.db
+        let removed = self
+            .db
             .evict_oldest_pending_private_outbox_for_device(device_id)
-            .await
+            .await?;
+        if removed.is_some()
+            && let Err(err) = self
+                .note_private_capacity_released(Some(device_id), 1)
+                .await
+        {
+            emit_capacity_recovery_signal_failure(&err);
+        }
+        Ok(removed)
     }
 
     pub async fn evict_oldest_pending_private_outbox_global(
         &self,
     ) -> StoreResult<Option<(DeviceId, String)>> {
-        self.db.evict_oldest_pending_private_outbox_global().await
+        let removed = self.db.evict_oldest_pending_private_outbox_global().await?;
+        if let Some((device_id, _)) = removed.as_ref()
+            && let Err(err) = self
+                .note_private_capacity_released(Some(*device_id), 1)
+                .await
+        {
+            emit_capacity_recovery_signal_failure(&err);
+        }
+        Ok(removed)
     }
 
     pub async fn count_private_outbox_for_device(&self, device_id: DeviceId) -> StoreResult<usize> {
@@ -87,15 +174,28 @@ impl Storage {
         &self,
         device_id: DeviceId,
         delivery_id: &str,
-    ) -> StoreResult<()> {
-        self.db.ack_private_delivery(device_id, delivery_id).await?;
+    ) -> StoreResult<bool> {
+        let _delivery_write = self.durable_write_gate.lock().await;
+        let removed = self.db.ack_private_delivery(device_id, delivery_id).await?;
         self.record_device_activity_best_effort(
             device_id,
             chrono::Utc::now().timestamp_millis(),
             "private_ack",
         )
         .await;
-        Ok(())
+        if removed
+            && let Err(err) = self
+                .note_private_capacity_released(Some(device_id), 1)
+                .await
+        {
+            ::tracing::event!(
+                target: "gateway.trace_event",
+                ::tracing::Level::WARN,
+                event = "dispatch.private_capacity_recovery_signal_failed",
+                error = %(err.to_string())
+            );
+        }
+        Ok(removed)
     }
 
     pub async fn load_private_message(
@@ -123,6 +223,7 @@ impl Storage {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()> {
+        let _delivery_write = self.durable_write_gate.lock().await;
         self.db
             .enqueue_provider_pull_item(device_id, delivery_id, message, platform, provider_token)
             .await
@@ -134,6 +235,7 @@ impl Storage {
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>> {
+        let _delivery_write = self.durable_write_gate.lock().await;
         let item = self
             .db
             .pull_provider_item(device_id, delivery_id, now)
@@ -151,6 +253,7 @@ impl Storage {
         now: i64,
         limit: usize,
     ) -> StoreResult<Vec<ProviderPullItem>> {
+        let _delivery_write = self.durable_write_gate.lock().await;
         let items = self.db.pull_provider_items(device_id, now, limit).await?;
         if !items.is_empty() {
             self.record_device_activity_best_effort(device_id, now, "provider_pull")
@@ -230,6 +333,7 @@ impl Storage {
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullItem>> {
+        let _delivery_write = self.durable_write_gate.lock().await;
         let item = self
             .db
             .ack_provider_item(device_id, delivery_id, now)
@@ -248,6 +352,7 @@ impl Storage {
         delivery_ids: &[String],
         now: i64,
     ) -> StoreResult<Vec<ProviderPullItem>> {
+        let _delivery_write = self.durable_write_gate.lock().await;
         let items = self
             .db
             .ack_provider_items(device_id, delivery_ids, now)
@@ -259,14 +364,18 @@ impl Storage {
         Ok(items)
     }
 
-    pub async fn discard_invalid_provider_items(
+    /// Discard only the exact encoded candidates that were validated as
+    /// invalid by the caller. The complete effective payload is the CAS
+    /// fingerprint, so a different payload version is also a mismatch.
+    pub async fn discard_invalid_provider_candidates(
         &self,
         device_id: DeviceId,
-        delivery_ids: &[String],
+        candidates: &[ProviderPullCandidate],
         now: i64,
     ) -> StoreResult<usize> {
+        let _delivery_write = self.durable_write_gate.lock().await;
         self.db
-            .discard_provider_items_by_outer_ids(device_id, delivery_ids, now)
+            .discard_provider_items_if_candidates_match(device_id, candidates, now)
             .await
     }
 
@@ -337,16 +446,33 @@ impl Storage {
         worker_id: &str,
         claim_generation: u64,
     ) -> StoreResult<bool> {
-        self.db
+        let removed = self
+            .db
             .drop_private_delivery_if_claimed(device_id, delivery_id, worker_id, claim_generation)
-            .await
+            .await?;
+        if removed
+            && let Err(err) = self
+                .note_private_capacity_released(Some(device_id), 1)
+                .await
+        {
+            emit_capacity_recovery_signal_failure(&err);
+        }
+        Ok(removed)
     }
 
     pub async fn clear_private_outbox_for_device(
         &self,
         device_id: DeviceId,
     ) -> StoreResult<Vec<String>> {
-        self.db.clear_private_outbox_for_device(device_id).await
+        let removed = self.db.clear_private_outbox_for_device(device_id).await?;
+        if !removed.is_empty()
+            && let Err(err) = self
+                .note_private_capacity_released(Some(device_id), removed.len())
+                .await
+        {
+            emit_capacity_recovery_signal_failure(&err);
+        }
+        Ok(removed)
     }
 
     pub async fn list_private_outbox_due(
@@ -525,7 +651,7 @@ impl Storage {
             }
             let items = self
                 .db
-                .pull_provider_items(device_id, now, batch_size)
+                .peek_provider_items(device_id, now, batch_size)
                 .await?;
             if items.is_empty() {
                 break;
@@ -567,6 +693,17 @@ impl Storage {
                 self.db
                     .enqueue_private_outbox_messages_batch(&batch, max_pending_per_device)
                     .await?;
+                let delivery_ids = batch
+                    .iter()
+                    .map(|item| item.entry.delivery_id.clone())
+                    .collect::<Vec<_>>();
+                // Provider pull storage is non-destructive until the private
+                // payload and outbox rows are durable. A crash before this
+                // acknowledgement only replays idempotent inserts.
+                let _ = self
+                    .db
+                    .discard_provider_items_by_outer_ids(device_id, &delivery_ids, now)
+                    .await?;
                 migrated = migrated.saturating_add(batch.len());
                 remaining_capacity = remaining_capacity.saturating_sub(batch.len());
             }
@@ -586,4 +723,13 @@ impl Storage {
         );
         Ok(migrated)
     }
+}
+
+fn emit_capacity_recovery_signal_failure(err: &StoreError) {
+    ::tracing::event!(
+        target: "gateway.trace_event",
+        ::tracing::Level::WARN,
+        event = "dispatch.private_capacity_recovery_signal_failed",
+        error = %(err.to_string())
+    );
 }

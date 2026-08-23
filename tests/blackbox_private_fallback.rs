@@ -177,10 +177,12 @@ async fn wait_until_private_outbox_is_empty(gateway: &GatewayProcess) {
     let deadline = Instant::now() + Duration::from_secs(10);
 
     loop {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox")
-            .fetch_one(&mut connection)
-            .await
-            .expect("private outbox count should query");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM private_outbox WHERE status IN ('pending','claimed','sent')",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .expect("private outbox count should query");
         if count == 0 {
             return;
         }

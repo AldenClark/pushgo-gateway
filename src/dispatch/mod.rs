@@ -25,7 +25,7 @@ mod workers;
 use config::DispatchRuntimeConfig;
 use runtime::DispatchWorkerRuntime;
 pub(crate) use types::{
-    ApnsJob, DispatchChannels, DispatchError, DispatchWorkerReceivers, FcmJob,
+    ApnsJob, DispatchChannels, DispatchError, DispatchWorkerReceivers, DurableProviderJob, FcmJob,
     ProviderDeliveryPath, ProviderDispatchOutcome, ProviderDispatchOutcomeLease,
     ProviderPullDelivery, WidgetPushJob, WnsJob,
 };

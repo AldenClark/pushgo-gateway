@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::util::SharedStringMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApnsExpirationEpochSeconds(i64);
 
 impl ApnsExpirationEpochSeconds {
@@ -25,7 +25,7 @@ impl std::fmt::Display for ApnsExpirationEpochSeconds {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApnsPushType {
     Alert,
     Background,
@@ -34,7 +34,7 @@ pub enum ApnsPushType {
 }
 
 /// Core APS payload fields.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct Aps {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,7 +62,7 @@ pub struct Aps {
 }
 
 /// Alert content shown to the user.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Alert {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -88,7 +88,39 @@ pub struct ApnsPayload {
     encoded_body_cache: Mutex<Option<Arc<[u8]>>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ApnsPayloadSnapshot {
+    aps: Aps,
+    data: hashbrown::HashMap<String, String>,
+    expiration: Option<ApnsExpirationEpochSeconds>,
+    push_type: ApnsPushType,
+    topic_override: Option<String>,
+    priority: u8,
+}
+
 impl ApnsPayload {
+    pub(crate) fn snapshot(&self) -> ApnsPayloadSnapshot {
+        ApnsPayloadSnapshot {
+            aps: self.aps.clone(),
+            data: self.data.as_map().clone(),
+            expiration: self.expiration,
+            push_type: self.push_type,
+            topic_override: self.topic_override.clone(),
+            priority: self.priority,
+        }
+    }
+
+    pub(crate) fn from_snapshot(snapshot: ApnsPayloadSnapshot) -> Self {
+        Self {
+            aps: snapshot.aps,
+            data: snapshot.data.into(),
+            expiration: snapshot.expiration,
+            push_type: snapshot.push_type,
+            topic_override: snapshot.topic_override,
+            priority: snapshot.priority,
+            encoded_body_cache: Mutex::new(None),
+        }
+    }
     pub fn new(
         title: Option<String>,
         body: Option<String>,
