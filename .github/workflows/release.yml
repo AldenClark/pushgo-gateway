@@ -131,8 +131,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  build-gnu-binaries:
-    name: Build GNU binary (${{ matrix.target }})
+  build-binaries:
+    name: Build Linux binary (${{ matrix.target }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     needs: release-gate
@@ -142,75 +142,28 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             arch: amd64
-            image: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main@sha256:5a2831afe0b368edc94c249ce9fa325af19c447a72cd08c7592e0546dba1cf04
+            libc: gnu
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f
           - target: aarch64-unknown-linux-gnu
             arch: arm64
-            image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main@sha256:1edb02d16ff2eaa4839c63a87dfbd546192dae9e59012c117679f465997e5267
+            libc: gnu
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c
           - target: armv7-unknown-linux-gnueabihf
             arch: armv7
-            image: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main@sha256:ff8092f70424871282fe81f1e34597e2dda9d38dc328e2d76a5c01170f630a5b
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Read exact Rust toolchain contract
-        id: rust
-        run: echo "channel=$(.github/scripts/release_toolchain.sh)" >> "$GITHUB_OUTPUT"
-
-      - name: Install exact Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
-        with:
-          toolchain: ${{ steps.rust.outputs.channel }}
-          targets: ${{ matrix.target }}
-
-      - name: Install exact cross version
-        run: cargo install cross --version "${CROSS_VERSION}" --locked
-
-      - name: Build GNU binary with pinned cross image
-        env:
-          CROSS_IMAGE: ${{ matrix.image }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          printf '[target.%s]\nimage = "%s"\n' "${TARGET}" "${CROSS_IMAGE}" > Cross.toml
-          cargo fetch --locked --target "${TARGET}"
-          cross build --frozen --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target "${TARGET}"
-
-      - name: Collect GNU binary
-        run: |
-          set -euo pipefail
-          mkdir -p out-gnu
-          cp "target/${{ matrix.target }}/release/${SOURCE_BINARY_NAME}" "out-gnu/${BINARY_NAME}-linux-${{ matrix.arch }}-gnu"
-          chmod 0755 out-gnu/*
-
-      - name: Upload GNU binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pushgo-gnu-${{ matrix.arch }}
-          path: out-gnu
-          if-no-files-found: error
-          retention-days: 7
-
-  build-musl-binaries:
-    name: Build musl binary (${{ matrix.target }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    needs: release-gate
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
+            libc: gnu
+            image: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5@sha256:4a08bebb60f08d52c1885b643a768f163c7318c05f91cf119f6c02855ea52699
           - target: x86_64-unknown-linux-musl
             arch: amd64
-            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:main@sha256:d54fdde7f1b680901a0bb21a2952e4921172b94c17e48603ccbbaeca8b5ef7e8
+            libc: musl
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.5@sha256:77db671d8356a64ae72a3e1415e63f547f26d374fbe3c4762c1cd36c7eac7b99
           - target: aarch64-unknown-linux-musl
             arch: arm64
-            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:main@sha256:f604e399cbb2154ddeb013db99eb4f123d24f09a579c7e8d6ed631d15ffa8b12
+            libc: musl
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5@sha256:702154f52b2d8091671aa2c84d5582d849f949977228c735ff8462f93cc0e1e4
           - target: armv7-unknown-linux-musleabihf
             arch: armv7
-            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:main@sha256:1b30949c63dc54b52caf364dc02653c6f770d7576d7b1370bac85ce4b47bd3c4
+            libc: musl
+            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:0.2.5@sha256:b4f481f30ceca34730a5723f717396d762d94f6eddd7e1cf7c7862d1377ff98c
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -230,7 +183,7 @@ jobs:
       - name: Install exact cross version
         run: cargo install cross --version "${CROSS_VERSION}" --locked
 
-      - name: Build musl binary with pinned cross image
+      - name: Build binary with matching pinned cross image
         env:
           CROSS_IMAGE: ${{ matrix.image }}
           TARGET: ${{ matrix.target }}
@@ -240,18 +193,18 @@ jobs:
           cargo fetch --locked --target "${TARGET}"
           cross build --frozen --release -p pushgo-gateway --bin "${SOURCE_BINARY_NAME}" --target "${TARGET}"
 
-      - name: Collect musl binary
+      - name: Collect Linux binary
         run: |
           set -euo pipefail
-          mkdir -p out-musl
-          cp "target/${{ matrix.target }}/release/${SOURCE_BINARY_NAME}" "out-musl/${BINARY_NAME}-linux-${{ matrix.arch }}-musl"
-          chmod 0755 out-musl/*
+          mkdir -p out
+          cp "target/${{ matrix.target }}/release/${SOURCE_BINARY_NAME}" "out/${BINARY_NAME}-linux-${{ matrix.arch }}-${{ matrix.libc }}"
+          chmod 0755 out/*
 
-      - name: Upload musl binary
+      - name: Upload Linux binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pushgo-musl-${{ matrix.arch }}
-          path: out-musl
+          name: pushgo-linux-${{ matrix.arch }}-${{ matrix.libc }}
+          path: out
           if-no-files-found: error
           retention-days: 7
 
@@ -259,40 +212,28 @@ jobs:
     name: Assemble and inventory six release binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: [build-gnu-binaries, build-musl-binaries]
+    needs: build-binaries
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Download GNU binaries
+      - name: Download Linux binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: pushgo-gnu-*
+          pattern: pushgo-linux-*
           merge-multiple: true
-          path: inputs/gnu
-
-      - name: Download musl binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: pushgo-musl-*
-          merge-multiple: true
-          path: inputs/musl
+          path: inputs
 
       - name: Assemble release and Docker inputs
         run: |
           set -euo pipefail
           mkdir -p dist dist-docker evidence
-          cp "inputs/gnu/${BINARY_NAME}-linux-amd64-gnu" dist/
-          cp "inputs/gnu/${BINARY_NAME}-linux-arm64-gnu" dist/
-          cp "inputs/gnu/${BINARY_NAME}-linux-armv7-gnu" dist/
-          cp "inputs/musl/${BINARY_NAME}-linux-amd64-musl" dist/
-          cp "inputs/musl/${BINARY_NAME}-linux-arm64-musl" dist/
-          cp "inputs/musl/${BINARY_NAME}-linux-armv7-musl" dist/
-          cp "inputs/gnu/${BINARY_NAME}-linux-amd64-gnu" "dist-docker/${BINARY_NAME}-amd64-gnu"
-          cp "inputs/gnu/${BINARY_NAME}-linux-arm64-gnu" "dist-docker/${BINARY_NAME}-arm64-gnu"
-          cp "inputs/gnu/${BINARY_NAME}-linux-armv7-gnu" "dist-docker/${BINARY_NAME}-armv7-gnu"
+          find inputs -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec cp {} dist/ \;
+          cp "inputs/${BINARY_NAME}-linux-amd64-musl" "dist-docker/${BINARY_NAME}-amd64-musl"
+          cp "inputs/${BINARY_NAME}-linux-arm64-musl" "dist-docker/${BINARY_NAME}-arm64-musl"
+          cp "inputs/${BINARY_NAME}-linux-armv7-musl" "dist-docker/${BINARY_NAME}-armv7-musl"
           find dist dist-docker -maxdepth 1 -type f -name "${BINARY_NAME}-*" -exec chmod 0755 {} +
           .github/scripts/verify_release_assets.sh dist evidence
 
@@ -331,32 +272,10 @@ jobs:
           retention-days: 7
 
   binary-smoke:
-    name: Smoke ${{ matrix.target }}
+    name: Smoke six Linux binaries
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: assemble-binaries
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: linux-amd64-gnu
-            platform: linux/amd64
-            runtime: debian
-          - target: linux-arm64-gnu
-            platform: linux/arm64
-            runtime: debian
-          - target: linux-armv7-gnu
-            platform: linux/arm/v7
-            runtime: debian
-          - target: linux-amd64-musl
-            platform: linux/amd64
-            runtime: alpine
-          - target: linux-arm64-musl
-            platform: linux/arm64
-            runtime: alpine
-          - target: linux-armv7-musl
-            platform: linux/arm/v7
-            runtime: alpine
     steps:
       - name: Download release binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -365,39 +284,38 @@ jobs:
           path: dist
 
       - name: Set up QEMU
-        if: matrix.platform != 'linux/amd64'
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
-      - name: Execute exact binary under target runtime
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          RUNTIME: ${{ matrix.runtime }}
-          TARGET: ${{ matrix.target }}
+      - name: Execute every binary under its target runtime
         run: |
           set -euo pipefail
-          case "${RUNTIME}" in
-            debian) image="${DEBIAN_RUNTIME_IMAGE}" ;;
-            alpine) image="${ALPINE_RUNTIME_IMAGE}" ;;
-            *) exit 1 ;;
-          esac
-          asset="${GITHUB_WORKSPACE}/dist/${BINARY_NAME}-${TARGET}"
-          docker run --rm --platform "${PLATFORM}" \
-            --mount "type=bind,source=${asset},target=/usr/local/bin/${BINARY_NAME},readonly" \
-            --entrypoint "/usr/local/bin/${BINARY_NAME}" \
-            "${image}" --help >/dev/null
           mkdir -p evidence
-          jq -n \
-            --arg target "${TARGET}" \
-            --arg platform "${PLATFORM}" \
-            --arg runtime_image "${image}" \
-            --arg sha256 "$(sha256sum "${asset}" | awk '{print $1}')" \
-            '{schema_version: 1, status: "passed", target: $target, platform: $platform, runtime_image: $runtime_image, sha256: $sha256}' \
-            > "evidence/binary-smoke-${TARGET}.json"
+          while IFS='|' read -r target platform image; do
+            asset="${GITHUB_WORKSPACE}/dist/${BINARY_NAME}-${target}"
+            docker run --rm --platform "${platform}" \
+              --mount "type=bind,source=${asset},target=/usr/local/bin/${BINARY_NAME},readonly" \
+              --entrypoint "/usr/local/bin/${BINARY_NAME}" \
+              "${image}" --help >/dev/null
+            jq -n \
+              --arg target "${target}" \
+              --arg platform "${platform}" \
+              --arg runtime_image "${image}" \
+              --arg sha256 "$(sha256sum "${asset}" | awk '{print $1}')" \
+              '{schema_version: 1, status: "passed", target: $target, platform: $platform, runtime_image: $runtime_image, sha256: $sha256}' \
+              > "evidence/binary-smoke-${target}.json"
+          done <<EOF
+          linux-amd64-gnu|linux/amd64|${DEBIAN_RUNTIME_IMAGE}
+          linux-arm64-gnu|linux/arm64|${DEBIAN_RUNTIME_IMAGE}
+          linux-armv7-gnu|linux/arm/v7|${DEBIAN_RUNTIME_IMAGE}
+          linux-amd64-musl|linux/amd64|${ALPINE_RUNTIME_IMAGE}
+          linux-arm64-musl|linux/arm64|${ALPINE_RUNTIME_IMAGE}
+          linux-armv7-musl|linux/arm/v7|${ALPINE_RUNTIME_IMAGE}
+          EOF
 
       - name: Upload binary smoke evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: binary-smoke-${{ matrix.target }}
+          name: binary-smoke-linux
           path: evidence
           if-no-files-found: error
           retention-days: 30
@@ -490,26 +408,15 @@ jobs:
           sbom: true
 
   docker-smoke:
-    name: Smoke OCI image (${{ matrix.platform }})
+    name: Smoke three-platform OCI image
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     needs: [release-gate, docker]
     permissions:
       contents: read
       packages: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            slug: amd64
-          - platform: linux/arm64
-            slug: arm64
-          - platform: linux/arm/v7
-            slug: armv7
     steps:
       - name: Set up QEMU
-        if: matrix.platform != 'linux/amd64'
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
@@ -525,35 +432,37 @@ jobs:
       - name: Verify manifest and execute image
         env:
           IMAGE: ${{ needs.docker.outputs.candidate }}
-          PLATFORM: ${{ matrix.platform }}
-          SLUG: ${{ matrix.slug }}
           EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           set -euo pipefail
           manifest_json="$(docker buildx imagetools inspect "${IMAGE}" --format '{{json .Manifest}}')"
           resolved_digest="$(jq -r '.digest' <<<"${manifest_json}")"
           test "${resolved_digest}" = "${EXPECTED_DIGEST}"
-          platform_digest="$(jq -r --arg platform "${PLATFORM}" '.manifests[] | select(.platform.os != "unknown") | (.platform.os + "/" + .platform.architecture + (if .platform.architecture == "arm" and .platform.variant then "/" + .platform.variant else "" end)) as $candidate | select($candidate == $platform) | .digest' <<<"${manifest_json}")"
-          [[ "${platform_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          manifest="$(docker buildx imagetools inspect "${IMAGE}")"
-          grep -Fq "${PLATFORM}" <<<"${manifest}"
           verified_ref="${IMAGE}@${EXPECTED_DIGEST}"
-          docker pull --platform "${PLATFORM}" "${verified_ref}"
-          docker run --rm --platform "${PLATFORM}" "${verified_ref}" --help >/dev/null
           mkdir -p evidence
-          jq -n \
-            --arg platform "${PLATFORM}" \
-            --arg image "${IMAGE}" \
-            --arg verified_ref "${verified_ref}" \
-            --arg index_digest "${resolved_digest}" \
-            --arg platform_manifest_digest "${platform_digest}" \
-            '{schema_version: 1, status: "passed", platform: $platform, image: $image, verified_ref: $verified_ref, index_digest: $index_digest, platform_manifest_digest: $platform_manifest_digest}' \
-            > "evidence/docker-smoke-${SLUG}.json"
+          while IFS='|' read -r platform slug; do
+            platform_digest="$(jq -r --arg platform "${platform}" '.manifests[] | select(.platform.os != "unknown") | (.platform.os + "/" + .platform.architecture + (if .platform.architecture == "arm" and .platform.variant then "/" + .platform.variant else "" end)) as $candidate | select($candidate == $platform) | .digest' <<<"${manifest_json}")"
+            [[ "${platform_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker pull --platform "${platform}" "${verified_ref}"
+            docker run --rm --platform "${platform}" "${verified_ref}" --help >/dev/null
+            jq -n \
+              --arg platform "${platform}" \
+              --arg image "${IMAGE}" \
+              --arg verified_ref "${verified_ref}" \
+              --arg index_digest "${resolved_digest}" \
+              --arg platform_manifest_digest "${platform_digest}" \
+              '{schema_version: 1, status: "passed", platform: $platform, image: $image, verified_ref: $verified_ref, index_digest: $index_digest, platform_manifest_digest: $platform_manifest_digest}' \
+              > "evidence/docker-smoke-${slug}.json"
+          done <<'EOF'
+          linux/amd64|amd64
+          linux/arm64|arm64
+          linux/arm/v7|armv7
+          EOF
 
       - name: Upload image smoke evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: docker-smoke-${{ matrix.slug }}
+          name: docker-smoke-linux
           path: evidence
           if-no-files-found: error
           retention-days: 30

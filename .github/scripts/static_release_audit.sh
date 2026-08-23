@@ -82,11 +82,31 @@ for variable in DEBIAN_RUNTIME_IMAGE ALPINE_RUNTIME_IMAGE; do
   fi
 done
 
-cross_image_count="$(grep -Ec '^[[:space:]]+image: ghcr\.io/cross-rs/[^[:space:]]+@sha256:[0-9a-f]{64}$' "$workflow")"
+cross_image_count="$(grep -Ec '^[[:space:]]+image: ghcr\.io/cross-rs/[^:[:space:]]+:0\.2\.5@sha256:[0-9a-f]{64}$' "$workflow")"
 if [[ "$cross_image_count" != "6" ]]; then
-  echo "expected six digest-pinned cross images; found $cross_image_count" >&2
+  echo "expected six cross 0.2.5 digest-pinned images; found $cross_image_count" >&2
   exit 1
 fi
+if grep -Eq 'ghcr\.io/cross-rs/[^[:space:]]+:main@' "$workflow"; then
+  echo "release workflow must not use rolling cross :main images" >&2
+  exit 1
+fi
+grep -Fq 'dist-docker/${BINARY_NAME}-amd64-musl' "$workflow"
+grep -Fq '${BINARY_NAME}-${suffix}-musl' "$dockerfile"
+
+linux_target_count="$(grep -Ec '^[[:space:]]+- target: [^[:space:]]+-linux-(gnu|musl|gnueabihf|musleabihf)$' "$workflow")"
+all_target_count="$(grep -Ec '^[[:space:]]+- target:' "$workflow")"
+if [[ "$linux_target_count" != "6" || "$all_target_count" != "6" ]]; then
+  echo "release workflow must build exactly the six Linux targets retained from 1.2.x" >&2
+  exit 1
+fi
+grep -Fq 'build-binaries:' "$workflow"
+if grep -Eq '^  build-(gnu|musl)-binaries:' "$workflow"; then
+  echo "GNU and musl builds must share one Linux matrix" >&2
+  exit 1
+fi
+grep -Fq 'name: binary-smoke-linux' "$workflow"
+grep -Fq 'name: docker-smoke-linux' "$workflow"
 
 stable_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0 1111111111111111111111111111111111111111 true false)"
 beta_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0-beta.2 2222222222222222222222222222222222222222 false false)"

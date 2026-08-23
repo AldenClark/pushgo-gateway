@@ -18,7 +18,7 @@ RUN --mount=type=bind,source=dist,target=/tmp/dist,readonly \
         arm/v7) suffix="armv7" ;; \
         *) echo "Unsupported TARGETARCH/TARGETVARIANT=${TARGETARCH}/${TARGETVARIANT}" >&2; exit 1 ;; \
     esac; \
-    install -m 0755 "/tmp/dist/${BINARY_NAME}-${suffix}-gnu" "/usr/local/bin/${BINARY_NAME}"
+    install -m 0755 "/tmp/dist/${BINARY_NAME}-${suffix}-musl" "/usr/local/bin/${BINARY_NAME}"
 
 RUN set -eux; \
     groupadd --system --gid 10001 pushgo; \
