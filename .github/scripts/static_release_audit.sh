@@ -30,7 +30,7 @@ grep -Fq 'EVIDENCE_FILE: evidence/rollback/v12-single-instance.json' "$workflow"
 grep -Fq 'name: pushgo-release-gate-evidence' "$workflow"
 grep -Fq 'production_validation == false' "$workflow"
 grep -Fq 'crossdb_parity_rounds: 3' "$workflow"
-grep -Fq 'SYFT_VERSION: "1.51.0"' "$workflow"
+grep -Fq 'SYFT_VERSION: "v1.51.0"' "$workflow"
 grep -Fq 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6' "$workflow"
 grep -Fq 'docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a' "$workflow"
 
