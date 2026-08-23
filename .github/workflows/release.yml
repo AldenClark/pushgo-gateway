@@ -88,7 +88,10 @@ jobs:
         run: |
           set -euo pipefail
           cargo clippy --frozen --all-targets --all-features -- -D warnings
-          cargo deny --frozen check -D warnings
+          # cargo-deny's advisory check requires its own mutable cache even in
+          # frozen mode. Keep the reproducible policy checks here and let the
+          # pinned cargo-audit database below own vulnerability coverage.
+          cargo deny --frozen check bans licenses sources -D warnings
           advisory_db="${RUNNER_TEMP}/rustsec-advisory-db"
           mkdir -p "${advisory_db}"
           git -C "${advisory_db}" init

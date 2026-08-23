@@ -140,6 +140,6 @@ done
 
 grep -Fq 'CARGO_DENY_VERSION: "0.20.2"' "$workflow"
 grep -Fq 'cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked' "$workflow"
-grep -Fq 'cargo deny --frozen check -D warnings' "$workflow"
+grep -Fq 'cargo deny --frozen check bans licenses sources -D warnings' "$workflow"
 
 echo "release workflow static audit passed"
