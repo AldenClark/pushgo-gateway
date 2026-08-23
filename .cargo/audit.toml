@@ -1,0 +1,5 @@
+[advisories]
+# SQLx MySQL uses rsa 0.9.x only to encrypt credentials with the server's public
+# key during non-TLS authentication. The advisory concerns observable private-key
+# operations, which Gateway does not perform. Keep all other advisories blocking.
+ignore = ["RUSTSEC-2023-0071"]

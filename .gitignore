@@ -9,7 +9,9 @@
 !/scripts/v12_single_instance_rollback_drill.sh
 bench/results/*
 !bench/results/.gitkeep
-/.cargo/
+/.cargo/*
+!/.cargo/audit.toml
+!/.cargo/config.toml
 **/__pycache__/
 *.pyc
 /.env

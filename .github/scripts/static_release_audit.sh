@@ -10,12 +10,15 @@ rollback_drill="$ROOT_DIR/scripts/v12_single_instance_rollback_drill.sh"
 rollback_runbook="$ROOT_DIR/release/V12_SINGLE_INSTANCE_ROLLBACK.md"
 crossdb_parity="$ROOT_DIR/scripts/storage_crossdb_parity.sh"
 
-for file in "$workflow" "$dockerfile" "$local_dockerfile" "$preflight" "$rollback_drill" "$rollback_runbook" "$crossdb_parity" "$ROOT_DIR/rust-toolchain.toml"; do
+for file in "$workflow" "$dockerfile" "$local_dockerfile" "$preflight" "$rollback_drill" "$rollback_runbook" "$crossdb_parity" "$ROOT_DIR/rust-toolchain.toml" "$ROOT_DIR/.cargo/audit.toml" "$ROOT_DIR/.cargo/config.toml"; do
   if [[ ! -f "$file" ]]; then
     echo "missing release contract file: $file" >&2
     exit 1
   fi
 done
+
+grep -Fq 'ignore = ["RUSTSEC-2023-0071"]' "$ROOT_DIR/.cargo/audit.toml"
+grep -Fq 'SQLx MySQL uses rsa 0.9.x only to encrypt credentials' "$ROOT_DIR/.cargo/audit.toml"
 
 bash -n "$rollback_drill"
 grep -Fq '2026-08-20-gateway-v12' "$rollback_runbook"
