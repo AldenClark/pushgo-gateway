@@ -290,6 +290,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
+          find dist -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec chmod 0755 {} +
           while IFS='|' read -r target platform image; do
             asset="${GITHUB_WORKSPACE}/dist/${BINARY_NAME}-${target}"
             docker run --rm --platform "${platform}" \

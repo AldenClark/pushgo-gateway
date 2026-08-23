@@ -107,6 +107,7 @@ if grep -Eq '^  build-(gnu|musl)-binaries:' "$workflow"; then
 fi
 grep -Fq 'name: binary-smoke-linux' "$workflow"
 grep -Fq 'name: docker-smoke-linux' "$workflow"
+grep -Fq 'find dist -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec chmod 0755 {} +' "$workflow"
 
 stable_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0 1111111111111111111111111111111111111111 true false)"
 beta_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0-beta.2 2222222222222222222222222222222222222222 false false)"
