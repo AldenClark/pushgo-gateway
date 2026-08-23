@@ -2337,7 +2337,7 @@ mod tests {
             .await
             .expect("persist heartbeat job");
         let lease = store
-            .claim_provider_dispatch_job("FCM", None, "heartbeat-owner", now, now + 120)
+            .claim_provider_dispatch_job("FCM", None, "heartbeat-owner", now, now + 5_000)
             .await
             .expect("heartbeat claim should succeed")
             .expect("heartbeat job should exist");
@@ -2368,18 +2368,35 @@ mod tests {
                 .expect("wrong-generation renewal query should run")
         );
 
-        let mut confirmed_until = lease.lease_until;
+        // Keep setup latency outside the lease window under test. Shared CI
+        // runners can spend well over the old 120 ms window on the two
+        // negative SQLite checks above even though the heartbeat itself is
+        // healthy. Start a fresh, still aggressively short lease here so this
+        // oracle measures renewal behavior rather than scheduler contention.
+        let heartbeat_started_at = chrono::Utc::now().timestamp_millis();
+        let original_test_lease_until = heartbeat_started_at + 500;
+        assert!(
+            store
+                .renew_provider_dispatch_job_lease(
+                    &lease,
+                    heartbeat_started_at,
+                    original_test_lease_until,
+                )
+                .await
+                .expect("initial heartbeat test lease should renew")
+        );
+        let mut confirmed_until = original_test_lease_until;
         let live_attempt = run_with_provider_lease_heartbeat_config(
             &runtime,
             &lease,
             &mut confirmed_until,
-            Duration::from_millis(25),
-            120,
-            25,
-            sleep(Duration::from_millis(350)),
+            Duration::from_millis(50),
+            500,
+            100,
+            sleep(Duration::from_millis(1_200)),
         );
         let competing_claim = async {
-            sleep(Duration::from_millis(200)).await;
+            sleep(Duration::from_millis(700)).await;
             let reclaim_at = chrono::Utc::now().timestamp_millis();
             let recovered = store
                 .recover_expired_provider_dispatch_leases(reclaim_at)
@@ -2391,7 +2408,7 @@ mod tests {
                     None,
                     "competing-owner",
                     reclaim_at,
-                    reclaim_at + 120,
+                    reclaim_at + 500,
                 )
                 .await
                 .expect("competing claim query should run");
@@ -2405,7 +2422,7 @@ mod tests {
             "a live lease must remain exclusively owned"
         );
         assert!(
-            confirmed_until > lease.lease_until,
+            confirmed_until > original_test_lease_until,
             "the heartbeat must retain its latest confirmed database deadline"
         );
 
@@ -2413,13 +2430,13 @@ mod tests {
             &runtime,
             &lease,
             &mut confirmed_until,
-            Duration::from_millis(25),
-            120,
-            25,
-            sleep(Duration::from_millis(180)),
+            Duration::from_millis(50),
+            500,
+            100,
+            sleep(Duration::from_millis(600)),
         );
         let competing_second_stage = async {
-            sleep(Duration::from_millis(110)).await;
+            sleep(Duration::from_millis(350)).await;
             let reclaim_at = chrono::Utc::now().timestamp_millis();
             let recovered = store
                 .recover_expired_provider_dispatch_leases(reclaim_at)
@@ -2431,7 +2448,7 @@ mod tests {
                     None,
                     "second-competing-owner",
                     reclaim_at,
-                    reclaim_at + 120,
+                    reclaim_at + 500,
                 )
                 .await
                 .expect("second competing claim query should run");
