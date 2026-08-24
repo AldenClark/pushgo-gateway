@@ -8,7 +8,7 @@ use arc_swap::ArcSwap;
 use chrono::{DateTime, Utc};
 use reqwest::{
     Client, StatusCode, Url,
-    header::{AUTHORIZATION, HeaderValue, RETRY_AFTER},
+    header::{HeaderValue, RETRY_AFTER},
     redirect,
 };
 use serde::Deserialize;
@@ -95,7 +95,6 @@ pub(crate) struct GatewayTokenCache {
     client: Client,
     provider: GatewayProvider,
     base_url: Arc<str>,
-    authorization: Option<HeaderValue>,
     state: Arc<ArcSwap<GatewayTokenState>>,
     refresh: Mutex<RefreshCoordinator>,
 }
@@ -130,12 +129,7 @@ struct FetchFailure {
 }
 
 impl GatewayTokenCache {
-    pub(crate) fn new(
-        client: Client,
-        provider: GatewayProvider,
-        base_url: &str,
-        authorization: Option<HeaderValue>,
-    ) -> Self {
+    pub(crate) fn new(client: Client, provider: GatewayProvider, base_url: &str) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
         let expired_at = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -151,7 +145,6 @@ impl GatewayTokenCache {
             client,
             provider,
             base_url: Arc::from(base_url.into_boxed_str()),
-            authorization,
             state: Arc::new(ArcSwap::from_pointee(initial)),
             refresh: Mutex::new(RefreshCoordinator::default()),
         }
@@ -403,24 +396,25 @@ impl GatewayTokenCache {
         &self,
         url: &str,
     ) -> Result<(TokenInfo, Option<Arc<str>>), FetchFailure> {
-        let mut request = self.client.get(url);
-        if let Some(authorization) = self.authorization.as_ref() {
-            request = request.header(AUTHORIZATION, authorization.clone());
-        }
-        let mut response = request.send().await.map_err(|error| FetchFailure {
-            retryable: !error.is_builder()
-                && !error.is_redirect()
-                && (error.is_timeout()
-                    || error.is_connect()
-                    || error.is_body()
-                    || error.is_request()),
-            retry_after: None,
-            error: Error::Upstream {
-                provider: "PushGo Token Service",
-                status: 0,
-                message: "token service request failed".to_string(),
-            },
-        })?;
+        let mut response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| FetchFailure {
+                retryable: !error.is_builder()
+                    && !error.is_redirect()
+                    && (error.is_timeout()
+                        || error.is_connect()
+                        || error.is_body()
+                        || error.is_request()),
+                retry_after: None,
+                error: Error::Upstream {
+                    provider: "PushGo Token Service",
+                    status: 0,
+                    message: "token service request failed".to_string(),
+                },
+            })?;
         let status = response.status();
         let retry_after = response
             .headers()
@@ -822,7 +816,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            None,
         );
 
         let (first, first_project) = cache
@@ -849,28 +842,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn token_request_sends_dedicated_bearer_authorization() {
+    async fn token_request_is_sent_without_authorization() {
         let (base_url, _, requests) =
             spawn_token_service(vec![TestReply::token("token", "project", 3600)]).await;
-        let mut authorization = HeaderValue::from_static("Bearer service-secret");
-        authorization.set_sensitive(true);
         let cache = GatewayTokenCache::new(
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            Some(authorization),
         );
 
         cache
             .token_info_with_project_fresh()
             .await
-            .expect("authenticated request should succeed");
+            .expect("unauthenticated request should succeed");
 
         let captured = requests.lock().expect("captured requests lock");
-        assert!(captured[0].lines().any(|line| {
-            line.trim_end()
-                .eq_ignore_ascii_case("authorization: Bearer service-secret")
-        }));
+        assert!(
+            !captured[0]
+                .lines()
+                .any(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+        );
     }
 
     #[tokio::test]
@@ -887,7 +878,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Wns,
             &base_url,
-            None,
         );
 
         let error = cache
@@ -908,7 +898,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Wns,
             &base_url,
-            None,
         );
 
         let error = cache
@@ -931,7 +920,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            None,
         );
 
         let (token, _) = cache
@@ -954,7 +942,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            None,
         );
 
         let (token, _) = cache
@@ -975,7 +962,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Apns,
             &base_url,
-            None,
         );
 
         let error = cache
@@ -996,7 +982,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Wns,
             &base_url,
-            None,
         );
         cache.state.store(Arc::new(GatewayTokenState {
             token: Arc::from("almost-expired"),
@@ -1028,13 +1013,10 @@ mod tests {
             disconnect_before_response: false,
         };
         let (base_url, source_count, _) = spawn_token_service(vec![redirect]).await;
-        let mut authorization = HeaderValue::from_static("Bearer must-not-leak");
-        authorization.set_sensitive(true);
         let cache = GatewayTokenCache::new(
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            Some(authorization),
         );
 
         cache
@@ -1055,7 +1037,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            None,
         ));
 
         let results = join_all((0..64).map(|_| {
@@ -1081,7 +1062,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            None,
         ));
 
         let first = {
@@ -1127,7 +1107,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Wns,
             &base_url,
-            None,
         ));
 
         let results = join_all((0..64).map(|_| {
@@ -1154,7 +1133,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Apns,
             &base_url,
-            None,
         ));
 
         cache
@@ -1218,7 +1196,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            None,
         ));
 
         let results = join_all((0..64).map(|_| {
@@ -1249,7 +1226,6 @@ mod tests {
             build_token_service_http_client().expect("test client should build"),
             GatewayProvider::Fcm,
             &base_url,
-            None,
         );
 
         let error = cache

@@ -58,33 +58,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let apns_endpoint = apns_endpoint(args.sandbox_mode);
-    let token_service = args.token_service_client_config()?;
+    let token_service_url = args.token_service_base_url()?;
     print_startup_diagnostics(
         &args,
         private_transports,
         &observability,
         runtime_tuning,
         apns_endpoint,
-        token_service.base_url(),
-        token_service.auth_configured(),
+        token_service_url.as_str(),
     );
 
     let client = build_token_service_http_client()?;
-    let authorization = token_service.authorization_header();
 
     let apns_token_provider = Arc::new(RemoteApnsTokenProvider::new(
-        token_service.base_url(),
-        authorization.clone(),
+        token_service_url.as_str(),
         client.clone(),
     ));
     let fcm_token_provider = Arc::new(RemoteFcmTokenProvider::new(
-        token_service.base_url(),
-        authorization.clone(),
+        token_service_url.as_str(),
         client.clone(),
     ));
     let wns_token_provider = Arc::new(RemoteWnsTokenProvider::new(
-        token_service.base_url(),
-        authorization,
+        token_service_url.as_str(),
         client,
     ));
 
@@ -332,7 +327,6 @@ fn print_startup_diagnostics(
     runtime_tuning: RuntimeTuning,
     apns_endpoint: &str,
     token_service_url: &str,
-    token_service_auth_configured: bool,
 ) {
     ::tracing::event!(
         target: "gateway.trace_event",
@@ -357,8 +351,7 @@ fn print_startup_diagnostics(
         db_observability_enabled = false,
         mcp_enabled = (args.mcp_enabled),
         apns_endpoint = %(apns_endpoint),
-        token_service_url = %(token_service_url),
-        token_service_auth_configured = token_service_auth_configured
+        token_service_url = %(token_service_url)
     );
 }
 

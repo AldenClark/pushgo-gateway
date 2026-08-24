@@ -10,17 +10,8 @@ pub(crate) struct FcmTokenProvider {
 }
 
 impl FcmTokenProvider {
-    pub(crate) fn new(
-        token_service_url: &str,
-        authorization: Option<reqwest::header::HeaderValue>,
-        client: reqwest::Client,
-    ) -> Self {
-        let cache = GatewayTokenCache::new(
-            client,
-            GatewayProvider::Fcm,
-            token_service_url,
-            authorization,
-        );
+    pub(crate) fn new(token_service_url: &str, client: reqwest::Client) -> Self {
+        let cache = GatewayTokenCache::new(client, GatewayProvider::Fcm, token_service_url);
         Self { cache }
     }
 }

@@ -1,12 +1,11 @@
 use clap::Parser;
 use std::{
-    fmt,
     io::{Error as IoError, ErrorKind},
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
 
-use reqwest::{Url, header::HeaderValue};
+use reqwest::Url;
 
 use crate::runtime_config::{GatewayRuntimeProfile, GatewayRuntimeProfileSelection, RuntimeTuning};
 
@@ -36,16 +35,6 @@ pub struct PrivateTransports {
 #[derive(Debug, Clone)]
 pub struct TokenServiceBaseUrl {
     canonical: String,
-    loopback: bool,
-}
-
-#[derive(Clone)]
-struct TokenServiceAuthToken(String);
-
-#[derive(Clone)]
-pub struct TokenServiceClientConfig {
-    base_url: TokenServiceBaseUrl,
-    authorization: Option<HeaderValue>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,75 +100,12 @@ impl TokenServiceBaseUrl {
                 "PUSHGO_TOKEN_SERVICE_URL must use HTTPS unless its host is loopback",
             ));
         }
-        Ok(Self {
-            canonical,
-            loopback,
-        })
+        Ok(Self { canonical })
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
         self.canonical.as_str()
-    }
-}
-
-impl TokenServiceAuthToken {
-    fn from_raw(raw: &str) -> Option<Self> {
-        normalize_non_empty_str(raw).map(Self)
-    }
-
-    fn authorization_header(&self) -> Result<HeaderValue, IoError> {
-        if !(32..=4096).contains(&self.0.len())
-            || !self.0.bytes().all(|byte| byte.is_ascii_graphic())
-            || !is_valid_bearer_token(self.0.as_bytes())
-        {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                "PUSHGO_TOKEN_SERVICE_AUTH_TOKEN must be a valid Bearer token",
-            ));
-        }
-        let mut header =
-            HeaderValue::from_str(format!("Bearer {}", self.0).as_str()).map_err(|_| {
-                IoError::new(
-                    ErrorKind::InvalidInput,
-                    "PUSHGO_TOKEN_SERVICE_AUTH_TOKEN must be a valid Bearer token",
-                )
-            })?;
-        header.set_sensitive(true);
-        Ok(header)
-    }
-}
-
-impl fmt::Debug for TokenServiceAuthToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("TokenServiceAuthToken([REDACTED])")
-    }
-}
-
-impl fmt::Debug for TokenServiceClientConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("TokenServiceClientConfig")
-            .field("base_url", &self.base_url)
-            .field("auth_configured", &self.authorization.is_some())
-            .finish()
-    }
-}
-
-impl TokenServiceClientConfig {
-    #[must_use]
-    pub fn base_url(&self) -> &str {
-        self.base_url.as_str()
-    }
-
-    #[must_use]
-    pub fn authorization_header(&self) -> Option<HeaderValue> {
-        self.authorization.clone()
-    }
-
-    #[must_use]
-    pub const fn auth_configured(&self) -> bool {
-        self.authorization.is_some()
     }
 }
 
@@ -479,51 +405,6 @@ impl Args {
         TokenServiceBaseUrl::parse(self.token_service_url.as_str())
     }
 
-    pub fn token_service_client_config(&self) -> Result<TokenServiceClientConfig, IoError> {
-        let raw = std::env::var_os("PUSHGO_TOKEN_SERVICE_AUTH_TOKEN")
-            .map(|value| {
-                value.into_string().map_err(|_| {
-                    IoError::new(
-                        ErrorKind::InvalidInput,
-                        "PUSHGO_TOKEN_SERVICE_AUTH_TOKEN must be valid UTF-8",
-                    )
-                })
-            })
-            .transpose()?;
-        self.token_service_client_config_with_auth(raw.as_deref())
-    }
-
-    fn token_service_client_config_with_auth(
-        &self,
-        raw_auth_token: Option<&str>,
-    ) -> Result<TokenServiceClientConfig, IoError> {
-        let base_url = self.token_service_base_url()?;
-        let auth_token = raw_auth_token.and_then(TokenServiceAuthToken::from_raw);
-        if let (Some(gateway_token), Some(token_service_token)) =
-            (self.token.as_deref(), auth_token.as_ref())
-            && gateway_token.trim().as_bytes() == token_service_token.0.as_bytes()
-        {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                "Gateway API and token-service credentials must be distinct",
-            ));
-        }
-        let authorization = auth_token
-            .as_ref()
-            .map(TokenServiceAuthToken::authorization_header)
-            .transpose()?;
-        if !base_url.loopback && authorization.is_none() {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                "PUSHGO_TOKEN_SERVICE_AUTH_TOKEN is required for a non-loopback token-service",
-            ));
-        }
-        Ok(TokenServiceClientConfig {
-            base_url,
-            authorization,
-        })
-    }
-
     pub fn public_base_url_value(&self) -> Result<Option<PublicBaseUrl>, IoError> {
         self.public_base_url
             .as_deref()
@@ -704,23 +585,6 @@ fn token_service_host_is_loopback(url: &Url) -> bool {
         .is_ok_and(|address| address.is_loopback())
 }
 
-fn is_valid_bearer_token(raw: &[u8]) -> bool {
-    if raw.is_empty() {
-        return false;
-    }
-    let mut padding_started = false;
-    raw.iter().copied().all(|byte| {
-        if byte == b'=' {
-            padding_started = true;
-            true
-        } else if padding_started {
-            false
-        } else {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/')
-        }
-    })
-}
-
 fn parse_private_transports(raw: &str) -> Result<PrivateTransports, IoError> {
     let normalized = raw.trim().to_ascii_lowercase();
     if normalized.is_empty() || matches!(normalized.as_str(), "false" | "off" | "disabled" | "none")
@@ -781,9 +645,6 @@ mod tests {
     use crate::{runtime_config::GatewayRuntimeProfile, storage::DatabaseKind};
 
     use super::{Args, ObservabilityLogLevel, PrivateTransports, normalize_optional_non_empty};
-
-    const TOKEN_SERVICE_TEST_SECRET: &str = "token-service-test-secret-0123456789";
-    const SHARED_TEST_SECRET: &str = "shared-test-secret-0123456789abcd";
 
     #[test]
     fn normalize_optional_non_empty_treats_empty_and_whitespace_as_missing() {
@@ -1099,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn token_service_client_config_rejects_plaintext_remote_endpoint() {
+    fn token_service_base_url_rejects_plaintext_remote_endpoint() {
         let args = Args::parse_from([
             "pushgo-gateway",
             "--db-url",
@@ -1109,13 +970,13 @@ mod tests {
         ])
         .normalized();
         let error = args
-            .token_service_client_config_with_auth(Some(TOKEN_SERVICE_TEST_SECRET))
+            .token_service_base_url()
             .expect_err("remote token-service must use HTTPS");
         assert!(error.to_string().contains("must use HTTPS"));
     }
 
     #[test]
-    fn token_service_client_config_allows_plaintext_loopback_without_auth() {
+    fn token_service_base_url_allows_plaintext_loopback() {
         let args = Args::parse_from([
             "pushgo-gateway",
             "--db-url",
@@ -1124,25 +985,14 @@ mod tests {
             "http://[::1]:8080/",
         ])
         .normalized();
-        let config = args
-            .token_service_client_config_with_auth(None)
+        let base_url = args
+            .token_service_base_url()
             .expect("loopback development service should be allowed");
-        assert_eq!(config.base_url(), "http://[::1]:8080");
+        assert_eq!(base_url.as_str(), "http://[::1]:8080");
     }
 
     #[test]
-    fn default_token_service_is_loopback_and_does_not_require_a_secret() {
-        let args = Args::parse_from(["pushgo-gateway", "--db-url", "sqlite:///tmp/pushgo.db"])
-            .normalized();
-        let config = args
-            .token_service_client_config_with_auth(None)
-            .expect("the default local token-service must be usable without a secret");
-        assert_eq!(config.base_url(), "http://127.0.0.1:6766");
-        assert!(config.authorization_header().is_none());
-    }
-
-    #[test]
-    fn token_service_client_config_requires_auth_for_remote_endpoint() {
+    fn token_service_base_url_allows_remote_https_without_authentication() {
         let args = Args::parse_from([
             "pushgo-gateway",
             "--db-url",
@@ -1151,164 +1001,10 @@ mod tests {
             "https://token.pushgo.dev",
         ])
         .normalized();
-        let error = args
-            .token_service_client_config_with_auth(None)
-            .expect_err("remote token-service must be authenticated");
-        assert!(
-            error
-                .to_string()
-                .contains("PUSHGO_TOKEN_SERVICE_AUTH_TOKEN is required")
-        );
-    }
-
-    #[test]
-    fn token_service_auth_token_is_independent_from_gateway_api_token() {
-        let args = Args::parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token",
-            "gateway-api-token",
-            "--token-service-url",
-            "https://token.pushgo.dev",
-        ])
-        .normalized();
-        let config = args
-            .token_service_client_config_with_auth(Some(TOKEN_SERVICE_TEST_SECRET))
-            .expect("separate token-service auth should parse");
-        let header = config
-            .authorization_header()
-            .expect("authorization header should exist");
-        assert_eq!(
-            header.to_str().expect("test header should be visible"),
-            format!("Bearer {TOKEN_SERVICE_TEST_SECRET}")
-        );
-    }
-
-    #[test]
-    fn token_service_authorization_header_is_marked_sensitive() {
-        let args = Args::parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token-service-url",
-            "https://token.pushgo.dev",
-        ])
-        .normalized();
-        let header = args
-            .token_service_client_config_with_auth(Some(TOKEN_SERVICE_TEST_SECRET))
-            .expect("token service config should parse")
-            .authorization_header()
-            .expect("authorization header should exist");
-        assert!(header.is_sensitive());
-    }
-
-    #[test]
-    fn token_service_auth_token_rejects_whitespace_inside_bearer_value() {
-        let args = Args::parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token-service-url",
-            "https://token.pushgo.dev",
-        ])
-        .normalized();
-        assert!(
-            args.token_service_client_config_with_auth(Some(
-                "token-service-secret-with space-0123456789",
-            ))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn token_service_auth_token_rejects_non_b64token_graphic_characters() {
-        let args = Args::parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token-service-url",
-            "https://token.pushgo.dev",
-        ])
-        .normalized();
-        assert!(
-            args.token_service_client_config_with_auth(Some(
-                "token-service-secret:invalid-0123456789",
-            ))
-            .is_err()
-        );
-        assert!(
-            args.token_service_client_config_with_auth(Some(
-                "token-service=invalid-padding-0123456789",
-            ))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn token_service_auth_token_cli_argument_is_rejected() {
-        let result = Args::try_parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token-service-auth-token",
-            "must-not-enter-argv",
-        ]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn token_service_auth_token_rejects_gateway_api_token_reuse() {
-        let args = Args::parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token",
-            SHARED_TEST_SECRET,
-            "--token-service-url",
-            "https://token.pushgo.dev",
-        ])
-        .normalized();
-        let error = args
-            .token_service_client_config_with_auth(Some(SHARED_TEST_SECRET))
-            .expect_err("credentials from different trust domains must be distinct");
-        assert!(error.to_string().contains("credentials must be distinct"));
-    }
-
-    #[test]
-    fn empty_token_service_auth_is_treated_as_missing() {
-        let args = Args::parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token-service-url",
-            "https://token.pushgo.dev",
-        ])
-        .normalized();
-        let error = args
-            .token_service_client_config_with_auth(Some("   "))
-            .expect_err("blank authentication must not satisfy remote requirement");
-        assert!(
-            error
-                .to_string()
-                .contains("PUSHGO_TOKEN_SERVICE_AUTH_TOKEN is required")
-        );
-    }
-
-    #[test]
-    fn short_token_service_auth_is_rejected_before_startup() {
-        let args = Args::parse_from([
-            "pushgo-gateway",
-            "--db-url",
-            "sqlite:///tmp/pushgo.db",
-            "--token-service-url",
-            "https://token.pushgo.dev",
-        ])
-        .normalized();
-        assert!(
-            args.token_service_client_config_with_auth(Some("too-short"))
-                .is_err()
-        );
+        let base_url = args
+            .token_service_base_url()
+            .expect("remote HTTPS token-service should not require authentication");
+        assert_eq!(base_url.as_str(), "https://token.pushgo.dev");
     }
 
     #[test]

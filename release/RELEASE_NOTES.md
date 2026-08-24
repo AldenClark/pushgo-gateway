@@ -8,6 +8,11 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.3.1]
+
+### Fixed
+- Restored compatibility with token services that accept unauthenticated HTTPS requests; Gateway API access-token behavior is unchanged.
+
 ## [v1.3.0]
 
 ### Improved

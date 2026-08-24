@@ -14,6 +14,11 @@ PushGo Gateway policy:
 
 ## [Unreleased]
 
+## [v1.3.1] - 2026-08-24
+
+### Fixed
+- Restored the 1.2.x Gateway-to-token-service contract: remote HTTPS token-service requests no longer require or send a Bearer credential. Gateway public API authentication remains unchanged.
+
 ## [v1.3.0] - 2026-08-23
 
 ### Fixed
