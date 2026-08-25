@@ -14,6 +14,13 @@ PushGo Gateway policy:
 
 ## [Unreleased]
 
+## [v1.3.2] - 2026-08-25
+
+### Fixed
+- Changed the binary, container, and example default token-service endpoint from loopback to `https://token.pushgo.cn/`, with a regression test covering the CLI default.
+- Made Docker Hub image promotion mandatory again for immutable release tags and the stable `latest` channel, while preserving the verified GHCR candidate digest and post-promotion digest checks.
+- Added static release-audit coverage that rejects an opt-in Docker Hub gate and verifies synchronized GHCR/Docker Hub tag generation.
+
 ## [v1.3.1] - 2026-08-24
 
 ### Fixed

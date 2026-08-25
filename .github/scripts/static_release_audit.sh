@@ -33,6 +33,8 @@ grep -Fq 'crossdb_parity_rounds: 3' "$workflow"
 grep -Fq 'SYFT_VERSION: "v1.51.0"' "$workflow"
 grep -Fq 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6' "$workflow"
 grep -Fq 'docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a' "$workflow"
+grep -Fq 'default_value = "https://token.pushgo.cn"' "$ROOT_DIR/src/args.rs"
+grep -Fq 'PUSHGO_TOKEN_SERVICE_URL=https://token.pushgo.cn' "$ROOT_DIR/.env.example"
 
 for pinned_dockerfile in "$dockerfile" "$local_dockerfile"; do
   from_count="$(grep -Ec '^FROM[[:space:]]+' "$pinned_dockerfile")"
@@ -45,7 +47,7 @@ for pinned_dockerfile in "$dockerfile" "$local_dockerfile"; do
     echo "Dockerfile frontend is not digest pinned: $pinned_dockerfile" >&2
     exit 1
   fi
-  grep -Fq 'PUSHGO_TOKEN_SERVICE_URL=http://127.0.0.1:6766' "$pinned_dockerfile"
+  grep -Fq 'PUSHGO_TOKEN_SERVICE_URL=https://token.pushgo.cn' "$pinned_dockerfile"
   grep -Fq 'exec /usr/local/bin/pushgo-gateway "$@"' "$pinned_dockerfile"
 done
 
@@ -117,14 +119,36 @@ jq -n -e \
   '[{target: "linux-amd64-musl", sha256: "abc"}] as $records | [{target: "linux-amd64-musl", sha256: "abc"}] as $assets | all($records[]; . as $record | any($assets[]; .target == $record.target and .sha256 == $record.sha256))' \
   >/dev/null
 
-stable_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0 1111111111111111111111111111111111111111 true false)"
-beta_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0-beta.2 2222222222222222222222222222222222222222 false false)"
+stable_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0 1111111111111111111111111111111111111111 true example)"
+beta_tags="$(.github/scripts/image_tags.sh ghcr.io/example/pushgo-gateway v1.3.0-beta.2 2222222222222222222222222222222222222222 false example)"
 if ! grep -Fxq 'ghcr.io/example/pushgo-gateway:latest' <<<"$stable_tags"; then
   echo "stable channel did not produce latest" >&2
   exit 1
 fi
+if ! grep -Fxq 'example/pushgo-gateway:latest' <<<"$stable_tags"; then
+  echo "stable channel did not produce Docker Hub latest" >&2
+  exit 1
+fi
+if ! grep -Fxq 'example/pushgo-gateway:v1.3.0' <<<"$stable_tags" ||
+  ! grep -Fxq 'example/pushgo-gateway:sha-1111111111111111111111111111111111111111' <<<"$stable_tags"; then
+  echo "stable channel did not produce immutable Docker Hub tags" >&2
+  exit 1
+fi
 if grep -Fq ':latest' <<<"$beta_tags"; then
   echo "beta channel produced latest" >&2
+  exit 1
+fi
+if ! grep -Fxq 'example/pushgo-gateway:v1.3.0-beta.2' <<<"$beta_tags"; then
+  echo "beta channel did not produce Docker Hub version tag" >&2
+  exit 1
+fi
+
+if grep -Fq 'PUBLISH_DOCKERHUB' "$workflow"; then
+  echo "Docker Hub publication must not be disabled by an opt-in variable" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc 'name: Log in to Docker Hub' "$workflow")" != "2" ]]; then
+  echo "immutable and stable image promotion must both log in to Docker Hub" >&2
   exit 1
 fi
 

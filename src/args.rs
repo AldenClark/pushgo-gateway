@@ -226,7 +226,7 @@ pub struct Args {
     #[arg(
         env = "PUSHGO_TOKEN_SERVICE_URL",
         long = "token-service-url",
-        default_value = "http://127.0.0.1:6766"
+        default_value = "https://token.pushgo.cn"
     )]
     pub token_service_url: String,
 
@@ -957,6 +957,16 @@ mod tests {
         ])
         .normalized();
         assert!(args.token_service_base_url().is_err());
+    }
+
+    #[test]
+    fn token_service_base_url_defaults_to_mainland_china_endpoint() {
+        let args = Args::parse_from(["pushgo-gateway", "--db-url", "sqlite:///tmp/pushgo.db"])
+            .normalized();
+        let base_url = args
+            .token_service_base_url()
+            .expect("default token-service URL should be valid");
+        assert_eq!(base_url.as_str(), "https://token.pushgo.cn");
     }
 
     #[test]

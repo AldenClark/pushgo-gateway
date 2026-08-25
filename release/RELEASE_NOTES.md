@@ -8,6 +8,12 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.3.2]
+
+### Fixed
+- Changed the default token-service endpoint to `https://token.pushgo.cn/`; global and self-hosted deployments can continue to override it with `PUSHGO_TOKEN_SERVICE_URL`.
+- Restored synchronized Gateway image publication to both GHCR and Docker Hub for release tags.
+
 ## [v1.3.1]
 
 ### Fixed

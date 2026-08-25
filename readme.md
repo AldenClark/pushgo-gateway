@@ -21,7 +21,8 @@
 - token-service: `https://token.pushgo.cn/`
 - gateway: `https://gateway.pushgo.cn/`
 
-In production, explicitly set `--token-service-url` (or `PUSHGO_TOKEN_SERVICE_URL`) based on region.
+The default token-service is `https://token.pushgo.cn/`. Global deployments should explicitly set
+`--token-service-url https://token.pushgo.dev` (or the equivalent `PUSHGO_TOKEN_SERVICE_URL`).
 Gateway-to-token-service requests are unauthenticated. HTTP is accepted only for literal loopback
 development endpoints, and token-service redirects may not cross origins. This does not change
 the optional public Gateway API token (`PUSHGO_TOKEN`).
@@ -71,7 +72,7 @@ Advanced env-only runtime tunables are listed in a separate section below.
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | No                | HTTP API / WSS bind address                            |
 | `--token`                         | `PUSHGO_TOKEN`                         | None                       | No                | Public API auth token (`Authorization: Bearer <token>` first; fallback `?token=<token>` only when Authorization is absent) |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | No                | Sandbox mode (including APNS sandbox endpoint)         |
-| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `http://127.0.0.1:6766`    | No                | token-service endpoint (set explicitly for remote deployments) |
+| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.cn`  | No                | token-service endpoint (override explicitly for the global region or self-hosting) |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | No                | Private transport switch (`true/false` or `quic,tcp,wss,mqtt`) |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | No                | Resource/performance profile (`small`/`public`); never changes the database driver selected by `--db-url` |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | No                | Native tracing log level (`off`/`error`/`warn`/`info`/`debug`/`trace`) |
@@ -365,7 +366,8 @@ Docker image files:
 - `Dockerfile.gha`: release/GitHub Actions image assembly from prebuilt `dist/*-gnu` binaries.
 - `Dockerfile.local`: local source build (multi-stage) for developer machines.
 
-Published images (for example `ghcr.io/<owner>/pushgo-gateway:latest`) are built from `Dockerfile.gha`.
+Release images are built from `Dockerfile.gha` and published to both
+`ghcr.io/<owner>/pushgo-gateway` and `<dockerhub-user>/pushgo-gateway`.
 
 Build locally from source:
 
@@ -492,7 +494,8 @@ The complete operator contract and temporary-database drill are in [`release/V12
 - token-service: `https://token.pushgo.cn/`
 - gateway: `https://gateway.pushgo.cn/`
 
-生产环境建议根据部署地域显式设置 `--token-service-url`（或 `PUSHGO_TOKEN_SERVICE_URL`）。
+默认 token-service 为 `https://token.pushgo.cn/`。全球区域部署应显式设置
+`--token-service-url https://token.pushgo.dev`（或对应的 `PUSHGO_TOKEN_SERVICE_URL`）。
 Gateway 到 token-service 的请求不做鉴权。HTTP 只允许字面 loopback 开发地址，token-service
 重定向不得跨 origin；Gateway 公共 API token（`PUSHGO_TOKEN`）的行为不变。
 
@@ -541,7 +544,7 @@ Gateway 到 token-service 的请求不做鉴权。HTTP 只允许字面 loopback 
 | `--http-addr`                     | `PUSHGO_HTTP_ADDR`                     | `127.0.0.1:6666`           | 否       | HTTP API / WSS 监听地址                              |
 | `--token`                         | `PUSHGO_TOKEN`                         | 无                         | 否       | 公共 API 鉴权 token（优先 `Authorization: Bearer <token>`；仅当 Authorization 缺失时回退 `?token=<token>`） |
 | `--sandbox-mode`                  | `PUSHGO_SANDBOX_MODE`                  | `false`                    | 否       | 沙盒模式（含 APNS sandbox）                          |
-| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `http://127.0.0.1:6766`    | 否       | token-service 地址（远端部署必须显式设置）           |
+| `--token-service-url`             | `PUSHGO_TOKEN_SERVICE_URL`             | `https://token.pushgo.cn`  | 否       | token-service 地址（全球区域或自托管部署需显式覆盖） |
 | `--private-transports`            | `PUSHGO_PRIVATE_TRANSPORTS`            | `false`                    | 否       | 私有传输开关（`true/false` 或 `quic,tcp,wss,mqtt`） |
 | `--runtime-profile`               | `PUSHGO_RUNTIME_PROFILE`               | `small`                    | 否       | 资源/性能档位（`small`/`public`）；不会改变 `--db-url` 选择的数据库驱动 |
 | `--observability-log-level`       | `PUSHGO_OBSERVABILITY_LOG_LEVEL`       | `warn`                     | 否       | 原生 tracing 日志级别（`off`/`error`/`warn`/`info`/`debug`/`trace`） |
@@ -791,7 +794,8 @@ Docker 镜像文件说明：
 - `Dockerfile.gha`：用于 Release/GitHub Actions，基于预编译 `dist/*-gnu` 二进制组装镜像。
 - `Dockerfile.local`：用于本地开发机，直接从源码多阶段构建镜像。
 
-已发布镜像（例如 `ghcr.io/<owner>/pushgo-gateway:latest`）由 `Dockerfile.gha` 产出。
+Release 镜像由 `Dockerfile.gha` 产出，并同步发布到
+`ghcr.io/<owner>/pushgo-gateway` 与 `<dockerhub-user>/pushgo-gateway`。
 
 本地源码构建示例：
 
