@@ -617,18 +617,20 @@ pub(crate) async fn device_channel_delete(
         ));
     }
 
-    current
-        .cleanup(device_key, None, None)
-        .apply(&state)
-        .await?;
-
-    let updated = state
-        .device_registry
-        .clear_channel(device_key, current_type)
-        .map_err(Error::Internal)?;
+    let mut updated = current.clone();
+    updated.provider_token = None;
+    updated.updated_at = current.next_updated_at(chrono::Utc::now().timestamp_millis());
     updated
         .persisted_change(device_key, Some(&current), None)
         .persist(&state, "route_delete_channel")
+        .await?;
+    state
+        .device_registry
+        .restore_route(device_key, updated.clone())
+        .map_err(Error::Internal)?;
+    current
+        .cleanup(device_key, None, None)
+        .apply(&state)
         .await?;
 
     Ok(crate::api::ok(DeviceChannelResponse {
@@ -652,49 +654,45 @@ pub(crate) async fn provider_token_retire(
     let platform = payload.requested_platform()?;
     let provider_token = payload.normalized_provider_token(platform)?;
     let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
-    // Token ownership may move while waiting for a device operation. Lock the
-    // current owner before changing either its registry or durable route.
-    let _operation_lock = loop {
-        let Some(device_key) = state
-            .device_registry
-            .resolve_provider_ingress_route(platform, &provider_token)
-        else {
-            break None;
-        };
+    // Lock every in-memory owner before the durable sweep. Historical
+    // duplicate routes can exist even when the provider index names one key.
+    let mut locked_keys = state
+        .device_registry
+        .device_keys_for_provider_token(platform, &provider_token);
+    locked_keys.sort_unstable();
+    locked_keys.dedup();
+    let mut _operation_locks = Vec::with_capacity(locked_keys.len());
+    for device_key in &locked_keys {
         let guard = state
             .device_operation_guards
-            .guard_for(&device_key)
-            .ok_or_else(|| Error::Internal("invalid provider device identity".into()))?
-            .lock_owned()
-            .await;
-        if state
-            .device_registry
-            .resolve_provider_ingress_route(platform, &provider_token)
-            .as_deref()
-            == Some(device_key.as_str())
-        {
-            break Some(guard);
-        }
-    };
-    if let Some(retired) = state
-        .device_registry
-        .retire_provider_token(platform, &provider_token)
-    {
-        retired
-            .updated
-            .persisted_change(
-                retired.device_key.as_str(),
-                Some(&retired.previous),
-                Some("provider_token_retired"),
-            )
-            .persist(&state, "provider_token_retire")
-            .await?;
+            .guard_for(device_key)
+            .ok_or_else(|| Error::Internal("invalid provider device identity".into()))?;
+        _operation_locks.push(guard.lock_owned().await);
     }
-    state
+    let result = state
         .store
         .retire_provider_token(platform, &provider_token)
-        .await
-        .map_err(|err| Error::Internal(format!("failed to retire provider token: {err}")))?;
+        .await;
+    // A SQLite cleanup after the core transaction can still fail. Read back
+    // the durable owner state before returning either success or error.
+    for device_key in &locked_keys {
+        match state.store.active_device_route_snapshot(device_key).await? {
+            Some(route) => {
+                let channel_type =
+                    DeviceChannelType::parse(&route.channel_type).ok_or_else(|| {
+                        Error::Internal("persisted active channel type is invalid".into())
+                    })?;
+                state
+                    .device_registry
+                    .update_channel(device_key, channel_type, route.provider_token)
+                    .map_err(Error::Internal)?;
+            }
+            None => {
+                state.device_registry.remove_device(device_key);
+            }
+        }
+    }
+    result.map_err(|err| Error::Internal(format!("failed to retire provider token: {err}")))?;
 
     Ok(crate::api::ok(serde_json::json!({
         "retired": true

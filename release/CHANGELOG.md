@@ -23,6 +23,7 @@ PushGo Gateway policy:
 ### Fixed
 - Kept a committed transition's original receipt replayable after expiry or a later token takeover, and cleared coalesced old device identities from the in-memory provider ingress registry.
 - Advanced the durable route revision when provider-token retirement changes an active route, so prepared transitions cannot commit over the retired token.
+- Preserved pending private deliveries and the active in-memory route when `/channel/device/delete` cannot persist its route change.
 - Serialized token claims, retirement, route deletion, and identity replacement around the affected device operations, preventing stale route or provider-token ownership from being restored by concurrent requests.
 - Rolled back in-memory route state when a route retry fails, and fenced subscription and token-retirement writes against a concurrent route transition.
 - Prevented UTF-8 provider tokens from panicking when abbreviated in diagnostic output.

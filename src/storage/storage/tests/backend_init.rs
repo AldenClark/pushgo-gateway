@@ -2346,7 +2346,7 @@ async fn set_external_route_receipt_fault(db_url: &str, postgres: bool, enabled:
         } else {
             "DROP TRIGGER fail_route_transition_receipt"
         };
-        sqlx::query(statement)
+        sqlx::raw_sql(statement)
             .execute(&mut conn)
             .await
             .expect("MySQL receipt fault trigger should change");

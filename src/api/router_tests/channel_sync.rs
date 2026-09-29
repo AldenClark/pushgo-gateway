@@ -545,6 +545,168 @@ async fn provider_token_retire_removes_only_old_token_state() {
 }
 
 #[tokio::test]
+async fn failed_private_route_delete_preserves_pending_delivery_and_registry() {
+    let (state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (status, registered) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform": "android"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let device_key = response_string_field(&registered, "device_key").to_string();
+    let revision = response_data(&registered)["route_revision"]
+        .as_i64()
+        .expect("route revision");
+    let delivery_id = "failed-private-delete-pending";
+    seed_private_pending_delivery(&state, &device_key, delivery_id, "queued").await;
+    let db = sqlx::SqlitePool::connect(&db_url)
+        .await
+        .expect("route fault database should connect");
+    sqlx::query(
+        "CREATE TRIGGER fail_route_delete BEFORE UPDATE ON devices \
+         BEGIN SELECT RAISE(ABORT, 'injected route persistence failure'); END",
+    )
+    .execute(&db)
+    .await
+    .expect("route fault trigger should install");
+
+    let (status, _) = post_json(
+        app.clone(),
+        "/channel/device/delete",
+        json!({"device_key": device_key, "channel_type": "private"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        state
+            .store
+            .load_private_outbox_entry(derive_private_device_id(&device_key), delivery_id)
+            .await
+            .expect("pending delivery should load")
+            .is_some()
+    );
+    assert_eq!(
+        state
+            .store
+            .current_device_route_revision(&device_key)
+            .await
+            .expect("route revision after failed delete"),
+        Some(revision)
+    );
+    assert_eq!(
+        state
+            .device_registry
+            .get(&device_key)
+            .expect("registry route should remain")
+            .channel_type,
+        crate::routing::DeviceChannelType::Private
+    );
+
+    sqlx::query("DROP TRIGGER fail_route_delete")
+        .execute(&db)
+        .await
+        .expect("route fault trigger should drop");
+    let (status, body) = post_json(
+        app,
+        "/channel/device/delete",
+        json!({"device_key": device_key, "channel_type": "private"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "retry delete: {body:?}");
+    assert!(
+        state
+            .store
+            .load_private_outbox_entry(derive_private_device_id(&device_key), delivery_id)
+            .await
+            .expect("deleted private queue should load")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn failed_provider_token_retire_preserves_durable_and_memory_owner() {
+    let (state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (_, registered) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform": "android"}),
+    )
+    .await;
+    let device_key = response_string_field(&registered, "device_key").to_string();
+    let provider_token = "retire-failure-provider-token";
+    let (status, active) = post_json(
+        app.clone(),
+        "/channel/device",
+        json!({"device_key": device_key, "platform": "android", "channel_type": "fcm", "provider_token": provider_token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "provider route: {active:?}");
+    let revision = response_data(&active)["route_revision"]
+        .as_i64()
+        .expect("active route revision");
+    let db = sqlx::SqlitePool::connect(&db_url)
+        .await
+        .expect("retire fault database should connect");
+    sqlx::query(
+        "CREATE TRIGGER fail_provider_retire BEFORE UPDATE ON devices \
+         BEGIN SELECT RAISE(ABORT, 'injected token retirement failure'); END",
+    )
+    .execute(&db)
+    .await
+    .expect("retire fault trigger should install");
+    let retire_request = json!({"platform": "android", "provider_token": provider_token});
+    let (status, _) = post_json(
+        app.clone(),
+        "/channel/device/provider-token/retire",
+        retire_request.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        state
+            .device_registry
+            .resolve_provider_ingress_route(Platform::ANDROID, provider_token)
+            .as_deref(),
+        Some(device_key.as_str())
+    );
+    assert_eq!(
+        state
+            .store
+            .active_device_route_snapshot(&device_key)
+            .await
+            .expect("durable route after failed retire")
+            .expect("active provider route should remain")
+            .route_revision,
+        revision
+    );
+    sqlx::query("DROP TRIGGER fail_provider_retire")
+        .execute(&db)
+        .await
+        .expect("retire fault trigger should drop");
+    let (status, body) =
+        post_json(app, "/channel/device/provider-token/retire", retire_request).await;
+    assert_eq!(status, StatusCode::OK, "retire retry: {body:?}");
+    assert!(
+        state
+            .device_registry
+            .resolve_provider_ingress_route(Platform::ANDROID, provider_token)
+            .is_none()
+    );
+    let route = state
+        .store
+        .active_device_route_snapshot(&device_key)
+        .await
+        .expect("retired durable route")
+        .expect("device identity should remain");
+    assert_eq!(route.route_revision, revision + 1);
+    assert_eq!(route.channel_type, "private");
+    assert!(route.provider_token.is_none());
+}
+
+#[tokio::test]
 async fn concurrent_route_upserts_keep_single_current_route() {
     let state = build_test_state().await;
     let app = super::super::build_router(state.clone(), "<html>docs</html>");

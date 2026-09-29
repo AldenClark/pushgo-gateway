@@ -16,6 +16,7 @@ Policy:
 
 ### Fixed
 - Kept provider-token ownership and delivery routing consistent when devices take over a token or concurrent subscription, retirement, and route operations overlap.
+- Preserved pending private deliveries when a route deletion cannot be saved.
 - Made completed route switches safely repeatable after expiry or later route changes, and prevented a failed route retry from leaving the in-memory route changed.
 - Prevented a diagnostic log path from crashing on multibyte provider tokens.
 
