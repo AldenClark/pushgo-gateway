@@ -312,6 +312,65 @@ impl Storage {
         Ok(migrated)
     }
 
+    pub async fn current_device_route_revision(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<i64>> {
+        self.db.current_device_route_revision(device_key).await
+    }
+
+    pub async fn prepare_route_transition(
+        &self,
+        record: &RouteTransitionPrepareRecord,
+    ) -> StoreResult<RouteTransitionRecord> {
+        self.db.prepare_route_transition(record).await
+    }
+
+    pub async fn query_route_transition(
+        &self,
+        transition_id: Option<&str>,
+        device_key: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> StoreResult<Option<RouteTransitionRecord>> {
+        self.db
+            .query_route_transition(transition_id, device_key, operation_id)
+            .await
+    }
+
+    pub async fn abort_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+    ) -> StoreResult<RouteTransitionRecord> {
+        self.db
+            .abort_route_transition(transition_id, operation_id, now)
+            .await
+    }
+
+    pub async fn commit_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<RouteTransitionCommitResult> {
+        let result = self
+            .db
+            .commit_route_transition(
+                transition_id,
+                operation_id,
+                now,
+                ack_timeout_secs,
+                max_pending_per_device,
+            )
+            .await?;
+        self.cache.clear_devices();
+        self.cache.invalidate_all_channel_devices();
+        Ok(result)
+    }
+
     pub async fn replace_device_identity(
         &self,
         route: &DeviceRouteRecordRow,

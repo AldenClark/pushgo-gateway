@@ -155,13 +155,22 @@ impl DispatchWorkerRuntime {
 }
 
 fn redact_device_token(token: &str) -> String {
-    let visible = 8usize.min(token.len());
-    format!("...{}", &token[token.len().saturating_sub(visible)..])
+    let start = token.ceil_char_boundary(token.len().saturating_sub(8));
+    format!("...{}", &token[start..])
 }
 
 #[cfg(test)]
 mod failure_log_tests {
     use super::ProviderFailureLogWindow;
+
+    #[test]
+    fn unicode_provider_token_logging_does_not_split_codepoints() {
+        let token = "opaque-token😀abcdefg";
+        crate::storage::DeviceInfo::from_token(crate::storage::Platform::ANDROID, token)
+            .expect("accepted opaque token");
+        assert_eq!(super::redact_device_token(token), "...abcdefg");
+        assert_eq!(super::redact_device_token("1234567890"), "...34567890");
+    }
 
     #[test]
     fn provider_failure_logs_are_bounded_per_kind_and_reset_each_minute() {

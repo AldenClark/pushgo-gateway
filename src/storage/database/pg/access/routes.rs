@@ -586,6 +586,54 @@ impl PostgresDb {
         Ok(())
     }
 
+    pub(super) async fn current_device_route_revision(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<i64>> {
+        Ok(
+            sqlx::query_scalar("SELECT route_revision FROM devices WHERE device_key = $1")
+                .bind(device_key)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    pub(super) async fn prepare_route_transition(
+        &self,
+        _record: &RouteTransitionPrepareRecord,
+    ) -> StoreResult<RouteTransitionRecord> {
+        Err(StoreError::RouteTransitionUnsupported)
+    }
+
+    pub(super) async fn query_route_transition(
+        &self,
+        _transition_id: Option<&str>,
+        _device_key: Option<&str>,
+        _operation_id: Option<&str>,
+    ) -> StoreResult<Option<RouteTransitionRecord>> {
+        Err(StoreError::RouteTransitionUnsupported)
+    }
+
+    pub(super) async fn abort_route_transition(
+        &self,
+        _transition_id: &str,
+        _operation_id: &str,
+        _now: i64,
+    ) -> StoreResult<RouteTransitionRecord> {
+        Err(StoreError::RouteTransitionUnsupported)
+    }
+
+    pub(super) async fn commit_route_transition(
+        &self,
+        _transition_id: &str,
+        _operation_id: &str,
+        _now: i64,
+        _ack_timeout_secs: u64,
+        _max_pending_per_device: usize,
+    ) -> StoreResult<RouteTransitionCommitResult> {
+        Err(StoreError::RouteTransitionUnsupported)
+    }
+
     pub(super) async fn retire_provider_token(
         &self,
         platform: Platform,

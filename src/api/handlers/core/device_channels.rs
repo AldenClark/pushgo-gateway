@@ -47,6 +47,7 @@ pub(super) struct DeviceRegisterResponse {
     pub issued_new_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_reason: Option<String>,
+    pub route_revision: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,6 +59,7 @@ pub(super) struct DeviceChannelResponse {
     pub issued_new_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_reason: Option<String>,
+    pub route_revision: i64,
 }
 
 impl DeviceRegisterRequest {
@@ -452,6 +454,27 @@ pub(crate) async fn device_channel_upsert(
             other => Error::Internal(format!("failed to transition device route: {other}")),
         })?;
 
+    let persisted = state
+        .store
+        .load_device_routes()
+        .await?
+        .into_iter()
+        .find(|route| route.device_key == device_key)
+        .ok_or(StoreError::DeviceNotFound)?;
+    if persisted.channel_type != proposed.channel_type.as_str()
+        || persisted.provider_token != proposed.provider_token
+    {
+        return Err(Error::Conflict {
+            message: "device route changed concurrently".into(),
+            code: "route_transition_revision_conflict".into(),
+        });
+    }
+    let route_revision = state
+        .store
+        .current_device_route_revision(device_key)
+        .await?
+        .ok_or(StoreError::DeviceNotFound)?;
+
     let updated = state
         .device_registry
         .update_channel(device_key, next_type, next_provider_token)
@@ -478,6 +501,7 @@ pub(crate) async fn device_channel_upsert(
         provider_token: updated.provider_token,
         issued_new_key: false,
         issue_reason: None,
+        route_revision,
     }))
 }
 
@@ -505,10 +529,16 @@ pub(crate) async fn device_register(
         },
     )
     .await?;
+    let route_revision = state
+        .store
+        .current_device_route_revision(&resolved.device_key)
+        .await?
+        .ok_or(StoreError::DeviceNotFound)?;
     Ok(crate::api::ok(DeviceRegisterResponse {
         device_key: resolved.device_key,
         issued_new_key: resolved.issued_new_key,
         issue_reason: resolved.issue_reason.map(ToString::to_string),
+        route_revision,
     }))
 }
 
@@ -555,6 +585,11 @@ pub(crate) async fn device_channel_delete(
         provider_token: updated.provider_token,
         issued_new_key: false,
         issue_reason: None,
+        route_revision: state
+            .store
+            .current_device_route_revision(device_key)
+            .await?
+            .ok_or(StoreError::DeviceNotFound)?,
     }))
 }
 
@@ -564,6 +599,30 @@ pub(crate) async fn provider_token_retire(
 ) -> HttpResult {
     let platform = payload.requested_platform()?;
     let provider_token = payload.normalized_provider_token(platform)?;
+    // Token ownership may move while waiting for a device operation. Lock the
+    // current owner before changing either its registry or durable route.
+    let _operation_lock = loop {
+        let Some(device_key) = state
+            .device_registry
+            .resolve_provider_ingress_route(platform, &provider_token)
+        else {
+            break None;
+        };
+        let guard = state
+            .device_operation_guards
+            .guard_for(&device_key)
+            .ok_or_else(|| Error::Internal("invalid provider device identity".into()))?
+            .lock_owned()
+            .await;
+        if state
+            .device_registry
+            .resolve_provider_ingress_route(platform, &provider_token)
+            .as_deref()
+            == Some(device_key.as_str())
+        {
+            break Some(guard);
+        }
+    };
     if let Some(retired) = state
         .device_registry
         .retire_provider_token(platform, &provider_token)

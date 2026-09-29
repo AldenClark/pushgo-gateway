@@ -57,6 +57,61 @@ impl DeviceRouteDatabaseAccess for DatabaseDriver {
         )
     }
 
+    async fn current_device_route_revision(&self, device_key: &str) -> StoreResult<Option<i64>> {
+        delegate_db_async!(self, current_device_route_revision(device_key))
+    }
+
+    async fn prepare_route_transition(
+        &self,
+        record: &RouteTransitionPrepareRecord,
+    ) -> StoreResult<RouteTransitionRecord> {
+        delegate_db_async!(self, prepare_route_transition(record))
+    }
+
+    async fn query_route_transition(
+        &self,
+        transition_id: Option<&str>,
+        device_key: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> StoreResult<Option<RouteTransitionRecord>> {
+        delegate_db_async!(
+            self,
+            query_route_transition(transition_id, device_key, operation_id)
+        )
+    }
+
+    async fn abort_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+    ) -> StoreResult<RouteTransitionRecord> {
+        delegate_db_async!(
+            self,
+            abort_route_transition(transition_id, operation_id, now)
+        )
+    }
+
+    async fn commit_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<RouteTransitionCommitResult> {
+        delegate_db_async!(
+            self,
+            commit_route_transition(
+                transition_id,
+                operation_id,
+                now,
+                ack_timeout_secs,
+                max_pending_per_device
+            )
+        )
+    }
+
     async fn replace_device_identity(
         &self,
         route: &DeviceRouteRecordRow,

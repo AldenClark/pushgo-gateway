@@ -32,6 +32,18 @@ pub enum StoreError {
         "Device route migration requires {pending} pending slots, but only {capacity} are available"
     )]
     RouteMigrationCapacityExceeded { pending: usize, capacity: usize },
+    #[error("Device route revision conflict: expected {expected}, actual {actual}")]
+    RouteTransitionRevisionConflict { expected: i64, actual: i64 },
+    #[error("Route transition operation conflicts with its original request")]
+    RouteTransitionOperationConflict,
+    #[error("Route transition not found")]
+    RouteTransitionNotFound,
+    #[error("Route transition is expired")]
+    RouteTransitionExpired,
+    #[error("Route transition is aborted")]
+    RouteTransitionAborted,
+    #[error("Route transition v2 is unavailable for this storage backend")]
+    RouteTransitionUnsupported,
     #[error("Provider dispatch durable capacity is exhausted ({pending}/{capacity})")]
     ProviderDispatchCapacityExceeded { pending: usize, capacity: usize },
     #[error("Dispatch submission durable capacity is exhausted ({pending}/{capacity})")]
