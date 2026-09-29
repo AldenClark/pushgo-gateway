@@ -2631,6 +2631,17 @@ async fn assert_external_route_transition_contract(db_url: &str, postgres: bool)
     assert_eq!(committed.previous_revision, base_revision);
     assert_eq!(committed.route_revision, base_revision + 1);
     assert_eq!(committed.migrated_pending_count, 1);
+    let active = reopened
+        .active_device_route_snapshot(device_key)
+        .await
+        .expect("committed active route should load")
+        .expect("committed active route should exist");
+    assert_eq!(active.route_revision, committed.route_revision);
+    assert_eq!(active.channel_type, "fcm");
+    assert_eq!(
+        active.provider_token.as_deref(),
+        Some("external-route-provider-token")
+    );
     assert!(
         reopened
             .load_private_outbox_entry(device_id, delivery_id)
@@ -2695,6 +2706,14 @@ async fn assert_external_route_transition_contract(db_url: &str, postgres: bool)
         .expect("return-to-private transition should commit after capacity increase");
     assert_eq!(back.route_revision, committed.route_revision + 1);
     assert_eq!(back.migrated_pending_count, 1);
+    let active = reopened
+        .active_device_route_snapshot(device_key)
+        .await
+        .expect("restored active route should load")
+        .expect("restored active route should exist");
+    assert_eq!(active.route_revision, back.route_revision);
+    assert_eq!(active.channel_type, "private");
+    assert!(active.provider_token.is_none());
     assert!(
         reopened
             .load_private_outbox_entry(device_id, delivery_id)
