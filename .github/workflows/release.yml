@@ -138,7 +138,12 @@ jobs:
         run: scripts/storage_crossdb_parity.sh
 
       - name: Archive dependency audit receipt after clean-tree preflight
-        run: cp "${RUNNER_TEMP}/dependency-policy.json" evidence/dependency-policy.json
+        if: always()
+        run: |
+          if [ -f "${RUNNER_TEMP}/dependency-policy.json" ]; then
+            mkdir -p evidence
+            cp "${RUNNER_TEMP}/dependency-policy.json" evidence/dependency-policy.json
+          fi
 
       - name: Upload release-gate evidence
         if: always()
