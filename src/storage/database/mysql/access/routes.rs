@@ -453,22 +453,22 @@ impl MySqlDb {
             }
         }
         let current_route = sqlx::query(
-            "SELECT channel_type, route_updated_at, route_revision FROM devices WHERE device_id = ? FOR UPDATE",
+            "SELECT channel_type, route_updated_at, route_revision FROM devices WHERE device_key = ? FOR UPDATE",
         )
-        .bind(values.device_id.as_slice())
+        .bind(values.device_key.as_str())
         .fetch_optional(&mut *tx)
         .await?;
         let actual_revision = current_route
             .as_ref()
-            .map(|row| row.get::<i64, _>("route_revision"))
-            .unwrap_or_default();
-        if let Some((_, _, expected_revision, _)) = prepared_operation
-            && actual_revision != expected_revision
-        {
-            return Err(StoreError::RouteTransitionRevisionConflict {
-                expected: expected_revision,
-                actual: actual_revision,
-            });
+            .map(|row| row.get::<i64, _>("route_revision"));
+        if let Some((_, _, expected_revision, _)) = prepared_operation {
+            let actual = actual_revision.ok_or(StoreError::DeviceNotFound)?;
+            if actual != expected_revision {
+                return Err(StoreError::RouteTransitionRevisionConflict {
+                    expected: expected_revision,
+                    actual,
+                });
+            }
         }
         if prepared_operation.is_none()
             && current_route.as_ref().is_some_and(|row| {
@@ -477,10 +477,7 @@ impl MySqlDb {
             })
         {
             tx.commit().await?;
-            return Ok((0, actual_revision));
-        }
-        if prepared_operation.is_some() && current_route.is_none() {
-            return Err(StoreError::DeviceNotFound);
+            return Ok((0, actual_revision.unwrap_or_default()));
         }
         let previous_channel_type = current_route
             .and_then(|row| row.get::<Option<String>, _>("channel_type"))
@@ -625,8 +622,8 @@ impl MySqlDb {
         }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
         let route_revision: i64 =
-            sqlx::query_scalar("SELECT route_revision FROM devices WHERE device_id = ?")
-                .bind(values.device_id.as_slice())
+            sqlx::query_scalar("SELECT route_revision FROM devices WHERE device_key = ?")
+                .bind(values.device_key.as_str())
                 .fetch_one(&mut *tx)
                 .await?;
         if let Some((transition_id, operation_id, _, _)) = prepared_operation {
