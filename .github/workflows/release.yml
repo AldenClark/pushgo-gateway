@@ -108,14 +108,13 @@ jobs:
           fi
           echo "RustSec advisory database ${RUSTSEC_ADVISORY_DB_REV} fetched at age ${advisory_db_age_seconds}s"
           cargo audit --db "${advisory_db}" --no-fetch
-          mkdir -p evidence
           jq -n \
             --arg advisory_db_revision "${RUSTSEC_ADVISORY_DB_REV}" \
             --arg advisory_db_commit_date "${advisory_db_commit_date}" \
             --argjson advisory_db_age_seconds "${advisory_db_age_seconds}" \
             --argjson advisory_db_max_age_seconds "${RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS}" \
             '{advisory_db_revision: $advisory_db_revision, advisory_db_commit_date: $advisory_db_commit_date, advisory_db_age_seconds: $advisory_db_age_seconds, advisory_db_max_age_seconds: $advisory_db_max_age_seconds, fetched_revision_verified: true, cargo_audit: "passed"}' \
-            > evidence/dependency-policy.json
+            > "${RUNNER_TEMP}/dependency-policy.json"
 
       - name: Run frozen preflight and black-box flows
         env:
@@ -137,6 +136,9 @@ jobs:
           ROUNDS: "3"
           REPORT_DIR: evidence/crossdb
         run: scripts/storage_crossdb_parity.sh
+
+      - name: Archive dependency audit receipt after clean-tree preflight
+        run: cp "${RUNNER_TEMP}/dependency-policy.json" evidence/dependency-policy.json
 
       - name: Upload release-gate evidence
         if: always()
