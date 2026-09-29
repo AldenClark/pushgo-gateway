@@ -281,7 +281,7 @@ impl GatewayTokenCache {
             return Ok(cached);
         }
 
-        let fetched = self.fetch_token().await;
+        let fetched = self.fetch_token(intent).await;
         let (info, fetched_project_id) = match fetched {
             Ok(result) => result,
             Err(failure) => {
@@ -349,7 +349,10 @@ impl GatewayTokenCache {
         ))
     }
 
-    async fn fetch_token(&self) -> Result<(TokenInfo, Option<Arc<str>>), FetchFailure> {
+    async fn fetch_token(
+        &self,
+        intent: RefreshIntent,
+    ) -> Result<(TokenInfo, Option<Arc<str>>), FetchFailure> {
         let path = match self.provider {
             GatewayProvider::Apns => {
                 if pushgo_gateway::util::is_sandbox_mode() {
@@ -360,18 +363,26 @@ impl GatewayTokenCache {
             }
             GatewayProvider::Fcm | GatewayProvider::Wns => TOKEN_ENDPOINT_PATH,
         };
-        self.fetch_token_from_path(path).await
+        let force_refresh = matches!(intent, RefreshIntent::Explicit)
+            && matches!(self.provider, GatewayProvider::Fcm | GatewayProvider::Wns);
+        self.fetch_token_from_path(path, force_refresh).await
     }
 
     async fn fetch_token_from_path(
         &self,
         token_path: &str,
+        force_refresh: bool,
     ) -> Result<(TokenInfo, Option<Arc<str>>), FetchFailure> {
         let url = format!(
-            "{}{}?provider={}",
+            "{}{}?provider={}{}",
             self.base_url,
             token_path,
-            self.provider.as_str()
+            self.provider.as_str(),
+            if force_refresh {
+                "&force_refresh=true"
+            } else {
+                ""
+            }
         );
         let mut retry_delays = TOKEN_SERVICE_RETRY_DELAYS.into_iter();
         loop {
@@ -839,6 +850,65 @@ mod tests {
         assert_eq!(&*fresh.token, "token-2");
         assert_eq!(&*fresh_project, "project-2");
         assert_eq!(request_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn explicit_fcm_and_wns_refresh_requests_force_without_changing_default_requests() {
+        for provider in [GatewayProvider::Fcm, GatewayProvider::Wns] {
+            let (base_url, request_count, requests) = spawn_token_service(vec![
+                TestReply::token("cached", "project", 3600),
+                TestReply::token("refreshed", "project", 3600),
+            ])
+            .await;
+            let cache = GatewayTokenCache::new(
+                build_token_service_http_client().expect("test client should build"),
+                provider,
+                &base_url,
+            );
+
+            let (initial, refreshed) = match provider {
+                GatewayProvider::Fcm => (
+                    cache
+                        .token_info_with_project()
+                        .await
+                        .expect("initial FCM token")
+                        .0,
+                    cache
+                        .token_info_with_project_fresh()
+                        .await
+                        .expect("explicit FCM refresh")
+                        .0,
+                ),
+                GatewayProvider::Wns => (
+                    cache.token_info().await.expect("initial WNS token"),
+                    cache
+                        .token_info_fresh()
+                        .await
+                        .expect("explicit WNS refresh"),
+                ),
+                GatewayProvider::Apns => unreachable!("only FCM and WNS are tested here"),
+            };
+            assert_eq!(&*initial.token, "cached");
+            assert_eq!(&*refreshed.token, "refreshed");
+            assert_eq!(request_count.load(Ordering::SeqCst), 2);
+
+            let captured = requests.lock().expect("captured requests lock");
+            let default_request = captured[0].lines().next().unwrap_or_default();
+            let explicit_request = captured[1].lines().next().unwrap_or_default();
+            assert!(
+                default_request
+                    .contains(&format!("/provider/token?provider={}", provider.as_str()))
+                    && !default_request.contains("force_refresh"),
+                "opportunistic refresh must keep the legacy query: {default_request}"
+            );
+            assert!(
+                explicit_request.contains(&format!(
+                    "/provider/token?provider={}&force_refresh=true",
+                    provider.as_str()
+                )),
+                "explicit refresh must request a fresh service token: {explicit_request}"
+            );
+        }
     }
 
     #[tokio::test]
