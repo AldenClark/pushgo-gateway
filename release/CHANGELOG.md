@@ -29,11 +29,15 @@ PushGo Gateway policy:
 - Prevented UTF-8 provider tokens from panicking when abbreviated in diagnostic output.
 - Retained partially received TCP frame bytes across outbound wakeups instead of restarting the next read mid-frame.
 - Bound canonical zero-padded device IDs when querying legacy MySQL `BINARY(32)` device and subscription columns, fixing activity refresh, private subscription lookup and removal, and identity replacement cleanup.
+- Requested a forced Token Service refresh after FCM/WNS rejects a credential, and kept a concurrent ordinary fetch of the rejected token from suppressing that retry; ordinary requests and APNs keep their existing cache behavior.
+- Pinned the Warp-link WSS Ping/Pong backpressure fix so a blocked Pong write ends the transport session within its configured timeout.
+- Raised the `rustls` minimum to 0.23.45 for RUSTSEC-2026-0285 and removed the yanked `chacha20` 0.10.1 lock entry. Release dependency audits now reject a RustSec database pin older than seven days and record the fetched database revision and age.
 
 ### Test
 - Added SQLite API regressions for token takeover, committed receipt replay, current route queries, and route-writer serialization; added PostgreSQL/MySQL fixtures that inject a receipt-write failure and verify atomic rollback, restart recovery, idempotence, expiry replay, and private-route capacity conflicts.
 - Added a nonpublishing quality workflow that runs library and real PostgreSQL/MySQL route-transition fixtures, exact release Clippy and black-box preflight, v11/v12 rollback, and three-round cross-database parity on pull requests. An explicit `release-validation` PR label runs the pinned dependency policy and builds and inventories all six Linux release targets.
 - Added red/green TCP frame cancellation regressions and actual PostgreSQL/MySQL device-activity, subscription, and identity cleanup assertions.
+- Added HTTP regressions for FCM/WNS forced-refresh request parameters and the interleaving where an ordinary Token Service fetch returns the same rejected token before an explicit refresh takes the lock.
 
 ## [v1.3.2] - 2026-08-25
 

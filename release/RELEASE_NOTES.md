@@ -21,6 +21,8 @@ Policy:
 - Prevented a diagnostic log path from crashing on multibyte provider tokens.
 - Kept private TCP connections readable when an outgoing delivery interrupts an incoming frame that has arrived in pieces.
 - Restored MySQL private-device activity updates and channel subscription cleanup when devices unsubscribe or replace their identity.
+- With a Token Service that supports forced refresh, FCM/WNS delivery retries now request a new credential after the provider rejects the previous one, even if an ordinary token fetch overlaps the retry.
+- Closed a TLS-handshake validation issue in the Gateway's TLS dependency and bounded private WSS Ping/Pong writes when a peer stops reading.
 
 ## [v1.3.2]
 

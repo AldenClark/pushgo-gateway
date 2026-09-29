@@ -77,13 +77,13 @@ rand = "0.10.2"
 sha2 = "0.11.0"
 base64 = "0.22.1"
 async-trait = "0.1.91"
-warp-link = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "55a1cf7c156e8cf495037655f6f8fb71a28ce1e2" }
-warp-link-coordination = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "55a1cf7c156e8cf495037655f6f8fb71a28ce1e2" }
-pushgo-warp-profile = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "55a1cf7c156e8cf495037655f6f8fb71a28ce1e2" }
+warp-link = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "dbae3a80c8b796969cadc9045ee982a0a60c4d27" }
+warp-link-coordination = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "dbae3a80c8b796969cadc9045ee982a0a60c4d27" }
+pushgo-warp-profile = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "dbae3a80c8b796969cadc9045ee982a0a60c4d27" }
 futures-util = "0.3.33"
 parking_lot = "0.12.5"
 scc = "3.8.6"
-rustls = "0.23.43"
+rustls = "0.23.45"
 tokio-rustls = "0.26.4"
 mqttbytes = "0.6.0"
 bytes = "1.12.1"

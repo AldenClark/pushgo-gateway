@@ -127,7 +127,8 @@ jobs:
       CARGO_BUILD_JOBS: "2"
       CARGO_AUDIT_VERSION: "0.22.2"
       CARGO_DENY_VERSION: "0.20.2"
-      RUSTSEC_ADVISORY_DB_REV: 1237bbe09d2701e14e6593a630fbaf28928df712
+      RUSTSEC_ADVISORY_DB_REV: 390e72b56b91964faa51440d3c10a65b8860009a
+      RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS: "604800"
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact validation head
@@ -159,6 +160,13 @@ jobs:
           git -C "${advisory_db}" fetch --depth=1 origin "${RUSTSEC_ADVISORY_DB_REV}"
           git -C "${advisory_db}" checkout --detach FETCH_HEAD
           test "$(git -C "${advisory_db}" rev-parse HEAD)" = "${RUSTSEC_ADVISORY_DB_REV}"
+          advisory_db_commit_date="$(git -C "${advisory_db}" show -s --format=%cI HEAD)"
+          advisory_db_age_seconds="$(( $(date -u +%s) - $(git -C "${advisory_db}" show -s --format=%ct HEAD) ))"
+          if (( advisory_db_age_seconds < 0 || advisory_db_age_seconds > RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS )); then
+            echo "RustSec advisory database pin is stale or dated in the future: ${RUSTSEC_ADVISORY_DB_REV} (${advisory_db_commit_date})" >&2
+            exit 1
+          fi
+          echo "RustSec advisory database ${RUSTSEC_ADVISORY_DB_REV} fetched at age ${advisory_db_age_seconds}s"
           cargo audit --db "${advisory_db}" --no-fetch
           mkdir -p evidence
           jq -n \
@@ -167,7 +175,10 @@ jobs:
             --arg cargo_audit_version "${CARGO_AUDIT_VERSION}" \
             --arg cargo_deny_version "${CARGO_DENY_VERSION}" \
             --arg advisory_db_revision "${RUSTSEC_ADVISORY_DB_REV}" \
-            '{git_sha: $git_sha, rust_toolchain: $rust_toolchain, cargo_audit_version: $cargo_audit_version, cargo_deny_version: $cargo_deny_version, advisory_db_revision: $advisory_db_revision, status: "passed"}' \
+            --arg advisory_db_commit_date "${advisory_db_commit_date}" \
+            --argjson advisory_db_age_seconds "${advisory_db_age_seconds}" \
+            --argjson advisory_db_max_age_seconds "${RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS}" \
+            '{git_sha: $git_sha, rust_toolchain: $rust_toolchain, cargo_audit_version: $cargo_audit_version, cargo_deny_version: $cargo_deny_version, advisory_db_revision: $advisory_db_revision, advisory_db_commit_date: $advisory_db_commit_date, advisory_db_age_seconds: $advisory_db_age_seconds, advisory_db_max_age_seconds: $advisory_db_max_age_seconds, fetched_revision_verified: true, status: "passed"}' \
             > evidence/dependency-policy.json
 
       - name: Upload dependency audit evidence
