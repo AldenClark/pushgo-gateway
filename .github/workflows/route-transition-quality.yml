@@ -2,6 +2,7 @@ name: Gateway pull request quality
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 permissions:
@@ -9,7 +10,7 @@ permissions:
 
 jobs:
   route-transition:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -44,7 +45,7 @@ jobs:
         run: cargo test --locked --lib route_transition_external_ -- --nocapture --test-threads=1
 
   release-preflight:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     name: Exercise release preflight without publication
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -118,7 +119,7 @@ jobs:
           retention-days: 30
 
   dependency-policy:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'release-validation')
     name: Audit pinned release dependency graph
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -127,11 +128,12 @@ jobs:
       CARGO_AUDIT_VERSION: "0.22.2"
       CARGO_DENY_VERSION: "0.20.2"
       RUSTSEC_ADVISORY_DB_REV: 1237bbe09d2701e14e6593a630fbaf28928df712
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact validation head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
 
       - name: Install Rust 1.97.1
@@ -147,7 +149,7 @@ jobs:
       - name: Audit frozen graph against pinned advisory database
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
           cargo fetch --locked
           cargo deny --frozen check bans licenses sources -D warnings
           advisory_db="${RUNNER_TEMP}/rustsec-advisory-db"
@@ -160,7 +162,7 @@ jobs:
           cargo audit --db "${advisory_db}" --no-fetch
           mkdir -p evidence
           jq -n \
-            --arg git_sha "${GITHUB_SHA}" \
+            --arg git_sha "${SOURCE_SHA}" \
             --arg rust_toolchain "$(.github/scripts/release_toolchain.sh)" \
             --arg cargo_audit_version "${CARGO_AUDIT_VERSION}" \
             --arg cargo_deny_version "${CARGO_DENY_VERSION}" \
@@ -178,7 +180,7 @@ jobs:
           retention-days: 30
 
   build-linux-targets:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'release-validation')
     name: Build Linux binary (${{ matrix.target }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -215,11 +217,12 @@ jobs:
       CARGO_BUILD_JOBS: "2"
       CROSS_VERSION: "0.2.5"
       BINARY_NAME: pushgo-gateway
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact validation head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
 
       - name: Install exact Rust toolchain and target
@@ -237,7 +240,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
           printf '[target.%s]\nimage = "%s"\n' "${TARGET}" "${CROSS_IMAGE}" > Cross.toml
           cargo fetch --locked --target "${TARGET}"
           cross build --frozen --release -p pushgo-gateway --bin "${BINARY_NAME}" --target "${TARGET}"
@@ -254,18 +257,19 @@ jobs:
           retention-days: 7
 
   inventory-linux-targets:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'release-validation')
     name: Verify six Linux binary assets
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: build-linux-targets
     env:
       BINARY_NAME: pushgo-gateway
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact validation head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
 
       - name: Download six validation binaries
@@ -278,12 +282,12 @@ jobs:
       - name: Verify release asset contract and record exact head
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
           mkdir -p dist evidence
           find inputs -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec cp {} dist/ \;
           find dist -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec chmod 0755 {} +
-          .github/scripts/verify_release_assets.sh dist evidence
-          test "$(jq -r .git_sha evidence/release-assets.json)" = "${GITHUB_SHA}"
+          GITHUB_SHA="${SOURCE_SHA}" .github/scripts/verify_release_assets.sh dist evidence
+          test "$(jq -r .git_sha evidence/release-assets.json)" = "${SOURCE_SHA}"
 
       - name: Upload verified asset inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
