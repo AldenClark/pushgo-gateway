@@ -2372,6 +2372,47 @@ async fn assert_external_route_transition_contract(db_url: &str, postgres: bool)
         })
         .await
         .expect("initial private route should persist");
+    storage
+        .touch_device_activity(device_id, now + 1)
+        .await
+        .expect("private device activity should persist");
+    assert_eq!(
+        storage
+            .load_device_routes()
+            .await
+            .expect("updated route should load")
+            .into_iter()
+            .find(|route| route.device_key == device_key)
+            .expect("active route should remain")
+            .updated_at,
+        now + 1,
+        "activity update must find the stored device id"
+    );
+    let channel_id = [42u8; 16];
+    storage
+        .private_subscribe_channel(channel_id, device_id)
+        .await
+        .expect("private subscription should persist");
+    assert_eq!(
+        storage
+            .list_private_subscribed_channels_for_device(device_id)
+            .await
+            .expect("private subscription should load"),
+        vec![channel_id],
+        "private subscription lookup must find the stored device id"
+    );
+    storage
+        .private_unsubscribe_channel(channel_id, device_id)
+        .await
+        .expect("private subscription should remove");
+    assert!(
+        storage
+            .list_private_subscribed_channels_for_device(device_id)
+            .await
+            .expect("private subscription deletion should load")
+            .is_empty(),
+        "private unsubscribe must remove the stored device id"
+    );
     let base_revision = storage
         .current_device_route_revision(device_key)
         .await
