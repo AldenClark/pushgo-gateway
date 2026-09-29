@@ -1841,7 +1841,7 @@ dependencies = [
 [[package]]
 name = "pushgo-warp-profile"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=7668ddc4733e9919a6962a6e110e9f9939b6fa91#7668ddc4733e9919a6962a6e110e9f9939b6fa91"
+source = "git+https://github.com/AldenClark/warp-link?rev=55a1cf7c156e8cf495037655f6f8fb71a28ce1e2#55a1cf7c156e8cf495037655f6f8fb71a28ce1e2"
 dependencies = [
  "bytes",
  "postcard",
@@ -3306,7 +3306,7 @@ dependencies = [
 [[package]]
 name = "warp-link"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=7668ddc4733e9919a6962a6e110e9f9939b6fa91#7668ddc4733e9919a6962a6e110e9f9939b6fa91"
+source = "git+https://github.com/AldenClark/warp-link?rev=55a1cf7c156e8cf495037655f6f8fb71a28ce1e2#55a1cf7c156e8cf495037655f6f8fb71a28ce1e2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3324,7 +3324,7 @@ dependencies = [
 [[package]]
 name = "warp-link-coordination"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=7668ddc4733e9919a6962a6e110e9f9939b6fa91#7668ddc4733e9919a6962a6e110e9f9939b6fa91"
+source = "git+https://github.com/AldenClark/warp-link?rev=55a1cf7c156e8cf495037655f6f8fb71a28ce1e2#55a1cf7c156e8cf495037655f6f8fb71a28ce1e2"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -3334,7 +3334,7 @@ dependencies = [
 [[package]]
 name = "warp-link-core"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=7668ddc4733e9919a6962a6e110e9f9939b6fa91#7668ddc4733e9919a6962a6e110e9f9939b6fa91"
+source = "git+https://github.com/AldenClark/warp-link?rev=55a1cf7c156e8cf495037655f6f8fb71a28ce1e2#55a1cf7c156e8cf495037655f6f8fb71a28ce1e2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3344,7 +3344,7 @@ dependencies = [
 [[package]]
 name = "warp-link-transport"
 version = "0.1.0"
-source = "git+https://github.com/AldenClark/warp-link?rev=7668ddc4733e9919a6962a6e110e9f9939b6fa91#7668ddc4733e9919a6962a6e110e9f9939b6fa91"
+source = "git+https://github.com/AldenClark/warp-link?rev=55a1cf7c156e8cf495037655f6f8fb71a28ce1e2#55a1cf7c156e8cf495037655f6f8fb71a28ce1e2"
 dependencies = [
  "bytes",
  "futures-util",
