@@ -2429,6 +2429,13 @@ async fn assert_external_route_transition_contract(db_url: &str, postgres: bool)
         .private_subscribe_channel(channel_id, retired_id)
         .await
         .expect("retired identity subscription should persist");
+    assert_eq!(
+        storage
+            .list_private_subscribed_channels_for_device(retired_id)
+            .await
+            .expect("retired identity subscription should load"),
+        vec![channel_id]
+    );
     storage
         .revoke_device_identity(retired_key)
         .await
@@ -2457,6 +2464,13 @@ async fn assert_external_route_transition_contract(db_url: &str, postgres: bool)
         .private_subscribe_channel(channel_id, old_id)
         .await
         .expect("old identity subscription should persist");
+    assert_eq!(
+        storage
+            .list_private_subscribed_channels_for_device(old_id)
+            .await
+            .expect("old identity subscription should load"),
+        vec![channel_id]
+    );
     storage
         .replace_device_identity(
             &DeviceRouteRecordRow {
