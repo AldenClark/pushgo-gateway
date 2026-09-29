@@ -19,6 +19,8 @@ Policy:
 - Preserved pending private deliveries when a route deletion cannot be saved.
 - Made completed route switches safely repeatable after expiry or later route changes, and prevented a failed route retry from leaving the in-memory route changed.
 - Prevented a diagnostic log path from crashing on multibyte provider tokens.
+- Kept private TCP connections readable when an outgoing delivery interrupts an incoming frame that has arrived in pieces.
+- Restored MySQL private-device activity updates and channel subscription cleanup when devices unsubscribe or replace their identity.
 
 ## [v1.3.2]
 

@@ -27,10 +27,13 @@ PushGo Gateway policy:
 - Serialized token claims, retirement, route deletion, and identity replacement around the affected device operations, preventing stale route or provider-token ownership from being restored by concurrent requests.
 - Rolled back in-memory route state when a route retry fails, and fenced subscription and token-retirement writes against a concurrent route transition.
 - Prevented UTF-8 provider tokens from panicking when abbreviated in diagnostic output.
+- Retained partially received TCP frame bytes across outbound wakeups instead of restarting the next read mid-frame.
+- Bound canonical zero-padded device IDs when querying legacy MySQL `BINARY(32)` device and subscription columns, fixing activity refresh, private subscription lookup and removal, and identity replacement cleanup.
 
 ### Test
 - Added SQLite API regressions for token takeover, committed receipt replay, current route queries, and route-writer serialization; added PostgreSQL/MySQL fixtures that inject a receipt-write failure and verify atomic rollback, restart recovery, idempotence, expiry replay, and private-route capacity conflicts.
 - Added a pull-request quality workflow that runs library tests and requires real PostgreSQL/MySQL route-transition fixtures on a Linux runner.
+- Added red/green TCP frame cancellation regressions and actual PostgreSQL/MySQL device-activity, subscription, and identity cleanup assertions.
 
 ## [v1.3.2] - 2026-08-25
 

@@ -2413,6 +2413,71 @@ async fn assert_external_route_transition_contract(db_url: &str, postgres: bool)
             .is_empty(),
         "private unsubscribe must remove the stored device id"
     );
+    let retired_key = "external-retired-device";
+    let retired_id = derive_private_device_id(retired_key);
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: retired_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: "private".to_string(),
+            provider_token: None,
+            updated_at: now,
+        })
+        .await
+        .expect("retired identity should persist");
+    storage
+        .private_subscribe_channel(channel_id, retired_id)
+        .await
+        .expect("retired identity subscription should persist");
+    storage
+        .revoke_device_identity(retired_key)
+        .await
+        .expect("retired identity should revoke");
+    assert!(
+        storage
+            .list_private_subscribed_channels_for_device(retired_id)
+            .await
+            .expect("retired subscription should load")
+            .is_empty(),
+        "revocation must remove subscriptions from the wide MySQL id column"
+    );
+    let old_key = "external-replaced-device";
+    let old_id = derive_private_device_id(old_key);
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: old_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: "private".to_string(),
+            provider_token: None,
+            updated_at: now,
+        })
+        .await
+        .expect("old identity should persist");
+    storage
+        .private_subscribe_channel(channel_id, old_id)
+        .await
+        .expect("old identity subscription should persist");
+    storage
+        .replace_device_identity(
+            &DeviceRouteRecordRow {
+                device_key: "external-replacement-device".to_string(),
+                platform: Platform::ANDROID.name().to_string(),
+                channel_type: "private".to_string(),
+                provider_token: None,
+                updated_at: now + 1,
+            },
+            Some(old_key),
+        )
+        .await
+        .expect("identity replacement should persist");
+    assert!(
+        storage
+            .list_private_subscribed_channels_for_device(old_id)
+            .await
+            .expect("old subscription should load")
+            .is_empty(),
+        "replacement must remove subscriptions from the wide MySQL id column"
+    );
     let base_revision = storage
         .current_device_route_revision(device_key)
         .await

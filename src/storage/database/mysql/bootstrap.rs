@@ -919,7 +919,9 @@ impl MySqlDb {
             let conflicting_device_id: Option<Vec<u8>> = sqlx::query_scalar(
                 "SELECT device_id FROM devices WHERE device_id = ? AND device_id <> ? LIMIT 1 FOR UPDATE",
             )
-            .bind(expected_private_id.as_slice())
+            .bind(super::access::binary32_private_device_id(
+                expected_private_id.as_slice(),
+            )?)
             .bind(route_device_id.as_slice())
             .fetch_optional(&mut *tx)
             .await?;

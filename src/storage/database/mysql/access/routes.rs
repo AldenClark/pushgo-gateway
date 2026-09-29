@@ -355,7 +355,7 @@ impl MySqlDb {
         )
         .bind(at_ts)
         .bind(at_ts)
-        .bind(device_id.as_slice())
+        .bind(binary32_private_device_id(device_id.as_slice())?)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -681,8 +681,12 @@ impl MySqlDb {
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
 
         if let (Some(old_key), Some(device_id)) = (old_key, old_device_id.as_deref()) {
+            let wide_device_id = binary32_private_device_id(device_id)?;
+            sqlx::query("DELETE FROM channel_subscriptions WHERE device_id = ?")
+                .bind(wide_device_id.as_slice())
+                .execute(&mut *tx)
+                .await?;
             for statement in [
-                "DELETE FROM channel_subscriptions WHERE device_id = ?",
                 "DELETE FROM provider_pull_queue WHERE device_id = ?",
                 "DELETE FROM private_bindings WHERE device_id = ?",
                 "DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
@@ -696,7 +700,7 @@ impl MySqlDb {
             }
             sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
                 .bind(old_key.as_str())
-                .bind(device_id)
+                .bind(wide_device_id.as_slice())
                 .execute(&mut *tx)
                 .await?;
             cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
@@ -711,6 +715,7 @@ impl MySqlDb {
             return Ok(());
         };
         let device_id = PrivateDeviceId::derive(normalized_key.as_str()).to_vec();
+        let wide_device_id = binary32_private_device_id(device_id.as_slice())?;
         let mut tx = self.pool.begin().await?;
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
@@ -725,8 +730,11 @@ impl MySqlDb {
             .map(|row| decode_mysql_text(&row, "delivery_id"))
             .collect::<StoreResult<Vec<_>>>()?;
 
+        sqlx::query("DELETE FROM channel_subscriptions WHERE device_id = ?")
+            .bind(wide_device_id.as_slice())
+            .execute(&mut *tx)
+            .await?;
         for statement in [
-            "DELETE FROM channel_subscriptions WHERE device_id = ?",
             "DELETE FROM provider_pull_queue WHERE device_id = ?",
             "DELETE FROM private_bindings WHERE device_id = ?",
             "DELETE FROM private_outbox WHERE device_id = ? AND status <> 'acked'",
@@ -740,7 +748,7 @@ impl MySqlDb {
         }
         sqlx::query("DELETE FROM devices WHERE device_key = ? OR device_id = ?")
             .bind(normalized_key.as_str())
-            .bind(device_id.as_slice())
+            .bind(wide_device_id.as_slice())
             .execute(&mut *tx)
             .await?;
 
