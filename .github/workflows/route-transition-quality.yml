@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   route-transition:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -43,6 +44,7 @@ jobs:
         run: cargo test --locked --lib route_transition_external_ -- --nocapture --test-threads=1
 
   release-preflight:
+    if: github.event_name == 'pull_request'
     name: Exercise release preflight without publication
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -113,4 +115,180 @@ jobs:
           name: pushgo-pr-compatibility-evidence
           path: /tmp/pushgo-pr-compatibility
           if-no-files-found: warn
+          retention-days: 30
+
+  dependency-policy:
+    if: github.event_name == 'workflow_dispatch'
+    name: Audit pinned release dependency graph
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_AUDIT_VERSION: "0.22.2"
+      CARGO_DENY_VERSION: "0.20.2"
+      RUSTSEC_ADVISORY_DB_REV: 1237bbe09d2701e14e6593a630fbaf28928df712
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.97.1"
+
+      - name: Install exact dependency policy tools
+        run: |
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked
+
+      - name: Audit frozen graph against pinned advisory database
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          cargo fetch --locked
+          cargo deny --frozen check bans licenses sources -D warnings
+          advisory_db="${RUNNER_TEMP}/rustsec-advisory-db"
+          mkdir -p "${advisory_db}"
+          git -C "${advisory_db}" init
+          git -C "${advisory_db}" remote add origin https://github.com/RustSec/advisory-db.git
+          git -C "${advisory_db}" fetch --depth=1 origin "${RUSTSEC_ADVISORY_DB_REV}"
+          git -C "${advisory_db}" checkout --detach FETCH_HEAD
+          test "$(git -C "${advisory_db}" rev-parse HEAD)" = "${RUSTSEC_ADVISORY_DB_REV}"
+          cargo audit --db "${advisory_db}" --no-fetch
+          mkdir -p evidence
+          jq -n \
+            --arg git_sha "${GITHUB_SHA}" \
+            --arg rust_toolchain "$(.github/scripts/release_toolchain.sh)" \
+            --arg cargo_audit_version "${CARGO_AUDIT_VERSION}" \
+            --arg cargo_deny_version "${CARGO_DENY_VERSION}" \
+            --arg advisory_db_revision "${RUSTSEC_ADVISORY_DB_REV}" \
+            '{git_sha: $git_sha, rust_toolchain: $rust_toolchain, cargo_audit_version: $cargo_audit_version, cargo_deny_version: $cargo_deny_version, advisory_db_revision: $advisory_db_revision, status: "passed"}' \
+            > evidence/dependency-policy.json
+
+      - name: Upload dependency audit evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pushgo-pr-dependency-policy
+          path: evidence
+          if-no-files-found: warn
+          retention-days: 30
+
+  build-linux-targets:
+    if: github.event_name == 'workflow_dispatch'
+    name: Build Linux binary (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    needs: dependency-policy
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+            libc: gnu
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+            libc: gnu
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c
+          - target: armv7-unknown-linux-gnueabihf
+            arch: armv7
+            libc: gnu
+            image: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5@sha256:4a08bebb60f08d52c1885b643a768f163c7318c05f91cf119f6c02855ea52699
+          - target: x86_64-unknown-linux-musl
+            arch: amd64
+            libc: musl
+            image: ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.5@sha256:77db671d8356a64ae72a3e1415e63f547f26d374fbe3c4762c1cd36c7eac7b99
+          - target: aarch64-unknown-linux-musl
+            arch: arm64
+            libc: musl
+            image: ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5@sha256:702154f52b2d8091671aa2c84d5582d849f949977228c735ff8462f93cc0e1e4
+          - target: armv7-unknown-linux-musleabihf
+            arch: armv7
+            libc: musl
+            image: ghcr.io/cross-rs/armv7-unknown-linux-musleabihf:0.2.5@sha256:b4f481f30ceca34730a5723f717396d762d94f6eddd7e1cf7c7862d1377ff98c
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CROSS_VERSION: "0.2.5"
+      BINARY_NAME: pushgo-gateway
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install exact Rust toolchain and target
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.97.1"
+          targets: ${{ matrix.target }}
+
+      - name: Install exact cross version
+        run: cargo install cross --version "${CROSS_VERSION}" --locked
+
+      - name: Build with matching pinned cross image
+        env:
+          CROSS_IMAGE: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          printf '[target.%s]\nimage = "%s"\n' "${TARGET}" "${CROSS_IMAGE}" > Cross.toml
+          cargo fetch --locked --target "${TARGET}"
+          cross build --frozen --release -p pushgo-gateway --bin "${BINARY_NAME}" --target "${TARGET}"
+          mkdir -p out
+          cp "target/${TARGET}/release/${BINARY_NAME}" "out/${BINARY_NAME}-linux-${{ matrix.arch }}-${{ matrix.libc }}"
+          chmod 0755 out/*
+
+      - name: Upload Linux binary for validation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pushgo-pr-linux-${{ matrix.arch }}-${{ matrix.libc }}
+          path: out
+          if-no-files-found: error
+          retention-days: 7
+
+  inventory-linux-targets:
+    if: github.event_name == 'workflow_dispatch'
+    name: Verify six Linux binary assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: build-linux-targets
+    env:
+      BINARY_NAME: pushgo-gateway
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download six validation binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: pushgo-pr-linux-*
+          merge-multiple: true
+          path: inputs
+
+      - name: Verify release asset contract and record exact head
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          mkdir -p dist evidence
+          find inputs -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec cp {} dist/ \;
+          find dist -maxdepth 1 -type f -name "${BINARY_NAME}-linux-*" -exec chmod 0755 {} +
+          .github/scripts/verify_release_assets.sh dist evidence
+          test "$(jq -r .git_sha evidence/release-assets.json)" = "${GITHUB_SHA}"
+
+      - name: Upload verified asset inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pushgo-pr-linux-asset-inventory
+          path: evidence
+          if-no-files-found: error
           retention-days: 30

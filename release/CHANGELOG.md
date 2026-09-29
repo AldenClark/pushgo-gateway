@@ -32,7 +32,7 @@ PushGo Gateway policy:
 
 ### Test
 - Added SQLite API regressions for token takeover, committed receipt replay, current route queries, and route-writer serialization; added PostgreSQL/MySQL fixtures that inject a receipt-write failure and verify atomic rollback, restart recovery, idempotence, expiry replay, and private-route capacity conflicts.
-- Added a pull-request quality workflow that runs library tests and requires real PostgreSQL/MySQL route-transition fixtures on a Linux runner.
+- Added a nonpublishing quality workflow that runs library and real PostgreSQL/MySQL route-transition fixtures, exact release Clippy and black-box preflight, v11/v12 rollback, and three-round cross-database parity on pull requests. Manual dispatch checks the pinned dependency policy and builds and inventories all six Linux release targets.
 - Added red/green TCP frame cancellation regressions and actual PostgreSQL/MySQL device-activity, subscription, and identity cleanup assertions.
 
 ## [v1.3.2] - 2026-08-25
