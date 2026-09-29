@@ -53,7 +53,7 @@ jobs:
       CARGO_DEPENDENCY_MODE: frozen
       PUSHGO_REQUIRE_EXTERNAL_DB_TESTS: "1"
       REQUIRE_CLEAN_WORKTREE: "1"
-      EVIDENCE_DIR: ${{ runner.temp }}/pushgo-pr-preflight
+      EVIDENCE_DIR: /tmp/pushgo-pr-preflight
     steps:
       - name: Checkout source and historical database fixtures
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,6 +87,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pushgo-pr-preflight-evidence
-          path: ${{ runner.temp }}/pushgo-pr-preflight
+          path: /tmp/pushgo-pr-preflight
           if-no-files-found: warn
           retention-days: 30
