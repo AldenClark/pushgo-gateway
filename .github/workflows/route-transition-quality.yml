@@ -40,3 +40,53 @@ jobs:
         env:
           PUSHGO_REQUIRE_EXTERNAL_DB_TESTS: "1"
         run: cargo test --locked --lib route_transition_external_ -- --nocapture --test-threads=1
+
+  release-preflight:
+    name: Exercise release preflight without publication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      CARGO_DEPENDENCY_MODE: frozen
+      PUSHGO_REQUIRE_EXTERNAL_DB_TESTS: "1"
+      REQUIRE_CLEAN_WORKTREE: "1"
+      EVIDENCE_DIR: evidence/preflight
+    steps:
+      - name: Checkout source and historical database fixtures
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust 1.97.1 with Clippy
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt, clippy
+
+      - name: Verify preflight commands
+        run: |
+          command -v jq
+          command -v sqlite3
+          command -v docker
+
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+
+      - name: Lint all release targets and features
+        run: cargo clippy --frozen --all-targets --all-features -- -D warnings
+
+      - name: Run frozen release preflight and black-box flows
+        run: scripts/preflight_release_audit.sh all
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pushgo-pr-preflight-evidence
+          path: evidence/preflight
+          if-no-files-found: warn
+          retention-days: 30
