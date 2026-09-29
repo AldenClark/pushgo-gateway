@@ -7,6 +7,13 @@ impl DeviceRouteDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, load_device_routes())
     }
 
+    async fn active_device_route_snapshot(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<DeviceRouteSnapshot>> {
+        delegate_db_async!(self, active_device_route_snapshot(device_key))
+    }
+
     async fn provider_route_is_current(
         &self,
         device_key: &str,

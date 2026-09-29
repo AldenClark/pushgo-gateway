@@ -1,5 +1,6 @@
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     api::{ApiJson, Error, HttpResult},
@@ -9,6 +10,7 @@ use crate::{
     value::{DeviceKeyRef, ProviderTokenRef},
 };
 
+use super::device_channels::{lock_provider_route_owners, reconcile_coalesced_route_owners};
 use super::shared::platform_from_str;
 
 const ROUTE_TRANSITION_TTL_MILLIS: i64 = 10 * 60 * 1000;
@@ -70,8 +72,9 @@ struct RouteTransitionQueryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     committed_revision: Option<i64>,
     candidate_channel_type: String,
-    route_revision: i64,
-    channel_type: String,
+    route_revision: Option<i64>,
+    channel_type: Option<String>,
+    current_provider_token_sha256: Option<String>,
 }
 
 fn validated_id<'a>(value: &'a str, field: &'static str) -> Result<&'a str, Error> {
@@ -213,40 +216,63 @@ pub(crate) async fn query(
             "route_transition_query_invalid",
         ));
     }
-    let record = state
-        .store
-        .query_route_transition(
-            transition_id,
-            device_key.as_ref().map(|value| (*value).as_str()),
-            operation_id,
-        )
-        .await
-        .map_err(map_transition_error)?
-        .ok_or_else(|| map_transition_error(StoreError::RouteTransitionNotFound))?;
-    let route_revision = state
-        .store
-        .current_device_route_revision(&record.device_key)
-        .await?
-        .ok_or(StoreError::DeviceNotFound)?;
-    let channel_type = state
-        .store
-        .load_device_routes()
-        .await?
-        .into_iter()
-        .find(|route| route.device_key == record.device_key)
-        .ok_or(StoreError::DeviceNotFound)?
-        .channel_type;
-    Ok(crate::api::ok(RouteTransitionQueryResponse {
-        transition_id: record.transition_id,
-        state: record.state,
-        base_revision: record.base_revision,
-        candidate_fingerprint: record.candidate_fingerprint,
-        expires_at: record.expires_at,
-        committed_revision: record.committed_revision,
-        candidate_channel_type: record.candidate_channel_type,
-        route_revision,
-        channel_type,
-    }))
+    for _ in 0..5 {
+        let record = state
+            .store
+            .query_route_transition(
+                transition_id,
+                device_key.as_ref().map(|value| (*value).as_str()),
+                operation_id,
+            )
+            .await
+            .map_err(map_transition_error)?
+            .ok_or_else(|| map_transition_error(StoreError::RouteTransitionNotFound))?;
+        let active_route = state
+            .store
+            .active_device_route_snapshot(&record.device_key)
+            .await?;
+        let record_after = state
+            .store
+            .query_route_transition(
+                transition_id,
+                device_key.as_ref().map(|value| (*value).as_str()),
+                operation_id,
+            )
+            .await
+            .map_err(map_transition_error)?;
+        // Route fields come from one database row snapshot. Operation changes
+        // commit with the route, so stable bookends keep the receipt and route
+        // from different transaction generations out of the same response.
+        if record_after.as_ref() != Some(&record) {
+            continue;
+        }
+        let current_provider_token_sha256 = active_route
+            .as_ref()
+            .filter(|route| route.channel_type != DeviceChannelType::Private.as_str())
+            .and_then(|route| route.provider_token.as_deref())
+            .map(|token| {
+                let digest = Sha256::digest(token.as_bytes());
+                digest.iter().map(|byte| format!("{byte:02x}")).collect()
+            });
+        let route_revision = active_route.as_ref().map(|route| route.route_revision);
+        let channel_type = active_route.map(|route| route.channel_type);
+        return Ok(crate::api::ok(RouteTransitionQueryResponse {
+            transition_id: record.transition_id,
+            state: record.state,
+            base_revision: record.base_revision,
+            candidate_fingerprint: record.candidate_fingerprint,
+            expires_at: record.expires_at,
+            committed_revision: record.committed_revision,
+            candidate_channel_type: record.candidate_channel_type,
+            route_revision,
+            channel_type,
+            current_provider_token_sha256,
+        }));
+    }
+    Err(Error::Conflict {
+        message: "device route changed while querying transition".into(),
+        code: "route_transition_revision_conflict".into(),
+    })
 }
 
 pub(crate) async fn abort(
@@ -279,14 +305,14 @@ pub(crate) async fn commit(
         .await
         .map_err(map_transition_error)?
         .ok_or_else(|| map_transition_error(StoreError::RouteTransitionNotFound))?;
-    let operation_guard = state
-        .device_operation_guards
-        .guard_for(&prepared.device_key);
-    let _operation_lock = if let Some(ref guard) = operation_guard {
-        Some(guard.lock().await)
-    } else {
-        None
-    };
+    let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
+    let (locked_keys, _operation_locks) = lock_provider_route_owners(
+        &state,
+        &prepared.device_key,
+        platform_from_str(&prepared.platform)?,
+        prepared.candidate_provider_token.as_deref(),
+    )
+    .await?;
     let ack_timeout_secs = state
         .private
         .as_ref()
@@ -311,28 +337,39 @@ pub(crate) async fn commit(
     // A committed operation can be retried after a later route change. Its
     // immutable receipt is not the current route: reconcile the registry from
     // durable state while holding the device operation guard.
-    let active_route = state
-        .store
-        .load_device_routes()
-        .await?
-        .into_iter()
+    let persisted_routes = state.store.load_device_routes().await?;
+    if let Some(active_route) = persisted_routes
+        .iter()
         .find(|route| route.device_key == committed.record.device_key)
-        .ok_or(StoreError::DeviceNotFound)?;
-    let channel_type = DeviceChannelType::parse(&active_route.channel_type)
-        .ok_or_else(|| Error::Internal("persisted active channel type is invalid".into()))?;
-    state
-        .device_registry
-        .update_channel(
-            &committed.record.device_key,
-            channel_type,
-            active_route.provider_token,
-        )
-        .map_err(Error::Internal)?;
-    if committed.migrated_pending_count > 0
-        && channel_type == DeviceChannelType::Private
-        && let Some(private) = state.private.as_deref()
     {
-        private.request_fallback_resync();
+        let channel_type = DeviceChannelType::parse(&active_route.channel_type)
+            .ok_or_else(|| Error::Internal("persisted active channel type is invalid".into()))?;
+        reconcile_coalesced_route_owners(
+            &state,
+            &locked_keys,
+            &persisted_routes,
+            &committed.record.device_key,
+        );
+        state
+            .device_registry
+            .update_channel(
+                &committed.record.device_key,
+                channel_type,
+                active_route.provider_token.clone(),
+            )
+            .map_err(Error::Internal)?;
+        if committed.migrated_pending_count > 0
+            && channel_type == DeviceChannelType::Private
+            && let Some(private) = state.private.as_deref()
+        {
+            private.request_fallback_resync();
+        }
+    } else {
+        // A later token transfer may retire this identity. Keep the original
+        // committed receipt replayable without resurrecting the retired route.
+        state
+            .device_registry
+            .remove_device(&committed.record.device_key);
     }
     Ok(crate::api::ok(RouteTransitionCommitResponse {
         transition_id: committed.record.transition_id,

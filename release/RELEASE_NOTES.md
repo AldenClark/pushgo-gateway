@@ -8,6 +8,17 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.3.3]
+
+### Improved
+- Route switching now uses the same recoverable, atomic transition on SQLite, PostgreSQL, and MySQL, including PostgreSQL/MySQL deployments used by Android manual transport switching.
+- Route recovery can verify the currently active provider token through a SHA-256 fingerprint without exposing the token in transition queries.
+
+### Fixed
+- Kept provider-token ownership and delivery routing consistent when devices take over a token or concurrent subscription, retirement, and route operations overlap.
+- Made completed route switches safely repeatable after expiry or later route changes, and prevented a failed route retry from leaving the in-memory route changed.
+- Prevented a diagnostic log path from crashing on multibyte provider tokens.
+
 ## [v1.3.2]
 
 ### Fixed

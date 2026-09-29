@@ -233,6 +233,10 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
 #[async_trait]
 pub trait DeviceRouteDatabaseAccess: Send + Sync {
     async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>>;
+    async fn active_device_route_snapshot(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<DeviceRouteSnapshot>>;
     async fn provider_route_is_current(
         &self,
         device_key: &str,

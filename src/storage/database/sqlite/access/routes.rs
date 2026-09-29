@@ -6,6 +6,7 @@ fn route_transition_from_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> RouteTrans
         transition_id: row.get("transition_id"),
         operation_id: row.get("operation_id"),
         device_key: row.get("device_key"),
+        platform: row.get("platform"),
         state: row.get("state"),
         base_revision: row.get("expected_route_revision"),
         candidate_channel_type: row.get("candidate_channel_type"),
@@ -413,6 +414,24 @@ impl SqliteDb {
         Ok(out)
     }
 
+    pub(super) async fn active_device_route_snapshot(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<DeviceRouteSnapshot>> {
+        let row = sqlx::query(
+            "SELECT route_revision, channel_type, provider_token FROM devices \
+             WHERE device_key = ? AND channel_type IS NOT NULL",
+        )
+        .bind(device_key)
+        .fetch_optional(self.core_read_pool())
+        .await?;
+        Ok(row.map(|row| DeviceRouteSnapshot {
+            route_revision: row.get("route_revision"),
+            channel_type: row.get("channel_type"),
+            provider_token: row.get("provider_token"),
+        }))
+    }
+
     pub(super) async fn upsert_device_route(
         &self,
         route: &DeviceRouteRecordRow,
@@ -638,10 +657,14 @@ impl SqliteDb {
         operation_id: &str,
         now: i64,
     ) -> StoreResult<RouteTransitionRecord> {
-        let current = self
-            .query_route_transition(Some(transition_id), None, None)
+        let mut conn = self.delivery_pool().acquire().await?;
+        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let row = sqlx::query("SELECT * FROM route_transition_operations WHERE transition_id = ?")
+            .bind(transition_id)
+            .fetch_optional(&mut *tx)
             .await?
             .ok_or(StoreError::RouteTransitionNotFound)?;
+        let current = route_transition_from_sqlite_row(&row);
         if current.operation_id != operation_id {
             return Err(StoreError::RouteTransitionOperationConflict);
         }
@@ -658,9 +681,10 @@ impl SqliteDb {
             .bind(transition_id)
             .bind(operation_id)
             .bind(ROUTE_TRANSITION_STATE_PREPARED)
-            .execute(self.delivery_pool())
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         self.query_route_transition(Some(transition_id), None, None)
             .await?
             .ok_or(StoreError::RouteTransitionNotFound)
@@ -694,37 +718,20 @@ impl SqliteDb {
                 record: current,
             });
         }
-        if current.expires_at <= now {
-            return Err(StoreError::RouteTransitionExpired);
-        }
         let route = DeviceRouteRecordRow {
             device_key: current.device_key.clone(),
-            platform: sqlx::query_scalar::<_, String>(
-                "SELECT platform FROM devices WHERE device_key = ?",
-            )
-            .bind(current.device_key.as_str())
-            .fetch_optional(self.core_read_pool())
-            .await?
-            .ok_or(StoreError::DeviceNotFound)?,
+            platform: current.platform.clone(),
             channel_type: current.candidate_channel_type.clone(),
             provider_token: current.candidate_provider_token.clone(),
             updated_at: now,
         };
-        let previous_channel_type = sqlx::query_scalar::<_, String>(
-            "SELECT channel_type FROM devices WHERE device_key = ?",
-        )
-        .bind(current.device_key.as_str())
-        .fetch_optional(self.core_read_pool())
-        .await?
-        .ok_or(StoreError::DeviceNotFound)
-        .and_then(|value| RouteChannelType::parse(value.as_str()))?;
         let (migrated_pending_count, route_revision) = self
             .transition_device_route_inner(
                 &route,
-                previous_channel_type,
+                RouteChannelType::parse(current.candidate_channel_type.as_str())?,
                 ack_timeout_secs,
                 max_pending_per_device,
-                Some((transition_id, operation_id, current.base_revision)),
+                Some((transition_id, operation_id, current.base_revision, now)),
             )
             .await?;
         let record = self
@@ -763,7 +770,7 @@ impl SqliteDb {
         _previous_channel_type: RouteChannelType,
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
-        prepared_operation: Option<(&str, &str, i64)>,
+        prepared_operation: Option<(&str, &str, i64, i64)>,
     ) -> StoreResult<(usize, i64)> {
         let values = route.persistence_values()?;
         let next_channel_type = route.channel_type_kind()?;
@@ -771,9 +778,11 @@ impl SqliteDb {
         let mut conn = self.delivery_pool().acquire().await?;
         ensure_core_database_attached(&mut conn, self.core_db_path.as_deref()).await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
-        if let Some((transition_id, operation_id, expected_revision)) = prepared_operation {
+        if let Some((transition_id, operation_id, expected_revision, requested_now)) =
+            prepared_operation
+        {
             let operation = sqlx::query(
-                "SELECT state, expected_route_revision, expires_at FROM route_transition_operations \
+                "SELECT state, expected_route_revision, expires_at, committed_revision, migrated_pending_count FROM route_transition_operations \
                  WHERE transition_id = ? AND operation_id = ?",
             )
             .bind(transition_id)
@@ -782,13 +791,23 @@ impl SqliteDb {
             .await?
             .ok_or(StoreError::RouteTransitionNotFound)?;
             let state: String = operation.get("state");
+            if state == ROUTE_TRANSITION_STATE_COMMITTED {
+                let revision = operation
+                    .get::<Option<i64>, _>("committed_revision")
+                    .ok_or(StoreError::RouteTransitionOperationConflict)?;
+                let migrated = operation
+                    .get::<Option<i64>, _>("migrated_pending_count")
+                    .ok_or(StoreError::RouteTransitionOperationConflict)?;
+                tx.commit().await?;
+                return Ok((migrated.max(0) as usize, revision));
+            }
             if state == ROUTE_TRANSITION_STATE_ABORTED {
                 return Err(StoreError::RouteTransitionAborted);
             }
             if state != ROUTE_TRANSITION_STATE_PREPARED {
                 return Err(StoreError::RouteTransitionOperationConflict);
             }
-            if operation.get::<i64, _>("expires_at") <= now {
+            if operation.get::<i64, _>("expires_at") <= now.max(requested_now) {
                 return Err(StoreError::RouteTransitionExpired);
             }
             if operation.get::<i64, _>("expected_route_revision") != expected_revision {
@@ -805,7 +824,7 @@ impl SqliteDb {
             .as_ref()
             .map(|row| row.get::<i64, _>("route_revision"))
             .ok_or(StoreError::DeviceNotFound)?;
-        if let Some((_, _, expected_revision)) = prepared_operation
+        if let Some((_, _, expected_revision, _)) = prepared_operation
             && actual_revision != expected_revision
         {
             return Err(StoreError::RouteTransitionRevisionConflict {
@@ -969,7 +988,7 @@ impl SqliteDb {
         .bind(values.device_id.as_slice())
         .fetch_one(&mut *tx)
         .await?;
-        if let Some((transition_id, operation_id, _)) = prepared_operation {
+        if let Some((transition_id, operation_id, _, _)) = prepared_operation {
             let updated = sqlx::query(
                 "UPDATE route_transition_operations SET state = ?, updated_at = ?, \
                  committed_revision = ?, migrated_pending_count = ? \
@@ -1147,7 +1166,8 @@ impl SqliteDb {
             .await?;
         sqlx::query(
             "UPDATE devices \
-             SET token_raw = CAST(device_key AS BLOB), channel_type = 'private', provider_token = NULL, route_updated_at = ? \
+             SET token_raw = CAST(device_key AS BLOB), channel_type = 'private', provider_token = NULL, \
+                 route_updated_at = ?, route_revision = route_revision + 1 \
              WHERE platform = ? AND provider_token = ? AND device_key IS NOT NULL",
         )
         .bind(now)

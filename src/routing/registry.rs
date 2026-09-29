@@ -82,6 +82,11 @@ impl DeviceRegistry {
         let mut state = self.state.write();
         if let Some(previous) = state.by_device.get(key.as_str())
             && let Some(old_key) = ProviderIngressKey::from_route(previous)
+            && state
+                .provider_ingress_index
+                .get(&old_key)
+                .map(String::as_str)
+                == Some(key.as_str())
         {
             state.provider_ingress_index.remove(&old_key);
         }
@@ -108,7 +113,13 @@ impl DeviceRegistry {
             .ok_or_else(|| "device_key not found".to_string())?;
         let old_key = ProviderIngressKey::from_route(old_key);
 
-        if let Some(old_key) = old_key {
+        if let Some(old_key) = old_key
+            && state
+                .provider_ingress_index
+                .get(&old_key)
+                .map(String::as_str)
+                == Some(device_key)
+        {
             state.provider_ingress_index.remove(&old_key);
         }
 
@@ -152,7 +163,13 @@ impl DeviceRegistry {
             }
             ProviderIngressKey::from_route(rec)
         };
-        if let Some(old_key) = old_key {
+        if let Some(old_key) = old_key
+            && state
+                .provider_ingress_index
+                .get(&old_key)
+                .map(String::as_str)
+                == Some(device_key)
+        {
             state.provider_ingress_index.remove(&old_key);
         }
         let rec = state
@@ -168,10 +185,35 @@ impl DeviceRegistry {
         let key = DeviceKeyRef::parse(device_key).ok()?;
         let mut state = self.state.write();
         let previous = state.by_device.remove(key.as_str())?;
-        if let Some(provider_key) = ProviderIngressKey::from_route(&previous) {
+        if let Some(provider_key) = ProviderIngressKey::from_route(&previous)
+            && state
+                .provider_ingress_index
+                .get(&provider_key)
+                .map(String::as_str)
+                == Some(key.as_str())
+        {
             state.provider_ingress_index.remove(&provider_key);
         }
         Some(previous)
+    }
+
+    pub(crate) fn device_keys_for_provider_token(
+        &self,
+        platform: Platform,
+        provider_token: &str,
+    ) -> Vec<String> {
+        let Some(provider_key) = ProviderIngressKey::new(platform, provider_token) else {
+            return Vec::new();
+        };
+        let state = self.state.read();
+        state
+            .by_device
+            .iter()
+            .filter_map(|(device_key, route)| {
+                (ProviderIngressKey::from_route(route).as_ref() == Some(&provider_key))
+                    .then(|| device_key.clone())
+            })
+            .collect()
     }
 
     pub fn remember_replaced_device_key(
@@ -396,6 +438,29 @@ mod tests {
         assert_eq!(err, "channel_type mismatch");
         let mapped = registry.resolve_provider_ingress_route(Platform::IOS, "token-1");
         assert_eq!(mapped.as_deref(), Some(device_key.as_str()));
+    }
+
+    #[test]
+    fn removing_stale_token_owner_keeps_current_provider_index() {
+        let registry = DeviceRegistry::new();
+        for key in ["previous-device", "current-device"] {
+            registry
+                .restore_route(
+                    key,
+                    crate::routing::DeviceRouteRecord {
+                        platform: Platform::ANDROID,
+                        channel_type: DeviceChannelType::Fcm,
+                        provider_token: Some("shared-provider-token".to_string()),
+                        updated_at: 1,
+                    },
+                )
+                .expect("route should restore");
+        }
+        registry.remove_device("previous-device");
+        assert_eq!(
+            registry.resolve_provider_ingress_route(Platform::ANDROID, "shared-provider-token"),
+            Some("current-device".to_string()),
+        );
     }
 
     #[test]

@@ -26,6 +26,13 @@ pub struct DeviceRouteRecordRow {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRouteSnapshot {
+    pub route_revision: i64,
+    pub channel_type: String,
+    pub provider_token: Option<String>,
+}
+
 pub const ROUTE_TRANSITION_STATE_PREPARED: &str = "prepared";
 pub const ROUTE_TRANSITION_STATE_COMMITTED: &str = "committed";
 pub const ROUTE_TRANSITION_STATE_ABORTED: &str = "aborted";
@@ -49,6 +56,7 @@ pub struct RouteTransitionRecord {
     pub transition_id: String,
     pub operation_id: String,
     pub device_key: String,
+    pub platform: String,
     pub state: String,
     pub base_revision: i64,
     pub candidate_channel_type: String,

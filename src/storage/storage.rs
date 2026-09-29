@@ -61,7 +61,7 @@ impl Default for StorageInitConfig {
 
 impl Storage {
     pub fn supports_route_transition_v2(&self) -> bool {
-        matches!(self.db.as_ref(), DatabaseDriver::Sqlite(_))
+        true
     }
     pub async fn new(db_url: Option<&str>) -> StoreResult<Self> {
         Self::new_with_config(StorageInitConfig {

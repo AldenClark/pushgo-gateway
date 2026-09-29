@@ -230,6 +230,13 @@ impl Storage {
         self.db.load_device_routes().await
     }
 
+    pub async fn active_device_route_snapshot(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<DeviceRouteSnapshot>> {
+        self.db.active_device_route_snapshot(device_key).await
+    }
+
     pub(crate) async fn provider_route_is_current(
         &self,
         device_key: &str,

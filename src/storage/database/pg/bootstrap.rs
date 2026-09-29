@@ -29,6 +29,7 @@ const PG_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS private_bindings (platform SMALLINT NOT NULL, token_hash BYTEA NOT NULL, device_id BYTEA NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (platform, token_hash))",
     "CREATE TABLE IF NOT EXISTS channel_subscriptions (channel_id BYTEA NOT NULL, device_id BYTEA NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'active', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (channel_id, device_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, payload_blob BYTEA NOT NULL, payload_size INTEGER NOT NULL, sent_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, platform VARCHAR(32) NOT NULL, provider_token TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
+    "CREATE TABLE IF NOT EXISTS route_transition_operations (transition_id VARCHAR(128) PRIMARY KEY, operation_id VARCHAR(128) NOT NULL, device_key VARCHAR(255) NOT NULL, platform VARCHAR(32) NOT NULL, expected_route_revision BIGINT NOT NULL, candidate_channel_type VARCHAR(32) NOT NULL, candidate_provider_token TEXT, candidate_fingerprint VARCHAR(64) NOT NULL, state VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, committed_revision BIGINT, migrated_pending_count BIGINT, UNIQUE (device_key, operation_id))",
 ];
 
 const PG_BASE_INDEX_STATEMENTS: &[&str] = &[
@@ -68,9 +69,11 @@ const PG_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)",
     "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)",
     "CREATE INDEX IF NOT EXISTS provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)",
+    "CREATE INDEX IF NOT EXISTS route_transition_device_state_idx ON route_transition_operations (device_key, state, updated_at)",
 ];
 
 const PG_RUNTIME_DROP_STATEMENTS: &[&str] = &[
+    "DROP TABLE IF EXISTS route_transition_operations",
     "DROP TABLE IF EXISTS provider_pull_queue",
     "DROP TABLE IF EXISTS channel_subscriptions",
     "DROP TABLE IF EXISTS private_bindings",

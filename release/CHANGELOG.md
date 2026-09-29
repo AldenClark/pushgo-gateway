@@ -14,6 +14,23 @@ PushGo Gateway policy:
 
 ## [Unreleased]
 
+## [v1.3.3] - 2026-09-29
+
+### Added
+- Added durable prepare/query/commit/abort route transitions for PostgreSQL and MySQL, matching the SQLite v2 contract. The active route, private/provider delivery migration, token ownership coalescing, and immutable operation receipt now commit in one database transaction on every supported backend.
+- Added the current active provider token's SHA-256 fingerprint to route-transition queries so clients can verify a superseding provider route without receiving its token.
+
+### Fixed
+- Kept a committed transition's original receipt replayable after expiry or a later token takeover, and cleared coalesced old device identities from the in-memory provider ingress registry.
+- Advanced the durable route revision when provider-token retirement changes an active route, so prepared transitions cannot commit over the retired token.
+- Serialized token claims, retirement, route deletion, and identity replacement around the affected device operations, preventing stale route or provider-token ownership from being restored by concurrent requests.
+- Rolled back in-memory route state when a route retry fails, and fenced subscription and token-retirement writes against a concurrent route transition.
+- Prevented UTF-8 provider tokens from panicking when abbreviated in diagnostic output.
+
+### Test
+- Added SQLite API regressions for token takeover, committed receipt replay, current route queries, and route-writer serialization; added PostgreSQL/MySQL fixtures that inject a receipt-write failure and verify atomic rollback, restart recovery, idempotence, expiry replay, and private-route capacity conflicts.
+- Added a pull-request quality workflow that runs library tests and requires real PostgreSQL/MySQL route-transition fixtures on a Linux runner.
+
 ## [v1.3.2] - 2026-08-25
 
 ### Fixed

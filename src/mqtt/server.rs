@@ -264,6 +264,12 @@ impl MqttSession {
                 )
             })?;
         }
+        let _claim_lock = self
+            .runtime
+            .state
+            .device_operation_guards
+            .lock_provider_claim()
+            .await;
         let device_operation_guard = requested_device_key.and_then(|device_key| {
             self.runtime
                 .state
@@ -299,6 +305,9 @@ impl MqttSession {
         if route.channel_type != DeviceChannelType::Private {
             return Err((ConnectReturnCode::NotAuthorized, "private_route_required"));
         }
+        // The device guard continues to pin this route through bootstrap;
+        // unrelated route claims need not wait for the session work below.
+        drop(_claim_lock);
         if self
             .runtime
             .private

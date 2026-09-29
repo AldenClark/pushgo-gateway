@@ -435,6 +435,13 @@ macro_rules! impl_backend_device_route_access {
                 <$backend>::load_device_routes(self).await
             }
 
+            async fn active_device_route_snapshot(
+                &self,
+                device_key: &str,
+            ) -> StoreResult<Option<DeviceRouteSnapshot>> {
+                <$backend>::active_device_route_snapshot(self, device_key).await
+            }
+
             async fn provider_route_is_current(
                 &self,
                 device_key: &str,

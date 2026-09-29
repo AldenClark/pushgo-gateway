@@ -23,6 +23,7 @@ const MYSQL_BASE_TABLE_STATEMENTS: &[&str] = &[
 
 const MYSQL_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS devices (device_id BINARY(32) PRIMARY KEY, token_raw BLOB NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, platform VARCHAR(32) NULL, channel_type VARCHAR(32) NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, route_updated_at BIGINT NULL, route_revision BIGINT NOT NULL DEFAULT 0) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS route_transition_operations (transition_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, operation_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, platform VARCHAR(32) NOT NULL, expected_route_revision BIGINT NOT NULL, candidate_channel_type VARCHAR(32) NOT NULL, candidate_provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, candidate_fingerprint VARCHAR(64) NOT NULL, state VARCHAR(16) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, committed_revision BIGINT NULL, migrated_pending_count BIGINT NULL, PRIMARY KEY (transition_id), UNIQUE KEY route_transition_device_operation_uidx (device_key, operation_id), KEY route_transition_device_state_idx (device_key, state, updated_at)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BINARY(16) NOT NULL, key_id INT NOT NULL, key_hash BLOB NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT NULL, PRIMARY KEY (device_id, key_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BINARY(16) NOT NULL, expires_at BIGINT NOT NULL) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_outbox (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, status VARCHAR(16) NOT NULL, attempts INT NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT NULL, claimed_by VARCHAR(128) NULL, claim_generation BIGINT NOT NULL DEFAULT 0, first_sent_at BIGINT NULL, last_attempt_at BIGINT NULL, acked_at BIGINT NULL, fallback_sent_at BIGINT NULL, next_attempt_at BIGINT NOT NULL, last_error_code VARCHAR(64) NULL, last_error_detail TEXT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
@@ -71,6 +72,7 @@ const MYSQL_RUNTIME_INDEX_STATEMENTS: &[&str] = &[
 ];
 
 const MYSQL_RUNTIME_DROP_STATEMENTS: &[&str] = &[
+    "DROP TABLE IF EXISTS route_transition_operations",
     "DROP TABLE IF EXISTS provider_pull_queue",
     "DROP TABLE IF EXISTS channel_subscriptions",
     "DROP TABLE IF EXISTS private_bindings",
