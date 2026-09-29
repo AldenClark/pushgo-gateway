@@ -209,10 +209,10 @@ impl DeviceRegistry {
         state
             .by_device
             .iter()
-            .filter_map(|(device_key, route)| {
-                (ProviderIngressKey::from_route(route).as_ref() == Some(&provider_key))
-                    .then(|| device_key.clone())
+            .filter(|(_, route)| {
+                ProviderIngressKey::from_route(route).as_ref() == Some(&provider_key)
             })
+            .map(|(device_key, _)| device_key.clone())
             .collect()
     }
 
