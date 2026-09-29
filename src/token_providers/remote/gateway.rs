@@ -89,6 +89,7 @@ struct GatewayTokenState {
     expires_at: Instant,
     project_id: Option<Arc<str>>,
     generation: u64,
+    last_refresh_was_explicit: bool,
 }
 
 pub(crate) struct GatewayTokenCache {
@@ -140,6 +141,7 @@ impl GatewayTokenCache {
             expires_at: expired_at,
             project_id: None,
             generation: 0,
+            last_refresh_was_explicit: false,
         };
         Self {
             client,
@@ -253,7 +255,7 @@ impl GatewayTokenCache {
         intent: RefreshIntent,
         requirement: TokenRequirement,
     ) -> Result<(TokenInfo, Option<Arc<str>>), Error> {
-        let observed_generation = self.state.load().generation;
+        let observed = self.state.load_full();
         let mut coordinator = self.refresh.lock().await;
         if let Some(status) = coordinator.terminal_auth_status {
             return Err(token_service_error_from_status(status));
@@ -267,12 +269,17 @@ impl GatewayTokenCache {
             coordinator.failure_backoff = None;
         }
 
-        let current_generation = self.state.load().generation;
+        let (current_generation, explicit_refresh_satisfied) = {
+            let current = self.state.load();
+            (
+                current.generation,
+                current.generation != observed.generation
+                    && (current.last_refresh_was_explicit || current.token != observed.token),
+            )
+        };
         let minimum_remaining = match intent {
             RefreshIntent::Opportunistic => Some(TOKEN_REFRESH_BUFFER),
-            RefreshIntent::Explicit if current_generation != observed_generation => {
-                Some(Duration::ZERO)
-            }
+            RefreshIntent::Explicit if explicit_refresh_satisfied => Some(Duration::ZERO),
             RefreshIntent::Explicit => None,
         };
         if let Some(minimum_remaining) = minimum_remaining
@@ -320,6 +327,7 @@ impl GatewayTokenCache {
             expires_at,
             project_id: project_id.as_ref().map(Arc::clone),
             generation,
+            last_refresh_was_explicit: matches!(intent, RefreshIntent::Explicit),
         }));
         coordinator.failure_backoff = None;
         Ok((info, project_id))
@@ -756,6 +764,7 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
+        sync::Notify,
     };
 
     use pushgo_gateway::Error;
@@ -773,6 +782,7 @@ mod tests {
         headers: Vec<(String, String)>,
         delay: Duration,
         disconnect_before_response: bool,
+        release_gate: Option<Arc<Notify>>,
     }
 
     impl TestReply {
@@ -785,6 +795,7 @@ mod tests {
                 headers: Vec::new(),
                 delay: Duration::ZERO,
                 disconnect_before_response: false,
+                release_gate: None,
             }
         }
 
@@ -797,6 +808,7 @@ mod tests {
                 headers: vec![("X-Request-ID".to_string(), "test-request".to_string())],
                 delay: Duration::ZERO,
                 disconnect_before_response: false,
+                release_gate: None,
             }
         }
 
@@ -812,6 +824,11 @@ mod tests {
 
         fn disconnect_before_response(mut self) -> Self {
             self.disconnect_before_response = true;
+            self
+        }
+
+        fn with_release_gate(mut self, gate: Arc<Notify>) -> Self {
+            self.release_gate = Some(gate);
             self
         }
     }
@@ -909,6 +926,58 @@ mod tests {
                 "explicit refresh must request a fresh service token: {explicit_request}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn opportunistic_same_token_cannot_satisfy_waiting_explicit_refresh() {
+        let release_default_response = Arc::new(Notify::new());
+        let (base_url, request_count, requests) = spawn_token_service(vec![
+            TestReply::token("rejected", "project", 3600)
+                .with_release_gate(Arc::clone(&release_default_response)),
+            TestReply::token("replacement", "project", 3600),
+        ])
+        .await;
+        let cache = Arc::new(GatewayTokenCache::new(
+            build_token_service_http_client().expect("test client should build"),
+            GatewayProvider::Wns,
+            &base_url,
+        ));
+        cache.state.store(Arc::new(GatewayTokenState {
+            token: Arc::from("rejected"),
+            expires_at: Instant::now() + Duration::from_secs(30),
+            project_id: None,
+            generation: 1,
+            last_refresh_was_explicit: false,
+        }));
+
+        let opportunistic = tokio::spawn({
+            let cache = Arc::clone(&cache);
+            async move { cache.token_info().await }
+        });
+        wait_for_request_count(&request_count, 1).await;
+
+        // Poll the credential-rejection path while the ordinary refresh holds
+        // the gate. Its observed generation must precede the ordinary response.
+        let explicit = cache.token_info_fresh();
+        tokio::pin!(explicit);
+        assert!(futures_util::poll!(explicit.as_mut()).is_pending());
+        release_default_response.notify_one();
+
+        let default_result = opportunistic
+            .await
+            .expect("ordinary refresh task should complete")
+            .expect("ordinary refresh should return the cached service token");
+        assert_eq!(&*default_result.token, "rejected");
+        let forced_result = tokio::time::timeout(Duration::from_secs(2), explicit.as_mut())
+            .await
+            .expect("explicit refresh should finish")
+            .expect("explicit refresh should fetch a replacement");
+        assert_eq!(&*forced_result.token, "replacement");
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
+
+        let captured = requests.lock().expect("captured requests lock");
+        assert!(!captured[0].contains("force_refresh"));
+        assert!(captured[1].contains("/provider/token?provider=wns&force_refresh=true"));
     }
 
     #[tokio::test]
@@ -1058,6 +1127,7 @@ mod tests {
             expires_at: Instant::now() + Duration::from_millis(10),
             project_id: None,
             generation: 1,
+            last_refresh_was_explicit: false,
         }));
 
         let error = cache
@@ -1081,6 +1151,7 @@ mod tests {
             )],
             delay: Duration::ZERO,
             disconnect_before_response: false,
+            release_gate: None,
         };
         let (base_url, source_count, _) = spawn_token_service(vec![redirect]).await;
         let cache = GatewayTokenCache::new(
@@ -1344,6 +1415,9 @@ mod tests {
                     .expect("captured request lock")
                     .push(request);
                 served_count.fetch_add(1, Ordering::SeqCst);
+                if let Some(gate) = reply.release_gate.as_ref() {
+                    gate.notified().await;
+                }
                 if !reply.delay.is_zero() {
                     tokio::time::sleep(reply.delay).await;
                 }
