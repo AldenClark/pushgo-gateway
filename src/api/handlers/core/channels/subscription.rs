@@ -25,6 +25,12 @@ pub(crate) async fn channel_subscribe(
     let span = tracing::info_span!("gateway.channel.subscribe");
     let fut = async move {
         let device_key = DeviceKeyRef::parse(&payload.device_key)?;
+        let operation_guard = state.device_operation_guards.guard_for(device_key.as_str());
+        let operation_lock = if let Some(ref guard) = operation_guard {
+            Some(guard.lock().await)
+        } else {
+            None
+        };
         let route = state
             .device_registry
             .get(device_key.as_str())
@@ -84,6 +90,9 @@ pub(crate) async fn channel_subscribe(
                         "private channel is disabled",
                     ));
                 }
+                // The shared HTTP/MQTT service acquires the same guard and
+                // re-reads the route. Do not recursively lock it here.
+                drop(operation_lock);
                 let outcome = subscribe_private_device_to_channel(
                     &state,
                     ChannelSubscribeCommand {

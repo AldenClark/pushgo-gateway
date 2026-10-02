@@ -734,12 +734,21 @@ pub(crate) async fn cleanup_invalid_provider_token(request: ProviderInvalidToken
 }
 
 fn redact_device_token(token: &str) -> String {
-    let visible = 8usize.min(token.len());
-    format!("...{}", &token[token.len().saturating_sub(visible)..])
+    let start = token.ceil_char_boundary(token.len().saturating_sub(8));
+    format!("...{}", &token[start..])
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unicode_provider_token_cleanup_logging_does_not_split_codepoints() {
+        let token = "opaque-token😀abcdefg";
+        crate::storage::DeviceInfo::from_token(crate::storage::Platform::WINDOWS, token)
+            .expect("accepted opaque token");
+        assert_eq!(super::redact_device_token(token), "...abcdefg");
+        assert_eq!(super::redact_device_token("1234567890"), "...34567890");
+    }
+
     use super::{
         ProviderDispatchDevice, ProviderExecutionTarget, ProviderRouteResolver,
         ProviderTargetPreparation, direct_data_with_provider_ack_source, prepare_provider_target,

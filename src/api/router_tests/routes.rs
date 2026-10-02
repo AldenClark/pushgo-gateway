@@ -783,6 +783,13 @@ async fn gateway_profile_route_reports_private_disabled_when_private_module_off(
             .and_then(Value::as_bool),
         Some(false)
     );
+    assert_eq!(
+        response_data(&value)
+            .get("route_transition_v2")
+            .and_then(Value::as_bool),
+        Some(true),
+        "SQLite profile must advertise the implemented transition contract"
+    );
     assert!(
         response_data(&value).get("transport").is_none(),
         "private disabled profile should not include transport hints"

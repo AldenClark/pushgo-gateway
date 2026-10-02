@@ -59,6 +59,12 @@ pub(crate) async fn subscribe_private_device_to_channel(
     command: ChannelSubscribeCommand,
 ) -> Result<ChannelSubscribeOutcome, Error> {
     let device_key = DeviceKeyRef::parse(&command.device_key)?;
+    let operation_guard = state.device_operation_guards.guard_for(device_key.as_str());
+    let _operation_lock = if let Some(ref guard) = operation_guard {
+        Some(guard.lock().await)
+    } else {
+        None
+    };
     let route = state
         .device_registry
         .get(device_key.as_str())

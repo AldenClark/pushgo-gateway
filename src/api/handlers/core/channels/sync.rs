@@ -42,6 +42,14 @@ pub(crate) async fn channel_sync(
             ));
         }
 
+        // Route snapshots must remain authoritative until subscription writes
+        // finish; otherwise a concurrent switch can be overwritten by this sync.
+        let operation_guard = state.device_operation_guards.guard_for(device_key.as_str());
+        let _operation_lock = if let Some(ref guard) = operation_guard {
+            Some(guard.lock().await)
+        } else {
+            None
+        };
         let route = match state.device_registry.get(device_key.as_str()) {
             Some(route) => route,
             None => {

@@ -6,7 +6,7 @@ DIST_DIR="${1:-$ROOT_DIR/dist}"
 EVIDENCE_DIR="${2:-$ROOT_DIR/evidence}"
 BINARY_NAME="${BINARY_NAME:-pushgo-gateway}"
 
-for command in file jq readelf sha256sum stat; do
+for command in file jq readelf sha256sum stat python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "missing required command: $command" >&2
     exit 1
@@ -38,15 +38,7 @@ for target in "${targets[@]}"; do
   fi
 
   description="$(file -b "$path")"
-  case "$target" in
-    linux-amd64-*) pattern='x86-64' ;;
-    linux-arm64-*) pattern='ARM aarch64' ;;
-    linux-armv7-*) pattern='ARM' ;;
-  esac
-  if [[ "$description" != *"$pattern"* ]]; then
-    echo "release asset architecture mismatch: target=$target file=$description" >&2
-    exit 1
-  fi
+  python3 "$ROOT_DIR/.github/scripts/verify_release_elf.py" "$path" "$target"
   if [[ "$target" == *-gnu ]]; then
     if ! readelf -l "$path" | grep -Fq 'Requesting program interpreter:'; then
       echo "GNU release asset is not dynamically linked through an ELF interpreter: $target" >&2

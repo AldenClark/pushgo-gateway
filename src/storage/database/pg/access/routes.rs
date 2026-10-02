@@ -1,6 +1,27 @@
 use super::*;
 use crate::value::{DeviceKeyRef, ProviderTokenRef};
 
+fn route_transition_from_pg_row(row: &sqlx::postgres::PgRow) -> RouteTransitionRecord {
+    RouteTransitionRecord {
+        transition_id: row.get("transition_id"),
+        operation_id: row.get("operation_id"),
+        device_key: row.get("device_key"),
+        platform: row.get("platform"),
+        state: row.get("state"),
+        base_revision: row.get("expected_route_revision"),
+        candidate_channel_type: row.get("candidate_channel_type"),
+        candidate_provider_token: row.get("candidate_provider_token"),
+        candidate_fingerprint: row.get("candidate_fingerprint"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        expires_at: row.get("expires_at"),
+        committed_revision: row.get("committed_revision"),
+        migrated_pending_count: row
+            .get::<Option<i64>, _>("migrated_pending_count")
+            .map(|value| value.max(0) as usize),
+    }
+}
+
 pub(in crate::storage::database::pg) async fn upsert_device_route_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     route: &DeviceRouteRecordRow,
@@ -48,7 +69,8 @@ async fn collect_duplicate_provider_routes_in_tx(
     let rows = sqlx::query(
         "SELECT device_id \
          FROM devices \
-         WHERE platform = $1 AND provider_token = $2 AND device_id <> $3",
+         WHERE platform = $1 AND provider_token = $2 AND device_id <> $3 \
+         ORDER BY device_id FOR UPDATE",
     )
     .bind(route.platform.as_str())
     .bind(provider_token)
@@ -324,26 +346,95 @@ impl PostgresDb {
     pub(super) async fn transition_device_route(
         &self,
         route: &DeviceRouteRecordRow,
-        _previous_channel_type: RouteChannelType,
+        previous_channel_type: RouteChannelType,
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
     ) -> StoreResult<usize> {
+        self.transition_device_route_inner(
+            route,
+            previous_channel_type,
+            ack_timeout_secs,
+            max_pending_per_device,
+            None,
+        )
+        .await
+        .map(|(migrated, _)| migrated)
+    }
+
+    async fn transition_device_route_inner(
+        &self,
+        route: &DeviceRouteRecordRow,
+        _previous_channel_type: RouteChannelType,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+        prepared_operation: Option<(&str, &str, i64, i64)>,
+    ) -> StoreResult<(usize, i64)> {
         let values = route.persistence_values()?;
         let next_channel_type = route.channel_type_kind()?;
         let now = Utc::now().timestamp_millis();
         let mut tx = self.pool.begin().await?;
+        if let Some((transition_id, operation_id, expected_revision, requested_now)) =
+            prepared_operation
+        {
+            let operation = sqlx::query(
+                "SELECT state, expected_route_revision, expires_at, committed_revision, migrated_pending_count \
+                 FROM route_transition_operations WHERE transition_id = $1 AND operation_id = $2 FOR UPDATE",
+            )
+            .bind(transition_id)
+            .bind(operation_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(StoreError::RouteTransitionNotFound)?;
+            let state: String = operation.get("state");
+            if state == ROUTE_TRANSITION_STATE_COMMITTED {
+                let revision = operation
+                    .get::<Option<i64>, _>("committed_revision")
+                    .ok_or(StoreError::RouteTransitionOperationConflict)?;
+                let migrated = operation
+                    .get::<Option<i64>, _>("migrated_pending_count")
+                    .ok_or(StoreError::RouteTransitionOperationConflict)?;
+                tx.commit().await?;
+                return Ok((migrated.max(0) as usize, revision));
+            }
+            if state == ROUTE_TRANSITION_STATE_ABORTED {
+                return Err(StoreError::RouteTransitionAborted);
+            }
+            if state != ROUTE_TRANSITION_STATE_PREPARED {
+                return Err(StoreError::RouteTransitionOperationConflict);
+            }
+            if operation.get::<i64, _>("expires_at") <= now.max(requested_now) {
+                return Err(StoreError::RouteTransitionExpired);
+            }
+            if operation.get::<i64, _>("expected_route_revision") != expected_revision {
+                return Err(StoreError::RouteTransitionOperationConflict);
+            }
+        }
         let current_route = sqlx::query(
-            "SELECT channel_type, route_updated_at FROM devices WHERE device_id = $1 FOR UPDATE",
+            "SELECT channel_type, route_updated_at, route_revision FROM devices WHERE device_id = $1 FOR UPDATE",
         )
         .bind(values.device_id.as_slice())
         .fetch_optional(&mut *tx)
         .await?;
-        if current_route.as_ref().is_some_and(|row| {
-            row.get::<Option<i64>, _>("route_updated_at")
-                .is_some_and(|updated_at| updated_at >= values.updated_at)
-        }) {
+        let actual_revision = current_route
+            .as_ref()
+            .map(|row| row.get::<i64, _>("route_revision"));
+        if let Some((_, _, expected_revision, _)) = prepared_operation {
+            let actual_revision = actual_revision.ok_or(StoreError::DeviceNotFound)?;
+            if actual_revision != expected_revision {
+                return Err(StoreError::RouteTransitionRevisionConflict {
+                    expected: expected_revision,
+                    actual: actual_revision,
+                });
+            }
+        }
+        if prepared_operation.is_none()
+            && current_route.as_ref().is_some_and(|row| {
+                row.get::<Option<i64>, _>("route_updated_at")
+                    .is_some_and(|updated_at| updated_at >= values.updated_at)
+            })
+        {
             tx.commit().await?;
-            return Ok(0);
+            return Ok((0, actual_revision.unwrap_or_default()));
         }
         let previous_channel_type = current_route
             .and_then(|row| row.get::<Option<String>, _>("channel_type"))
@@ -483,8 +574,32 @@ impl PostgresDb {
                 .await?;
         }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        let route_revision: i64 =
+            sqlx::query_scalar("SELECT route_revision FROM devices WHERE device_id = $1")
+                .bind(values.device_id.as_slice())
+                .fetch_one(&mut *tx)
+                .await?;
+        if let Some((transition_id, operation_id, _, _)) = prepared_operation {
+            let updated = sqlx::query(
+                "UPDATE route_transition_operations SET state = $1, updated_at = $2, \
+                 committed_revision = $3, migrated_pending_count = $4 \
+                 WHERE transition_id = $5 AND operation_id = $6 AND state = $7",
+            )
+            .bind(ROUTE_TRANSITION_STATE_COMMITTED)
+            .bind(now)
+            .bind(route_revision)
+            .bind(i64::try_from(migrated).unwrap_or(i64::MAX))
+            .bind(transition_id)
+            .bind(operation_id)
+            .bind(ROUTE_TRANSITION_STATE_PREPARED)
+            .execute(&mut *tx)
+            .await?;
+            if updated.rows_affected() != 1 {
+                return Err(StoreError::RouteTransitionOperationConflict);
+            }
+        }
         tx.commit().await?;
-        Ok(migrated)
+        Ok((migrated, route_revision))
     }
 
     pub(super) async fn replace_device_identity(
@@ -586,6 +701,229 @@ impl PostgresDb {
         Ok(())
     }
 
+    pub(super) async fn current_device_route_revision(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<i64>> {
+        Ok(
+            sqlx::query_scalar("SELECT route_revision FROM devices WHERE device_key = $1")
+                .bind(device_key)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    pub(super) async fn active_device_route_snapshot(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<DeviceRouteSnapshot>> {
+        let row = sqlx::query(
+            "SELECT route_revision, channel_type, provider_token FROM devices \
+             WHERE device_key = $1 AND channel_type IS NOT NULL",
+        )
+        .bind(device_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| DeviceRouteSnapshot {
+            route_revision: row.get("route_revision"),
+            channel_type: row.get("channel_type"),
+            provider_token: row.get("provider_token"),
+        }))
+    }
+
+    pub(super) async fn prepare_route_transition(
+        &self,
+        record: &RouteTransitionPrepareRecord,
+    ) -> StoreResult<RouteTransitionRecord> {
+        let existing = self
+            .query_route_transition(
+                None,
+                Some(record.device_key.as_str()),
+                Some(record.operation_id.as_str()),
+            )
+            .await?;
+        if let Some(existing) = existing {
+            if existing.base_revision == record.expected_route_revision
+                && existing.candidate_fingerprint == record.candidate_fingerprint
+            {
+                return Ok(existing);
+            }
+            return Err(StoreError::RouteTransitionOperationConflict);
+        }
+        let actual_revision = self
+            .current_device_route_revision(record.device_key.as_str())
+            .await?
+            .ok_or(StoreError::DeviceNotFound)?;
+        if actual_revision != record.expected_route_revision {
+            return Err(StoreError::RouteTransitionRevisionConflict {
+                expected: record.expected_route_revision,
+                actual: actual_revision,
+            });
+        }
+        let inserted = sqlx::query(
+            "INSERT INTO route_transition_operations \
+             (transition_id, operation_id, device_key, platform, expected_route_revision, \
+              candidate_channel_type, candidate_provider_token, candidate_fingerprint, state, \
+              created_at, updated_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)",
+        )
+        .bind(record.transition_id.as_str())
+        .bind(record.operation_id.as_str())
+        .bind(record.device_key.as_str())
+        .bind(record.platform.as_str())
+        .bind(record.expected_route_revision)
+        .bind(record.candidate_channel_type.as_str())
+        .bind(record.candidate_provider_token.as_deref())
+        .bind(record.candidate_fingerprint.as_str())
+        .bind(ROUTE_TRANSITION_STATE_PREPARED)
+        .bind(record.created_at)
+        .bind(record.expires_at)
+        .execute(&self.pool)
+        .await;
+        if let Err(err) = inserted {
+            if !matches!(&err, sqlx::Error::Database(db) if db.is_unique_violation()) {
+                return Err(StoreError::Sqlx(err));
+            }
+            let winner = self
+                .query_route_transition(
+                    None,
+                    Some(record.device_key.as_str()),
+                    Some(record.operation_id.as_str()),
+                )
+                .await?
+                .ok_or(StoreError::RouteTransitionOperationConflict)?;
+            if winner.base_revision == record.expected_route_revision
+                && winner.candidate_fingerprint == record.candidate_fingerprint
+            {
+                return Ok(winner);
+            }
+            return Err(StoreError::RouteTransitionOperationConflict);
+        }
+        self.query_route_transition(Some(record.transition_id.as_str()), None, None)
+            .await?
+            .ok_or(StoreError::RouteTransitionNotFound)
+    }
+
+    pub(super) async fn query_route_transition(
+        &self,
+        transition_id: Option<&str>,
+        device_key: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> StoreResult<Option<RouteTransitionRecord>> {
+        let row = if let Some(transition_id) = transition_id {
+            sqlx::query("SELECT * FROM route_transition_operations WHERE transition_id = $1")
+                .bind(transition_id)
+                .fetch_optional(&self.pool)
+                .await?
+        } else if let (Some(device_key), Some(operation_id)) = (device_key, operation_id) {
+            sqlx::query(
+                "SELECT * FROM route_transition_operations WHERE device_key = $1 AND operation_id = $2",
+            )
+            .bind(device_key)
+            .bind(operation_id)
+            .fetch_optional(&self.pool)
+            .await?
+        } else {
+            return Err(StoreError::RouteTransitionOperationConflict);
+        };
+        Ok(row.as_ref().map(route_transition_from_pg_row))
+    }
+
+    pub(super) async fn abort_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+    ) -> StoreResult<RouteTransitionRecord> {
+        let mut tx = self.pool.begin().await?;
+        let current = sqlx::query(
+            "SELECT * FROM route_transition_operations WHERE transition_id = $1 FOR UPDATE",
+        )
+        .bind(transition_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(StoreError::RouteTransitionNotFound)?;
+        let current = route_transition_from_pg_row(&current);
+        if current.operation_id != operation_id || current.state == ROUTE_TRANSITION_STATE_COMMITTED
+        {
+            return Err(StoreError::RouteTransitionOperationConflict);
+        }
+        let result = if current.state == ROUTE_TRANSITION_STATE_PREPARED {
+            let row = sqlx::query(
+                "UPDATE route_transition_operations SET state = $1, updated_at = $2 \
+                 WHERE transition_id = $3 AND operation_id = $4 AND state = $5 RETURNING *",
+            )
+            .bind(ROUTE_TRANSITION_STATE_ABORTED)
+            .bind(now)
+            .bind(transition_id)
+            .bind(operation_id)
+            .bind(ROUTE_TRANSITION_STATE_PREPARED)
+            .fetch_one(&mut *tx)
+            .await?;
+            route_transition_from_pg_row(&row)
+        } else {
+            current
+        };
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub(super) async fn commit_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<RouteTransitionCommitResult> {
+        let current = self
+            .query_route_transition(Some(transition_id), None, None)
+            .await?
+            .ok_or(StoreError::RouteTransitionNotFound)?;
+        if current.operation_id != operation_id {
+            return Err(StoreError::RouteTransitionOperationConflict);
+        }
+        if current.state == ROUTE_TRANSITION_STATE_ABORTED {
+            return Err(StoreError::RouteTransitionAborted);
+        }
+        if current.state == ROUTE_TRANSITION_STATE_COMMITTED {
+            return Ok(RouteTransitionCommitResult {
+                previous_revision: current.base_revision,
+                route_revision: current
+                    .committed_revision
+                    .ok_or(StoreError::RouteTransitionOperationConflict)?,
+                migrated_pending_count: current.migrated_pending_count.unwrap_or_default(),
+                record: current,
+            });
+        }
+        let route = DeviceRouteRecordRow {
+            device_key: current.device_key.clone(),
+            platform: current.platform.clone(),
+            channel_type: current.candidate_channel_type.clone(),
+            provider_token: current.candidate_provider_token.clone(),
+            updated_at: now,
+        };
+        let (migrated_pending_count, route_revision) = self
+            .transition_device_route_inner(
+                &route,
+                RouteChannelType::parse(current.candidate_channel_type.as_str())?,
+                ack_timeout_secs,
+                max_pending_per_device,
+                Some((transition_id, operation_id, current.base_revision, now)),
+            )
+            .await?;
+        let record = self
+            .query_route_transition(Some(transition_id), None, None)
+            .await?
+            .ok_or(StoreError::RouteTransitionNotFound)?;
+        Ok(RouteTransitionCommitResult {
+            record,
+            previous_revision: current.base_revision,
+            route_revision,
+            migrated_pending_count,
+        })
+    }
+
     pub(super) async fn retire_provider_token(
         &self,
         platform: Platform,
@@ -624,7 +962,8 @@ impl PostgresDb {
             .await?;
         sqlx::query(
             "UPDATE devices \
-             SET token_raw = convert_to(device_key, 'UTF8'), channel_type = 'private', provider_token = NULL, route_updated_at = $1 \
+             SET token_raw = convert_to(device_key, 'UTF8'), channel_type = 'private', provider_token = NULL, \
+                 route_updated_at = $1, route_revision = route_revision + 1 \
              WHERE platform = $2 AND provider_token = $3 AND device_key IS NOT NULL",
         )
         .bind(now)

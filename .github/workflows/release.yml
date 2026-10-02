@@ -20,7 +20,8 @@ env:
   CARGO_DENY_VERSION: "0.20.2"
   CROSS_VERSION: "0.2.5"
   SYFT_VERSION: "v1.51.0"
-  RUSTSEC_ADVISORY_DB_REV: 1237bbe09d2701e14e6593a630fbaf28928df712
+  RUSTSEC_ADVISORY_DB_REV: 390e72b56b91964faa51440d3c10a65b8860009a
+  RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS: "604800"
   DEBIAN_RUNTIME_IMAGE: debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
   ALPINE_RUNTIME_IMAGE: alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 
@@ -99,7 +100,21 @@ jobs:
           git -C "${advisory_db}" fetch --depth=1 origin "${RUSTSEC_ADVISORY_DB_REV}"
           git -C "${advisory_db}" checkout --detach FETCH_HEAD
           test "$(git -C "${advisory_db}" rev-parse HEAD)" = "${RUSTSEC_ADVISORY_DB_REV}"
+          advisory_db_commit_date="$(git -C "${advisory_db}" show -s --format=%cI HEAD)"
+          advisory_db_age_seconds="$(( $(date -u +%s) - $(git -C "${advisory_db}" show -s --format=%ct HEAD) ))"
+          if (( advisory_db_age_seconds < 0 || advisory_db_age_seconds > RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS )); then
+            echo "RustSec advisory database pin is stale or dated in the future: ${RUSTSEC_ADVISORY_DB_REV} (${advisory_db_commit_date})" >&2
+            exit 1
+          fi
+          echo "RustSec advisory database ${RUSTSEC_ADVISORY_DB_REV} fetched at age ${advisory_db_age_seconds}s"
           cargo audit --db "${advisory_db}" --no-fetch
+          jq -n \
+            --arg advisory_db_revision "${RUSTSEC_ADVISORY_DB_REV}" \
+            --arg advisory_db_commit_date "${advisory_db_commit_date}" \
+            --argjson advisory_db_age_seconds "${advisory_db_age_seconds}" \
+            --argjson advisory_db_max_age_seconds "${RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS}" \
+            '{advisory_db_revision: $advisory_db_revision, advisory_db_commit_date: $advisory_db_commit_date, advisory_db_age_seconds: $advisory_db_age_seconds, advisory_db_max_age_seconds: $advisory_db_max_age_seconds, fetched_revision_verified: true, cargo_audit: "passed"}' \
+            > "${RUNNER_TEMP}/dependency-policy.json"
 
       - name: Run frozen preflight and black-box flows
         env:
@@ -121,6 +136,14 @@ jobs:
           ROUNDS: "3"
           REPORT_DIR: evidence/crossdb
         run: scripts/storage_crossdb_parity.sh
+
+      - name: Archive dependency audit receipt after clean-tree preflight
+        if: always()
+        run: |
+          if [ -f "${RUNNER_TEMP}/dependency-policy.json" ]; then
+            mkdir -p evidence
+            cp "${RUNNER_TEMP}/dependency-policy.json" evidence/dependency-policy.json
+          fi
 
       - name: Upload release-gate evidence
         if: always()

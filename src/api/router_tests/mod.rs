@@ -37,6 +37,12 @@ async fn build_test_state() -> AppState {
 }
 
 async fn build_test_state_with_receivers() -> (AppState, DispatchWorkerReceivers) {
+    let (state, receivers, _) = build_test_state_with_receivers_and_db_url().await;
+    (state, receivers)
+}
+
+async fn build_test_state_with_receivers_and_db_url() -> (AppState, DispatchWorkerReceivers, String)
+{
     let unique_id = TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let db_url = format!(
         "sqlite:///tmp/pushgo-router-test-{}-{}-{}.db",
@@ -79,6 +85,7 @@ async fn build_test_state_with_receivers() -> (AppState, DispatchWorkerReceivers
             mcp: None,
         },
         receivers,
+        db_url,
     )
 }
 

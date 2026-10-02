@@ -1,5 +1,6 @@
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
+use tokio::sync::OwnedMutexGuard;
 
 use crate::{
     api::{ApiJson, Error, HttpResult, deserialize_empty_as_none},
@@ -47,6 +48,7 @@ pub(super) struct DeviceRegisterResponse {
     pub issued_new_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_reason: Option<String>,
+    pub route_revision: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,6 +60,7 @@ pub(super) struct DeviceChannelResponse {
     pub issued_new_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_reason: Option<String>,
+    pub route_revision: i64,
 }
 
 impl DeviceRegisterRequest {
@@ -404,19 +407,67 @@ impl DeviceRouteChange<'_> {
     }
 }
 
+pub(super) async fn lock_provider_route_owners(
+    state: &AppState,
+    device_key: &str,
+    platform: Platform,
+    provider_token: Option<&str>,
+) -> Result<(Vec<String>, Vec<OwnedMutexGuard<()>>), Error> {
+    let mut device_keys = vec![device_key.to_string()];
+    if let Some(token) = provider_token {
+        device_keys.extend(
+            state
+                .device_registry
+                .device_keys_for_provider_token(platform, token),
+        );
+    }
+    device_keys.sort_unstable();
+    device_keys.dedup();
+    let mut locks = Vec::with_capacity(device_keys.len());
+    for key in &device_keys {
+        let guard = state
+            .device_operation_guards
+            .guard_for(key)
+            .ok_or_else(|| Error::Internal("invalid provider device identity".into()))?;
+        locks.push(guard.lock_owned().await);
+    }
+    Ok((device_keys, locks))
+}
+
+pub(super) fn reconcile_coalesced_route_owners(
+    state: &AppState,
+    locked_keys: &[String],
+    persisted_routes: &[DeviceRouteRecordRow],
+    active_device_key: &str,
+) {
+    for key in locked_keys {
+        if key != active_device_key
+            && !persisted_routes
+                .iter()
+                .any(|route| route.device_key == *key)
+        {
+            state.device_registry.remove_device(key);
+        }
+    }
+}
+
 pub(crate) async fn device_channel_upsert(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<DeviceChannelUpsertRequest>,
 ) -> HttpResult {
     let device_key = payload.device_key()?;
-    let device_operation_guard = state.device_operation_guards.guard_for(device_key);
-    let _device_operation_lock = if let Some(ref guard) = device_operation_guard {
-        Some(guard.lock().await)
-    } else {
-        None
-    };
+    let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
     let next_type = payload.requested_channel_type()?;
     let requested_platform = payload.requested_platform()?;
+    let initial = resolve_existing_for_route(&state, device_key, requested_platform).await?;
+    let candidate_token = payload.normalized_provider_token(initial.platform, next_type)?;
+    let (locked_keys, _operation_locks) = lock_provider_route_owners(
+        &state,
+        device_key,
+        initial.platform,
+        candidate_token.as_deref(),
+    )
+    .await?;
     let previous = resolve_existing_for_route(&state, device_key, requested_platform).await?;
     let next_provider_token = payload.normalized_provider_token(previous.platform, next_type)?;
     let ack_timeout_secs = state
@@ -452,6 +503,28 @@ pub(crate) async fn device_channel_upsert(
             other => Error::Internal(format!("failed to transition device route: {other}")),
         })?;
 
+    let persisted_routes = state.store.load_device_routes().await?;
+    let persisted = persisted_routes
+        .iter()
+        .into_iter()
+        .find(|route| route.device_key == device_key)
+        .ok_or(StoreError::DeviceNotFound)?;
+    if persisted.channel_type != proposed.channel_type.as_str()
+        || persisted.provider_token != proposed.provider_token
+    {
+        return Err(Error::Conflict {
+            message: "device route changed concurrently".into(),
+            code: "route_transition_revision_conflict".into(),
+        });
+    }
+    let route_revision = state
+        .store
+        .current_device_route_revision(device_key)
+        .await?
+        .ok_or(StoreError::DeviceNotFound)?;
+
+    reconcile_coalesced_route_owners(&state, &locked_keys, &persisted_routes, device_key);
+
     let updated = state
         .device_registry
         .update_channel(device_key, next_type, next_provider_token)
@@ -478,6 +551,7 @@ pub(crate) async fn device_channel_upsert(
         provider_token: updated.provider_token,
         issued_new_key: false,
         issue_reason: None,
+        route_revision,
     }))
 }
 
@@ -485,6 +559,7 @@ pub(crate) async fn device_register(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<DeviceRegisterRequest>,
 ) -> HttpResult {
+    let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
     let requested_device_key = payload
         .device_key
         .as_deref()
@@ -505,10 +580,16 @@ pub(crate) async fn device_register(
         },
     )
     .await?;
+    let route_revision = state
+        .store
+        .current_device_route_revision(&resolved.device_key)
+        .await?
+        .ok_or(StoreError::DeviceNotFound)?;
     Ok(crate::api::ok(DeviceRegisterResponse {
         device_key: resolved.device_key,
         issued_new_key: resolved.issued_new_key,
         issue_reason: resolved.issue_reason.map(ToString::to_string),
+        route_revision,
     }))
 }
 
@@ -516,6 +597,7 @@ pub(crate) async fn device_channel_delete(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<DeviceChannelDeleteRequest>,
 ) -> HttpResult {
+    let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
     let device_key = payload.device_key()?;
     let device_operation_guard = state.device_operation_guards.guard_for(device_key);
     let _device_operation_lock = if let Some(ref guard) = device_operation_guard {
@@ -535,18 +617,20 @@ pub(crate) async fn device_channel_delete(
         ));
     }
 
-    current
-        .cleanup(device_key, None, None)
-        .apply(&state)
-        .await?;
-
-    let updated = state
-        .device_registry
-        .clear_channel(device_key, current_type)
-        .map_err(Error::Internal)?;
+    let mut updated = current.clone();
+    updated.provider_token = None;
+    updated.updated_at = current.next_updated_at(chrono::Utc::now().timestamp_millis());
     updated
         .persisted_change(device_key, Some(&current), None)
         .persist(&state, "route_delete_channel")
+        .await?;
+    state
+        .device_registry
+        .restore_route(device_key, updated.clone())
+        .map_err(Error::Internal)?;
+    current
+        .cleanup(device_key, None, None)
+        .apply(&state)
         .await?;
 
     Ok(crate::api::ok(DeviceChannelResponse {
@@ -555,6 +639,11 @@ pub(crate) async fn device_channel_delete(
         provider_token: updated.provider_token,
         issued_new_key: false,
         issue_reason: None,
+        route_revision: state
+            .store
+            .current_device_route_revision(device_key)
+            .await?
+            .ok_or(StoreError::DeviceNotFound)?,
     }))
 }
 
@@ -564,25 +653,46 @@ pub(crate) async fn provider_token_retire(
 ) -> HttpResult {
     let platform = payload.requested_platform()?;
     let provider_token = payload.normalized_provider_token(platform)?;
-    if let Some(retired) = state
+    let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
+    // Lock every in-memory owner before the durable sweep. Historical
+    // duplicate routes can exist even when the provider index names one key.
+    let mut locked_keys = state
         .device_registry
-        .retire_provider_token(platform, &provider_token)
-    {
-        retired
-            .updated
-            .persisted_change(
-                retired.device_key.as_str(),
-                Some(&retired.previous),
-                Some("provider_token_retired"),
-            )
-            .persist(&state, "provider_token_retire")
-            .await?;
+        .device_keys_for_provider_token(platform, &provider_token);
+    locked_keys.sort_unstable();
+    locked_keys.dedup();
+    let mut _operation_locks = Vec::with_capacity(locked_keys.len());
+    for device_key in &locked_keys {
+        let guard = state
+            .device_operation_guards
+            .guard_for(device_key)
+            .ok_or_else(|| Error::Internal("invalid provider device identity".into()))?;
+        _operation_locks.push(guard.lock_owned().await);
     }
-    state
+    let result = state
         .store
         .retire_provider_token(platform, &provider_token)
-        .await
-        .map_err(|err| Error::Internal(format!("failed to retire provider token: {err}")))?;
+        .await;
+    // A SQLite cleanup after the core transaction can still fail. Read back
+    // the durable owner state before returning either success or error.
+    for device_key in &locked_keys {
+        match state.store.active_device_route_snapshot(device_key).await? {
+            Some(route) => {
+                let channel_type =
+                    DeviceChannelType::parse(&route.channel_type).ok_or_else(|| {
+                        Error::Internal("persisted active channel type is invalid".into())
+                    })?;
+                state
+                    .device_registry
+                    .update_channel(device_key, channel_type, route.provider_token)
+                    .map_err(Error::Internal)?;
+            }
+            None => {
+                state.device_registry.remove_device(device_key);
+            }
+        }
+    }
+    result.map_err(|err| Error::Internal(format!("failed to retire provider token: {err}")))?;
 
     Ok(crate::api::ok(serde_json::json!({
         "retired": true
