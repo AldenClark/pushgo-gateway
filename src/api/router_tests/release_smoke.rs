@@ -2,6 +2,8 @@ use super::*;
 
 use axum::body::to_bytes;
 
+type ExpectedOperation = (String, Option<String>, Option<(&'static str, &'static str)>);
+
 const GATEWAY_TOKEN: &str = "release-smoke-gateway-token";
 const CIPHERTEXT_FIXTURE: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIj";
 
@@ -149,11 +151,7 @@ async fn release_smoke_core_lifecycle() {
     );
     let expected_title = "release smoke payload";
     let expected_body = "accepted through the real message handler";
-    let mut expected_operations: Vec<(
-        String,
-        Option<String>,
-        Option<(&'static str, &'static str)>,
-    )> = Vec::new();
+    let mut expected_operations: Vec<ExpectedOperation> = Vec::new();
     let (status, accepted) = post_json_with_auth(
         app.clone(),
         "/message",
