@@ -1851,7 +1851,6 @@ fn event_and_thing_domain_commands_do_not_interpret_business_payload_values() {
         "EventStatusText",
         "EventMessageText",
         "event_create_required_fields_missing",
-        "event_state",
     ] {
         if event_source.contains(forbidden) {
             violations.push(format!(
@@ -1864,7 +1863,6 @@ fn event_and_thing_domain_commands_do_not_interpret_business_payload_values() {
         "ExternalIdPatchRef",
         "validate_manufacturer_attrs",
         "ExternalIdKey",
-        "\"state\".to_string()",
     ] {
         if thing_source.contains(forbidden) {
             violations.push(format!(
@@ -1891,6 +1889,12 @@ fn event_and_thing_domain_commands_do_not_interpret_business_payload_values() {
         "gateway should only validate technical Event/Thing fields and forward business payload values:\n{}",
         violations.join("\n")
     );
+
+    // Lifecycle state is technical metadata derived from the authorized command,
+    // not a business value parsed from the caller's payload. Runtime lifecycle
+    // tests also verify that spoofed custom state cannot override these values.
+    assert!(event_source.contains("kind.lifecycle_state().to_string()"));
+    assert!(thing_source.contains("kind.entity_state().to_string()"));
 }
 
 #[test]
