@@ -132,7 +132,7 @@ jobs:
       CARGO_BUILD_JOBS: "2"
       CARGO_AUDIT_VERSION: "0.22.2"
       CARGO_DENY_VERSION: "0.20.2"
-      RUSTSEC_ADVISORY_DB_REV: 390e72b56b91964faa51440d3c10a65b8860009a
+      RUSTSEC_ADVISORY_DB_REV: 7eebec69c352c7191b1f13eb95dd510eeca5d1de
       RUSTSEC_ADVISORY_DB_MAX_AGE_SECONDS: "604800"
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
