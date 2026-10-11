@@ -100,7 +100,9 @@ impl ProviderTokenSnapshot {
         if token.len() <= PREFIX + SUFFIX + 1 {
             return token.to_string();
         }
-        format!("{}***{}", &token[..PREFIX], &token[token.len() - SUFFIX..])
+        let prefix_end = token.floor_char_boundary(PREFIX);
+        let suffix_start = token.ceil_char_boundary(token.len() - SUFFIX);
+        format!("{}***{}", &token[..prefix_end], &token[suffix_start..])
     }
 }
 
@@ -284,6 +286,23 @@ mod tests {
         let empty = ProviderTokenSnapshot::from_option(Some("   "));
         assert!(empty.hash().is_none());
         assert!(empty.preview().is_none());
+    }
+
+    #[test]
+    fn unicode_provider_tokens_have_bounded_utf8_safe_previews() {
+        for platform in [Platform::ANDROID, Platform::WINDOWS] {
+            for token in ["abcde😀tokenXYZ", "abcdefghijk😀ab"] {
+                let device =
+                    DeviceInfo::from_token(platform, token).expect("accepted opaque token");
+                let snapshot = device.token_snapshot();
+                let preview = snapshot.preview().expect("preview");
+                let (prefix, suffix) = preview.split_once("***").expect("masked token");
+                assert!(prefix.len() <= 6);
+                assert!(suffix.len() <= 4);
+                assert!(token.starts_with(prefix));
+                assert!(token.ends_with(suffix));
+            }
+        }
     }
 
     #[test]

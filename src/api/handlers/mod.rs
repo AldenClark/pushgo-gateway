@@ -99,6 +99,22 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route("/thing/delete", post(thing::thing_delete_to_channel))
         .route("/device/register", post(core::device_register))
         .route("/channel/device", post(core::device_channel_upsert))
+        .route(
+            "/v2/channel/device/transition/prepare",
+            post(core::route_transition_prepare),
+        )
+        .route(
+            "/v2/channel/device/transition/commit",
+            post(core::route_transition_commit),
+        )
+        .route(
+            "/v2/channel/device/transition/abort",
+            post(core::route_transition_abort),
+        )
+        .route(
+            "/v2/channel/device/transition/query",
+            post(core::route_transition_query),
+        )
         .route("/channel/device/delete", post(core::device_channel_delete))
         .route(
             "/channel/device/provider-token/retire",

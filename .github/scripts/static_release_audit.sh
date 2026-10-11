@@ -10,6 +10,8 @@ rollback_drill="$ROOT_DIR/scripts/v12_single_instance_rollback_drill.sh"
 rollback_runbook="$ROOT_DIR/release/V12_SINGLE_INSTANCE_ROLLBACK.md"
 crossdb_parity="$ROOT_DIR/scripts/storage_crossdb_parity.sh"
 
+python3 -m unittest discover -s "$ROOT_DIR/.github/scripts/tests" -p 'test_*.py'
+
 for file in "$workflow" "$dockerfile" "$local_dockerfile" "$preflight" "$rollback_drill" "$rollback_runbook" "$crossdb_parity" "$ROOT_DIR/rust-toolchain.toml" "$ROOT_DIR/.cargo/audit.toml"; do
   if [[ ! -f "$file" ]]; then
     echo "missing release contract file: $file" >&2

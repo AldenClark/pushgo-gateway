@@ -254,6 +254,7 @@ impl ThingCommand<ThingPatch> {
         let mut extra = HashMap::with_capacity(20);
         extra.insert("occurred_at".to_string(), observed_at.to_string());
         extra.insert("thing_id".to_string(), thing_id.clone());
+        extra.insert("state".to_string(), kind.entity_state().to_string());
         extra.insert(
             "domain_action".to_string(),
             kind.domain_action().as_str().to_string(),
@@ -375,6 +376,14 @@ impl ThingCommandKind {
             ThingCommandKind::Update => DomainAction::Update,
             ThingCommandKind::Archive => DomainAction::Archive,
             ThingCommandKind::Delete => DomainAction::Delete,
+        }
+    }
+
+    fn entity_state(self) -> &'static str {
+        match self {
+            ThingCommandKind::Create | ThingCommandKind::Update => "active",
+            ThingCommandKind::Archive => "archived",
+            ThingCommandKind::Delete => "deleted",
         }
     }
 }

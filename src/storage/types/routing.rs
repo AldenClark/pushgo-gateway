@@ -27,6 +27,57 @@ pub struct DeviceRouteRecordRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRouteSnapshot {
+    pub route_revision: i64,
+    pub channel_type: String,
+    pub provider_token: Option<String>,
+}
+
+pub const ROUTE_TRANSITION_STATE_PREPARED: &str = "prepared";
+pub const ROUTE_TRANSITION_STATE_COMMITTED: &str = "committed";
+pub const ROUTE_TRANSITION_STATE_ABORTED: &str = "aborted";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteTransitionPrepareRecord {
+    pub transition_id: String,
+    pub operation_id: String,
+    pub device_key: String,
+    pub platform: String,
+    pub expected_route_revision: i64,
+    pub candidate_channel_type: String,
+    pub candidate_provider_token: Option<String>,
+    pub candidate_fingerprint: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteTransitionRecord {
+    pub transition_id: String,
+    pub operation_id: String,
+    pub device_key: String,
+    pub platform: String,
+    pub state: String,
+    pub base_revision: i64,
+    pub candidate_channel_type: String,
+    pub candidate_provider_token: Option<String>,
+    pub candidate_fingerprint: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: i64,
+    pub committed_revision: Option<i64>,
+    pub migrated_pending_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteTransitionCommitResult {
+    pub record: RouteTransitionRecord,
+    pub previous_revision: i64,
+    pub route_revision: i64,
+    pub migrated_pending_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRoutePersistenceValues {
     pub device_id: Vec<u8>,
     pub token_raw: Vec<u8>,

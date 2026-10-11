@@ -1,0 +1,9 @@
+# target<TAB>fully-qualified Rust test name
+# Core smoke covers message/channel/event/thing lifecycles, ciphertext pass-through and subscriber isolation.
+# Loopback private smoke also verifies Hello-token rejection, redelivery, ACK and reconnect behavior.
+lib	api::router::tests::release_smoke::release_smoke_core_lifecycle
+lib	api::router::tests::routes::thing_scoped_event_route_is_supported
+lib	api::router::tests::provider_ingress::messages_pull_v2_discards_invalid_payload_without_returning_it
+lib	api::router::tests::provider_ingress::messages_pull_v2_discards_missing_and_mismatched_inner_ids_by_outer_id_only
+lib	api::router::tests::routes::message_route_client_op_id_is_idempotent_and_payload_bound
+blackbox_private_fallback	private_ack_timeout_redelivers_over_private_ws_without_provider

@@ -2303,3 +2303,454 @@ fn strict_runtime_cleanup_config() -> MaintenanceCleanupConfig {
         ..MaintenanceCleanupConfig::default()
     }
 }
+
+async fn set_external_route_receipt_fault(db_url: &str, postgres: bool, enabled: bool) {
+    if postgres {
+        let mut conn = PgConnection::connect(db_url)
+            .await
+            .expect("PostgreSQL route fixture should connect");
+        if enabled {
+            sqlx::query(
+                "CREATE FUNCTION fail_route_transition_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ \
+                 BEGIN RAISE EXCEPTION 'injected route receipt failure'; END; $$",
+            )
+            .execute(&mut conn)
+            .await
+            .expect("PostgreSQL receipt fault function should install");
+            sqlx::query(
+                "CREATE TRIGGER fail_route_transition_receipt BEFORE UPDATE ON route_transition_operations \
+                 FOR EACH ROW EXECUTE FUNCTION fail_route_transition_receipt()",
+            )
+            .execute(&mut conn)
+            .await
+            .expect("PostgreSQL receipt fault trigger should install");
+        } else {
+            sqlx::query(
+                "DROP TRIGGER fail_route_transition_receipt ON route_transition_operations",
+            )
+            .execute(&mut conn)
+            .await
+            .expect("PostgreSQL receipt fault trigger should drop");
+            sqlx::query("DROP FUNCTION fail_route_transition_receipt()")
+                .execute(&mut conn)
+                .await
+                .expect("PostgreSQL receipt fault function should drop");
+        }
+    } else {
+        let mut conn = MySqlConnection::connect(db_url)
+            .await
+            .expect("MySQL route fixture should connect");
+        let statement = if enabled {
+            "CREATE TRIGGER fail_route_transition_receipt BEFORE UPDATE ON route_transition_operations \
+             FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected route receipt failure'"
+        } else {
+            "DROP TRIGGER fail_route_transition_receipt"
+        };
+        sqlx::raw_sql(statement)
+            .execute(&mut conn)
+            .await
+            .expect("MySQL receipt fault trigger should change");
+    }
+}
+
+async fn assert_external_route_transition_contract(db_url: &str, postgres: bool) {
+    let storage = Storage::new(Some(db_url))
+        .await
+        .expect("external route storage should initialize");
+    assert!(storage.supports_route_transition_v2());
+    let now = chrono::Utc::now().timestamp_millis();
+    let device_key = "external-route-transition-device";
+    let device_id = derive_private_device_id(device_key);
+    let delivery_id = "external-route-transition-delivery";
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: device_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: "private".to_string(),
+            provider_token: None,
+            updated_at: now,
+        })
+        .await
+        .expect("initial private route should persist");
+    storage
+        .touch_device_activity(device_id, now + 1)
+        .await
+        .expect("private device activity should persist");
+    assert_eq!(
+        storage
+            .load_device_routes()
+            .await
+            .expect("updated route should load")
+            .into_iter()
+            .find(|route| route.device_key == device_key)
+            .expect("active route should remain")
+            .updated_at,
+        now + 1,
+        "activity update must find the stored device id"
+    );
+    let channel_id = [42u8; 16];
+    storage
+        .private_subscribe_channel(channel_id, device_id)
+        .await
+        .expect("private subscription should persist");
+    assert_eq!(
+        storage
+            .list_private_subscribed_channels_for_device(device_id)
+            .await
+            .expect("private subscription should load"),
+        vec![channel_id],
+        "private subscription lookup must find the stored device id"
+    );
+    storage
+        .private_unsubscribe_channel(channel_id, device_id)
+        .await
+        .expect("private subscription should remove");
+    assert!(
+        storage
+            .list_private_subscribed_channels_for_device(device_id)
+            .await
+            .expect("private subscription deletion should load")
+            .is_empty(),
+        "private unsubscribe must remove the stored device id"
+    );
+    let retired_key = "external-retired-device";
+    let retired_id = derive_private_device_id(retired_key);
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: retired_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: "private".to_string(),
+            provider_token: None,
+            updated_at: now,
+        })
+        .await
+        .expect("retired identity should persist");
+    storage
+        .private_subscribe_channel(channel_id, retired_id)
+        .await
+        .expect("retired identity subscription should persist");
+    assert_eq!(
+        storage
+            .list_private_subscribed_channels_for_device(retired_id)
+            .await
+            .expect("retired identity subscription should load"),
+        vec![channel_id]
+    );
+    storage
+        .revoke_device_identity(retired_key)
+        .await
+        .expect("retired identity should revoke");
+    assert!(
+        storage
+            .list_private_subscribed_channels_for_device(retired_id)
+            .await
+            .expect("retired subscription should load")
+            .is_empty(),
+        "revocation must remove subscriptions from the wide MySQL id column"
+    );
+    let old_key = "external-replaced-device";
+    let old_id = derive_private_device_id(old_key);
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: old_key.to_string(),
+            platform: Platform::ANDROID.name().to_string(),
+            channel_type: "private".to_string(),
+            provider_token: None,
+            updated_at: now,
+        })
+        .await
+        .expect("old identity should persist");
+    storage
+        .private_subscribe_channel(channel_id, old_id)
+        .await
+        .expect("old identity subscription should persist");
+    assert_eq!(
+        storage
+            .list_private_subscribed_channels_for_device(old_id)
+            .await
+            .expect("old identity subscription should load"),
+        vec![channel_id]
+    );
+    storage
+        .replace_device_identity(
+            &DeviceRouteRecordRow {
+                device_key: "external-replacement-device".to_string(),
+                platform: Platform::ANDROID.name().to_string(),
+                channel_type: "private".to_string(),
+                provider_token: None,
+                updated_at: now + 1,
+            },
+            Some(old_key),
+        )
+        .await
+        .expect("identity replacement should persist");
+    assert!(
+        storage
+            .list_private_subscribed_channels_for_device(old_id)
+            .await
+            .expect("old subscription should load")
+            .is_empty(),
+        "replacement must remove subscriptions from the wide MySQL id column"
+    );
+    let base_revision = storage
+        .current_device_route_revision(device_key)
+        .await
+        .expect("initial revision should load")
+        .expect("initial route should exist");
+    drop(storage);
+    // Simulate an existing v12 database created before the operation table
+    // existed. Startup must add that table without resetting its active route.
+    if postgres {
+        let mut conn = PgConnection::connect(db_url)
+            .await
+            .expect("PostgreSQL v12 fixture should connect");
+        sqlx::query("DROP TABLE route_transition_operations")
+            .execute(&mut conn)
+            .await
+            .expect("PostgreSQL v12 fixture should drop new table");
+    } else {
+        let mut conn = MySqlConnection::connect(db_url)
+            .await
+            .expect("MySQL v12 fixture should connect");
+        sqlx::query("DROP TABLE route_transition_operations")
+            .execute(&mut conn)
+            .await
+            .expect("MySQL v12 fixture should drop new table");
+    }
+    let storage = Storage::new(Some(db_url))
+        .await
+        .expect("existing v12 route storage should initialize additively");
+    assert_eq!(
+        storage
+            .current_device_route_revision(device_key)
+            .await
+            .expect("existing route should survive additive bootstrap"),
+        Some(base_revision)
+    );
+    storage
+        .insert_private_message(
+            delivery_id,
+            &PrivateMessage {
+                payload: vec![1, 2, 3].into(),
+                size: 3,
+                sent_at: now,
+                expires_at: now + 300_000,
+            },
+        )
+        .await
+        .expect("private payload should persist");
+    storage
+        .enqueue_private_outbox(
+            device_id,
+            &PrivateOutboxEntry {
+                delivery_id: delivery_id.to_string(),
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                occurred_at: now,
+                created_at: now,
+                next_attempt_at: now,
+                updated_at: now,
+                ..PrivateOutboxEntry::default()
+            },
+        )
+        .await
+        .expect("private delivery should persist");
+    let prepare = RouteTransitionPrepareRecord {
+        transition_id: "external-route-transition-id".to_string(),
+        operation_id: "external-route-operation-id".to_string(),
+        device_key: device_key.to_string(),
+        platform: Platform::ANDROID.name().to_string(),
+        expected_route_revision: base_revision,
+        candidate_channel_type: "fcm".to_string(),
+        candidate_provider_token: Some("external-route-provider-token".to_string()),
+        candidate_fingerprint: "external-route-fingerprint".to_string(),
+        created_at: now,
+        expires_at: now + 600_000,
+    };
+    let prepared = storage
+        .prepare_route_transition(&prepare)
+        .await
+        .expect("external transition should prepare");
+    assert_eq!(prepared.state, ROUTE_TRANSITION_STATE_PREPARED);
+    assert_eq!(
+        storage
+            .prepare_route_transition(&prepare)
+            .await
+            .expect("identical prepare should be idempotent")
+            .transition_id,
+        prepared.transition_id
+    );
+    let conflicting = RouteTransitionPrepareRecord {
+        candidate_fingerprint: "different-candidate".to_string(),
+        ..prepare.clone()
+    };
+    assert!(matches!(
+        storage.prepare_route_transition(&conflicting).await,
+        Err(StoreError::RouteTransitionOperationConflict)
+    ));
+
+    set_external_route_receipt_fault(db_url, postgres, true).await;
+    assert!(
+        storage
+            .commit_route_transition(
+                &prepare.transition_id,
+                &prepare.operation_id,
+                now + 1,
+                30,
+                10
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        storage
+            .current_device_route_revision(device_key)
+            .await
+            .expect("revision should survive failed commit"),
+        Some(base_revision),
+        "route write must roll back with receipt write"
+    );
+    assert_eq!(
+        storage
+            .query_route_transition(Some(&prepare.transition_id), None, None)
+            .await
+            .expect("operation should load after injected failure")
+            .expect("operation should remain")
+            .state,
+        ROUTE_TRANSITION_STATE_PREPARED
+    );
+    assert!(
+        storage
+            .load_private_outbox_entry(device_id, delivery_id)
+            .await
+            .expect("private queue should load after failed commit")
+            .is_some()
+    );
+    set_external_route_receipt_fault(db_url, postgres, false).await;
+
+    drop(storage);
+    let reopened = Storage::new(Some(db_url))
+        .await
+        .expect("prepared operation should survive restart");
+    let committed = reopened
+        .commit_route_transition(
+            &prepare.transition_id,
+            &prepare.operation_id,
+            now + 2,
+            30,
+            10,
+        )
+        .await
+        .expect("restarted transition should commit");
+    assert_eq!(committed.record.state, ROUTE_TRANSITION_STATE_COMMITTED);
+    assert_eq!(committed.previous_revision, base_revision);
+    assert_eq!(committed.route_revision, base_revision + 1);
+    assert_eq!(committed.migrated_pending_count, 1);
+    let active = reopened
+        .active_device_route_snapshot(device_key)
+        .await
+        .expect("committed active route should load")
+        .expect("committed active route should exist");
+    assert_eq!(active.route_revision, committed.route_revision);
+    assert_eq!(active.channel_type, "fcm");
+    assert_eq!(
+        active.provider_token.as_deref(),
+        Some("external-route-provider-token")
+    );
+    assert!(
+        reopened
+            .load_private_outbox_entry(device_id, delivery_id)
+            .await
+            .expect("migrated private queue should load")
+            .is_none()
+    );
+    let replay = reopened
+        .commit_route_transition(
+            &prepare.transition_id,
+            &prepare.operation_id,
+            now + 900_000,
+            30,
+            10,
+        )
+        .await
+        .expect("committed receipt must replay after expiry");
+    assert_eq!(replay, committed);
+    let private_candidate = RouteTransitionPrepareRecord {
+        transition_id: "external-route-transition-back-id".to_string(),
+        operation_id: "external-route-operation-back-id".to_string(),
+        expected_route_revision: committed.route_revision,
+        candidate_channel_type: "private".to_string(),
+        candidate_provider_token: None,
+        candidate_fingerprint: "external-private-fingerprint".to_string(),
+        created_at: now + 3,
+        expires_at: now + 600_000,
+        ..prepare
+    };
+    reopened
+        .prepare_route_transition(&private_candidate)
+        .await
+        .expect("return-to-private transition should prepare");
+    assert!(matches!(
+        reopened
+            .commit_route_transition(
+                &private_candidate.transition_id,
+                &private_candidate.operation_id,
+                now + 4,
+                30,
+                0,
+            )
+            .await,
+        Err(StoreError::RouteMigrationCapacityExceeded { .. })
+    ));
+    assert_eq!(
+        reopened
+            .current_device_route_revision(device_key)
+            .await
+            .expect("route revision after capacity conflict"),
+        Some(committed.route_revision)
+    );
+    let back = reopened
+        .commit_route_transition(
+            &private_candidate.transition_id,
+            &private_candidate.operation_id,
+            now + 5,
+            30,
+            10,
+        )
+        .await
+        .expect("return-to-private transition should commit after capacity increase");
+    assert_eq!(back.route_revision, committed.route_revision + 1);
+    assert_eq!(back.migrated_pending_count, 1);
+    let active = reopened
+        .active_device_route_snapshot(device_key)
+        .await
+        .expect("restored active route should load")
+        .expect("restored active route should exist");
+    assert_eq!(active.route_revision, back.route_revision);
+    assert_eq!(active.channel_type, "private");
+    assert!(active.provider_token.is_none());
+    assert!(
+        reopened
+            .load_private_outbox_entry(device_id, delivery_id)
+            .await
+            .expect("restored private delivery should load")
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn route_transition_external_postgres_contract() {
+    let Some((_container, db_url)) = start_postgres_container() else {
+        return;
+    };
+    wait_for_postgres(&db_url).await;
+    assert_external_route_transition_contract(&db_url, true).await;
+}
+
+#[tokio::test]
+async fn route_transition_external_mysql_contract() {
+    let Some((_container, db_url)) = start_mysql_container() else {
+        return;
+    };
+    wait_for_mysql(&db_url).await;
+    assert_external_route_transition_contract(&db_url, false).await;
+}

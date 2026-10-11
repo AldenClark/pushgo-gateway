@@ -77,12 +77,14 @@ const SQLITE_DISPATCH_INDEX_STATEMENTS: &[&str] = &[
 ];
 
 const SQLITE_DELIVERY_TABLE_STATEMENTS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS route_transition_operations (transition_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, device_key TEXT NOT NULL, platform TEXT NOT NULL, expected_route_revision INTEGER NOT NULL, candidate_channel_type TEXT NOT NULL, candidate_provider_token TEXT, candidate_fingerprint TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, committed_revision INTEGER, migrated_pending_count INTEGER, UNIQUE (device_key, operation_id))",
     "CREATE TABLE IF NOT EXISTS private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, claim_generation INTEGER NOT NULL DEFAULT 0, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
     "CREATE TABLE IF NOT EXISTS provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
 ];
 
 const SQLITE_DELIVERY_INDEX_STATEMENTS: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS route_transition_device_state_idx ON route_transition_operations (device_key, state, updated_at)",
     "CREATE INDEX IF NOT EXISTS private_payloads_expires_idx ON private_payloads (expires_at)",
     "CREATE INDEX IF NOT EXISTS private_outbox_delivery_idx ON private_outbox (delivery_id)",
     "CREATE INDEX IF NOT EXISTS private_outbox_due_idx ON private_outbox (status, next_attempt_at, attempts)",

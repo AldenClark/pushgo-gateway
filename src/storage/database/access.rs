@@ -233,6 +233,10 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
 #[async_trait]
 pub trait DeviceRouteDatabaseAccess: Send + Sync {
     async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>>;
+    async fn active_device_route_snapshot(
+        &self,
+        device_key: &str,
+    ) -> StoreResult<Option<DeviceRouteSnapshot>>;
     async fn provider_route_is_current(
         &self,
         device_key: &str,
@@ -251,6 +255,31 @@ pub trait DeviceRouteDatabaseAccess: Send + Sync {
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
     ) -> StoreResult<usize>;
+    async fn current_device_route_revision(&self, device_key: &str) -> StoreResult<Option<i64>>;
+    async fn prepare_route_transition(
+        &self,
+        record: &RouteTransitionPrepareRecord,
+    ) -> StoreResult<RouteTransitionRecord>;
+    async fn query_route_transition(
+        &self,
+        transition_id: Option<&str>,
+        device_key: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> StoreResult<Option<RouteTransitionRecord>>;
+    async fn abort_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+    ) -> StoreResult<RouteTransitionRecord>;
+    async fn commit_route_transition(
+        &self,
+        transition_id: &str,
+        operation_id: &str,
+        now: i64,
+        ack_timeout_secs: u64,
+        max_pending_per_device: usize,
+    ) -> StoreResult<RouteTransitionCommitResult>;
     async fn replace_device_identity(
         &self,
         route: &DeviceRouteRecordRow,

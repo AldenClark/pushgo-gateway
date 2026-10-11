@@ -15,6 +15,7 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 use warp_link::warp_link_core::{PeerMeta, ServerApp, TlsMode, TransportKind, WarpLinkError};
+use warp_link::warp_link_transport::FramedReader;
 use warp_link::{ServerSessionIo, run_server_session};
 
 use crate::private::{
@@ -341,7 +342,7 @@ impl TcpServerRuntime {
         W: AsyncWrite + Unpin + Send,
     {
         let mut io = FramedServerIo {
-            reader,
+            reader: FramedReader::new(reader),
             writer,
             write_timeout_ms: self.config.write_timeout_ms,
             prefetched_frame: None,
@@ -481,7 +482,7 @@ impl ProxyProtocolV1 {
 }
 
 struct FramedServerIo<R, W> {
-    reader: R,
+    reader: FramedReader<R>,
     writer: W,
     write_timeout_ms: u64,
     prefetched_frame: Option<Vec<u8>>,
@@ -516,23 +517,7 @@ where
     }
 
     async fn recv_prefixed_frame(&mut self) -> Result<Vec<u8>, WarpLinkError> {
-        let mut len_bytes = [0u8; 4];
-        self.reader
-            .read_exact(&mut len_bytes)
-            .await
-            .map_err(|err| WarpLinkError::Transport(err.to_string()))?;
-        let len = u32::from_be_bytes(len_bytes) as usize;
-        if len == 0 || len > MAX_FRAME_LEN {
-            return Err(WarpLinkError::Protocol(format!(
-                "invalid stream frame length {len}"
-            )));
-        }
-        let mut frame = vec![0u8; len];
-        self.reader
-            .read_exact(&mut frame)
-            .await
-            .map_err(|err| WarpLinkError::Transport(err.to_string()))?;
-        Ok(frame)
+        self.reader.read_frame().await
     }
 }
 
@@ -567,14 +552,105 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::ProxyProtocolV1;
-    use std::time::Duration;
+    use super::{FramedServerIo, ProxyProtocolV1};
+    use std::{
+        io,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
+        time::Duration,
+    };
     use tokio::{
-        io::AsyncWriteExt,
+        io::{AsyncRead, AsyncWriteExt, ReadBuf},
         net::{TcpListener, TcpStream},
+        sync::oneshot,
         time::Instant,
     };
-    use warp_link::warp_link_core::WarpLinkError;
+    use warp_link::{ServerSessionIo, warp_link_core::WarpLinkError};
+
+    struct PausedFrameReader {
+        first: Vec<u8>,
+        first_offset: usize,
+        remaining: Vec<u8>,
+        remaining_offset: usize,
+        first_consumed: Option<oneshot::Sender<()>>,
+        released: Arc<AtomicBool>,
+    }
+
+    impl AsyncRead for PausedFrameReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            if self.first_offset < self.first.len() {
+                let count = (self.first.len() - self.first_offset).min(buf.remaining());
+                buf.put_slice(&self.first[self.first_offset..self.first_offset + count]);
+                self.first_offset += count;
+                if self.first_offset == self.first.len()
+                    && let Some(sender) = self.first_consumed.take()
+                {
+                    let _ = sender.send(());
+                }
+                return Poll::Ready(Ok(()));
+            }
+            if !self.released.load(Ordering::SeqCst) {
+                return Poll::Pending;
+            }
+            let count = (self.remaining.len() - self.remaining_offset).min(buf.remaining());
+            buf.put_slice(&self.remaining[self.remaining_offset..self.remaining_offset + count]);
+            self.remaining_offset += count;
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    async fn cancelled_read_keeps_partial_frame(first: Vec<u8>, remaining: Vec<u8>) {
+        let (first_consumed, outbound_ready) = oneshot::channel();
+        let released = Arc::new(AtomicBool::new(false));
+        let reader = PausedFrameReader {
+            first,
+            first_offset: 0,
+            remaining,
+            remaining_offset: 0,
+            first_consumed: Some(first_consumed),
+            released: Arc::clone(&released),
+        };
+        let mut io = FramedServerIo {
+            reader: warp_link::warp_link_transport::FramedReader::new(reader),
+            writer: tokio::io::sink(),
+            write_timeout_ms: 1_000,
+            prefetched_frame: None,
+        };
+
+        tokio::select! {
+            result = io.recv_frame(1_000) => panic!("partial frame unexpectedly completed: {result:?}"),
+            result = outbound_ready => result.expect("outbound wake should follow partial read"),
+        }
+        released.store(true, Ordering::SeqCst);
+        let frame = io
+            .recv_frame(1_000)
+            .await
+            .expect("frame should resume after outbound wake");
+        assert_eq!(frame, b"abcdef");
+    }
+
+    #[tokio::test]
+    async fn outbound_wake_preserves_partial_length_prefix() {
+        cancelled_read_keeps_partial_frame(vec![0, 0], [vec![0, 6], b"abcdef".to_vec()].concat())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn outbound_wake_preserves_partial_payload() {
+        cancelled_read_keeps_partial_frame(
+            [vec![0, 0, 0, 6], b"ab".to_vec()].concat(),
+            b"cdef".to_vec(),
+        )
+        .await;
+    }
 
     #[test]
     fn parse_proxy_tcp4_source_addr() {

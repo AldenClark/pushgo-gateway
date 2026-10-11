@@ -1,12 +1,15 @@
 **/.DS_Store
 /target/
+/build/
 /dist/
 /docs/*
 !/docs/gateway-database-upgrade-plan.md
+!/docs/release-smoke.md
 /scripts/*
 !/scripts/preflight_release_audit.sh
 !/scripts/storage_crossdb_parity.sh
 !/scripts/v12_single_instance_rollback_drill.sh
+!/scripts/release_smoke.sh
 bench/results/*
 !bench/results/.gitkeep
 /.cargo/*

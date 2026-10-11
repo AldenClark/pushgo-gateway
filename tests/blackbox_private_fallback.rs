@@ -132,6 +132,7 @@ async fn private_ack_timeout_redelivers_over_private_ws_without_provider() {
     let device_key = register_private_device(&client, &gateway).await;
     let channel_id = subscribe_channel(&client, &gateway, &device_key).await;
     let profile: Arc<PushgoWireProfile> = Arc::new(PushgoWireProfile::new());
+    reject_private_session_with_invalid_gateway_token(&gateway, &profile, &device_key).await;
     let mut ws = connect_private_ws(&gateway, &profile, &device_key).await;
 
     send_message(&client, &gateway, &channel_id).await;
@@ -164,6 +165,69 @@ async fn private_ack_timeout_redelivers_over_private_ws_without_provider() {
 
     let mut reconnected = connect_private_ws(&gateway, &profile, &device_key).await;
     assert_no_deliver_for(&mut reconnected, &profile, Duration::from_secs(3), &gateway).await;
+}
+
+async fn reject_private_session_with_invalid_gateway_token(
+    gateway: &GatewayProcess,
+    profile: &Arc<PushgoWireProfile>,
+    device_key: &str,
+) {
+    let mut request = format!("ws://127.0.0.1:{}/private/ws", gateway.http_port)
+        .into_client_request()
+        .expect("ws request should build");
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        "pushgo-private.v1".parse().expect("subprotocol header"),
+    );
+    // Pass HTTP middleware so this specifically checks the private protocol's
+    // device-session authentication with the Hello token.
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", gateway.token)
+            .parse()
+            .expect("auth header"),
+    );
+    let (mut ws, _) = connect_async(request)
+        .await
+        .expect("websocket transport should connect before Hello auth");
+    let hello = profile
+        .encode_client_hello(&HelloCtx {
+            identity: device_key.to_string(),
+            auth_token: Some("invalid-private-session-token".to_string()),
+            resume_token: None,
+            last_acked_seq: None,
+            supported_wire_versions: Vec::new(),
+            supported_payload_versions: Vec::new(),
+            perf_tier: None,
+            app_state: None,
+            metadata: Default::default(),
+        })
+        .expect("hello should encode");
+    ws.send(Message::Binary(hello.to_vec().into()))
+        .await
+        .expect("hello should send");
+
+    let next = tokio::time::timeout(Duration::from_secs(10), ws.next())
+        .await
+        .expect("authentication response should arrive")
+        .expect("private auth should respond before closing")
+        .expect("authentication frame should decode");
+    let Message::Binary(frame) = next else {
+        panic!("invalid private token should receive a protocol error frame: {next:?}");
+    };
+    match profile
+        .decode_server_frame(&frame)
+        .expect("private auth frame should decode")
+    {
+        DecodedServerFrame::Error { code, .. } => {
+            assert!(
+                !code.is_empty(),
+                "auth rejection should include an error code"
+            );
+        }
+        other => panic!("invalid private token was not rejected: {other:?}"),
+    }
+    let _ = ws.close(None).await;
 }
 
 async fn wait_until_private_outbox_is_empty(gateway: &GatewayProcess) {

@@ -300,6 +300,10 @@ impl SubmissionRecoveryWorker {
 pub(crate) struct DeviceOperationGuards {
     by_key: ConcurrentHashMap<Arc<str>, DeviceOperationGuardSlot>,
     access_count: AtomicUsize,
+    // A provider token can move between two device keys. Serialize claims
+    // before taking their per-device guards so competing moves cannot invert
+    // the lock order or discover different owners mid-transition.
+    provider_claim: Mutex<()>,
 }
 
 struct DeviceOperationGuardSlot {
@@ -314,6 +318,10 @@ impl DeviceOperationGuards {
     fn monotonic_now_ms() -> u64 {
         static START: OnceLock<Instant> = OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_millis() as u64
+    }
+
+    pub(crate) async fn lock_provider_claim(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.provider_claim.lock().await
     }
 
     pub(crate) fn guard_for(&self, device_key: &str) -> Option<Arc<Mutex<()>>> {
@@ -378,6 +386,7 @@ impl Default for DeviceOperationGuards {
         Self {
             by_key: ConcurrentHashMap::default(),
             access_count: AtomicUsize::new(0),
+            provider_claim: Mutex::new(()),
         }
     }
 }

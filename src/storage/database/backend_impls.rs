@@ -435,6 +435,13 @@ macro_rules! impl_backend_device_route_access {
                 <$backend>::load_device_routes(self).await
             }
 
+            async fn active_device_route_snapshot(
+                &self,
+                device_key: &str,
+            ) -> StoreResult<Option<DeviceRouteSnapshot>> {
+                <$backend>::active_device_route_snapshot(self, device_key).await
+            }
+
             async fn provider_route_is_current(
                 &self,
                 device_key: &str,
@@ -484,6 +491,58 @@ macro_rules! impl_backend_device_route_access {
                     self,
                     route,
                     previous_channel_type,
+                    ack_timeout_secs,
+                    max_pending_per_device,
+                )
+                .await
+            }
+
+            async fn current_device_route_revision(
+                &self,
+                device_key: &str,
+            ) -> StoreResult<Option<i64>> {
+                <$backend>::current_device_route_revision(self, device_key).await
+            }
+
+            async fn prepare_route_transition(
+                &self,
+                record: &RouteTransitionPrepareRecord,
+            ) -> StoreResult<RouteTransitionRecord> {
+                <$backend>::prepare_route_transition(self, record).await
+            }
+
+            async fn query_route_transition(
+                &self,
+                transition_id: Option<&str>,
+                device_key: Option<&str>,
+                operation_id: Option<&str>,
+            ) -> StoreResult<Option<RouteTransitionRecord>> {
+                <$backend>::query_route_transition(self, transition_id, device_key, operation_id)
+                    .await
+            }
+
+            async fn abort_route_transition(
+                &self,
+                transition_id: &str,
+                operation_id: &str,
+                now: i64,
+            ) -> StoreResult<RouteTransitionRecord> {
+                <$backend>::abort_route_transition(self, transition_id, operation_id, now).await
+            }
+
+            async fn commit_route_transition(
+                &self,
+                transition_id: &str,
+                operation_id: &str,
+                now: i64,
+                ack_timeout_secs: u64,
+                max_pending_per_device: usize,
+            ) -> StoreResult<RouteTransitionCommitResult> {
+                <$backend>::commit_route_transition(
+                    self,
+                    transition_id,
+                    operation_id,
+                    now,
                     ack_timeout_secs,
                     max_pending_per_device,
                 )

@@ -19,6 +19,16 @@ mod subscriptions;
 
 impl_backend_database_access!(MySqlDb);
 
+// The legacy MySQL devices and channel_subscriptions tables use BINARY(32),
+// while private device identities are 16 bytes. MySQL pads inserted BINARY
+// values with zeroes, but prepared equality parameters are not padded.
+pub(super) fn binary32_private_device_id(raw: &[u8]) -> StoreResult<Vec<u8>> {
+    let id = PrivateDeviceId::parse_compat(raw).ok_or(StoreError::BinaryError)?;
+    let mut padded = vec![0u8; 32];
+    padded[..16].copy_from_slice(&id.into_inner());
+    Ok(padded)
+}
+
 fn decode_mysql_attempts(row: &sqlx::mysql::MySqlRow) -> u32 {
     let attempts: i32 = row.get("attempts");
     attempts.max(0) as u32

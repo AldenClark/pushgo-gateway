@@ -154,7 +154,7 @@ impl MySqlDb {
             "SELECT channel_id FROM channel_subscriptions \
              WHERE device_id = ? AND status = 'active'",
         )
-        .bind(&device_id[..])
+        .bind(binary32_private_device_id(&device_id)?)
         .fetch_all(&self.pool)
         .await?;
         let mut channels = Vec::with_capacity(rows.len());
@@ -265,7 +265,7 @@ impl MySqlDb {
              LIMIT 1",
         )
         .bind(&channel_id[..])
-        .bind(&device_id[..])
+        .bind(binary32_private_device_id(&device_id)?)
         .fetch_optional(&mut *tx)
         .await?;
         if already_active.is_none() {
@@ -303,7 +303,7 @@ impl MySqlDb {
     ) -> StoreResult<()> {
         sqlx::query("DELETE FROM channel_subscriptions WHERE channel_id = ? AND device_id = ?")
             .bind(&channel_id[..])
-            .bind(&device_id[..])
+            .bind(binary32_private_device_id(&device_id)?)
             .execute(&self.pool)
             .await?;
         Ok(())

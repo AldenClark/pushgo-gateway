@@ -46,7 +46,7 @@ fn transport_hints_returns_profile_capabilities() {
 
 #[test]
 fn gateway_profile_disabled_omits_transport() {
-    let response = GatewayProfileResponse::private_disabled();
+    let response = GatewayProfileResponse::private_disabled(true);
     assert!(!response.private_channel_enabled);
     assert!(!response.private_enabled);
     assert!(response.transport.is_none());

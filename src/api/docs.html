@@ -932,6 +932,10 @@
           <code>/event/*</code> 请求支持可选 <code>ciphertext</code>，网关仅透传密文；路由与优先级字段（如 <code>channel_id/event_id/thing_id/severity</code>）建议保持明文。<br />
           <code>/event/*</code> accepts optional <code>ciphertext</code>. Gateway only forwards it; routing/priority fields (for example <code>channel_id/event_id/thing_id/severity</code>) should remain plaintext.
         </p>
+        <p class="note">
+          推送给设备的规范事件载荷包含网关按动作生成的 <code>event_state</code>：create/update 为 <code>ongoing</code>，close 为 <code>closed</code>；它独立于发送方提供的事件状态字段。<br />
+          Canonical event payloads delivered to devices include Gateway-derived <code>event_state</code>: <code>ongoing</code> for create/update and <code>closed</code> for close. This is independent of the sender-provided event status field.
+        </p>
 
         <h3><code>POST /event/create</code></h3>
         <p>
@@ -1364,6 +1368,10 @@
         <p class="callout">
           <code>/thing/*</code> 请求支持可选 <code>ciphertext</code>，网关仅透传密文；路由字段（如 <code>channel_id/thing_id</code>）建议保持明文。<br />
           <code>/thing/*</code> accepts optional <code>ciphertext</code>. Gateway only forwards it; routing fields (for example <code>channel_id/thing_id</code>) should remain plaintext.
+        </p>
+        <p class="note">
+          推送给设备的规范对象载荷包含网关按动作生成的 <code>state</code>：create/update 为 <code>active</code>，archive 为 <code>archived</code>，delete 为 <code>deleted</code>。<br />
+          Canonical thing payloads delivered to devices include Gateway-derived <code>state</code>: <code>active</code> for create/update, <code>archived</code> for archive, and <code>deleted</code> for delete.
         </p>
 
         <h3><code>POST /thing/create</code></h3>

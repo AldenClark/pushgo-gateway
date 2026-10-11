@@ -8,6 +8,22 @@ Policy:
 - Keep entries user-visible and outcome-focused.
 - Internal refactors, CI changes, and implementation details belong in `release/CHANGELOG.md`.
 
+## [v1.3.3]
+
+### Improved
+- Route switching now uses the same recoverable, atomic transition on SQLite, PostgreSQL, and MySQL, including PostgreSQL/MySQL deployments used by Android manual transport switching.
+- Route recovery can verify the currently active provider token through a SHA-256 fingerprint without exposing the token in transition queries.
+
+### Fixed
+- Kept provider-token ownership and delivery routing consistent when devices take over a token or concurrent subscription, retirement, and route operations overlap.
+- Preserved pending private deliveries when a route deletion cannot be saved.
+- Made completed route switches safely repeatable after expiry or later route changes, and prevented a failed route retry from leaving the in-memory route changed.
+- Prevented a diagnostic log path from crashing on multibyte provider tokens.
+- Kept private TCP connections readable when an outgoing delivery interrupts an incoming frame that has arrived in pieces.
+- Restored MySQL private-device activity updates and channel subscription cleanup when devices unsubscribe or replace their identity.
+- With a Token Service that supports forced refresh, FCM/WNS delivery retries now request a new credential after the provider rejects the previous one, even if an ordinary token fetch overlaps the retry.
+- Closed a TLS-handshake validation issue in the Gateway's TLS dependency and bounded private WSS Ping/Pong writes when a peer stops reading.
+
 ## [v1.3.2]
 
 ### Fixed
