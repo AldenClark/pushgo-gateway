@@ -319,6 +319,8 @@ const MESSAGE_CUSTOM_KEYS: &[&str] = &["url", "images", "ciphertext", "metadata"
 const ENTITY_CUSTOM_KEYS: &[&str] = &["ciphertext", "metadata"];
 const MESSAGE_FIELD_KEYS: &[&str] = &["message_id", "tags", "thing_id"];
 const THING_FIELD_KEYS: &[&str] = &[
+    "domain_action",
+    "state",
     "occurred_at",
     "observed_at",
     "thing_id",
@@ -336,6 +338,8 @@ const THING_FIELD_KEYS: &[&str] = &[
     "location",
 ];
 const EVENT_FIELD_KEYS: &[&str] = &[
+    "domain_action",
+    "event_state",
     "event_id",
     "occurred_at",
     "event_time",
@@ -360,4 +364,74 @@ fn retain_allowed(
         .into_iter()
         .filter(|(key, _)| allowed_keys.contains(&key.as_str()))
         .collect()
+}
+
+#[cfg(test)]
+mod lifecycle_payload_tests {
+    use super::*;
+
+    #[test]
+    fn authoritative_thing_lifecycle_survives_dispatch_filtering() {
+        for (action, state) in [
+            ("create", "active"),
+            ("update", "active"),
+            ("archive", "archived"),
+            ("delete", "deleted"),
+        ] {
+            let (_, entity_id, custom, fields) = DispatchEntityPayload::thing(
+                "thing-1".to_string(),
+                HashMap::from([
+                    ("state".to_string(), "spoofed".to_string()),
+                    ("domain_action".to_string(), "spoofed".to_string()),
+                ]),
+                HashMap::from([
+                    ("state".to_string(), state.to_string()),
+                    ("domain_action".to_string(), action.to_string()),
+                    ("unrecognized".to_string(), "discard".to_string()),
+                ]),
+            )
+            .into_parts();
+
+            assert_eq!(entity_id, "thing-1");
+            assert!(custom.is_empty());
+            assert_eq!(fields.get("state").map(String::as_str), Some(state));
+            assert_eq!(
+                fields.get("domain_action").map(String::as_str),
+                Some(action)
+            );
+            assert!(!fields.contains_key("unrecognized"));
+        }
+    }
+
+    #[test]
+    fn authoritative_event_lifecycle_survives_dispatch_filtering() {
+        for (action, state) in [
+            ("create", "ongoing"),
+            ("update", "ongoing"),
+            ("close", "closed"),
+        ] {
+            let (_, entity_id, custom, fields) = DispatchEntityPayload::event(
+                "event-1".to_string(),
+                HashMap::from([
+                    ("event_state".to_string(), "spoofed".to_string()),
+                    ("domain_action".to_string(), "spoofed".to_string()),
+                ]),
+                HashMap::from([
+                    ("event_state".to_string(), state.to_string()),
+                    ("domain_action".to_string(), action.to_string()),
+                    ("unrecognized".to_string(), "discard".to_string()),
+                ]),
+            )
+            .into_parts();
+
+            assert_eq!(entity_id, "event-1");
+            assert!(custom.is_empty());
+            assert_eq!(fields.get("event_state").map(String::as_str), Some(state));
+            assert_eq!(
+                fields.get("domain_action").map(String::as_str),
+                Some(action)
+            );
+            assert!(!fields.contains_key("unrecognized"));
+        }
+    }
 }

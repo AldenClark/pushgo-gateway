@@ -87,6 +87,11 @@ jobs:
       - name: Run frozen release preflight and black-box flows
         run: scripts/preflight_release_audit.sh all
 
+      - name: Record bounded Gateway smoke on the same candidate
+        env:
+          RECEIPT_FILE: /tmp/pushgo-pr-preflight/gateway-release-smoke.json
+        run: scripts/release_smoke.sh
+
       - name: Run exact v11/v12 rollback and restore-clone drill
         env:
           V11_SOURCE_COMMIT: 6c26f420114823a827caa0274a0bbc3739d91211

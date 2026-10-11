@@ -281,6 +281,10 @@ impl EventCommand<EventPatch> {
             "domain_action".to_string(),
             kind.domain_action().as_str().to_string(),
         );
+        extra.insert(
+            "event_state".to_string(),
+            kind.lifecycle_state().to_string(),
+        );
         extra.insert("occurred_at".to_string(), event_time.to_string());
         extra.insert("event_time".to_string(), event_time.to_string());
         if let Some(value) = thing_id.as_deref() {
@@ -392,6 +396,13 @@ impl EventCommandKind {
             EventCommandKind::Create => DomainAction::Create,
             EventCommandKind::Update => DomainAction::Update,
             EventCommandKind::Close => DomainAction::Close,
+        }
+    }
+
+    fn lifecycle_state(self) -> &'static str {
+        match self {
+            EventCommandKind::Create | EventCommandKind::Update => "ongoing",
+            EventCommandKind::Close => "closed",
         }
     }
 }

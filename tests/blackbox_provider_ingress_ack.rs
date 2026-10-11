@@ -104,8 +104,33 @@ impl Drop for GatewayProcess {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_ingress_pull_and_ack_work_end_to_end() {
+    run_provider_ingress_journey(Client::new(), reqwest::Version::HTTP_11).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_ingress_pull_and_ack_work_end_to_end_over_http2() {
+    let client = Client::builder()
+        .http2_prior_knowledge()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("HTTP/2 client should build");
+    run_provider_ingress_journey(client, reqwest::Version::HTTP_2).await;
+}
+
+async fn run_provider_ingress_journey(client: Client, expected_version: reqwest::Version) {
     let gateway = GatewayProcess::spawn().await;
-    let client = Client::new();
+    let response = client
+        .get(gateway.base_url())
+        .bearer_auth(&gateway.token)
+        .send()
+        .await
+        .expect("Gateway should respond over the selected HTTP transport");
+    assert_eq!(response.status(), 200, "{}", gateway.logs());
+    assert_eq!(response.version(), expected_version);
+    let _ = response
+        .bytes()
+        .await
+        .expect("response body should complete");
 
     let device_key = register_provider_device(&client, &gateway).await;
     let channel_id = subscribe_channel(&client, &gateway, &device_key).await;

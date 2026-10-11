@@ -116,6 +116,12 @@ jobs:
             '{advisory_db_revision: $advisory_db_revision, advisory_db_commit_date: $advisory_db_commit_date, advisory_db_age_seconds: $advisory_db_age_seconds, advisory_db_max_age_seconds: $advisory_db_max_age_seconds, fetched_revision_verified: true, cargo_audit: "passed"}' \
             > "${RUNNER_TEMP}/dependency-policy.json"
 
+      - name: Run bounded Gateway release smoke profile
+        env:
+          CARGO_DEPENDENCY_MODE: frozen
+          RECEIPT_FILE: ${{ runner.temp }}/gateway-release-smoke.json
+        run: scripts/release_smoke.sh
+
       - name: Run frozen preflight and black-box flows
         env:
           CARGO_DEPENDENCY_MODE: frozen
@@ -144,6 +150,16 @@ jobs:
             mkdir -p evidence
             cp "${RUNNER_TEMP}/dependency-policy.json" evidence/dependency-policy.json
           fi
+          if [ -f "${RUNNER_TEMP}/gateway-release-smoke.json" ]; then
+            mkdir -p evidence
+            cp "${RUNNER_TEMP}/gateway-release-smoke.json" evidence/gateway-release-smoke.json
+          fi
+          for smoke_logs in "${RUNNER_TEMP}"/gateway-release-smoke.logs-*; do
+            if [ -d "${smoke_logs}" ]; then
+              mkdir -p evidence/gateway-release-smoke-logs
+              cp -R "${smoke_logs}/." evidence/gateway-release-smoke-logs/
+            fi
+          done
 
       - name: Upload release-gate evidence
         if: always()

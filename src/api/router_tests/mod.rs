@@ -27,6 +27,7 @@ mod activity;
 mod channel_sync;
 mod mcp;
 mod provider_ingress;
+mod release_smoke;
 mod routes;
 mod widget_push;
 
