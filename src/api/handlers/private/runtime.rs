@@ -26,7 +26,6 @@ pub(super) struct PrivateTransportHints {
 pub(super) struct GatewayProfileResponse {
     pub(super) private_channel_enabled: bool,
     pub(super) private_enabled: bool,
-    pub(super) route_transition_v2: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) transport: Option<PrivateTransportHints>,
 }
@@ -58,24 +57,18 @@ impl PrivateTransportProfile {
 }
 
 impl GatewayProfileResponse {
-    pub(super) fn private_disabled(route_transition_v2: bool) -> Self {
+    pub(super) fn private_disabled() -> Self {
         Self {
             private_channel_enabled: false,
             private_enabled: false,
-            route_transition_v2,
             transport: None,
         }
     }
 
-    fn private_enabled(
-        profile: &PrivateTransportProfile,
-        public_base_url: Option<&str>,
-        route_transition_v2: bool,
-    ) -> Self {
+    fn private_enabled(profile: &PrivateTransportProfile, public_base_url: Option<&str>) -> Self {
         Self {
             private_channel_enabled: true,
             private_enabled: true,
-            route_transition_v2,
             transport: Some(profile.hints(public_base_url)),
         }
     }
@@ -96,14 +89,11 @@ impl<'a> PrivateRuntimeView<'a> {
 
     pub(super) fn gateway_profile_response(&self) -> GatewayProfileResponse {
         if !self.state.private_channel_enabled {
-            GatewayProfileResponse::private_disabled(
-                self.state.store.supports_route_transition_v2(),
-            )
+            GatewayProfileResponse::private_disabled()
         } else {
             GatewayProfileResponse::private_enabled(
                 self.transport_profile(),
                 self.public_base_url(),
-                self.state.store.supports_route_transition_v2(),
             )
         }
     }

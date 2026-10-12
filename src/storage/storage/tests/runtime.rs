@@ -5490,3 +5490,118 @@ async fn upsert_device_route_coalesces_duplicate_provider_identities() {
         other => panic!("expected provider target after coalescing identities, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn retired_route_ledger_cleanup_preserves_routes_subscriptions_and_pending_messages() {
+    let ctx = setup_sqlite_storage("retired-route-ledger-cleanup").await;
+    let device_key = "ledger-cleanup-device";
+    let device_id = derive_private_device_id(device_key);
+    let channel_id = [43; 16];
+    let now = chrono::Utc::now().timestamp_millis();
+    ctx.storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: device_key.to_string(),
+            platform: "android".to_string(),
+            channel_type: "private".to_string(),
+            provider_token: None,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    ctx.storage
+        .private_subscribe_channel(channel_id, device_id)
+        .await
+        .unwrap();
+    ctx.storage
+        .insert_private_message(
+            "ledger-cleanup-delivery",
+            &PrivateMessage {
+                payload: vec![1, 2, 3].into(),
+                size: 3,
+                sent_at: now,
+                expires_at: now + 300_000,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.storage
+        .enqueue_private_outbox(
+            device_id,
+            &PrivateOutboxEntry {
+                delivery_id: "ledger-cleanup-delivery".to_string(),
+                status: OUTBOX_STATUS_PENDING.to_string(),
+                occurred_at: now,
+                created_at: now,
+                next_attempt_at: now,
+                updated_at: now,
+                ..PrivateOutboxEntry::default()
+            },
+        )
+        .await
+        .unwrap();
+    let before = ctx
+        .storage
+        .active_device_route_snapshot(device_key)
+        .await
+        .unwrap();
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE route_transition_operations (transition_id TEXT PRIMARY KEY)")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO route_transition_operations VALUES ('obsolete-prepared-operation')")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
+    drop(ctx.storage);
+    let reopened = Storage::new(Some(&ctx.db_url)).await.unwrap();
+    assert_eq!(
+        reopened
+            .active_device_route_snapshot(device_key)
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        reopened
+            .list_private_subscribed_channels_for_device(device_id)
+            .await
+            .unwrap(),
+        vec![channel_id]
+    );
+    assert!(
+        reopened
+            .load_private_outbox_entry(device_id, "ledger-cleanup-delivery")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        reopened
+            .load_private_message("ledger-cleanup-delivery")
+            .await
+            .unwrap()
+            .unwrap()
+            .payload
+            .as_ref(),
+        &[1, 2, 3]
+    );
+    let mut conn = SqliteConnection::connect(&ctx.delivery_db_url)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'route_transition_operations'").fetch_one(&mut conn).await.unwrap();
+    assert_eq!(count, 0);
+    // Reopening again is idempotent and cannot consume a pending delivery.
+    drop(reopened);
+    let reopened = Storage::new(Some(&ctx.db_url)).await.unwrap();
+    assert!(
+        reopened
+            .load_private_outbox_entry(device_id, "ledger-cleanup-delivery")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}

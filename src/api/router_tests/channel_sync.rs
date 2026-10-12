@@ -8,6 +8,140 @@ use crate::{
     },
 };
 
+#[tokio::test]
+async fn register_and_channel_sync_report_actual_route_without_reverting_it() {
+    let state = build_private_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let material = format!("fixture-{}", rand::random::<u64>());
+    let mismatched_material = format!("mismatch-{material}");
+    let provider_material = format!("provider-{}", rand::random::<u64>());
+    let (status, registered) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform": "android"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let device_key = response_string_field(&registered, "device_key").to_string();
+    assert_eq!(response_data(&registered)["issued_new_key"], true);
+    assert_eq!(
+        response_data(&registered)["route"],
+        json!({
+            "channel_type": "private", "route_revision": 1, "provider_token_present": false
+        })
+    );
+    let (status, subscribed) = post_json(
+        app.clone(),
+        "/channel/subscribe",
+        json!({
+            "device_key": device_key, "channel_name": "route-snapshot-channel", "password": material
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let channel_id = response_string_field(&subscribed, "channel_id").to_string();
+    for channel_type in ["fcm", "private"] {
+        let mut request =
+            json!({"device_key": device_key, "platform": "android", "channel_type": channel_type});
+        if channel_type == "fcm" {
+            request["provider_token"] = json!(provider_material);
+        }
+        let (status, switched) = post_json(app.clone(), "/channel/device", request).await;
+        assert_eq!(status, StatusCode::OK);
+        let revision = response_data(&switched)["route_revision"].as_i64().unwrap();
+        let expected = json!({"channel_type": channel_type, "route_revision": revision,
+            "provider_token_present": channel_type == "fcm"});
+        let (status, same_device) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({
+                "device_key": device_key, "platform": "android"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_string_field(&same_device, "device_key"),
+            device_key
+        );
+        assert_eq!(response_data(&same_device)["issued_new_key"], false);
+        assert_eq!(response_data(&same_device)["route"], expected);
+        assert_eq!(
+            response_data(&same_device)["route_revision"].as_i64(),
+            Some(revision)
+        );
+        let (status, synchronized) = post_json(app.clone(), "/channel/sync", json!({
+            "device_key": device_key, "channels": [{"channel_id": channel_id, "password": material}]
+        })).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_string_field(&synchronized, "device_key"),
+            device_key
+        );
+        let synced_route = state
+            .store
+            .active_device_route_snapshot(&device_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response_data(&synchronized)["route"],
+            json!({
+                "channel_type": channel_type, "route_revision": synced_route.route_revision,
+                "provider_token_present": channel_type == "fcm"
+            })
+        );
+        assert_eq!(synced_route.channel_type, channel_type);
+        assert_eq!(
+            synced_route.provider_token.as_deref(),
+            (channel_type == "fcm").then_some(provider_material.as_str())
+        );
+        assert_eq!(
+            synced_route.route_revision, revision,
+            "subscription sync must not rewrite the device route"
+        );
+        assert_eq!(response_data(&synchronized)["success"], 1);
+        assert_eq!(
+            response_data(&synchronized)["channels"][0]["subscribed"],
+            true
+        );
+        // Item-level errors still return the effective route for convergence.
+        let (status, failed_item) = post_json(app.clone(), "/channel/sync", json!({
+            "device_key": device_key, "channels": [{"channel_id": channel_id, "password": mismatched_material}]
+        })).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response_data(&failed_item)["failed"], 1);
+        let failed_sync_route = state
+            .store
+            .active_device_route_snapshot(&device_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response_data(&failed_item)["route"],
+            json!({
+                "channel_type": channel_type, "route_revision": failed_sync_route.route_revision,
+                "provider_token_present": channel_type == "fcm"
+            })
+        );
+        assert_eq!(failed_sync_route.channel_type, channel_type);
+        assert_eq!(failed_sync_route.route_revision, revision);
+        assert_eq!(
+            failed_sync_route.provider_token,
+            synced_route.provider_token
+        );
+        assert_eq!(
+            state
+                .device_registry
+                .get(&device_key)
+                .unwrap()
+                .channel_type
+                .as_str(),
+            channel_type
+        );
+    }
+}
+
 fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
     let mut data = hashbrown::HashMap::new();
     data.insert("delivery_id".to_string(), delivery_id.to_string());
@@ -17,6 +151,175 @@ fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
         data,
     })
     .expect("provider payload should encode")
+}
+
+#[tokio::test]
+async fn released_clients_keep_registration_sync_and_message_delivery_contracts() {
+    // Released Android/Apple v1.3.0 consume these fields and ignore additions.
+    #[derive(serde::Deserialize)]
+    struct LegacyRegistration {
+        device_key: String,
+        issued_new_key: bool,
+        issue_reason: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct LegacyRoute {
+        device_key: String,
+        channel_type: String,
+        provider_token: Option<String>,
+        issued_new_key: bool,
+        issue_reason: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct LegacySyncItem {
+        channel_id: String,
+        channel_name: Option<String>,
+        subscribed: bool,
+        created: bool,
+    }
+    #[derive(serde::Deserialize)]
+    struct LegacySync {
+        total: usize,
+        success: usize,
+        failed: usize,
+        channels: Vec<LegacySyncItem>,
+    }
+
+    for (platform, channel_type) in [("android", "fcm"), ("ios", "apns")] {
+        let state = build_test_state().await;
+        let app = super::super::build_router(state, "<html>docs</html>");
+        let material = format!("fixture-{}", rand::random::<u64>());
+        let provider_material = if platform == "ios" {
+            format!("{:064x}", rand::random::<u128>())
+        } else {
+            format!("provider-{}", rand::random::<u64>())
+        };
+        let (status, registration) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({"platform": platform}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let registered: LegacyRegistration =
+            serde_json::from_value(response_data(&registration).clone()).unwrap();
+        assert!(registered.issued_new_key);
+        assert_eq!(
+            registered.issue_reason.as_deref(),
+            Some("device_key_missing")
+        );
+        assert!(!registered.device_key.is_empty());
+        // No new route fields, revisions or operation IDs are sent by the old client.
+        let (status, response) = post_json(
+            app.clone(),
+            "/channel/device",
+            json!({
+                "device_key": registered.device_key, "platform": platform,
+                "channel_type": channel_type, "provider_token": provider_material
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let route: LegacyRoute = serde_json::from_value(response_data(&response).clone()).unwrap();
+        assert_eq!(route.device_key, registered.device_key);
+        assert_eq!(route.channel_type, channel_type);
+        assert_eq!(
+            route.provider_token.as_deref(),
+            Some(provider_material.as_str())
+        );
+        assert!(!route.issued_new_key);
+        assert!(route.issue_reason.is_none());
+        let (status, response) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({
+                "device_key": route.device_key, "platform": platform
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let same: LegacyRegistration =
+            serde_json::from_value(response_data(&response).clone()).unwrap();
+        assert_eq!(same.device_key, route.device_key);
+        assert!(!same.issued_new_key);
+        assert!(same.issue_reason.is_none());
+        let channel_name = format!("released-client-{platform}");
+        let (status, subscription) = post_json(
+            app.clone(),
+            "/channel/subscribe",
+            json!({
+                "device_key": route.device_key, "channel_name": channel_name, "password": material
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let channel_id = response_string_field(&subscription, "channel_id").to_string();
+        let (status, response) = post_json(app.clone(), "/channel/sync", json!({
+            "device_key": route.device_key, "channels": [{"channel_id": channel_id, "password": material}]
+        })).await;
+        assert_eq!(status, StatusCode::OK);
+        let sync: LegacySync = serde_json::from_value(response_data(&response).clone()).unwrap();
+        assert_eq!((sync.total, sync.success, sync.failed), (1, 1, 0));
+        assert_eq!(sync.channels.len(), 1);
+        assert_eq!(sync.channels[0].channel_id, channel_id);
+        assert_eq!(
+            sync.channels[0].channel_name.as_deref(),
+            Some(channel_name.as_str())
+        );
+        assert!(sync.channels[0].subscribed);
+        assert!(!sync.channels[0].created);
+        let title = format!("released-client-message-{platform}");
+        let body = format!("exact-body-{platform}");
+        let (status, accepted) = post_json(
+            app.clone(),
+            "/message",
+            json!({
+                "channel_id": channel_id, "password": material, "title": title, "body": body
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let operation = response_string_field(&accepted, "op_id");
+        let (status, pulled) = post_json(
+            app.clone(),
+            "/v2/messages/pull",
+            json!({"device_key": route.device_key}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let items = response_data(&pulled)["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["payload"]["op_id"], operation);
+        assert_eq!(items[0]["payload"]["title"], title);
+        assert_eq!(items[0]["payload"]["body"], body);
+        assert_eq!(items[0]["payload"]["channel_id"], channel_id);
+        let delivery_id = items[0]["delivery_id"].as_str().unwrap();
+        assert!(!delivery_id.is_empty());
+        let (status, acked) = post_json(
+            app.clone(),
+            "/v2/messages/ack",
+            json!({
+                "device_key": route.device_key, "delivery_ids": [delivery_id]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response_data(&acked)["requested_count"], 1);
+        assert_eq!(response_data(&acked)["removed_count"], 1);
+        let (status, drained) = post_json(
+            app,
+            "/v2/messages/pull",
+            json!({"device_key": route.device_key}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            response_data(&drained)["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 async fn seed_private_pending_delivery(
@@ -1079,635 +1382,6 @@ async fn idempotent_route_upsert_reconciles_a_stale_process_cache() {
         .expect("route should remain present");
     assert_eq!(persisted.channel_type, Platform::ANDROID.channel_type());
     assert_eq!(persisted.provider_token.as_deref(), Some(provider_token));
-}
-
-#[tokio::test]
-async fn route_transition_prepare_has_no_active_route_or_queue_side_effects() {
-    let state = build_test_state().await;
-    let app = super::super::build_router(state.clone(), "<html>docs</html>");
-    let (_status, register) = post_json(
-        app.clone(),
-        "/device/register",
-        json!({ "platform": "android" }),
-    )
-    .await;
-    let device_key = response_string_field(&register, "device_key").to_string();
-    let revision = response_data(&register)
-        .get("route_revision")
-        .and_then(Value::as_i64)
-        .expect("register should return route revision");
-    seed_private_pending_delivery(&state, &device_key, "prepare-no-effect", "queued").await;
-
-    let (status, prepared) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({
-            "operation_id": "prepare-no-effect-op",
-            "device_key": device_key,
-            "platform": "android",
-            "expected_route_revision": revision,
-            "candidate": {
-                "channel_type": "fcm",
-                "provider_token": "prepare-no-effect-provider-token"
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "prepare response: {prepared:?}");
-    assert_eq!(
-        state
-            .device_registry
-            .get(&device_key)
-            .expect("registry route should remain")
-            .channel_type,
-        crate::routing::DeviceChannelType::Private
-    );
-    assert_eq!(
-        state
-            .store
-            .list_private_outbox(derive_private_device_id(&device_key), 10)
-            .await
-            .expect("private queue should remain")
-            .len(),
-        1,
-        "prepare must not migrate pending work"
-    );
-    let persisted = state
-        .store
-        .load_device_routes()
-        .await
-        .expect("routes should load")
-        .into_iter()
-        .find(|route| route.device_key == device_key)
-        .expect("route should exist");
-    assert_eq!(persisted.channel_type, "private");
-
-    let transition_id = response_string_field(&prepared, "transition_id");
-    let (status, queried) = post_json(
-        app,
-        "/v2/channel/device/transition/query",
-        json!({ "transition_id": transition_id }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "query response: {queried:?}");
-    assert_eq!(response_string_field(&queried, "state"), "prepared");
-    assert_eq!(
-        response_data(&queried)
-            .get("route_revision")
-            .and_then(Value::as_i64),
-        Some(revision)
-    );
-    assert_eq!(response_string_field(&queried, "channel_type"), "private");
-    assert!(
-        response_data(&queried).get("provider_token").is_none(),
-        "query must not disclose the candidate token"
-    );
-}
-
-#[tokio::test]
-async fn concurrent_identical_route_transition_prepare_converges_on_one_operation() {
-    let state = build_test_state().await;
-    let app = super::super::build_router(state, "<html>docs</html>");
-    let (_status, register) = post_json(
-        app.clone(),
-        "/device/register",
-        json!({ "platform": "android" }),
-    )
-    .await;
-    let device_key = response_string_field(&register, "device_key").to_string();
-    let revision = response_data(&register)
-        .get("route_revision")
-        .and_then(Value::as_i64)
-        .expect("register revision");
-    let payload = json!({
-        "operation_id": "concurrent-identical-prepare-op",
-        "device_key": device_key,
-        "platform": "android",
-        "expected_route_revision": revision,
-        "candidate": {
-            "channel_type": "fcm",
-            "provider_token": "concurrent-identical-provider-token"
-        }
-    });
-    let (left, right) = tokio::join!(
-        post_json(
-            app.clone(),
-            "/v2/channel/device/transition/prepare",
-            payload.clone()
-        ),
-        post_json(app, "/v2/channel/device/transition/prepare", payload)
-    );
-    assert_eq!(left.0, StatusCode::OK, "left prepare: {:?}", left.1);
-    assert_eq!(right.0, StatusCode::OK, "right prepare: {:?}", right.1);
-    assert_eq!(
-        response_string_field(&left.1, "transition_id"),
-        response_string_field(&right.1, "transition_id"),
-        "concurrent exact retries must converge on the unique operation winner"
-    );
-}
-
-#[tokio::test]
-async fn route_transition_commit_migrates_once_and_is_idempotent() {
-    let state = build_test_state().await;
-    let app = super::super::build_router(state.clone(), "<html>docs</html>");
-    let (_status, register) = post_json(
-        app.clone(),
-        "/device/register",
-        json!({ "platform": "android" }),
-    )
-    .await;
-    let device_key = response_string_field(&register, "device_key").to_string();
-    let revision = response_data(&register)
-        .get("route_revision")
-        .and_then(Value::as_i64)
-        .expect("register revision");
-    seed_private_pending_delivery(&state, &device_key, "commit-once", "queued").await;
-    let (status, prepared) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({
-            "operation_id": "commit-once-op",
-            "device_key": device_key,
-            "platform": "android",
-            "expected_route_revision": revision,
-            "candidate": {"channel_type": "fcm", "provider_token": "commit-once-provider-token"}
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "prepare: {prepared:?}");
-    let transition_id = response_string_field(&prepared, "transition_id").to_string();
-    let commit_request = json!({
-        "transition_id": transition_id,
-        "operation_id": "commit-once-op"
-    });
-    let (status, first) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/commit",
-        commit_request.clone(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "first commit: {first:?}");
-    assert_eq!(response_string_field(&first, "state"), "committed");
-    assert_eq!(
-        response_data(&first)
-            .get("migrated_pending_count")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        state
-            .store
-            .list_private_outbox(derive_private_device_id(&device_key), 10)
-            .await
-            .expect("private outbox should load")
-            .len(),
-        0
-    );
-    assert!(
-        state
-            .store
-            .pull_provider_item(
-                derive_private_device_id(&device_key),
-                "commit-once",
-                chrono::Utc::now().timestamp_millis(),
-            )
-            .await
-            .expect("provider item lookup should succeed")
-            .is_some()
-    );
-    let (status, replayed_prepare) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({
-            "operation_id": "commit-once-op",
-            "device_key": device_key,
-            "platform": "android",
-            "expected_route_revision": revision,
-            "candidate": {"channel_type": "fcm", "provider_token": "commit-once-provider-token"}
-        }),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "exact prepare replay after commit must converge: {replayed_prepare:?}"
-    );
-    assert_eq!(
-        response_string_field(&replayed_prepare, "state"),
-        "committed"
-    );
-    assert_eq!(
-        response_string_field(&replayed_prepare, "transition_id"),
-        transition_id
-    );
-    let (status, conflicting_replay) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({
-            "operation_id": "commit-once-op",
-            "device_key": device_key,
-            "platform": "android",
-            "expected_route_revision": revision,
-            "candidate": {"channel_type": "private"}
-        }),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::CONFLICT,
-        "same operation with different payload must stay sensitive: {conflicting_replay:?}"
-    );
-    assert_eq!(
-        conflicting_replay.get("error_code").and_then(Value::as_str),
-        Some("route_transition_operation_conflict")
-    );
-    let (status, second) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/commit",
-        commit_request.clone(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "repeat commit: {second:?}");
-    assert_eq!(response_data(&first), response_data(&second));
-
-    let (status, queried) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/query",
-        json!({ "transition_id": transition_id }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "committed query: {queried:?}");
-    assert_eq!(response_string_field(&queried, "state"), "committed");
-    assert_eq!(response_string_field(&queried, "channel_type"), "fcm");
-    assert_eq!(
-        response_string_field(&queried, "current_provider_token_sha256"),
-        "8e11247bf62c4b61e61d19feecfeb3d15e751a885ca70ba0ee0df55c19ead0b0"
-    );
-    assert_eq!(
-        response_string_field(&queried, "candidate_channel_type"),
-        "fcm"
-    );
-    assert_eq!(
-        response_data(&queried)
-            .get("committed_revision")
-            .and_then(Value::as_i64),
-        response_data(&first)
-            .get("route_revision")
-            .and_then(Value::as_i64)
-    );
-    assert_eq!(
-        response_data(&queried)
-            .get("route_revision")
-            .and_then(Value::as_i64),
-        response_data(&first)
-            .get("route_revision")
-            .and_then(Value::as_i64)
-    );
-
-    let first_committed_revision = response_data(&first)
-        .get("route_revision")
-        .and_then(Value::as_i64)
-        .expect("first committed revision");
-    let (status, superseding_prepare) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({
-            "operation_id": "superseding-private-op",
-            "device_key": device_key,
-            "platform": "android",
-            "expected_route_revision": first_committed_revision,
-            "candidate": {"channel_type": "private"}
-        }),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "superseding prepare: {superseding_prepare:?}"
-    );
-    let (status, superseding_commit) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/commit",
-        json!({
-            "transition_id": response_string_field(&superseding_prepare, "transition_id"),
-            "operation_id": "superseding-private-op"
-        }),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "superseding commit: {superseding_commit:?}"
-    );
-    let superseding_revision = response_data(&superseding_commit)
-        .get("route_revision")
-        .and_then(Value::as_i64)
-        .expect("superseding revision");
-    assert!(superseding_revision > first_committed_revision);
-
-    // A delayed retry belongs to the old operation. Its receipt is stable,
-    // but it must not replace the newer active route in the in-memory registry.
-    let (status, replayed) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/commit",
-        commit_request,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "superseded replay: {replayed:?}");
-    assert_eq!(response_data(&replayed), response_data(&first));
-    let active = state
-        .device_registry
-        .get(&device_key)
-        .expect("active route");
-    assert_eq!(
-        active.channel_type,
-        crate::routing::DeviceChannelType::Private
-    );
-    assert_eq!(active.provider_token, None);
-
-    let (status, superseded_query) = post_json(
-        app,
-        "/v2/channel/device/transition/query",
-        json!({ "transition_id": transition_id }),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "superseded query: {superseded_query:?}"
-    );
-    assert_eq!(
-        response_data(&superseded_query)
-            .get("committed_revision")
-            .and_then(Value::as_i64),
-        Some(first_committed_revision)
-    );
-    assert_eq!(
-        response_string_field(&superseded_query, "candidate_channel_type"),
-        "fcm"
-    );
-    assert_eq!(
-        response_data(&superseded_query)
-            .get("route_revision")
-            .and_then(Value::as_i64),
-        Some(superseding_revision)
-    );
-    assert_eq!(
-        response_string_field(&superseded_query, "channel_type"),
-        "private"
-    );
-    assert!(response_data(&superseded_query)["current_provider_token_sha256"].is_null());
-}
-
-#[tokio::test]
-async fn route_transition_token_takeover_retires_previous_device_in_memory() {
-    let state = build_test_state().await;
-    let app = super::super::build_router(state.clone(), "<html>docs</html>");
-    let (_, first) = post_json(
-        app.clone(),
-        "/device/register",
-        json!({"platform": "android"}),
-    )
-    .await;
-    let old_key = response_string_field(&first, "device_key").to_string();
-    let token = "route-transition-token-takeover";
-    let (status, original_prepare) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({"operation_id": "original-op", "device_key": old_key, "platform": "android",
-            "expected_route_revision": response_data(&first)["route_revision"],
-            "candidate": {"channel_type": "fcm", "provider_token": token}}),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "first prepare: {original_prepare:?}"
-    );
-    let original_commit_request = json!({
-        "transition_id": response_string_field(&original_prepare, "transition_id"),
-        "operation_id": "original-op"
-    });
-    let (status, original_commit) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/commit",
-        original_commit_request.clone(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "first commit: {original_commit:?}");
-
-    let (_, second) = post_json(
-        app.clone(),
-        "/device/register",
-        json!({"platform": "android"}),
-    )
-    .await;
-    let new_key = response_string_field(&second, "device_key").to_string();
-    let revision = response_data(&second)["route_revision"]
-        .as_i64()
-        .expect("route revision");
-    let (status, prepared) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({"operation_id": "takeover-op", "device_key": new_key, "platform": "android", "expected_route_revision": revision,
-            "candidate": {"channel_type": "fcm", "provider_token": token}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "prepare: {prepared:?}");
-    let (status, committed) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/commit",
-        json!({"transition_id": response_string_field(&prepared, "transition_id"), "operation_id": "takeover-op"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "commit: {committed:?}");
-    assert!(
-        state
-            .store
-            .current_device_route_revision(&old_key)
-            .await
-            .expect("old route lookup")
-            .is_none()
-    );
-    assert!(
-        state.device_registry.get(&old_key).is_none(),
-        "coalesced identity must not survive in memory"
-    );
-    assert_eq!(
-        state
-            .device_registry
-            .resolve_provider_ingress_route(Platform::ANDROID, token)
-            .as_deref(),
-        Some(new_key.as_str())
-    );
-    let (status, replay) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/commit",
-        original_commit_request,
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "retired identity receipt: {replay:?}"
-    );
-    assert_eq!(response_data(&replay), response_data(&original_commit));
-    let (status, queried) = post_json(
-        app,
-        "/v2/channel/device/transition/query",
-        json!({"transition_id": response_string_field(&original_prepare, "transition_id")}),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "retired identity query: {queried:?}"
-    );
-    assert!(response_data(&queried)["route_revision"].is_null());
-    assert!(response_data(&queried)["channel_type"].is_null());
-    assert_eq!(response_string_field(&queried, "state"), "committed");
-}
-
-#[tokio::test]
-async fn route_transition_commit_rejects_stale_revision_without_registry_pollution() {
-    let state = build_test_state().await;
-    let app = super::super::build_router(state.clone(), "<html>docs</html>");
-    let (_status, register) = post_json(
-        app.clone(),
-        "/device/register",
-        json!({ "platform": "android" }),
-    )
-    .await;
-    let device_key = response_string_field(&register, "device_key").to_string();
-    let revision = response_data(&register)
-        .get("route_revision")
-        .and_then(Value::as_i64)
-        .expect("register revision");
-    let (status, prepared) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({
-            "operation_id": "stale-commit-op",
-            "device_key": device_key,
-            "platform": "android",
-            "expected_route_revision": revision,
-            "candidate": {"channel_type": "fcm", "provider_token": "stale-commit-provider-token"}
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "prepare: {prepared:?}");
-    state
-        .store
-        .persist_device_route_change(&DeviceRouteRecordRow {
-            device_key: device_key.clone(),
-            platform: "android".to_string(),
-            channel_type: "private".to_string(),
-            provider_token: None,
-            updated_at: chrono::Utc::now().timestamp_millis().saturating_add(1),
-        })
-        .await
-        .expect("concurrent route write should succeed");
-
-    let (status, body) = post_json(
-        app,
-        "/v2/channel/device/transition/commit",
-        json!({
-            "transition_id": response_string_field(&prepared, "transition_id"),
-            "operation_id": "stale-commit-op"
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT, "stale commit: {body:?}");
-    assert_eq!(
-        body.get("error_code").and_then(Value::as_str),
-        Some("route_transition_revision_conflict")
-    );
-    assert_eq!(
-        state
-            .device_registry
-            .get(&device_key)
-            .expect("registry route should remain")
-            .channel_type,
-        crate::routing::DeviceChannelType::Private
-    );
-}
-
-#[tokio::test]
-async fn provider_token_retirement_advances_route_revision_and_invalidates_prepared_transition() {
-    let state = build_test_state().await;
-    let app = super::super::build_router(state.clone(), "<html>docs</html>");
-    let (_, registered) = post_json(
-        app.clone(),
-        "/device/register",
-        json!({"platform": "android"}),
-    )
-    .await;
-    let device_key = response_string_field(&registered, "device_key").to_string();
-    let provider_token = "retire-revision-provider-token";
-    let (status, active) = post_json(
-        app.clone(),
-        "/channel/device",
-        json!({"device_key": device_key, "platform": "android", "channel_type": "fcm", "provider_token": provider_token}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "provider route: {active:?}");
-    let base_revision = response_data(&active)["route_revision"]
-        .as_i64()
-        .expect("active route revision");
-    let (status, prepared) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/prepare",
-        json!({"operation_id": "retire-revision-operation", "device_key": device_key,
-            "platform": "android", "expected_route_revision": base_revision,
-            "candidate": {"channel_type": "private"}}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "prepare: {prepared:?}");
-
-    // A second gateway process can retire a provider token without this
-    // process's registry owner. The durable route revision must still fence an
-    // already-prepared transition.
-    state
-        .store
-        .retire_provider_token(Platform::ANDROID, provider_token)
-        .await
-        .expect("durable provider token retire");
-    state
-        .device_registry
-        .retire_provider_token(Platform::ANDROID, provider_token);
-    assert_eq!(
-        state
-            .store
-            .current_device_route_revision(&device_key)
-            .await
-            .expect("retired route revision"),
-        Some(base_revision + 1)
-    );
-    let (status, queried) = post_json(
-        app.clone(),
-        "/v2/channel/device/transition/query",
-        json!({"transition_id": response_string_field(&prepared, "transition_id")}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "query: {queried:?}");
-    assert_eq!(
-        response_data(&queried)["route_revision"].as_i64(),
-        Some(base_revision + 1)
-    );
-    assert_eq!(response_string_field(&queried, "channel_type"), "private");
-    assert!(response_data(&queried)["current_provider_token_sha256"].is_null());
-    let (status, body) = post_json(
-        app,
-        "/v2/channel/device/transition/commit",
-        json!({"transition_id": response_string_field(&prepared, "transition_id"),
-            "operation_id": "retire-revision-operation"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT, "stale commit: {body:?}");
-    assert_eq!(
-        body.get("error_code").and_then(Value::as_str),
-        Some("route_transition_revision_conflict")
-    );
 }
 
 #[tokio::test]
