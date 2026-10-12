@@ -8,7 +8,7 @@ use crate::{
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
     services::record_route_activity_for_device_key,
-    storage::{DeviceRouteRecordRow, StoreError},
+    storage::StoreError,
     value::DeviceKeyRef,
 };
 
@@ -66,23 +66,6 @@ pub(crate) async fn channel_sync(
                 ));
             }
         };
-        state
-            .store
-            .upsert_device_route(&DeviceRouteRecordRow::from_registry_record(
-                device_key.as_str(),
-                &route,
-            ))
-            .await
-            .map_err(|err| {
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::WARN,
-                    event = "channel.sync_route_upsert_failed",
-                    device_key = %(crate::util::redact_text(device_key.as_str())),
-                    error = %(err.to_string())
-                );
-                Error::Internal(err.to_string())
-            })?;
         let mut channels = Vec::with_capacity(payload.channels.len());
         let mut desired_channels = HashSet::with_capacity(payload.channels.len());
         let mut success = 0usize;
@@ -221,6 +204,13 @@ pub(crate) async fn channel_sync(
         );
 
         Ok(crate::api::ok(ChannelSyncResponse {
+            device_key: device_key.as_str().to_string(),
+            route: state
+                .store
+                .active_device_route_snapshot(device_key.as_str())
+                .await?
+                .ok_or(StoreError::DeviceNotFound)?
+                .into(),
             total: channels.len(),
             success,
             failed,

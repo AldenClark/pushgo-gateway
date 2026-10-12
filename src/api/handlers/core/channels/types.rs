@@ -6,6 +6,8 @@ use crate::{
     app::AppState,
 };
 
+use super::super::device_channels::DeviceRouteResponse;
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChannelSyncRequest {
     pub(super) device_key: String,
@@ -20,6 +22,8 @@ pub(super) struct ChannelSyncItem {
 
 #[derive(Debug, Serialize)]
 pub(super) struct ChannelSyncResponse {
+    pub(super) device_key: String,
+    pub(super) route: DeviceRouteResponse,
     pub(super) total: usize,
     pub(super) success: usize,
     pub(super) failed: usize,
