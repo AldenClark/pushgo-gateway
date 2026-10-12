@@ -42,7 +42,7 @@ jobs:
       - name: Test route transitions on real PostgreSQL and MySQL
         env:
           PUSHGO_REQUIRE_EXTERNAL_DB_TESTS: "1"
-        run: cargo test --locked --lib route_transition_external_ -- --nocapture --test-threads=1
+        run: cargo test --locked --lib atomic_route_switch_external_ -- --nocapture --test-threads=1
 
   release-preflight:
     if: github.event_name == 'pull_request' && github.event.action != 'labeled'

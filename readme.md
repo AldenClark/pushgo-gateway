@@ -446,6 +446,16 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 - `POST /messages/ack` remains the legacy single-item contract `{device_key, delivery_id}`. `POST /v2/messages/ack` is the separate batch contract `{device_key, delivery_ids}` with at most 200 unique IDs and returns both `requested_count` and `removed_count`.
 - `provider_queued` means the operation has entered this Gateway process's in-memory Provider worker queue; it is not Provider success. `sent/provider_success` or `partially_failed/provider_failed` is persisted only after the worker receives the actual Provider result.
 
+## Device routing authority
+
+`POST /device/register` and `POST /channel/sync` return the current durable route in `data.route`: `{channel_type, route_revision, provider_token_present}`. Channel synchronization also returns `data.device_key`; registration retains its existing top-level `route_revision` and `issued_new_key` fields. These additive fields do not expose the Provider token. A newly issued identity starts with the default Private route; clients may initialize their chosen mode through the existing write endpoint. For an existing identity, clients apply the server route before token reporting and receiver startup.
+
+`POST /channel/device` remains the single explicit route switch. Its transaction moves pending deliveries together with the route; a Provider-to-Private capacity rejection leaves both unchanged. Registration and channel synchronization do not select a new mode. After a timeout, clients confirm the actual route through normal registration/synchronization, and repair local settings toward that result. This is eventual convergence, not a promise to undo every timed-out request.
+
+The unpublished `route_transition_v2` capability and its prepare/commit/abort/query endpoints have been retired. Startup removes only their obsolete operation ledger; routes, channel subscriptions and pending message queues are retained. Do not mix an old V2-enabled Gateway process with this build against the same database. The route-authority contract is additive for clients using the existing endpoints; legacy servers without `data.route` still require the client's legacy compatibility path.
+
+Released Gateway v1.3.2 has the same SQLite schema/startup definitions and no operation ledger, so this cleanup is a no-op for its database. Released Android/Apple v1.3.0 use the retained existing paths and response fields; they do not use the removed route V2 protocol. See the bounded historical-shape and data-preserving upgrade evidence in [release smoke](docs/release-smoke.md).
+
 ## Upgrade Notes for v1.2.11
 
 1. Back up the database before the first start after upgrade. Legacy runtime schema versions may trigger a runtime-table hard reset; channel/base data is preserved by migration tests, but runtime queues and deprecated observability rows can be rebuilt or dropped.
@@ -873,6 +883,16 @@ container run -d --name pushgo-gateway \
 - `items[].delivery_id` 外层字段是唯一权威 ID。缺失或冲突的内层 ID 视为损坏数据，只按外层 ID 静默删除。
 - `POST /messages/ack` 保持 legacy 单条合同 `{device_key, delivery_id}`；独立的 `POST /v2/messages/ack` 才接受 `{device_key, delivery_ids}`，最多 200 个去重 ID，并同时返回 `requested_count` 与 `removed_count`。
 - `provider_queued` 只表示操作已进入当前 Gateway 进程的 Provider worker 内存队列，不代表 Provider 成功；worker 获得真实结果后才持久化 `sent/provider_success` 或 `partially_failed/provider_failed`。
+
+## 设备路由以服务端为准
+
+`POST /device/register` 与 `POST /channel/sync` 在 `data.route` 中返回实际持久路由：`{channel_type, route_revision, provider_token_present}`，不返回 Provider token 明文。频道同步还返回 `data.device_key`；注册保留原有 `route_revision`、`issued_new_key` 字段。新设备默认 Private，可通过现有写接口初始化通知方式；已有设备先应用服务端路由，再上报 token、启动接收服务。
+
+`POST /channel/device` 继续作为单次明确切换入口，路由与待投递消息在同一事务中迁移；Provider 转 Private 容量不足时，旧路由和队列均保持不变。注册和频道同步不重新选择通知方式。请求超时后，通过正常注册或同步确认远端结果，本地设置向该结果收敛，不保证将每个超时请求回滚。
+
+尚未正式发布的 `route_transition_v2` 能力及 prepare/commit/abort/query 接口已移除。启动只清理其废弃操作台账，保留路由、订阅和待投递消息；不要让旧 V2 网关与此版本共用同一数据库运行。现有接口新增响应字段向后兼容；旧服务端未返回 `data.route` 时，客户端仍使用旧服务兼容分支。
+
+正式 Gateway v1.3.2 的 SQLite 表结构和启动定义保持一致，且不存在该操作台账，因此此清理对其数据库无实际删除动作。正式 Android/Apple v1.3.0 使用保留的旧接口与响应字段，不依赖已删除的路由 V2 协议。旧请求形状与保留数据的定点升级证据见[发布冒烟记录](docs/release-smoke.md)。
 
 ## v1.2.11 升级说明
 

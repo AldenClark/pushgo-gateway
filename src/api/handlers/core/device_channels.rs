@@ -7,7 +7,7 @@ use crate::{
     app::AppState,
     routing::{DeviceChannelType, DeviceRouteRecord, derive_private_device_id},
     services::{DeviceRegisterCommand, ensure_device_registered},
-    storage::{DeviceRouteRecordRow, Platform, RouteChannelType, StoreError},
+    storage::{DeviceRouteRecordRow, DeviceRouteSnapshot, Platform, RouteChannelType, StoreError},
     value::{DeviceKeyRef, ProviderTokenRef},
 };
 
@@ -49,6 +49,25 @@ pub(super) struct DeviceRegisterResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_reason: Option<String>,
     pub route_revision: i64,
+    pub route: DeviceRouteResponse,
+}
+
+/// Current durable routing, without exposing the provider credential.
+#[derive(Debug, Serialize)]
+pub(super) struct DeviceRouteResponse {
+    pub channel_type: String,
+    pub route_revision: i64,
+    pub provider_token_present: bool,
+}
+
+impl From<DeviceRouteSnapshot> for DeviceRouteResponse {
+    fn from(snapshot: DeviceRouteSnapshot) -> Self {
+        Self {
+            channel_type: snapshot.channel_type,
+            route_revision: snapshot.route_revision,
+            provider_token_present: snapshot.provider_token.is_some(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -580,16 +599,17 @@ pub(crate) async fn device_register(
         },
     )
     .await?;
-    let route_revision = state
+    let route = state
         .store
-        .current_device_route_revision(&resolved.device_key)
+        .active_device_route_snapshot(&resolved.device_key)
         .await?
         .ok_or(StoreError::DeviceNotFound)?;
     Ok(crate::api::ok(DeviceRegisterResponse {
         device_key: resolved.device_key,
         issued_new_key: resolved.issued_new_key,
         issue_reason: resolved.issue_reason.map(ToString::to_string),
-        route_revision,
+        route_revision: route.route_revision,
+        route: route.into(),
     }))
 }
 
