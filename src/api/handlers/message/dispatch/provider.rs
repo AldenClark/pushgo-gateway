@@ -163,14 +163,38 @@ async fn prepare_apns_provider_payload(
         payloads.apns_payload.clone()
     }
     .ok_or(Error::Internal("missing APNs payload".to_string()))?;
-    let direct_data =
+    let mut direct_data =
         direct_data_with_provider_ack_source(prepared.custom_data.as_ref(), &target.device_key);
+    Arc::make_mut(&mut direct_data).remove(crate::providers::apns::WATCH_ALERT_DEADLINE_KEY);
+    if target.device.platform == Platform::WATCHOS {
+        Arc::make_mut(&mut direct_data).insert("sent_at".to_string(), prepared.sent_at.to_string());
+    }
     let direct_data = if target.device.platform == Platform::WATCHOS {
         SharedStringMap::from(quantize_watch_payload(direct_data.as_ref()))
     } else {
         SharedStringMap::from(direct_data)
     };
-    let direct_payload = Arc::new(direct_template.with_data(direct_data));
+    let watch_deadline = if target.device.platform == Platform::WATCHOS {
+        let minutes = prepared
+            .runtime
+            .storage()
+            .watch_alert_window_minutes(&target.device_key)
+            .await?;
+        // Invalid/overflow acceptance suppresses the reminder in the worker.
+        Some(crate::providers::apns::watch_alert_deadline(prepared.sent_at, minutes).unwrap_or(-1))
+    } else {
+        None
+    };
+    let direct = direct_template.with_data(direct_data);
+    let direct_payload = Arc::new(match watch_deadline {
+        Some(deadline) => direct.with_watch_alert_deadline(deadline),
+        None => direct,
+    });
+    let mut wakeup_data = target.wakeup_data_for_device.as_ref().clone();
+    wakeup_data.remove(crate::providers::apns::WATCH_ALERT_DEADLINE_KEY);
+    if target.device.platform == Platform::WATCHOS {
+        wakeup_data.insert("sent_at".to_string(), prepared.sent_at.to_string());
+    }
     let wakeup_payload = Arc::new(ApnsPayload::wakeup(
         payloads.apns_wakeup_title.clone(),
         payloads.apns_wakeup_body.clone(),
@@ -178,8 +202,12 @@ async fn prepare_apns_provider_payload(
         prepared
             .effective_ttl
             .map(crate::providers::apns::ApnsExpirationEpochSeconds::from_epoch_millis),
-        SharedStringMap::from(Arc::clone(&target.wakeup_data_for_device)),
+        SharedStringMap::from(wakeup_data),
     ));
+    let wakeup_payload = match watch_deadline {
+        Some(deadline) => Arc::new(wakeup_payload.with_watch_alert_deadline(deadline)),
+        None => wakeup_payload,
+    };
     prepare_core_provider_payload(
         prepared,
         target,

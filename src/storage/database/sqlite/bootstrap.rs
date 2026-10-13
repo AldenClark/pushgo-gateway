@@ -22,7 +22,7 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const SQLITE_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER, route_revision INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER, route_revision INTEGER NOT NULL DEFAULT 0, watch_alert_window_minutes INTEGER NOT NULL DEFAULT 30)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BLOB NOT NULL, key_id INTEGER NOT NULL, key_hash BLOB NOT NULL, issued_at INTEGER NOT NULL, valid_until INTEGER, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id TEXT PRIMARY KEY, device_id BLOB NOT NULL, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, claim_generation INTEGER NOT NULL DEFAULT 0, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
@@ -400,6 +400,12 @@ impl SqliteDb {
             "devices",
             "route_updated_at",
             "ALTER TABLE devices ADD COLUMN route_updated_at INTEGER",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "devices",
+            "watch_alert_window_minutes",
+            "ALTER TABLE devices ADD COLUMN watch_alert_window_minutes INTEGER NOT NULL DEFAULT 30",
         )
         .await?;
         self.ensure_sqlite_column(
@@ -1765,6 +1771,7 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for SqliteDb
             ("private_outbox", "claim_generation"),
             ("devices", "provider_token"),
             ("devices", "route_revision"),
+            ("devices", "watch_alert_window_minutes"),
             ("private_bindings", "provider_token"),
             ("provider_pull_queue", "provider_token"),
         ] {

@@ -232,6 +232,13 @@ pub trait PrivateMessageDatabaseAccess: Send + Sync {
 
 #[async_trait]
 pub trait DeviceRouteDatabaseAccess: Send + Sync {
+    async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64>;
+    async fn set_watch_alert_window_minutes(
+        &self,
+        device_key: &str,
+        minutes: i64,
+    ) -> StoreResult<()>;
+
     async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>>;
     async fn active_device_route_snapshot(
         &self,

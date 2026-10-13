@@ -15,6 +15,8 @@ use super::shared::{platform_from_channel_type, platform_from_str};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct DeviceRegisterRequest {
+    #[serde(default)]
+    pub watch_alert_window_minutes: Option<i64>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub device_key: Option<String>,
     pub platform: String,
@@ -44,6 +46,8 @@ pub(crate) struct ProviderTokenRetireRequest {
 
 #[derive(Debug, Serialize)]
 pub(super) struct DeviceRegisterResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_alert_window_minutes: Option<i64>,
     pub device_key: String,
     pub issued_new_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -578,6 +582,15 @@ pub(crate) async fn device_register(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<DeviceRegisterRequest>,
 ) -> HttpResult {
+    let platform = payload.requested_platform()?;
+    if let Some(minutes) = payload.watch_alert_window_minutes
+        && (platform != Platform::WATCHOS || !matches!(minutes, 5 | 15 | 30 | 60))
+    {
+        return Err(Error::validation_code(
+            "invalid Watch alert window",
+            "invalid_watch_alert_window",
+        ));
+    }
     let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
     let requested_device_key = payload
         .device_key
@@ -599,12 +612,29 @@ pub(crate) async fn device_register(
         },
     )
     .await?;
+    if let Some(minutes) = payload.watch_alert_window_minutes {
+        state
+            .store
+            .set_watch_alert_window_minutes(&resolved.device_key, minutes)
+            .await?;
+    }
+    let watch_alert_window_minutes = if platform == Platform::WATCHOS {
+        Some(
+            state
+                .store
+                .watch_alert_window_minutes(&resolved.device_key)
+                .await?,
+        )
+    } else {
+        None
+    };
     let route = state
         .store
         .active_device_route_snapshot(&resolved.device_key)
         .await?
         .ok_or(StoreError::DeviceNotFound)?;
     Ok(crate::api::ok(DeviceRegisterResponse {
+        watch_alert_window_minutes,
         device_key: resolved.device_key,
         issued_new_key: resolved.issued_new_key,
         issue_reason: resolved.issue_reason.map(ToString::to_string),

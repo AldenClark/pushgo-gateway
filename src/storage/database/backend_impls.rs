@@ -431,6 +431,17 @@ macro_rules! impl_backend_device_route_access {
     ($backend:ty) => {
         #[async_trait]
         impl crate::storage::database::DeviceRouteDatabaseAccess for $backend {
+            async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
+                <$backend>::watch_alert_window_minutes(self, device_key).await
+            }
+            async fn set_watch_alert_window_minutes(
+                &self,
+                device_key: &str,
+                minutes: i64,
+            ) -> StoreResult<()> {
+                <$backend>::set_watch_alert_window_minutes(self, device_key, minutes).await
+            }
+
             async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>> {
                 <$backend>::load_device_routes(self).await
             }

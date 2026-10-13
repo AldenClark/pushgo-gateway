@@ -105,13 +105,14 @@ impl ApnsService {
             None => default_topic.to_string(),
         };
 
-        self.send_once(device_token, &topic, payload, collapse_id)
+        self.send_once(device_token, platform, &topic, payload, collapse_id)
             .await
     }
 
     async fn send_once(
         &self,
         device_token: &str,
+        platform: Platform,
         topic: &str,
         payload: Arc<ApnsPayload>,
         collapse_id: Option<Arc<str>>,
@@ -142,6 +143,14 @@ impl ApnsService {
             request = request.header("apns-expiration", expiration.to_string());
         }
 
+        // Credential acquisition may have crossed the frozen reminder cutoff.
+        // Recheck at the network boundary before starting a new Watch alert.
+        if platform == Platform::WATCHOS
+            && payload.push_type() == ApnsPushType::Alert
+            && !payload.watch_alert_is_current(chrono::Utc::now().timestamp_millis())
+        {
+            return DispatchResult::watch_alert_expired();
+        }
         let response = match request.body(body.as_ref().to_vec()).send().await {
             Ok(resp) => resp,
             Err(err) => return DispatchResult::transport(Error::Internal(err.to_string())),

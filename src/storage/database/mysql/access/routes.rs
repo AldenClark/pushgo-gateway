@@ -217,6 +217,26 @@ pub(in crate::storage::database::mysql) async fn coalesce_duplicate_provider_rou
 }
 
 impl MySqlDb {
+    pub(super) async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
+        let minutes: Option<i64> = sqlx::query_scalar("SELECT watch_alert_window_minutes FROM devices WHERE device_key = ? AND platform = 'watchos'")
+            .bind(device_key).fetch_optional(&self.pool).await?;
+        Ok(minutes
+            .filter(|value| matches!(value, 5 | 15 | 30 | 60))
+            .unwrap_or(30))
+    }
+    pub(super) async fn set_watch_alert_window_minutes(
+        &self,
+        device_key: &str,
+        minutes: i64,
+    ) -> StoreResult<()> {
+        if !matches!(minutes, 5 | 15 | 30 | 60) {
+            return Err(StoreError::InvalidPlatform);
+        }
+        sqlx::query("UPDATE devices SET watch_alert_window_minutes = ? WHERE device_key = ? AND platform = 'watchos'")
+            .bind(minutes).bind(device_key).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub(super) async fn provider_route_is_current(
         &self,
         device_key: &str,

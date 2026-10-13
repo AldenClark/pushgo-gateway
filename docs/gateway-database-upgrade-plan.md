@@ -49,3 +49,7 @@ printf '%s' "$PUSHGO_DB_URL" | shasum -a 256
 ## Release acceptance
 
 Before production rollout, run `scripts/preflight_release_audit.sh all` and `scripts/storage_crossdb_parity.sh`. The parity script creates and hashes small test-only artifacts for its ephemeral PostgreSQL/MySQL containers; those files are not production backup evidence.
+
+## Watch reminder setting
+
+`20261013_001_watch_alert_window` is an additive managed migration on the current v12 schema. It adds `devices.watch_alert_window_minutes` with default 30 on SQLite, PostgreSQL and MySQL, independently of provider route revisions. Existing v12 databases with no record for this migration receive a normal managed backfill with the required backup policy. Verification requires the column. Earlier binaries reject the unknown migration record; this change does not claim binary downgrade compatibility.

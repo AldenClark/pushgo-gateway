@@ -450,6 +450,9 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 
 `POST /device/register` and `POST /channel/sync` return the current durable route in `data.route`: `{channel_type, route_revision, provider_token_present}`. Channel synchronization also returns `data.device_key`; registration retains its existing top-level `route_revision` and `issued_new_key` fields. These additive fields do not expose the Provider token. A newly issued identity starts with the default Private route; clients may initialize their chosen mode through the existing write endpoint. For an existing identity, clients apply the server route before token reporting and receiver startup.
 
+Watch registration accepts `watch_alert_window_minutes` (5, 15, 30, or 60). It defaults to 30; omission on an existing Watch preserves its setting. The response reports the effective value for Watch only. Updating this setting does not change the route revision. Each newly materialized Watch delivery freezes its configured window against original Gateway acceptance `sent_at`, with `watch_alert_deadline_at` as an epoch-millisecond string in both direct and wakeup APNs snapshots. Existing queued jobs and retries retain that deadline. Older jobs without it use their durable acceptance plus 30 minutes. Invalid or future acceptance suppresses reminders. Expiry ends only provider reminder attempts; pull data, source retention, state updates, and client delivery ACK remain independent. Watch APNs expiration is bounded by the deadline and any earlier positive sender expiration; zero retains APNs do-not-store semantics. iPhone payload TTL is unchanged.
+
+
 `POST /channel/device` remains the single explicit route switch. Its transaction moves pending deliveries together with the route; a Provider-to-Private capacity rejection leaves both unchanged. Registration and channel synchronization do not select a new mode. After a timeout, clients confirm the actual route through normal registration/synchronization, and repair local settings toward that result. This is eventual convergence, not a promise to undo every timed-out request.
 
 The unpublished `route_transition_v2` capability and its prepare/commit/abort/query endpoints have been retired. Startup removes only their obsolete operation ledger; routes, channel subscriptions and pending message queues are retained. Do not mix an old V2-enabled Gateway process with this build against the same database. The route-authority contract is additive for clients using the existing endpoints; legacy servers without `data.route` still require the client's legacy compatibility path.
@@ -887,6 +890,9 @@ container run -d --name pushgo-gateway \
 ## 设备路由以服务端为准
 
 `POST /device/register` 与 `POST /channel/sync` 在 `data.route` 中返回实际持久路由：`{channel_type, route_revision, provider_token_present}`，不返回 Provider token 明文。频道同步还返回 `data.device_key`；注册保留原有 `route_revision`、`issued_new_key` 字段。新设备默认 Private，可通过现有写接口初始化通知方式；已有设备先应用服务端路由，再上报 token、启动接收服务。
+
+Watch 注册支持 `watch_alert_window_minutes`：5、15、30、60 分钟，默认 30；已有 Watch 省略字段时保留原设置，仅 Watch 响应返回有效值。更新设置不改变路由版本。每次新建 Watch 投递时，以 Gateway 原始接受时间 `sent_at` 加当时设置冻结截止时间，并在 direct/wakeup APNs 持久快照中写入毫秒时间戳字符串 `watch_alert_deadline_at`。已排队投递与重试不刷新；旧任务缺少字段时使用其持久接受时间加默认 30 分钟。无效或未来接受时间不触发提醒。过期只终止 Provider 提醒尝试，Pull、源数据保留、状态更新与客户端交付 ACK 独立处理。Watch 的 APNs expiration 取截止时间与发送方更早的正值中较早者；0 保留 APNs 不存储语义，iPhone 的 payload TTL 保持原行为。
+
 
 `POST /channel/device` 继续作为单次明确切换入口，路由与待投递消息在同一事务中迁移；Provider 转 Private 容量不足时，旧路由和队列均保持不变。注册和频道同步不重新选择通知方式。请求超时后，通过正常注册或同步确认远端结果，本地设置向该结果收敛，不保证将每个超时请求回滚。
 

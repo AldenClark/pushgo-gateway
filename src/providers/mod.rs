@@ -44,6 +44,16 @@ pub struct DispatchResult {
 }
 
 impl DispatchResult {
+    pub(crate) fn watch_alert_expired() -> Self {
+        Self {
+            success: false,
+            status_code: 0,
+            error: None,
+            failure_kind: Some(ProviderFailureKind::WatchAlertExpired),
+            retry_after_millis: None,
+        }
+    }
+
     pub(crate) fn success(status_code: u16) -> Self {
         Self {
             success: true,

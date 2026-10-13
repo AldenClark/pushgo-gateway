@@ -1573,3 +1573,220 @@ async fn provider_token_retirement_waits_for_route_switch_and_preserves_new_toke
         newer.provider_token
     );
 }
+
+#[tokio::test]
+async fn watch_alert_registration_defaults_preserves_updates_and_rejects_invalid_settings() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (status, first) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform":"watchos"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response_data(&first)["watch_alert_window_minutes"], 30);
+    let device_key = response_string_field(&first, "device_key").to_string();
+    let revision = response_data(&first)["route_revision"].clone();
+    for minutes in [5, 15, 30, 60] {
+        let (status, updated) = post_json(app.clone(), "/device/register", json!({"platform":"watchos", "device_key":device_key, "watch_alert_window_minutes":minutes})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_data(&updated)["watch_alert_window_minutes"],
+            minutes
+        );
+        assert_eq!(response_data(&updated)["route_revision"], revision);
+    }
+    let (_, preserved) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform":"watchos", "device_key":device_key}),
+    )
+    .await;
+    assert_eq!(response_data(&preserved)["watch_alert_window_minutes"], 60);
+    assert_eq!(
+        state
+            .store
+            .watch_alert_window_minutes(&device_key)
+            .await
+            .unwrap(),
+        60
+    );
+    for request in [
+        json!({"platform":"watchos", "device_key":device_key, "watch_alert_window_minutes":10}),
+        json!({"platform":"ios", "watch_alert_window_minutes":30}),
+    ] {
+        let (status, _) = post_json(app.clone(), "/device/register", request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn watch_alert_all_models_freeze_deadlines_and_preserve_phone_ttl() {
+    let (state, _receivers) = build_test_state_with_receivers().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let material = format!("watch-fixture-{}", rand::random::<u64>());
+    let mut watch_key = String::new();
+    let mut channel_id = String::new();
+    for (platform, provider_material) in [("watchos", "a".repeat(64)), ("ios", "b".repeat(64))] {
+        let (status, registered) = post_json(
+            app.clone(),
+            "/device/register",
+            json!({"platform":platform}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let key = response_string_field(&registered, "device_key").to_string();
+        let (status, _) = post_json(app.clone(), "/channel/device", json!({"device_key":key,"platform":platform,"channel_type":"apns","provider_token":provider_material})).await;
+        assert_eq!(status, StatusCode::OK);
+        let mut subscription = json!({"device_key":key,"password":material});
+        if channel_id.is_empty() {
+            subscription["channel_name"] = json!("watch-alert-contract");
+        } else {
+            subscription["channel_id"] = json!(channel_id);
+        }
+        let (status, subscribed) = post_json(app.clone(), "/channel/subscribe", subscription).await;
+        assert_eq!(status, StatusCode::OK);
+        channel_id = response_string_field(&subscribed, "channel_id").to_string();
+        if platform == "watchos" {
+            watch_key = key;
+        }
+    }
+    let sender_expiry = chrono::Utc::now().timestamp_millis() + 7_200_000;
+    for (path, fields) in [
+        (
+            "/message",
+            json!({"title":"Watch message","ttl":sender_expiry}),
+        ),
+        (
+            "/event/create",
+            json!({"title":"Watch event","status":"open","message":"body","event_time":1_700_000_000_000_i64}),
+        ),
+        (
+            "/thing/create",
+            json!({"title":"Watch thing","observed_at":1_700_000_000_000_i64}),
+        ),
+        ("/message", json!({"title":"later"})),
+    ] {
+        let minutes = if fields["title"] == "later" { 60 } else { 5 };
+        let mut request = fields;
+        request["channel_id"] = json!(channel_id);
+        request["password"] = json!(material);
+        state
+            .store
+            .set_watch_alert_window_minutes(&watch_key, minutes)
+            .await
+            .unwrap();
+        let (status, body) = post_json(app.clone(), path, request.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body:?}");
+        state
+            .store
+            .set_watch_alert_window_minutes(&watch_key, 60)
+            .await
+            .unwrap();
+        let mut observed_watch = false;
+        let mut observed_phone = false;
+        for _ in 0..2 {
+            let now = chrono::Utc::now().timestamp_millis();
+            let lease = state
+                .store
+                .claim_provider_dispatch_job("APNS", None, "watch-contract", now, now + 10_000)
+                .await
+                .unwrap()
+                .unwrap();
+            let durable: crate::dispatch::DurableProviderJob =
+                serde_json::from_slice(&lease.record.payload_blob).unwrap();
+            let job = durable.into_apns().unwrap();
+            for payload in [
+                job.direct_payload.as_ref(),
+                job.wakeup_payload.as_ref().unwrap().as_ref(),
+            ] {
+                let data = serde_json::to_value(payload).unwrap();
+                if job.platform == Platform::WATCHOS {
+                    observed_watch = true;
+                    let deadline = data["watch_alert_deadline_at"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<i64>()
+                        .unwrap();
+                    assert_eq!(deadline, lease.record.accepted_at + minutes * 60_000);
+                    assert_eq!(
+                        data["sent_at"].as_str().unwrap().parse::<i64>().unwrap(),
+                        lease.record.accepted_at
+                    );
+                    assert_ne!(lease.record.accepted_at, 1_700_000_000_000);
+                    if request["ttl"].as_i64().is_some() {
+                        assert_eq!(payload.expiration.unwrap().into_inner(), deadline / 1000);
+                    }
+                } else {
+                    observed_phone = true;
+                    assert!(data.get("watch_alert_deadline_at").is_none());
+                    if request["ttl"].as_i64().is_some() {
+                        assert_eq!(
+                            payload.expiration.unwrap().into_inner(),
+                            sender_expiry / 1000
+                        );
+                    } else {
+                        assert!(payload.expiration.is_none());
+                    }
+                }
+            }
+            state
+                .store
+                .settle_provider_dispatch_job(
+                    &lease,
+                    crate::storage::ProviderDispatchSettlement::Accepted,
+                    now,
+                    200,
+                    None,
+                    now,
+                )
+                .await
+                .unwrap();
+        }
+        assert!(observed_watch && observed_phone);
+    }
+}
+
+#[tokio::test]
+async fn watch_alert_existing_v12_database_adds_setting_without_changing_route() {
+    let (state, _, db_url) = build_test_state_with_receivers_and_db_url().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (_, registered) = post_json(app, "/device/register", json!({"platform":"watchos"})).await;
+    let key = response_string_field(&registered, "device_key").to_string();
+    let before = state
+        .store
+        .active_device_route_snapshot(&key)
+        .await
+        .unwrap()
+        .unwrap();
+    let pool = sqlx::SqlitePool::connect(&db_url).await.unwrap();
+    sqlx::query("ALTER TABLE devices DROP COLUMN watch_alert_window_minutes")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM pushgo_schema_migrations WHERE migration_id = '20261013_001_watch_alert_window'").execute(&pool).await.unwrap();
+    pool.close().await;
+    let reopened = Storage::new(Some(&db_url)).await.unwrap();
+    assert_eq!(reopened.watch_alert_window_minutes(&key).await.unwrap(), 30);
+    assert_eq!(
+        reopened
+            .active_device_route_snapshot(&key)
+            .await
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    reopened
+        .set_watch_alert_window_minutes(&key, 15)
+        .await
+        .unwrap();
+    let reopened_again = Storage::new(Some(&db_url)).await.unwrap();
+    assert_eq!(
+        reopened_again
+            .watch_alert_window_minutes(&key)
+            .await
+            .unwrap(),
+        15
+    );
+}

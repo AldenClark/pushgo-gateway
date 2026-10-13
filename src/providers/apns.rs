@@ -98,7 +98,75 @@ pub(crate) struct ApnsPayloadSnapshot {
     priority: u8,
 }
 
+pub(crate) const WATCH_ALERT_DEADLINE_KEY: &str = "watch_alert_deadline_at";
+
+/// Freeze Watch reminder age independently of sender TTL and pull retention.
+pub(crate) fn watch_alert_deadline(accepted_at: i64, minutes: i64) -> Option<i64> {
+    if accepted_at <= 0 || !matches!(minutes, 5 | 15 | 30 | 60) {
+        return None;
+    }
+    accepted_at.checked_add(minutes.checked_mul(60_000)?)
+}
+
 impl ApnsPayload {
+    pub(crate) fn with_watch_alert_deadline(&self, deadline: i64) -> Self {
+        let mut data = self.data.as_map().clone();
+        data.insert(WATCH_ALERT_DEADLINE_KEY.to_string(), deadline.to_string());
+        let mut payload = self.with_data(data);
+        let bound = ApnsExpirationEpochSeconds::from_epoch_millis(deadline);
+        payload.expiration = Some(match self.expiration {
+            Some(original) if original.into_inner() == 0 => original,
+            Some(original)
+                if original.into_inner() > 0 && original.into_inner() < bound.into_inner() =>
+            {
+                original
+            }
+            _ => bound,
+        });
+        payload
+    }
+
+    /// Old durable jobs use their original outbox acceptance and default window.
+    /// Never derive a fresh deadline from retry time or current device settings.
+    pub(crate) fn watch_alert_for_attempt(&self, accepted_at: i64, now: i64) -> Option<Self> {
+        if accepted_at <= 0 || accepted_at > now {
+            return None;
+        }
+        let deadline = match self.data.as_map().get(WATCH_ALERT_DEADLINE_KEY) {
+            Some(raw) => {
+                let deadline = raw.parse::<i64>().ok()?;
+                let age = deadline.checked_sub(accepted_at)?;
+                if !matches!(age, 300_000 | 900_000 | 1_800_000 | 3_600_000) {
+                    return None;
+                }
+                deadline
+            }
+            None => watch_alert_deadline(accepted_at, 30)?,
+        };
+        if now >= deadline
+            || self.expiration.is_some_and(|expiration| {
+                let seconds = expiration.into_inner();
+                seconds < 0 || (seconds > 0 && now.div_euclid(1000) >= seconds)
+            })
+        {
+            return None;
+        }
+        let mut payload = self.with_watch_alert_deadline(deadline);
+        let mut data = payload.data.as_map().clone();
+        data.insert("sent_at".to_string(), accepted_at.to_string());
+        payload.data = data.into();
+        Some(payload)
+    }
+
+    pub(crate) fn watch_alert_is_current(&self, now: i64) -> bool {
+        self.data
+            .as_map()
+            .get("sent_at")
+            .and_then(|raw| raw.parse::<i64>().ok())
+            .and_then(|accepted_at| self.watch_alert_for_attempt(accepted_at, now))
+            .is_some()
+    }
+
     pub(crate) fn snapshot(&self) -> ApnsPayloadSnapshot {
         ApnsPayloadSnapshot {
             aps: self.aps.clone(),
@@ -435,5 +503,116 @@ mod tests {
             json["aps"]["content-state"]["updatedAt"],
             "2023-11-14T22:13:20.123Z"
         );
+    }
+}
+
+#[cfg(test)]
+mod watch_alert_tests {
+    use super::*;
+    const ACCEPTED: i64 = 1_700_000_000_000;
+    fn payload(expiration: Option<i64>) -> ApnsPayload {
+        ApnsPayload::wakeup(
+            None,
+            None,
+            None,
+            expiration.map(ApnsExpirationEpochSeconds::from_epoch_millis),
+            hashbrown::HashMap::<String, String>::new(),
+        )
+    }
+    #[test]
+    fn watch_alert_cutoff_uses_original_acceptance_and_survives_snapshot() {
+        let deadline = watch_alert_deadline(ACCEPTED, 5).unwrap();
+        let original = payload(None);
+        let frozen = original.with_watch_alert_deadline(deadline);
+        let restored = ApnsPayload::from_snapshot(frozen.snapshot());
+        assert!(
+            restored
+                .watch_alert_for_attempt(ACCEPTED, deadline - 1)
+                .is_some()
+        );
+        assert!(
+            restored
+                .watch_alert_for_attempt(ACCEPTED, deadline)
+                .is_none()
+        );
+        assert_eq!(restored.expiration.unwrap().into_inner(), deadline / 1000);
+        assert!(original.expiration.is_none());
+        assert!(
+            !serde_json::to_value(original)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key(WATCH_ALERT_DEADLINE_KEY)
+        );
+    }
+    #[test]
+    fn watch_alert_preserves_no_store_and_earlier_sender_expiration() {
+        let deadline = watch_alert_deadline(ACCEPTED, 30).unwrap();
+        let no_store = payload(Some(0)).with_watch_alert_deadline(deadline);
+        assert_eq!(no_store.expiration.unwrap().into_inner(), 0);
+        assert!(
+            no_store
+                .watch_alert_for_attempt(ACCEPTED, ACCEPTED + 1)
+                .is_some()
+        );
+        let earlier = payload(Some(ACCEPTED + 60_000)).with_watch_alert_deadline(deadline);
+        assert_eq!(
+            earlier.expiration.unwrap().into_inner(),
+            (ACCEPTED + 60_000) / 1000
+        );
+        assert!(
+            earlier
+                .watch_alert_for_attempt(ACCEPTED, ACCEPTED + 60_000)
+                .is_none()
+        );
+    }
+    #[test]
+    fn watch_alert_legacy_and_invalid_time_never_refresh_from_now() {
+        let legacy = payload(None);
+        assert!(
+            legacy
+                .watch_alert_for_attempt(ACCEPTED, ACCEPTED + 1_799_999)
+                .is_some()
+        );
+        assert!(
+            legacy
+                .watch_alert_for_attempt(ACCEPTED, ACCEPTED + 1_800_000)
+                .is_none()
+        );
+        for accepted in [0, -1, i64::MAX, ACCEPTED + 1] {
+            assert!(legacy.watch_alert_for_attempt(accepted, ACCEPTED).is_none());
+        }
+        assert!(watch_alert_deadline(i64::MAX, 30).is_none());
+        for raw in ["bad", "0", "-1", "1700000000000", "9223372036854775807"] {
+            let forged = legacy.with_data(hashbrown::HashMap::from([(
+                WATCH_ALERT_DEADLINE_KEY.to_string(),
+                raw.to_string(),
+            )]));
+            assert!(forged.watch_alert_for_attempt(ACCEPTED, ACCEPTED).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod watch_alert_network_boundary_tests {
+    use super::*;
+    #[test]
+    fn watch_alert_network_rechecks_clock_after_credential_wait() {
+        let accepted = 1_700_000_000_000;
+        let deadline = accepted + 300_000;
+        let legacy = ApnsPayload::wakeup(
+            None,
+            None,
+            None,
+            None,
+            hashbrown::HashMap::<String, String>::new(),
+        );
+        let frozen = legacy
+            .with_watch_alert_deadline(deadline)
+            .watch_alert_for_attempt(accepted, deadline - 1)
+            .unwrap();
+        assert!(frozen.watch_alert_is_current(deadline - 1));
+        assert!(!frozen.watch_alert_is_current(deadline));
+        assert!(!frozen.watch_alert_is_current(accepted - 1));
     }
 }

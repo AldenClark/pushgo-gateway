@@ -16,6 +16,19 @@ const PROVIDER_FINALIZE_RETRY_DELAYS: [Duration; 7] = [
 ];
 
 impl Storage {
+    pub(crate) async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
+        self.db.watch_alert_window_minutes(device_key).await
+    }
+    pub(crate) async fn set_watch_alert_window_minutes(
+        &self,
+        device_key: &str,
+        minutes: i64,
+    ) -> StoreResult<()> {
+        self.db
+            .set_watch_alert_window_minutes(device_key, minutes)
+            .await
+    }
+
     pub async fn automation_counts(&self) -> StoreResult<AutomationCounts> {
         self.db.automation_counts().await
     }

@@ -22,7 +22,7 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const PG_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BYTEA PRIMARY KEY, token_raw BYTEA NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255), platform VARCHAR(32), channel_type VARCHAR(32), provider_token TEXT, route_updated_at BIGINT, route_revision BIGINT NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BYTEA PRIMARY KEY, token_raw BYTEA NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255), platform VARCHAR(32), channel_type VARCHAR(32), provider_token TEXT, route_updated_at BIGINT, route_revision BIGINT NOT NULL DEFAULT 0, watch_alert_window_minutes BIGINT NOT NULL DEFAULT 30)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BYTEA NOT NULL, key_id INTEGER NOT NULL, key_hash BYTEA NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BYTEA NOT NULL, expires_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_outbox (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT, claimed_by TEXT, claim_generation BIGINT NOT NULL DEFAULT 0, first_sent_at BIGINT, last_attempt_at BIGINT, acked_at BIGINT, fallback_sent_at BIGINT, next_attempt_at BIGINT NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
@@ -302,6 +302,12 @@ impl PostgresDb {
             "devices",
             "route_updated_at",
             "ALTER TABLE devices ADD COLUMN route_updated_at BIGINT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "devices",
+            "watch_alert_window_minutes",
+            "ALTER TABLE devices ADD COLUMN watch_alert_window_minutes BIGINT NOT NULL DEFAULT 30",
         )
         .await?;
         self.ensure_pg_column(
@@ -1278,6 +1284,7 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for Postgres
             ("dispatch_op_dedupe", "provider_lease_until"),
             ("sender_submit_status", "provider_run_token"),
             ("devices", "route_revision"),
+            ("devices", "watch_alert_window_minutes"),
         ] {
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT 1::BIGINT FROM information_schema.columns \

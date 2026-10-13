@@ -196,20 +196,36 @@ async fn claim_apns_job(
             )
             .await
         {
-            let job = if coalescible {
-                let (job, _, _) =
+            let (job, op_id, dedupe_key) = if coalescible || job.platform == Platform::WATCHOS {
+                // A replay may enqueue a fresh hint after the durable row already
+                // froze its Watch window. Hints only wake that original intent.
+                let hint_outcome = job.outcome;
+                let (mut frozen, op_id, dedupe_key) =
                     decode_leased_payload(runtime, provider, &lease, DurableProviderJob::into_apns)
                         .await?;
-                job
+                if !coalescible {
+                    // Preserve the live completion receipt only for the same
+                    // durable operation; retries use the persisted identities.
+                    frozen.outcome = hint_outcome.filter(|outcome| {
+                        op_id.as_deref() == Some(outcome.op_id())
+                            && dedupe_key.as_deref() == Some(outcome.dedupe_key())
+                            && frozen.delivery_id.as_ref() == outcome.delivery_id()
+                    });
+                }
+                (frozen, op_id, dedupe_key)
             } else {
-                job
+                (
+                    job,
+                    durable.op_id().map(str::to_string),
+                    durable.dedupe_key().map(str::to_string),
+                )
             };
             fairness.record_fresh_hint_claim();
             return Some(ClaimedProviderJob {
                 job,
                 lease,
-                op_id: durable.op_id().map(str::to_string),
-                dedupe_key: durable.dedupe_key().map(str::to_string),
+                op_id,
+                dedupe_key,
             });
         }
     }
@@ -1126,6 +1142,15 @@ impl DispatchWorkerPool {
                                         .expect("wakeup payload required for wakeup path"),
                                 ),
                             };
+                            if job.platform == Platform::WATCHOS {
+                                let Some(eligible) = payload.watch_alert_for_attempt(
+                                    claimed.lease.record.accepted_at,
+                                    chrono::Utc::now().timestamp_millis(),
+                                ) else {
+                                    return (DispatchResult::watch_alert_expired(), actual_path);
+                                };
+                                payload = Arc::new(eligible);
+                            }
                             let mut dispatch = apns_client
                                 .send_to_device(
                                     job.device_token.as_ref(),
@@ -1150,6 +1175,18 @@ impl DispatchWorkerPool {
                                     job.device_token.as_ref(),
                                 );
                                 payload = Arc::clone(wakeup_payload);
+                                if job.platform == Platform::WATCHOS {
+                                    let Some(eligible) = payload.watch_alert_for_attempt(
+                                        claimed.lease.record.accepted_at,
+                                        chrono::Utc::now().timestamp_millis(),
+                                    ) else {
+                                        return (
+                                            DispatchResult::watch_alert_expired(),
+                                            actual_path,
+                                        );
+                                    };
+                                    payload = Arc::new(eligible);
+                                }
                                 dispatch = apns_client
                                     .send_to_device(
                                         job.device_token.as_ref(),
@@ -1174,6 +1211,20 @@ impl DispatchWorkerPool {
                                 emit_provider_lease_lost(provider, &claimed.lease, err);
                                 continue;
                             }
+                        };
+                        let dispatch = if job.platform == Platform::WATCHOS
+                            && dispatch.is_retryable()
+                            && job
+                                .direct_payload
+                                .watch_alert_for_attempt(
+                                    claimed.lease.record.accepted_at,
+                                    chrono::Utc::now().timestamp_millis(),
+                                )
+                                .is_none()
+                        {
+                            DispatchResult::watch_alert_expired()
+                        } else {
+                            dispatch
                         };
                         runtime.record_provider_dispatch_result(
                             provider,
@@ -2176,6 +2227,367 @@ mod tests {
         fn token_info_fresh<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, crate::Error>> {
             Box::pin(async { Err(crate::Error::Internal("unused".into())) })
         }
+    }
+
+    #[tokio::test]
+    async fn watch_alert_expired_workers_settle_only_reminder_and_keep_pull_until_ack() {
+        let dir = tempdir().unwrap();
+        let db_url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("watch-expiry.sqlite").display()
+        );
+        let store = Storage::new(Some(&db_url)).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let accepted = now - 31 * 60_000;
+        let device_id = crate::routing::derive_private_device_id("watch-expiry-device");
+        for (delivery, path, legacy, retry) in [
+            (
+                "watch-direct-expired",
+                ProviderDeliveryPath::Direct,
+                false,
+                false,
+            ),
+            (
+                "watch-wakeup-expired",
+                ProviderDeliveryPath::WakeupPull,
+                false,
+                false,
+            ),
+            (
+                "watch-legacy-expired",
+                ProviderDeliveryPath::Direct,
+                true,
+                false,
+            ),
+            (
+                "watch-retry-expired",
+                ProviderDeliveryPath::Direct,
+                false,
+                true,
+            ),
+        ] {
+            let payload = ApnsPayload::wakeup(
+                None,
+                None,
+                None,
+                None,
+                hashbrown::HashMap::<String, String>::new(),
+            );
+            let payload = Arc::new(if legacy {
+                payload
+            } else {
+                payload.with_watch_alert_deadline(accepted + 30 * 60_000)
+            });
+            let job = ApnsJob {
+                channel_id: [32; 16],
+                correlation_id: Arc::from(delivery),
+                delivery_id: Arc::from(delivery),
+                device_key: Arc::from("watch-expiry-device"),
+                device_token: Arc::from("a".repeat(64)),
+                route_updated_at: accepted,
+                platform: Platform::WATCHOS,
+                direct_payload: Arc::clone(&payload),
+                wakeup_payload: Some(payload),
+                initial_path: path,
+                wakeup_payload_within_limit: true,
+                collapse_id: None,
+                route_fenced: false,
+                coalescible: false,
+                outcome: None,
+            };
+            let durable = DurableProviderJob::from_apns(&job);
+            store
+                .enqueue_provider_dispatch_job(
+                    &durable
+                        .to_record("pending", accepted, now + 86_400_000)
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if retry {
+                let lease = store
+                    .claim_provider_dispatch_job(
+                        "APNS",
+                        Some(&durable.job_id()),
+                        "seed",
+                        now,
+                        now + 1000,
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                store
+                    .settle_provider_dispatch_job(
+                        &lease,
+                        crate::storage::ProviderDispatchSettlement::Retry,
+                        now,
+                        503,
+                        Some("injected"),
+                        now,
+                    )
+                    .await
+                    .unwrap();
+            }
+            let bytes = Arc::<[u8]>::from(delivery.as_bytes());
+            store
+                .enqueue_provider_pull_item(
+                    device_id,
+                    delivery,
+                    &crate::storage::PrivateMessage {
+                        payload: bytes.clone(),
+                        size: bytes.len(),
+                        sent_at: accepted,
+                        expires_at: now + 86_400_000,
+                    },
+                    Platform::WATCHOS,
+                    &"a".repeat(64),
+                )
+                .await
+                .unwrap();
+        }
+        let (dispatch, receivers) = DispatchChannels::new();
+        let counters = RuntimeCounterCollector::spawn_with_mode(
+            store.clone(),
+            false,
+            GatewayRuntimeProfile::Small,
+        );
+        let workers = DispatchWorkerDeps {
+            apns: Arc::new(UnusedApnsClient),
+            fcm: Arc::new(StaticFcmClient {
+                success: true,
+                calls: AtomicUsize::new(0),
+            }),
+            wns: Arc::new(UnusedWnsClient),
+            store: store.clone(),
+            private: None,
+            runtime_counters: Arc::clone(&counters),
+            runtime_profile: GatewayRuntimeProfile::Small,
+        }
+        .spawn(receivers);
+        timeout(Duration::from_secs(2), async {
+            while store
+                .count_pending_provider_dispatch_jobs("APNS")
+                .await
+                .unwrap()
+                != 0
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("expired reminders should terminally settle without APNs");
+        for delivery in [
+            "watch-direct-expired",
+            "watch-wakeup-expired",
+            "watch-legacy-expired",
+            "watch-retry-expired",
+        ] {
+            assert_eq!(
+                store
+                    .provider_dispatch_terminal_success(delivery)
+                    .await
+                    .unwrap(),
+                Some(false)
+            );
+            let pull = store
+                .peek_provider_item(device_id, delivery, now)
+                .await
+                .unwrap()
+                .expect("alert expiry must keep pull");
+            assert_eq!(pull.payload.as_ref(), delivery.as_bytes());
+            assert_eq!(pull.sent_at, accepted);
+            assert_eq!(pull.expires_at, now + 86_400_000);
+            assert!(
+                store
+                    .ack_provider_item(device_id, delivery, now)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                store
+                    .peek_provider_item(device_id, delivery, now)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        drop(dispatch);
+        let report = workers
+            .shutdown_until(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await;
+        assert_eq!(
+            report.panicked, 0,
+            "no APNs call may start for expired reminders"
+        );
+        counters
+            .shutdown_until(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn watch_alert_claim_uses_frozen_row_after_replay_setting_changes() {
+        let dir = tempdir().unwrap();
+        let db_url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("watch-replay.sqlite").display()
+        );
+        let store = Storage::new(Some(&db_url)).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let accepted = now - 600_000;
+        let device_key = "watch-replay-device";
+        store
+            .upsert_device_route(&DeviceRouteRecordRow {
+                device_key: device_key.to_string(),
+                platform: Platform::WATCHOS.name().to_string(),
+                channel_type: "apns".to_string(),
+                provider_token: Some("a".repeat(64)),
+                updated_at: accepted,
+            })
+            .await
+            .unwrap();
+        let counters = RuntimeCounterCollector::spawn_with_mode(
+            store.clone(),
+            false,
+            GatewayRuntimeProfile::Small,
+        );
+        let runtime = DispatchWorkerRuntime {
+            store: store.clone(),
+            private: None,
+            runtime_counters: Arc::clone(&counters),
+        };
+        let (dispatch, receivers) = DispatchChannels::new();
+        let mut fairness = ProviderClaimFairness::default();
+        for (original_minutes, replay_minutes) in [(5, 60), (60, 5)] {
+            let delivery = format!("watch-replay-{original_minutes}");
+            let outcome = Arc::new(ProviderDispatchOutcome::new(
+                Arc::from(delivery.clone()),
+                Arc::from(format!("op:{delivery}")),
+                Arc::from(delivery.clone()),
+            ));
+            outcome.configure(1, 0);
+            outcome.commit();
+            let make_job = |minutes| {
+                let payload = Arc::new(
+                    ApnsPayload::wakeup(
+                        None,
+                        None,
+                        None,
+                        None,
+                        hashbrown::HashMap::<String, String>::new(),
+                    )
+                    .with_watch_alert_deadline(accepted + minutes * 60_000),
+                );
+                ApnsJob {
+                    channel_id: [39; 16],
+                    correlation_id: Arc::from(delivery.clone()),
+                    delivery_id: Arc::from(delivery.clone()),
+                    device_key: Arc::from(device_key),
+                    device_token: Arc::from("a".repeat(64)),
+                    route_updated_at: accepted,
+                    platform: Platform::WATCHOS,
+                    direct_payload: Arc::clone(&payload),
+                    wakeup_payload: Some(payload),
+                    initial_path: ProviderDeliveryPath::Direct,
+                    wakeup_payload_within_limit: true,
+                    collapse_id: None,
+                    route_fenced: true,
+                    coalescible: false,
+                    outcome: Some(Arc::clone(&outcome)),
+                }
+            };
+            store
+                .set_watch_alert_window_minutes(device_key, original_minutes)
+                .await
+                .unwrap();
+            let original = DurableProviderJob::from_apns(&make_job(original_minutes));
+            assert!(
+                store
+                    .enqueue_provider_dispatch_job(
+                        &original
+                            .to_record("pending", accepted, now + 86_400_000)
+                            .unwrap()
+                    )
+                    .await
+                    .unwrap()
+            );
+            store
+                .set_watch_alert_window_minutes(device_key, replay_minutes)
+                .await
+                .unwrap();
+            let hint = make_job(store.watch_alert_window_minutes(device_key).await.unwrap());
+            let replay = DurableProviderJob::from_apns(&hint);
+            assert!(
+                !store
+                    .enqueue_provider_dispatch_job(
+                        &replay
+                            .to_record("pending", accepted, now + 86_400_000)
+                            .unwrap()
+                    )
+                    .await
+                    .unwrap()
+            );
+            dispatch.try_send_apns(hint).unwrap();
+            let claimed = claim_apns_job(
+                &receivers.apns,
+                &runtime,
+                "watch-replay-owner",
+                "APNS",
+                &mut fairness,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(claimed.job.direct_payload.as_ref()).unwrap()
+                    [crate::providers::apns::WATCH_ALERT_DEADLINE_KEY]
+                    .as_str()
+                    .unwrap(),
+                (accepted + original_minutes * 60_000).to_string()
+            );
+            assert!(
+                Arc::ptr_eq(claimed.job.outcome.as_ref().unwrap(), &outcome),
+                "hint outcome must still receive terminal settlement"
+            );
+            assert_eq!(claimed.op_id.as_deref(), Some(delivery.as_str()));
+            assert_eq!(
+                claimed.dedupe_key.as_deref(),
+                Some(format!("op:{delivery}").as_str())
+            );
+            let eligible = claimed
+                .job
+                .direct_payload
+                .watch_alert_for_attempt(claimed.lease.record.accepted_at, now)
+                .is_some();
+            assert_eq!(eligible, original_minutes == 60);
+            let result = if eligible {
+                DispatchResult::success(200)
+            } else {
+                DispatchResult::watch_alert_expired()
+            };
+            assert!(
+                settle_provider_attempt(
+                    &runtime,
+                    &claimed.lease,
+                    claimed.dedupe_key.as_deref(),
+                    claimed.op_id.as_deref(),
+                    &result
+                )
+                .await
+            );
+            assert!(
+                claimed
+                    .job
+                    .outcome
+                    .as_ref()
+                    .unwrap()
+                    .record_provider_result(eligible)
+            );
+            assert_eq!(outcome.final_success(), Some(eligible));
+        }
+        drop(dispatch);
+        counters
+            .shutdown_until(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await;
     }
 
     struct UnusedApnsClient;

@@ -8,6 +8,7 @@ pub enum ProviderFailureKind {
     PayloadTooLarge,
     Unauthorized,
     Rejected,
+    WatchAlertExpired,
 }
 
 impl ProviderFailureKind {
@@ -21,6 +22,7 @@ impl ProviderFailureKind {
             Self::PayloadTooLarge => "payload_too_large",
             Self::Unauthorized => "unauthorized",
             Self::Rejected => "rejected",
+            Self::WatchAlertExpired => "watch_alert_expired",
         }
     }
 
