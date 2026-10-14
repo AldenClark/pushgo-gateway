@@ -948,7 +948,6 @@ pub(crate) struct DispatchWorkerDeps {
     pub store: Storage,
     pub private: Option<Arc<PrivateState>>,
     pub runtime_counters: Arc<RuntimeCounterCollector>,
-    pub runtime_profile: GatewayRuntimeProfile,
 }
 
 impl DispatchWorkerDeps {
@@ -963,7 +962,7 @@ impl DispatchWorkerDeps {
             fcm: self.fcm,
             wns: self.wns,
             runtime,
-            config: DispatchRuntimeConfig::from_profile(self.runtime_profile),
+            config: DispatchRuntimeConfig::default(),
         };
         pool.spawn(receivers)
     }
@@ -2128,6 +2127,7 @@ mod tests {
     use super::*;
     use crate::{
         providers::{ApnsClient, BoxFuture, FcmClient, TokenInfo, WnsClient},
+        runtime_config::GatewayRuntimeProfile,
         storage::{
             DedupeState, DeviceRouteRecordRow, OpDedupeReservation, SenderSubmitStatusKind,
             SenderSubmitStatusRecord,
@@ -2361,7 +2361,6 @@ mod tests {
             store: store.clone(),
             private: None,
             runtime_counters: Arc::clone(&counters),
-            runtime_profile: GatewayRuntimeProfile::Small,
         }
         .spawn(receivers);
         timeout(Duration::from_secs(2), async {
@@ -3248,7 +3247,6 @@ mod tests {
             store: store.clone(),
             private: None,
             runtime_counters,
-            runtime_profile: GatewayRuntimeProfile::Small,
         }
         .spawn(receivers);
         let payload = Arc::new(FcmPayload::new(
@@ -3385,7 +3383,6 @@ mod tests {
             store: store.clone(),
             private: None,
             runtime_counters,
-            runtime_profile: GatewayRuntimeProfile::Small,
         }
         .spawn(receivers);
 
@@ -3490,7 +3487,6 @@ mod tests {
                 false,
                 GatewayRuntimeProfile::Small,
             ),
-            runtime_profile: GatewayRuntimeProfile::Small,
         }
         .spawn(receivers);
 
@@ -3602,7 +3598,6 @@ mod tests {
             store: store.clone(),
             private: None,
             runtime_counters: Arc::clone(&runtime_counters),
-            runtime_profile: GatewayRuntimeProfile::Small,
         }
         .spawn(receivers);
 
@@ -3728,7 +3723,7 @@ mod tests {
         assert_eq!(worker_report.panicked, 0);
         assert_eq!(worker_report.aborted, 0);
         assert_eq!(worker_report.joined, {
-            let config = DispatchRuntimeConfig::from_profile(GatewayRuntimeProfile::Small);
+            let config = DispatchRuntimeConfig::default();
             config.apns.maximum
                 + config.live_activity.maximum
                 + config.widgets.maximum

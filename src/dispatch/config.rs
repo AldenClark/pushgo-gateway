@@ -1,5 +1,3 @@
-use crate::runtime_config::GatewayRuntimeProfile;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ProviderLaneConfig {
     pub(super) minimum: usize,
@@ -16,8 +14,8 @@ pub(super) struct DispatchRuntimeConfig {
     pub(super) wns: ProviderLaneConfig,
 }
 
-impl DispatchRuntimeConfig {
-    pub(super) fn from_profile(_profile: GatewayRuntimeProfile) -> Self {
+impl Default for DispatchRuntimeConfig {
+    fn default() -> Self {
         // Provider throughput is independent from storage/cache deployment
         // profiles. Stable tasks sit behind a small adaptive logical limit.
         Self {
@@ -48,17 +46,46 @@ impl DispatchRuntimeConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::DispatchRuntimeConfig;
-    use crate::runtime_config::GatewayRuntimeProfile;
+    use super::{DispatchRuntimeConfig, ProviderLaneConfig};
 
     #[test]
-    fn provider_lanes_are_profile_independent_and_provider_scoped() {
-        let small = DispatchRuntimeConfig::from_profile(GatewayRuntimeProfile::Small);
-        let public = DispatchRuntimeConfig::from_profile(GatewayRuntimeProfile::Public);
-        assert_eq!(small, public);
-        assert!(small.apns.maximum > small.widgets.maximum);
-        assert!(small.apns.maximum > small.live_activity.maximum);
-        assert!(small.fcm.maximum > small.wns.maximum);
-        assert!(small.apns.minimum < small.apns.maximum);
+    fn provider_lanes_keep_independent_adaptive_bounds() {
+        let config = DispatchRuntimeConfig::default();
+        assert_eq!(config.queue_capacity, 1_024);
+        assert_eq!(
+            config.apns,
+            ProviderLaneConfig {
+                minimum: 2,
+                maximum: 64
+            }
+        );
+        assert_eq!(
+            config.live_activity,
+            ProviderLaneConfig {
+                minimum: 1,
+                maximum: 8
+            }
+        );
+        assert_eq!(
+            config.widgets,
+            ProviderLaneConfig {
+                minimum: 1,
+                maximum: 8
+            }
+        );
+        assert_eq!(
+            config.fcm,
+            ProviderLaneConfig {
+                minimum: 2,
+                maximum: 64
+            }
+        );
+        assert_eq!(
+            config.wns,
+            ProviderLaneConfig {
+                minimum: 1,
+                maximum: 32
+            }
+        );
     }
 }

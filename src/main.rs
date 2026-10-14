@@ -83,20 +83,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         client,
     ));
 
-    let apns = Arc::new(ApnsService::new_with_profile(
-        apns_token_provider,
-        apns_endpoint,
-        runtime_tuning.profile,
-    )?);
-    let fcm = Arc::new(FcmService::new_with_profile(
-        fcm_token_provider,
-        FCM_SEND_BASE_URL,
-        runtime_tuning.profile,
-    )?);
-    let wns = Arc::new(WnsService::new_with_profile(
-        wns_token_provider,
-        runtime_tuning.profile,
-    )?);
+    let apns = Arc::new(ApnsService::new(apns_token_provider, apns_endpoint)?);
+    let fcm = Arc::new(FcmService::new(fcm_token_provider, FCM_SEND_BASE_URL)?);
+    let wns = Arc::new(WnsService::new(wns_token_provider)?);
 
     let addr: SocketAddr = args.http_addr.parse()?;
     let docs_html = include_str!("api/docs.html");
@@ -340,13 +329,14 @@ fn print_startup_diagnostics(
         private_transport_wss_enabled = (private_transports.wss),
         runtime_profile = %(runtime_tuning.profile.as_str()),
         private_online_fast_path_enabled = (runtime_tuning.private.online_fast_path_enabled),
-        dispatch_worker_count = (runtime_tuning.dispatch.worker_count as u64),
-        dispatch_queue_capacity = (runtime_tuning.dispatch.queue_capacity as u64),
         runtime_counter_channel_capacity = (runtime_tuning.runtime_counters.channel_capacity as u64),
+        // Configured resource limits, not live allocations or open connection counts.
+        sqlite_core_read_connection_limit = (runtime_tuning.sqlite.core_read_connections as u64),
+        sqlite_page_cache_kib = (runtime_tuning.sqlite.page_cache_kib),
         external_db_max_connections = (runtime_tuning.external_db.max_connections as u64),
-        provider_apns_max_in_flight = (runtime_tuning.provider.apns_max_in_flight as u64),
-        provider_fcm_max_in_flight = (runtime_tuning.provider.fcm_max_in_flight as u64),
-        provider_wns_max_in_flight = (runtime_tuning.provider.wns_max_in_flight as u64),
+        external_db_min_connections = (runtime_tuning.external_db.min_connections as u64),
+        device_cache_max_entries = (runtime_tuning.cache.device_max as u64),
+        dispatch_targets_cache_max_entries = (runtime_tuning.cache.dispatch_targets_max as u64),
         observability_log_level = %(observability.log_level.as_str()),
         db_observability_enabled = false,
         mcp_enabled = (args.mcp_enabled),
@@ -359,6 +349,77 @@ fn print_startup_diagnostics(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn startup_diagnostics_report_resource_limits_without_retired_dispatch_fields() {
+        #[derive(Clone)]
+        struct LogWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl std::io::Write for LogWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        for (profile, read_limit, page_kib, db_min, db_max, device_max, targets_max) in [
+            ("small", 2, 512, 0, 8, 512, 512),
+            ("public", 4, 4096, 4, 64, 4096, 8192),
+        ] {
+            let args = Args::parse_from([
+                "gateway",
+                "--db-url",
+                "sqlite::memory:",
+                "--runtime-profile",
+                profile,
+            ]);
+            let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let writer = LogWriter(Arc::clone(&buffer));
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish();
+            tracing::subscriber::with_default(subscriber, || {
+                print_startup_diagnostics(
+                    &args,
+                    args.private_transports().unwrap(),
+                    &args.observability_config(),
+                    args.runtime_tuning().unwrap(),
+                    APNS_PRODUCTION_ENDPOINT,
+                    "http://127.0.0.1:1",
+                );
+            });
+            let log: serde_json::Value = serde_json::from_slice(&buffer.lock().unwrap()).unwrap();
+            let fields = log["fields"].as_object().unwrap();
+            assert_eq!(fields["event"], "gateway.startup");
+            assert_eq!(fields["runtime_profile"], profile);
+            for (field, expected) in [
+                ("sqlite_core_read_connection_limit", read_limit),
+                ("sqlite_page_cache_kib", page_kib),
+                ("external_db_min_connections", db_min),
+                ("external_db_max_connections", db_max),
+                ("device_cache_max_entries", device_max),
+                ("dispatch_targets_cache_max_entries", targets_max),
+            ] {
+                assert_eq!(fields[field], expected, "{profile}: {field}");
+            }
+            for retired in [
+                "dispatch_worker_count",
+                "dispatch_queue_capacity",
+                "provider_apns_max_in_flight",
+                "provider_fcm_max_in_flight",
+                "provider_wns_max_in_flight",
+            ] {
+                assert!(!fields.contains_key(retired), "retired field: {retired}");
+            }
+        }
+    }
 
     #[tokio::test]
     async fn stalled_http_drain_cannot_extend_the_absolute_shutdown_deadline() {

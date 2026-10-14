@@ -46,7 +46,9 @@ The complete decision is:
 
 Merely decoupling APNs worker count from the generic worker count is necessary but not sufficient.
 
-## 2. Verified current-state findings
+## 2. Historical findings before durable adaptive dispatch
+
+This section records the baseline at `6c26f420114823a827caa0274a0bbc3739d91211`, before implementation commit `0cb95d3`. References to “current” below describe that historical baseline, not the present runtime. The 2026-10-14 cleanup removes the remaining unused profile fields/constructors/logs; it does not restore the old worker pool or introduce the policy framework sketched in the original plan.
 
 ### 2.1 One profile knob couples unrelated providers
 
@@ -773,29 +775,13 @@ Implementation can be split into reviewable packages, but the durable contract m
 
 The first implementation change should add a source-boundary test that rejects any correctness-bearing `try_send_*` payload queue, private realtime send before durable enqueue, retry sleep or logical delivery semaphore inside a provider adapter, profile reference in a provider scheduler, or terminal deletion of an unexpired accepted alert.
 
-### Configuration target
+### Current configuration boundary (2026-10-14)
 
-Replace:
+`src/dispatch/config.rs::DispatchRuntimeConfig::default()` owns independent adaptive lane bounds: APNs alert 2–64, Live Activity 1–8, Widget 1–8, FCM 2–64, WNS 1–32, with a 1024-capacity wakeup channel per lane. Stable tasks remain behind adaptive logical gates. Existing APNs sharing/fairness, durable claims, leases, retry/probe handling and shutdown semantics remain unchanged.
 
-```rust
-DispatchRuntimeTuning { worker_count, queue_capacity }
-ProviderRuntimeTuning { apns_max_in_flight, fcm_max_in_flight, wns_max_in_flight }
-```
+`GatewayRuntimeProfile` controls real database pools, storage caches, private transport budgets, counters, maintenance and MCP settings. It is no longer passed through Provider scheduler/client constructors. `DispatchRuntimeTuning` and `ProviderRuntimeTuning` had no consumers after `0cb95d3`; their remaining fields and misleading startup diagnostics are removed. The existing `DispatchRuntimeConfig` is sufficient: the original proposed `ProviderDispatchPolicy` wrapper is not an implementation requirement and is not added.
 
-with independently validated policy:
-
-```rust
-struct ProviderDispatchPolicy {
-    apns: AdaptiveLanePolicy,
-    fcm: AdaptiveLanePolicy,
-    wns: AdaptiveLanePolicy,
-    rate: ProviderRatePolicies,
-    durable_capacity: DurableCapacityPolicy,
-    retry: ProviderRetryPolicies,
-}
-```
-
-`GatewayRuntimeProfile` no longer appears in provider scheduler constructors.
+No CLI/env options or database schema change in this cleanup. The public Rust `new_with_profile` constructors and tuning fields are removed; downstream source users must migrate as described in the README. Startup log consumers must stop expecting the five retired dispatch/provider fields. Reported database/cache settings are configured backend-specific limits, not measured residency or live connections. Actual adaptive concurrency and resource-limit changes require separate decisions and validation.
 
 ## 16. Migration and rollout
 

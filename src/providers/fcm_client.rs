@@ -11,7 +11,6 @@ use crate::{
         error::{parse_retry_after_millis, trimmed_body_text},
         fcm::FcmPayload,
     },
-    runtime_config::GatewayRuntimeProfile,
 };
 
 pub struct FcmService {
@@ -22,14 +21,6 @@ pub struct FcmService {
 
 impl FcmService {
     pub fn new(token_provider: Arc<dyn FcmTokenProvider>, base_url: &str) -> Result<Self, Error> {
-        Self::new_with_profile(token_provider, base_url, GatewayRuntimeProfile::Small)
-    }
-
-    pub fn new_with_profile(
-        token_provider: Arc<dyn FcmTokenProvider>,
-        base_url: &str,
-        _runtime_profile: GatewayRuntimeProfile,
-    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
             .connect_timeout(PROVIDER_CONNECT_TIMEOUT)

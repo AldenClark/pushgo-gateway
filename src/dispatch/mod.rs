@@ -8,7 +8,6 @@ use crate::{
         ApnsClient, DispatchResult, FcmClient, WnsClient, apns::ApnsPayload, fcm::FcmPayload,
         wns::WnsPayload,
     },
-    runtime_config::GatewayRuntimeProfile,
     storage::{Platform, Storage},
     util::encode_crockford_base32_128,
 };

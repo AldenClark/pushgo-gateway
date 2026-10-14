@@ -436,7 +436,7 @@ pub async fn build_app(
     let device_operation_guards = Arc::new(DeviceOperationGuards::default());
     restore_device_registry(&store, &device_registry).await?;
 
-    let (dispatch, receivers) = DispatchChannels::with_profile(runtime_tuning.profile);
+    let (dispatch, receivers) = DispatchChannels::new();
 
     let auth = match args.token.as_deref() {
         None => AuthMode::Disabled,
@@ -611,7 +611,6 @@ pub async fn build_app(
         store: state.store.clone(),
         private: private.clone(),
         runtime_counters: Arc::clone(&runtime_counters),
-        runtime_profile: runtime_tuning.profile,
     }
     .spawn(receivers);
 

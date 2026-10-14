@@ -10,7 +10,6 @@ use crate::{
         error::{parse_retry_after_millis, trimmed_body_text},
         wns::WnsPayload,
     },
-    runtime_config::GatewayRuntimeProfile,
 };
 
 const WNS_TYPE: &str = "wns/raw";
@@ -24,13 +23,6 @@ pub struct WnsService {
 
 impl WnsService {
     pub fn new(token_provider: Arc<dyn WnsTokenProvider>) -> Result<Self, Error> {
-        Self::new_with_profile(token_provider, GatewayRuntimeProfile::Small)
-    }
-
-    pub fn new_with_profile(
-        token_provider: Arc<dyn WnsTokenProvider>,
-        _runtime_profile: GatewayRuntimeProfile,
-    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
             .connect_timeout(PROVIDER_CONNECT_TIMEOUT)

@@ -776,13 +776,8 @@ pub(crate) enum DispatchError {
 }
 
 impl DispatchChannels {
-    #[cfg(test)]
     pub(crate) fn new() -> (Self, DispatchWorkerReceivers) {
-        Self::with_profile(GatewayRuntimeProfile::Small)
-    }
-
-    pub(crate) fn with_profile(profile: GatewayRuntimeProfile) -> (Self, DispatchWorkerReceivers) {
-        let config = DispatchRuntimeConfig::from_profile(profile);
+        let config = DispatchRuntimeConfig::default();
         let (apns_tx, apns_rx) = flume::bounded(config.queue_capacity);
         let (live_activity_tx, live_activity_rx) = flume::bounded(config.queue_capacity);
         let (widget_push_tx, widget_push_rx) = flume::bounded(config.queue_capacity);

@@ -11,7 +11,6 @@ use crate::{
         apns::{ApnsPayload, ApnsPushType},
         error::{parse_retry_after_millis, trimmed_body_text},
     },
-    runtime_config::GatewayRuntimeProfile,
     storage::Platform,
 };
 
@@ -28,14 +27,6 @@ pub struct ApnsService {
 
 impl ApnsService {
     pub fn new(token_provider: Arc<dyn ApnsTokenProvider>, endpoint: &str) -> Result<Self, Error> {
-        Self::new_with_profile(token_provider, endpoint, GatewayRuntimeProfile::Small)
-    }
-
-    pub fn new_with_profile(
-        token_provider: Arc<dyn ApnsTokenProvider>,
-        endpoint: &str,
-        _runtime_profile: GatewayRuntimeProfile,
-    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent(concat!("pushgo-gateway/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
