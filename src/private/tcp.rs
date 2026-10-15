@@ -24,7 +24,7 @@ use crate::private::{
     warp_engine::{PushgoServerApp, default_server_config},
 };
 
-const MAX_FRAME_LEN: usize = (32 * 1024) + 2;
+const MAX_FRAME_LEN: usize = warp_link::warp_link_core::MAX_FRAME_BYTES;
 const MAX_PROXY_LINE_BYTES: usize = 108;
 
 #[derive(Clone)]
@@ -650,6 +650,38 @@ mod tests {
             b"cdef".to_vec(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn prefixed_writer_accepts_shared_maximum_and_rejects_one_over_before_prefix() {
+        use tokio::io::AsyncReadExt;
+        let maximum = warp_link::warp_link_core::MAX_FRAME_BYTES;
+        for size in [maximum, maximum + 1] {
+            let (writer, mut observed) = tokio::io::duplex(maximum + 4);
+            let mut io = FramedServerIo {
+                reader: warp_link::warp_link_transport::FramedReader::new(tokio::io::empty()),
+                writer,
+                write_timeout_ms: 1_000,
+                prefetched_frame: None,
+            };
+            let frame = vec![0x5a; size];
+            let sent = io.send_prefixed_frame(&frame).await;
+            drop(io);
+            let mut wire = Vec::new();
+            observed.read_to_end(&mut wire).await.unwrap();
+            if size == maximum {
+                sent.expect("shared maximum frame must be written intact");
+                assert_eq!(wire.len(), maximum + 4);
+                assert_eq!(&wire[..4], &(maximum as u32).to_be_bytes());
+                assert_eq!(&wire[4..], frame.as_slice());
+            } else {
+                assert!(matches!(sent, Err(WarpLinkError::Protocol(_))));
+                assert!(
+                    wire.is_empty(),
+                    "one-over rejection must emit neither prefix nor payload"
+                );
+            }
+        }
     }
 
     #[test]

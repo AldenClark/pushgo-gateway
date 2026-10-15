@@ -40,8 +40,8 @@ async-trait = "=0.1.91"
 bytes = "=1.12.1"
 mqttbytes = "=0.6.0"
 postcard = { version = "=1.1.3", default-features = false, features = ["alloc"] }
-warp-link = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "dbae3a80c8b796969cadc9045ee982a0a60c4d27" }
-pushgo-warp-profile = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "dbae3a80c8b796969cadc9045ee982a0a60c4d27" }
+warp-link = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "fded360134f2144876bb11b95e7431cb1d72aef3" }
+pushgo-warp-profile = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "fded360134f2144876bb11b95e7431cb1d72aef3" }
 quinn = { version = "=0.11.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = "=0.23.45"
 tokio-rustls = "=0.26.4"

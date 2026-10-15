@@ -1,19 +1,114 @@
-//! Explicit diagnostic for the existing HTTP/Private wire size contract seam.
-//! A passing diagnostic reports the gap; it is not a delivery acceptance test.
+//! Actual serialized ordinary HTTP/canonical/Private frame size oracles.
+//! The shared fixed transport frame budget includes type/flags, excluding the stream prefix.
 use crate::{Config, OrdinaryStore};
 use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
 use pushgo_warp_profile::PushgoWireProfile;
+use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
-use warp_link::warp_link_core::{DeliverMsg, WireProfile};
+use warp_link::warp_link_core::{DeliverMsg, MAX_FRAME_BYTES, WireProfile};
 
-#[tokio::test]
-#[ignore = "explicit C6 HTTP/Private wire boundary diagnostic; not a capability pass"]
-async fn legal_http_input_private_wire_size_diagnostic() {
+/// Exactly the locked public DeliverV2Frame schema. This test-only serialization
+/// measures actual Rust bytes even when the production codec rejects an oversize
+/// frame. Small/in-range frames are compared byte-for-byte against that codec.
+pub(super) fn actual_deliver_frame(id: &str, payload: &[u8]) -> Vec<u8> {
+    #[derive(Serialize)]
+    struct Deliver<'a> {
+        seq: u64,
+        delivery_id: &'a str,
+        payload: &'a [u8],
+    }
+    let profile = PushgoWireProfile::new();
+    let header = profile
+        .encode_server_deliver(&DeliverMsg {
+            seq: Some(1),
+            id: id.into(),
+            payload: bytes::Bytes::new(),
+        })
+        .unwrap();
+    let mut frame = header[..2].to_vec();
+    frame.extend(
+        postcard::to_allocvec(&Deliver {
+            seq: 1,
+            delivery_id: id,
+            payload,
+        })
+        .unwrap(),
+    );
+    if frame.len() <= MAX_FRAME_BYTES {
+        assert_eq!(
+            profile
+                .encode_server_deliver(&DeliverMsg {
+                    seq: Some(1),
+                    id: id.into(),
+                    payload: bytes::Bytes::copy_from_slice(payload)
+                })
+                .unwrap(),
+            frame
+        );
+    }
+    frame
+}
+
+/// Serialize the actual legal request instead of deriving per-field wire limits.
+pub(super) fn legal_http_input(channel: &str, password: &str, kind: &str) -> Vec<u8> {
+    let mut request = json!({"channel_id":channel,"password":password,"title":"x","body":"","op_id":"private-wire-boundary"});
+    if kind == "numeric-metadata" {
+        request["metadata"] = json!(null);
+        let base = serde_json::to_string(&request).unwrap();
+        let mut entries = Vec::new();
+        loop {
+            let entry = format!("\"{:x}\":1e15", entries.len());
+            entries.push(entry);
+            let candidate = base.replace(
+                "\"metadata\":null",
+                &format!("\"metadata\":{{{}}}", entries.join(",")),
+            );
+            if candidate.len() > 32768 {
+                entries.pop();
+                break;
+            }
+        }
+        let raw = base.replace(
+            "\"metadata\":null",
+            &format!("\"metadata\":{{{}}}", entries.join(",")),
+        );
+        let padding = "x".repeat(32768 - raw.len());
+        let raw = raw.replace("\"body\":\"\"", &format!("\"body\":\"{padding}\""));
+        assert_eq!(raw.len(), 32768);
+        return raw.into_bytes();
+    }
+    let pattern = match kind {
+        "text" => "x",
+        "chinese" => "中文",
+        "escape" => "\"\\\n\t",
+        _ => panic!("unknown boundary fixture"),
+    };
+    let mut repeats = 0;
+    loop {
+        request["body"] = json!(pattern.repeat(repeats + 128));
+        if serde_json::to_vec(&request).unwrap().len() > 32768 {
+            break;
+        }
+        repeats += 128;
+    }
+    request["body"] = json!(pattern.repeat(repeats));
+    let remainder = 32768 - serde_json::to_vec(&request).unwrap().len();
+    request["body"] = json!(format!(
+        "{}{}",
+        pattern.repeat(repeats),
+        "x".repeat(remainder)
+    ));
+    let raw = serde_json::to_vec(&request).unwrap();
+    assert_eq!(raw.len(), 32768);
+    raw
+}
+
+async fn admitted_size(kind: &str) {
     let dir = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.private.enabled = true;
@@ -32,11 +127,9 @@ async fn legal_http_input_private_wire_size_diagnostic() {
         .as_str()
         .unwrap()
         .to_owned();
-    let mut request = json!({"channel_id":channel,"password":password,"title":"x","body":"","op_id":"private-wire-boundary"});
-    let empty = serde_json::to_vec(&request).unwrap().len();
-    request["body"] = json!("x".repeat(32768 - empty));
-    let input = serde_json::to_vec(&request).unwrap();
-    assert_eq!(input.len(), 32768);
+    let input = legal_http_input(&channel, &password, kind);
+    let input_hash = blake3::hash(&input).to_hex().to_string();
+    let expected: serde_json::Value = serde_json::from_slice(&input).unwrap();
     let app = crate::router(store.clone(), Arc::new(|| json!({})));
     let response = app
         .oneshot(
@@ -49,12 +142,15 @@ async fn legal_http_input_private_wire_size_diagnostic() {
         )
         .await
         .unwrap();
-    assert!(response.status().is_success());
+    assert!(
+        response.status().is_success(),
+        "legal {kind} HTTP input must stay accepted"
+    );
     let accepted: serde_json::Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
     let route = store.private_route(&device).await.unwrap();
     let ticket = store
-        .private_claim(&route, "boundary-diagnostic", 1)
+        .private_claim(&route, "boundary", 1)
         .await
         .unwrap()
         .pop()
@@ -64,26 +160,102 @@ async fn legal_http_input_private_wire_size_diagnostic() {
         accepted["data"]["delivery_id"].as_str().unwrap()
     );
     let payload = crate::private_runtime::encode_payload(&ticket.payload).unwrap();
-    let frame = PushgoWireProfile::new()
-        .encode_server_deliver(&DeliverMsg {
-            seq: Some(1),
-            id: ticket.delivery_id.clone(),
-            payload,
-        })
-        .unwrap();
+    let frame = actual_deliver_frame(&ticket.delivery_id, &payload);
+    let decoded: pushgo_warp_profile::PrivatePayloadEnvelope =
+        postcard::from_bytes(&payload).unwrap();
+    assert_eq!(
+        decoded.data["body"],
+        expected["body"].as_str().unwrap().trim()
+    );
+    if let Some(metadata) = expected.get("metadata") {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&decoded.data["metadata"]).unwrap(),
+            *metadata
+        );
+    }
     println!(
-        "C6_CONTRACT_BOUNDARY http_bytes=32768 canonical_bytes={} deliver_frame_bytes={} existing_transport_limit=32770",
-        ticket.payload.len(),
-        frame.len()
+        "C7_LEGAL_HTTP_FRAME {}",
+        json!({"case":kind,"input_blake3":input_hash,"http_bytes":32768,"canonical_bytes":ticket.payload.len(),"complete_frame_bytes":frame.len(),"fixed_frame_limit":MAX_FRAME_BYTES,"accepted_delivery_id":ticket.delivery_id,"canonical_message_id":decoded.data["message_id"]})
     );
-    assert!(
-        frame.len() > 32770,
-        "diagnostic hypothesis must be observed, never assumed"
-    );
+    // No rejection or payload rewrite is introduced. If a real legal sample
+    // exceeds the shared fixed budget this preserves its exact generator/hash/bytes.
     store
         .private_release(&ticket.group_id, std::slice::from_ref(&ticket.claim_token))
         .await
         .unwrap();
     store.close().await;
     owner.release();
+    assert!(
+        frame.len() <= MAX_FRAME_BYTES,
+        "legal {kind} sample {input_hash}: actual complete frame {} exceeds shared fixed limit {}",
+        frame.len(),
+        MAX_FRAME_BYTES
+    );
+}
+#[tokio::test]
+async fn legal_http_text_fits_complete_private_frame() {
+    admitted_size("text").await;
+}
+#[tokio::test]
+async fn legal_http_chinese_fits_complete_private_frame() {
+    admitted_size("chinese").await;
+}
+#[tokio::test]
+async fn legal_http_escape_fits_complete_private_frame() {
+    admitted_size("escape").await;
+}
+#[tokio::test]
+async fn legal_http_numeric_metadata_measures_complete_private_frame() {
+    admitted_size("numeric-metadata").await;
+}
+
+#[test]
+fn ordinary_text_chinese_escape_complete_frame_at_and_above_shared_fixed_limit() {
+    for pattern in ["x", "中文", "\"\\\n\t"] {
+        let frame_for = |body: &str| {
+            let canonical = serde_json::to_vec(
+                &json!({"entity_type":"message","title":"boundary","body":body}),
+            )
+            .unwrap();
+            let payload = crate::private_runtime::encode_payload(&canonical).unwrap();
+            (
+                actual_deliver_frame("0123456789abcdef0123456789abcdef", &payload),
+                payload,
+            )
+        };
+        let mut low = 0;
+        let mut high = MAX_FRAME_BYTES;
+        while low < high {
+            let middle = (low + high + 1) / 2;
+            if frame_for(&pattern.repeat(middle)).0.len() <= MAX_FRAME_BYTES {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        let mut body = pattern.repeat(low);
+        // Fill only the final few bytes after actual serialized-size search.
+        let remaining = MAX_FRAME_BYTES - frame_for(&body).0.len();
+        body.push_str(&"x".repeat(remaining));
+        let (frame, payload) = frame_for(&body);
+        assert_eq!(frame.len(), MAX_FRAME_BYTES);
+        let decoded: pushgo_warp_profile::PrivatePayloadEnvelope =
+            postcard::from_bytes(&payload).unwrap();
+        assert_eq!(decoded.data["body"], body);
+        let mut oversized = body.clone();
+        oversized.push('x');
+        let (over, payload) = frame_for(&oversized);
+        assert_eq!(over.len(), MAX_FRAME_BYTES + 1);
+        assert!(
+            PushgoWireProfile::new()
+                .encode_server_deliver(&DeliverMsg {
+                    seq: Some(1),
+                    id: "0123456789abcdef0123456789abcdef".into(),
+                    payload: bytes::Bytes::from(payload)
+                })
+                .is_err(),
+            "transport rejects full frame one byte above shared fixed limit {}, not legal HTTP admission",
+            MAX_FRAME_BYTES
+        );
+    }
 }

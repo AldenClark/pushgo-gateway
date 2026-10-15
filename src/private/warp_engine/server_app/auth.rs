@@ -152,7 +152,7 @@ impl PushgoServerApp {
             max_backoff_secs: tuning.max_backoff_secs,
             auth_expires_at_unix_secs: None,
             auth_refresh_before_secs: 0,
-            max_frame_bytes: 32 * 1024,
+            max_frame_bytes: warp_link::warp_link_core::MAX_FRAME_BYTES as u32,
             negotiated_wire_version,
             negotiated_payload_version,
             metadata: std::collections::BTreeMap::new(),

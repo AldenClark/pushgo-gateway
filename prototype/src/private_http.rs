@@ -98,8 +98,10 @@ impl PrivateHttp {
             }
         });
         ws.protocols(["pushgo-private.v1"])
-            .max_frame_size(32770)
-            .max_message_size(32770)
+            // Match standalone Warp: bounded idle read allocation, unchanged legal frame/message size.
+            .read_buffer_size(16 * 1024)
+            .max_frame_size(warp_link::warp_link_core::MAX_FRAME_BYTES)
+            .max_message_size(warp_link::warp_link_core::MAX_FRAME_BYTES)
             .on_upgrade(move |socket| async move {
                 let _ = send.send(socket);
             })

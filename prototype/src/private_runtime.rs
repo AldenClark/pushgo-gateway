@@ -23,8 +23,8 @@ use tokio::{
 };
 use warp_link::warp_link_core::{
     AckMsg, AckStatus, AuthCheckPhase, AuthError, AuthRequest, AuthResponse, DisconnectReason,
-    OutboundMsg, ServerApp, SessionAuthState, SessionControl, SessionCtx, TransportKind,
-    WireProfile,
+    MAX_FRAME_BYTES, OutboundMsg, ServerApp, SessionAuthState, SessionControl, SessionCtx,
+    TransportKind, WireProfile,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -779,7 +779,7 @@ impl Owner {
                     max_backoff_secs: 30,
                     auth_expires_at_unix_secs: None,
                     auth_refresh_before_secs: 0,
-                    max_frame_bytes: 32768,
+                    max_frame_bytes: MAX_FRAME_BYTES as u32,
                     negotiated_wire_version: 2,
                     negotiated_payload_version: 1,
                     metadata: BTreeMap::new(),

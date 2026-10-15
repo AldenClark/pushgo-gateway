@@ -22,9 +22,12 @@ use tokio::{
     time::{Instant, timeout, timeout_at},
 };
 use warp_link::warp_link_core::{
-    AckMsg, AckStatus, OutboundMsg, SessionControl, SessionControlOps, WarpLinkError,
+    AckMsg, AckStatus, MAX_FRAME_BYTES, OutboundMsg, SessionControl, SessionControlOps,
+    WarpLinkError,
 };
-const MAX_PACKET: usize = 32770;
+// MQTT retains its independent whole-packet budget at the same shared fixed limit.
+// There is no length-prefix allowance or payload-size-derived expansion here.
+pub(crate) const MAX_PACKET: usize = MAX_FRAME_BYTES;
 const MAX_INFLIGHT: usize = 128;
 fn error(e: impl std::fmt::Display) -> WarpLinkError {
     WarpLinkError::Protocol(e.to_string())

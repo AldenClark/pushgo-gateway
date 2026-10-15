@@ -167,6 +167,10 @@ impl PlainPeer {
         else {
             panic!("real TCP expected WELCOME")
         };
+        assert_eq!(
+            welcome.max_frame_bytes,
+            warp_link::warp_link_core::MAX_FRAME_BYTES as u32
+        );
         (peer, welcome.resume_token.unwrap())
     }
     async fn delivery(&mut self) -> warp_link::warp_link_core::DeliverMsg {
@@ -271,7 +275,7 @@ async fn real_tcp_lost_ack_runtime_restart_replays_same_delivery_with_new_resume
 async fn mqtt_read(stream: &mut TcpStream, buffer: &mut BytesMut) -> Packet {
     timeout(Duration::from_secs(5), async {
         loop {
-            match v5::read(buffer, 32770) {
+            match v5::read(buffer, crate::private_mqtt::MAX_PACKET) {
                 Ok(p) => return p,
                 Err(mqttbytes::Error::InsufficientBytes(_)) => {}
                 Err(e) => panic!("real MQTT codec {e:?}"),
@@ -1036,6 +1040,149 @@ async fn real_ws_replacement_coexists_with_tcp_and_revoked_stream_cannot_consume
     runtime.begin_shutdown();
     http.shutdown(&runtime).await;
     tcp_listener.shutdown().await.unwrap();
+    runtime.shutdown().await.unwrap();
+    assert_eq!(runtime.available_owned_slots(), 4096);
+    f.close().await;
+}
+
+/// The former32768HTTP/33057DELIVER counterexample must now travel intact,
+/// commit ACK, and preserve the second accepted body's first identity across
+/// authority restart and Private->Provider route exit. No wakeup or chunking.
+#[tokio::test]
+async fn real_tcp_full_http_boundary_ack_restart_and_route_preserve_canonical_identity() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+    async fn admit(f: &Fixture, op: &str) -> serde_json::Value {
+        let input = crate::private_boundary_tests::legal_http_input(&f.channel, &f.auth, "text");
+        let input = String::from_utf8(input)
+            .unwrap()
+            .replace("private-wire-boundary", op)
+            .into_bytes();
+        assert_eq!(input.len(), 32768);
+        let response = crate::router(f.store.clone(), Arc::new(|| serde_json::json!({})))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/message")
+                    .header("content-type", "application/json")
+                    .body(Body::from(input))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        let accepted: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        accepted["data"].clone()
+    }
+    async fn snapshot(f: &Fixture, id: &str) -> (String, String, i64, i64, i64, Vec<u8>) {
+        sqlx::query_as("SELECT delivery_id,message_id,accepted_at,expires_at,dedupe_until,payload_blob FROM messages WHERE delivery_id=?").bind(id).fetch_one(&f.store.sqlite_store().unwrap().pool).await.unwrap()
+    }
+    let mut f = Fixture::new().await;
+    let first = admit(&f, "private-wire-boundary").await;
+    let (runtime, mut listener) = start_plain(&f).await;
+    let (mut peer, _) = PlainPeer::connect(listener.local_addr, f.hello()).await;
+    let delivered = peer.delivery().await;
+    let frame = PushgoWireProfile::new()
+        .encode_server_deliver(&delivered)
+        .unwrap();
+    assert_eq!(
+        frame.len(),
+        33057,
+        "retain exact original legal-input counterexample"
+    );
+    assert!(frame.len() > 32770 && frame.len() <= warp_link::warp_link_core::MAX_FRAME_BYTES);
+    let original: PrivatePayloadEnvelope = postcard::from_bytes(&delivered.payload).unwrap();
+    assert_eq!(
+        delivered.id.as_str(),
+        first["delivery_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        original.data["message_id"].as_str(),
+        first["message_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        original.data["body"],
+        serde_json::from_slice::<serde_json::Value>(
+            &crate::private_boundary_tests::legal_http_input(&f.channel, &f.auth, "text")
+        )
+        .unwrap()["body"]
+            .as_str()
+            .unwrap()
+    );
+    peer.ack(&delivered, AckStatus::Ok).await;
+    f.wait_consumed().await;
+    let replay = admit(&f, "private-wire-boundary").await;
+    assert_eq!(replay["delivery_id"], first["delivery_id"]);
+    assert_eq!(replay["message_id"], first["message_id"]);
+
+    let second = admit(&f, "private-wire-boundarz").await;
+    let id = second["delivery_id"].as_str().unwrap().to_owned();
+    let before = snapshot(&f, &id).await;
+    let pending = peer.delivery().await;
+    assert_eq!(pending.id, id);
+    let frozen: PrivatePayloadEnvelope = postcard::from_bytes(&pending.payload).unwrap();
+    drop(peer);
+    listener.shutdown().await.unwrap();
+    runtime.shutdown().await.unwrap();
+    assert_eq!(f.live_claims().await, 0);
+    let config = f.store.config.clone();
+    f.store.close().await;
+    f.owner.take().unwrap().release();
+    let (store, owner) = OrdinaryStore::open(
+        &format!(
+            "sqlite://{}",
+            f._dir.path().join("private.sqlite").display()
+        ),
+        config,
+    )
+    .await
+    .unwrap();
+    f.store = store;
+    f.owner = Some(owner);
+    assert_eq!(snapshot(&f, &id).await, before);
+    let (runtime, mut listener) = start_plain(&f).await;
+    let (mut peer, _) = PlainPeer::connect(listener.local_addr, f.hello()).await;
+    let recovered = peer.delivery().await;
+    assert_eq!(recovered.id, id);
+    assert_eq!(recovered.payload, pending.payload);
+    f.store
+        .update_route(&f.device, None, "FCM", Some("synthetic-c7-route-exit"))
+        .await
+        .unwrap();
+    let stale = PushgoWireProfile::new()
+        .encode_client_ack(&AckMsg {
+            seq: recovered.seq,
+            id: recovered.id.clone(),
+            status: AckStatus::Ok,
+        })
+        .unwrap();
+    let _ = write_prefixed_frame(&mut peer.writer, &stale).await;
+    let fenced = timeout(Duration::from_secs(5), peer.reader.read_frame())
+        .await
+        .expect("route exit fences old stream within original budget");
+    if let Ok(frame) = fenced {
+        assert!(matches!(
+            PushgoWireProfile::new()
+                .decode_server_frame(&frame)
+                .unwrap(),
+            DecodedServerFrame::GoAway(_) | DecodedServerFrame::Error { .. }
+        ));
+    }
+    assert_eq!(snapshot(&f, &id).await, before);
+    let pulled = f.store.pull(&f.device, Some(&id)).await.unwrap();
+    let item = &pulled["items"][0];
+    assert_eq!(item["delivery_id"], id);
+    assert_eq!(item["payload"]["message_id"], frozen.data["message_id"]);
+    assert_eq!(item["payload"]["body"], frozen.data["body"]);
+    assert_eq!(item["payload"]["sent_at"], frozen.data["sent_at"]);
+    assert_eq!(f.store.ack(&f.device, vec![id]).await.unwrap(), 1);
+    f.wait_consumed().await;
+    drop(peer);
+    listener.shutdown().await.unwrap();
     runtime.shutdown().await.unwrap();
     assert_eq!(runtime.available_owned_slots(), 4096);
     f.close().await;
