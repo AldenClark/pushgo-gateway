@@ -1,0 +1,18 @@
+{
+  "builds": [
+    "native-build-first.log",
+    "native-build-receipt-oracle-incremental.log"
+  ],
+  "files": [
+    {
+      "path": "staged-pushgo-android/app/build/outputs/apk/debug/app-universal-debug.apk",
+      "sha256": "148b254d1fdef70c8cbe5a842f54551b8aedb601fdb1c46d7bf25a6bf9ba62fa",
+      "bytes": 100629161
+    },
+    {
+      "path": "staged-pushgo-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+      "sha256": "a8c30d1cdca91c108716f8164fc91989b3dd6134fd38fc0fb48ac53309869979",
+      "bytes": 4747830
+    }
+  ]
+}

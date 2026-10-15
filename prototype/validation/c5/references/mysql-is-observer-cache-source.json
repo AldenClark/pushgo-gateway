@@ -1,0 +1,18 @@
+{
+  "source_url": "https://raw.githubusercontent.com/mysql/mysql-server/mysql-8.4.11/storage/innobase/trx/trx0i_s.cc",
+  "mysql_tag": "mysql-8.4.11",
+  "local_file": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/env/mysql-8.4.11-trx0i_s.cc",
+  "sha256": "3006dba44b36a3c963755afd11a7133bcb8dabd2a1428665eebadfd0f0ccfc66",
+  "cache_refresh_check_lines": [
+    681,
+    699
+  ],
+  "read_timestamp_update_lines": [
+    893,
+    900
+  ],
+  "claim": "INNODB_TRX cache refresh requires more than 100ms since previous read; each read updates last_read. Polling every5ms can retain the initial snapshot.",
+  "scope": "Only C5 MySQL native observer. No inference about C4 SQLite timeout.",
+  "test_change": "Exact pinned connection ID, 150ms observer interval, unchanged 2s bound; product timeout untouched.",
+  "line_number_note": "Original downloaded raw file line numbers, not browser HTML extraction line numbers."
+}

@@ -1,0 +1,728 @@
+{
+  "scope": "Final C5 source-only env/fault/native attempt03 and final651bf7 finite-capacity inputs; earlier named functional baselines preserved",
+  "note": "Exact copies except explicitly transformed historical artifact identity summary. Packaged locations have NOT RUN. No runtime result is created by packaging.",
+  "files": [
+    {
+      "packaged_path": "env/isolated_db.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/env/isolated_db.py",
+      "original_sha256": "94c0b29512aa65002ae57523f6b14f2c65358cda10d43968cd9f91832a9efbf4",
+      "packaged_sha256": "94c0b29512aa65002ae57523f6b14f2c65358cda10d43968cd9f91832a9efbf4",
+      "bytes": 6442,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "env/capture_config.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/env/capture_config.py",
+      "original_sha256": "b61135710989166cae8c0ce495bda79550304429129d72eb7939cfd3239d5f4f",
+      "packaged_sha256": "b61135710989166cae8c0ce495bda79550304429129d72eb7939cfd3239d5f4f",
+      "bytes": 2793,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "fault/mysql_wire_fault.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/fault/mysql_wire_fault.py",
+      "original_sha256": "c3ac0827c8dc42e03f781b8ad2c29ef6fca379e8fac181e276649733dff0efc0",
+      "packaged_sha256": "c3ac0827c8dc42e03f781b8ad2c29ef6fca379e8fac181e276649733dff0efc0",
+      "bytes": 13023,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "fault/mysql_released_session_fence.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/fault/mysql_released_session_fence.py",
+      "original_sha256": "1b38d1a6ab603ca3814132af05716e7131180155281db24b432725e133925abc",
+      "packaged_sha256": "1b38d1a6ab603ca3814132af05716e7131180155281db24b432725e133925abc",
+      "bytes": 4317,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "references/mysql-is-observer-cache-source.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/env/mysql-is-observer-cache-source.json",
+      "original_sha256": "7a24d0320546210bc8bab2c31f020711d8a6ec712a1908c55e06252758fa1799",
+      "packaged_sha256": "7a24d0320546210bc8bab2c31f020711d8a6ec712a1908c55e06252758fa1799",
+      "bytes": 949,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "artifact-identities-baseline-753a1836.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/binaries/c5-ordinary-identity.json",
+      "original_sha256": "ece0e42ec6add6e12c8232734a678d45485d9d064d6e07e8c6fc99be7f2a1d33",
+      "packaged_sha256": "60e98e9822983978d9d2e512f67a6bcebc93771fe3d5b907f6eae21053179fac",
+      "bytes": 5771,
+      "exact_byte_copy": false,
+      "transformation": "Selected historical normal/test/native artifact identities and scoped execution/quiet summaries; no new execution. Original receipts remain external.",
+      "executed_at_packaged_location": false,
+      "additional_original_inputs": [
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/summary.json",
+          "original_sha256": "d9e73d6b494aee455a881253953a62ced0925f038f76a481ea097c7c69a0a555"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/quiet.json",
+          "original_sha256": "339b6d9705cb826c29a59632b5f59108e92d9d4d9fef1fd934c58895a4c3b89f"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/final-rust-direct-results.json",
+          "original_sha256": "06d28e4a4d0045ce0755786abd34584a9ca44a82892233f221d36e72dfc895d6"
+        }
+      ],
+      "baseline_stage": "Historical 753a1836 artifacts and native attempt02; final identities are separate."
+    },
+    {
+      "packaged_path": "native/baseline-attempt02/run-matrix.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-02-adapter-source/run-matrix.py",
+      "original_sha256": "c568edd8cf4add891e740a29f9100c0deddd8632ecc8c9d2ecdf45fa72b74036",
+      "packaged_sha256": "c568edd8cf4add891e740a29f9100c0deddd8632ecc8c9d2ecdf45fa72b74036",
+      "bytes": 7598,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_path_at_previous_packaging": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/run-matrix.py",
+      "baseline_stage": "attempt02 on 753a1836; preserved exact bytes before attempt03 replacement",
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "attempt-02-adapter-source/run-matrix.py",
+        "source_sha256": "c568edd8cf4add891e740a29f9100c0deddd8632ecc8c9d2ecdf45fa72b74036"
+      }
+    },
+    {
+      "packaged_path": "native/baseline-attempt02/emulator_lifecycle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-02-adapter-source/emulator_lifecycle.py",
+      "original_sha256": "2a7bd36354eb31fbf6d1a536995cf42aadade654cdac9e58a544f7905c7c9f18",
+      "packaged_sha256": "2a7bd36354eb31fbf6d1a536995cf42aadade654cdac9e58a544f7905c7c9f18",
+      "bytes": 2023,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_path_at_previous_packaging": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/emulator_lifecycle.py",
+      "baseline_stage": "attempt02 on 753a1836; preserved exact bytes before attempt03 replacement",
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "attempt-02-adapter-source/emulator_lifecycle.py",
+        "source_sha256": "2a7bd36354eb31fbf6d1a536995cf42aadade654cdac9e58a544f7905c7c9f18"
+      }
+    },
+    {
+      "packaged_path": "native/observer-preflight.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/observer-preflight.py",
+      "original_sha256": "1ba6d8ccfa0255c6f4a02705457f45402b5a67cf6a836fdae9694a7f45689819",
+      "packaged_sha256": "1ba6d8ccfa0255c6f4a02705457f45402b5a67cf6a836fdae9694a7f45689819",
+      "bytes": 2081,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "observer-preflight.py",
+        "source_sha256": "1ba6d8ccfa0255c6f4a02705457f45402b5a67cf6a836fdae9694a7f45689819"
+      }
+    },
+    {
+      "packaged_path": "native/harness/native_store_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/harness/native_store_observer.py",
+      "original_sha256": "0d31193ca1236f6ae26d0e2e128a08b9e7e8addc290a5cf5312693d253f17823",
+      "packaged_sha256": "0d31193ca1236f6ae26d0e2e128a08b9e7e8addc290a5cf5312693d253f17823",
+      "bytes": 2702,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "harness/native_store_observer.py",
+        "source_sha256": "0d31193ca1236f6ae26d0e2e128a08b9e7e8addc290a5cf5312693d253f17823"
+      }
+    },
+    {
+      "packaged_path": "native/harness/run_c3_control_restart.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/harness/run_c3_control_restart.py",
+      "original_sha256": "4d3a9d67c3114662d841d585c2ab4873999d453ad777d56a5c0b88b6e19fb251",
+      "packaged_sha256": "4d3a9d67c3114662d841d585c2ab4873999d453ad777d56a5c0b88b6e19fb251",
+      "bytes": 15301,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "harness/run_c3_control_restart.py",
+        "source_sha256": "4d3a9d67c3114662d841d585c2ab4873999d453ad777d56a5c0b88b6e19fb251"
+      }
+    },
+    {
+      "packaged_path": "native/harness/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/harness/c3_mock.py",
+      "original_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "packaged_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "harness/c3_mock.py",
+        "source_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+      }
+    },
+    {
+      "packaged_path": "native/apple/run-loop.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/apple/run-loop.py",
+      "original_sha256": "c08ee33b93dcebf94552ff20654659517805ca1f9cdce437e1abe7e86e2a08a0",
+      "packaged_sha256": "c08ee33b93dcebf94552ff20654659517805ca1f9cdce437e1abe7e86e2a08a0",
+      "bytes": 18057,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "apple/run-loop.py",
+        "source_sha256": "c08ee33b93dcebf94552ff20654659517805ca1f9cdce437e1abe7e86e2a08a0"
+      }
+    },
+    {
+      "packaged_path": "native/apple/run-native.sh",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/apple/run-native.sh",
+      "original_sha256": "48f34885892ad85df5bf615a6d8466c75dfe0f2600b8446035a462299072895f",
+      "packaged_sha256": "48f34885892ad85df5bf615a6d8466c75dfe0f2600b8446035a462299072895f",
+      "bytes": 512,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "apple/run-native.sh",
+        "source_sha256": "48f34885892ad85df5bf615a6d8466c75dfe0f2600b8446035a462299072895f"
+      }
+    },
+    {
+      "packaged_path": "native/apple/source-copy-manifest.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/apple/source-copy-manifest.json",
+      "original_sha256": "0455c29e0b7b3707650c654c1de5f9999271c053962f430f790c12ccf9a59a09",
+      "packaged_sha256": "0455c29e0b7b3707650c654c1de5f9999271c053962f430f790c12ccf9a59a09",
+      "bytes": 17081,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/android/run-loop.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/run-loop.py",
+      "original_sha256": "e316ae09474127489c472892dc9191a3da92403ce38048e8385f43d0add7f1fd",
+      "packaged_sha256": "e316ae09474127489c472892dc9191a3da92403ce38048e8385f43d0add7f1fd",
+      "bytes": 16001,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "android/run-loop.py",
+        "source_sha256": "e316ae09474127489c472892dc9191a3da92403ce38048e8385f43d0add7f1fd"
+      }
+    },
+    {
+      "packaged_path": "native/android/run-native.sh",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/run-native.sh",
+      "original_sha256": "a4458be20936ca8eaa40ecf2b906d30d13aee932f32cc3984b775bec152d7bb7",
+      "packaged_sha256": "a4458be20936ca8eaa40ecf2b906d30d13aee932f32cc3984b775bec152d7bb7",
+      "bytes": 4764,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "android/run-native.sh",
+        "source_sha256": "a4458be20936ca8eaa40ecf2b906d30d13aee932f32cc3984b775bec152d7bb7"
+      }
+    },
+    {
+      "packaged_path": "native/android/verify-existing-room.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/verify-existing-room.py",
+      "original_sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+      "packaged_sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+      "bytes": 3707,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "android/verify-existing-room.py",
+        "source_sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851"
+      }
+    },
+    {
+      "packaged_path": "native/android/build-test-apk.sh",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/build-test-apk.sh",
+      "original_sha256": "cd3505752ceb34274a8470ca7dabba19e8615eb98770156eb6262a0b13c37cc1",
+      "packaged_sha256": "cd3505752ceb34274a8470ca7dabba19e8615eb98770156eb6262a0b13c37cc1",
+      "bytes": 816,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "android/build-test-apk.sh",
+        "source_sha256": "cd3505752ceb34274a8470ca7dabba19e8615eb98770156eb6262a0b13c37cc1"
+      }
+    },
+    {
+      "packaged_path": "native/android/verify-c5-staging.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/verify-c5-staging.py",
+      "original_sha256": "3829d552321c8ba81f967298a5e69d030757fc4eb45ade3481f0fb2d96c2181a",
+      "packaged_sha256": "3829d552321c8ba81f967298a5e69d030757fc4eb45ade3481f0fb2d96c2181a",
+      "bytes": 2034,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "android/verify-c5-staging.py",
+        "source_sha256": "3829d552321c8ba81f967298a5e69d030757fc4eb45ade3481f0fb2d96c2181a"
+      }
+    },
+    {
+      "packaged_path": "native/android/harness-source-identity.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/harness-source-identity.json",
+      "original_sha256": "138f04957bc79b122f8e25a7965e318e6f25489edc876a3d66238a8e7db0d859",
+      "packaged_sha256": "138f04957bc79b122f8e25a7965e318e6f25489edc876a3d66238a8e7db0d859",
+      "bytes": 503,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/android/native-apk-manifest.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/native-apk-manifest.json",
+      "original_sha256": "46e232317939245f2871abf012dfd597e09d0177ae988efe2ee03e33c8a9ccf7",
+      "packaged_sha256": "46e232317939245f2871abf012dfd597e09d0177ae988efe2ee03e33c8a9ccf7",
+      "bytes": 557,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/android/c5-test-apk-manifest.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/c5-test-apk-manifest.json",
+      "original_sha256": "2082e6b885ff2280cabdbd430856e146d7737dba26e3ff908ad3eb54ee74f0ff",
+      "packaged_sha256": "2082e6b885ff2280cabdbd430856e146d7737dba26e3ff908ad3eb54ee74f0ff",
+      "bytes": 791,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/android/cached-jni-identity.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/cached-jni-identity.json",
+      "original_sha256": "22f2330fa0dc9a9e5f30f71cdb33cc1328fc798eea4312367e62ec7367f5875e",
+      "packaged_sha256": "22f2330fa0dc9a9e5f30f71cdb33cc1328fc798eea4312367e62ec7367f5875e",
+      "bytes": 1667,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/android/production-main-source-manifest.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/production-main-source-manifest.json",
+      "original_sha256": "9c00e9871a303763b5692761e2f39b3e3c1fcee0a3159ace4d483a1542e853ed",
+      "packaged_sha256": "9c00e9871a303763b5692761e2f39b3e3c1fcee0a3159ace4d483a1542e853ed",
+      "bytes": 51651,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/android/c5-staging-after.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/c5-staging-after.json",
+      "original_sha256": "09a57ca65a9237b5cbf0db7c1a92e136dfe7f6f030520a93aa830a5b5ce84520",
+      "packaged_sha256": "09a57ca65a9237b5cbf0db7c1a92e136dfe7f6f030520a93aa830a5b5ce84520",
+      "bytes": 39634,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/observer-dependencies.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/observer-dependencies.json",
+      "original_sha256": "d6bdc086a1d97a548b720cfc00c46897e02cd1446088a421e74742d62c490eac",
+      "packaged_sha256": "d6bdc086a1d97a548b720cfc00c46897e02cd1446088a421e74742d62c490eac",
+      "bytes": 1704,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "native/android/source/CandidateOrdinaryC3DeviceTest.kt",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/c5-staged-pushgo-android/app/src/androidTest/java/io/ethan/pushgo/CandidateOrdinaryC3DeviceTest.kt",
+      "original_sha256": "7edf7e400585c6a5e6058648b730f728d6d1118626bc1c8e445581cc075fc786",
+      "packaged_sha256": "7edf7e400585c6a5e6058648b730f728d6d1118626bc1c8e445581cc075fc786",
+      "bytes": 21000,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "android/c5-staged-pushgo-android/app/src/androidTest/java/io/ethan/pushgo/CandidateOrdinaryC3DeviceTest.kt",
+        "source_sha256": "7edf7e400585c6a5e6058648b730f728d6d1118626bc1c8e445581cc075fc786"
+      }
+    },
+    {
+      "packaged_path": "native/run-matrix.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/run-matrix.py",
+      "original_sha256": "4d90ae9c35243b9c4430c5e8056eda18671fd5e6057b1d1f5c4adc120baea878",
+      "packaged_sha256": "4d90ae9c35243b9c4430c5e8056eda18671fd5e6057b1d1f5c4adc120baea878",
+      "bytes": 7724,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_execution_witness_sha256": "4d90ae9c35243b9c4430c5e8056eda18671fd5e6057b1d1f5c4adc120baea878",
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "run-matrix.py",
+        "source_sha256": "4d90ae9c35243b9c4430c5e8056eda18671fd5e6057b1d1f5c4adc120baea878"
+      }
+    },
+    {
+      "packaged_path": "native/emulator_lifecycle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/emulator_lifecycle.py",
+      "original_sha256": "5ac03c1980ef2caffe1d513706563de5b1189f1a1de652b9fd6cdfcecab2b2e7",
+      "packaged_sha256": "5ac03c1980ef2caffe1d513706563de5b1189f1a1de652b9fd6cdfcecab2b2e7",
+      "bytes": 2133,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_execution_witness_sha256": "5ac03c1980ef2caffe1d513706563de5b1189f1a1de652b9fd6cdfcecab2b2e7",
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "emulator_lifecycle.py",
+        "source_sha256": "5ac03c1980ef2caffe1d513706563de5b1189f1a1de652b9fd6cdfcecab2b2e7"
+      }
+    },
+    {
+      "packaged_path": "native/finalize-native-attempt03.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/finalize-native-attempt03.py",
+      "original_sha256": "42212b32ff354072cb7600264fe6b536776284b18955c250b40064287937fba7",
+      "packaged_sha256": "42212b32ff354072cb7600264fe6b536776284b18955c250b40064287937fba7",
+      "bytes": 9599,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_execution_witness_sha256": "42212b32ff354072cb7600264fe6b536776284b18955c250b40064287937fba7",
+      "native_attempt03_execution_manifest": {
+        "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+        "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+        "source_path": "finalize-native-attempt03.py",
+        "source_sha256": "42212b32ff354072cb7600264fe6b536776284b18955c250b40064287937fba7"
+      }
+    },
+    {
+      "packaged_path": "native/provenance/attempt-03-executed-adapter-manifest.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+      "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+      "packaged_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+      "bytes": 35318,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "fault/mysql_final_released_session_fence.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/fault/mysql_final_released_session_fence.py",
+      "original_sha256": "932e9ee91957d9bc1d0bf747ae32509795a4b184fdf9e61b0ab625640e40418f",
+      "packaged_sha256": "932e9ee91957d9bc1d0bf747ae32509795a4b184fdf9e61b0ab625640e40418f",
+      "bytes": 4255,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_execution_witness_sha256": "932e9ee91957d9bc1d0bf747ae32509795a4b184fdf9e61b0ab625640e40418f"
+    },
+    {
+      "packaged_path": "artifact-identities.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/binaries/c5-final-identity.json",
+      "original_sha256": "85c73ab0c29c289f61e6d371825d815dfe7ebc4d52c90a46891b1b68e4e83af8",
+      "packaged_sha256": "fc2919e450c45811cdc2a45c29adacc0e83286e8ae54914b7a705294bef42e97",
+      "bytes": 11581,
+      "exact_byte_copy": false,
+      "transformation": "Reduced final-function identity and scoped historical native/fault summaries; no execution at packaged location.",
+      "additional_original_inputs": [
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-summary.json",
+          "original_sha256": "c8f7ca55a65ff0c5079e3cdb03ed6760c5c4902b11acba124665aa891f5ce1ac"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-quiet.json",
+          "original_sha256": "5d67a77149e4c79b8183cad506d351e6e9639e051ae7ba1e53f6b0c4c4fe87f7"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/attempt-03-executed-adapter-manifest.json",
+          "original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/fault/final-index-results.json",
+          "original_sha256": "4935f0c37c7ef2e1d6e26f167d06b509bdca2b19aceb666805eb0bf796b3c6d3"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/fault/final-index-quiet.json",
+          "original_sha256": "0ba8f63cc648ee5a13a498366c556f62efc0ec0051e28f821cc5494ed83d0ecd"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+          "original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7"
+        },
+        {
+          "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+          "original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+        }
+      ],
+      "executed_at_packaged_location": false
+    },
+    {
+      "packaged_path": "capacity/run_c5_capacity_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/run_c5_capacity_final.py",
+      "original_sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372",
+      "packaged_sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372",
+      "bytes": 28596,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/db_os_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/db_os_observer.py",
+      "original_sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "packaged_sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/summarize_resources_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/summarize_resources_final.py",
+      "original_sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "packaged_sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "bytes": 5813,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/reduce_commits.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/reduce_commits.py",
+      "original_sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "packaged_sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/summarize_profile_window.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/summarize_profile_window.py",
+      "original_sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "packaged_sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/prepare_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/prepare_observer.py",
+      "original_sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "packaged_sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "bytes": 4770,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/observer_fixture.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/observer_fixture.rs",
+      "original_sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "packaged_sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/observer_library.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/observer_library.rs",
+      "original_sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "packaged_sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/c3_mock.py",
+      "original_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "packaged_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/c3_pid_rusage.c",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/c3_pid_rusage.c",
+      "original_sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "packaged_sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "bytes": 3333,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/static_final_runner_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/static_final_runner_checks.py",
+      "original_sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352",
+      "packaged_sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352",
+      "bytes": 7626,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/check_final_resource_oracle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/check_final_resource_oracle.py",
+      "original_sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9",
+      "packaged_sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9",
+      "bytes": 2154,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/prepare_and_build_651bf7.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/prepare_and_build_651bf7.py",
+      "original_sha256": "c84fbce4dc11e5dcef0a819505eb52140b6eb87d2970a6e4bcdfe090f2ce50a6",
+      "packaged_sha256": "c84fbce4dc11e5dcef0a819505eb52140b6eb87d2970a6e4bcdfe090f2ce50a6",
+      "bytes": 4439,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/execute_651bf7_lane.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/execute_651bf7_lane.py",
+      "original_sha256": "81c51cb154cc61a1f4144b5f6ee32e0d4ac245bed2e0da2cf1db545de666ce17",
+      "packaged_sha256": "81c51cb154cc61a1f4144b5f6ee32e0d4ac245bed2e0da2cf1db545de666ce17",
+      "bytes": 3193,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/observer.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/observer.patch",
+      "original_sha256": "0a708c8a7e1e9126d63616c9ab549996d5f7197bbd9293ab364fdf5baf7cb6d3",
+      "packaged_sha256": "0a708c8a7e1e9126d63616c9ab549996d5f7197bbd9293ab364fdf5baf7cb6d3",
+      "bytes": 7700,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    },
+    {
+      "packaged_path": "capacity/provenance/stable-source-list.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+      "original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+      "packaged_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+      "bytes": 7825,
+      "exact_byte_copy": true,
+      "executed_at_packaged_location": false,
+      "original_capacity_source_freeze": {
+        "source_list_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/stable-source-list.json",
+        "source_list_original_sha256": "fd5c694c7709b7a3718624c5fb3ad13e226d8102f08ef7a30ab257379ff278e7",
+        "final_handoff_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/final-handoff-manifest.json",
+        "final_handoff_original_sha256": "5cc8194f0b84b9db9bb3ff3ed80cce106209d91acfa60dbed3d0704221ea6f32"
+      }
+    }
+  ],
+  "package_generated_files": [
+    "README.md",
+    "source-provenance.json",
+    "native/source-dependencies.json",
+    "capacity/README.md"
+  ],
+  "packaging_checks": {
+    "exact_copy_hashes_verified": true,
+    "python_ast_parse_only": true,
+    "runtime_executed": false,
+    "build_executed": false,
+    "native_Kotlin_source_matches_original_APK_identity": true,
+    "native_historical_summary_and_quiet_read": true,
+    "native_attempt03_manifest_source_hashes_verified": 17,
+    "final_normal_test_native_fault_identity_agreement": true,
+    "capacity_stable_sources_and_exact_patch_hashes_verified": true,
+    "capacity_business_failure_explicit": true,
+    "raw_overlay_and_large_artifacts_excluded": true
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "scope": "stable capacity source packaging inputs; copies not a new runtime authorization",
+  "files": [
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/run_c5_capacity_final.py",
+      "relative": "run_c5_capacity_final.py",
+      "sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372",
+      "bytes": 28596
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/db_os_observer.py",
+      "relative": "db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/summarize_resources_final.py",
+      "relative": "summarize_resources_final.py",
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "bytes": 5813
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/reduce_commits.py",
+      "relative": "reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/summarize_profile_window.py",
+      "relative": "summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/prepare_observer.py",
+      "relative": "prepare_observer.py",
+      "sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "bytes": 4770
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/observer_fixture.rs",
+      "relative": "observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/observer_library.rs",
+      "relative": "observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/c3_mock.py",
+      "relative": "c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/c3_pid_rusage.c",
+      "relative": "c3_pid_rusage.c",
+      "sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "bytes": 3333
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/static_final_runner_checks.py",
+      "relative": "static_final_runner_checks.py",
+      "sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352",
+      "bytes": 7626
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/check_final_resource_oracle.py",
+      "relative": "check_final_resource_oracle.py",
+      "sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9",
+      "bytes": 2154
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/prepare_and_build_651bf7.py",
+      "relative": "prepare_and_build_651bf7.py",
+      "sha256": "c84fbce4dc11e5dcef0a819505eb52140b6eb87d2970a6e4bcdfe090f2ce50a6",
+      "bytes": 4439
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/execute_651bf7_lane.py",
+      "relative": "execute_651bf7_lane.py",
+      "sha256": "81c51cb154cc61a1f4144b5f6ee32e0d4ac245bed2e0da2cf1db545de666ce17",
+      "bytes": 3193
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/append_final_capacity_doc.py",
+      "relative": "append_final_capacity_doc.py",
+      "sha256": "7a2ea1816b0ea7133b064ddc292dc912c1f0bdb9cab402f2ba5b0bda0630ec2d",
+      "bytes": 9351
+    }
+  ],
+  "observer_patch": {
+    "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/observer.patch",
+    "sha256": "0a708c8a7e1e9126d63616c9ab549996d5f7197bbd9293ab364fdf5baf7cb6d3"
+  },
+  "sparse_overlay": [
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/Cargo.toml",
+      "relative": "prototype/Cargo.toml",
+      "sha256": "9eaa9877fab7a2e776e681ef065f1dca4514f71baac4862f5f13c7f4a420d449",
+      "bytes": 1370
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/src/bin/free_architecture_fixture.rs",
+      "relative": "prototype/src/bin/free_architecture_fixture.rs",
+      "sha256": "d3f99a2bb4a45f30af30c045d5d17840025e60f7aca85174b3c7995333e9f307",
+      "bytes": 11514
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/src/bin/support/commit_observer_fixture.rs",
+      "relative": "prototype/src/bin/support/commit_observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/src/commit_observer.rs",
+      "relative": "prototype/src/commit_observer.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/src/lib.rs",
+      "relative": "prototype/src/lib.rs",
+      "sha256": "ed95134de7685541e55d8b50ea50f0beb8f0c2c3ab0fb293b44fe613dc85f3d9",
+      "bytes": 1029
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/src/mysql_store.rs",
+      "relative": "prototype/src/mysql_store.rs",
+      "sha256": "734dde1c4df00b288d56ce15f2c85df0c843f16ee482477afe869aa4ac0376b8",
+      "bytes": 61149
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/src/pg_store.rs",
+      "relative": "prototype/src/pg_store.rs",
+      "sha256": "6efc4c7dc5647759fb82cee04d51d36ccb82b470d620d287a251ee48875286a6",
+      "bytes": 51208
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/overlay/prototype/src/store.rs",
+      "relative": "prototype/src/store.rs",
+      "sha256": "6944c894adb98b3c2fd52f311f27c81c11bf860ccd2e2b99d9c8393c9476adb4",
+      "bytes": 107657
+    }
+  ],
+  "source_identity": {
+    "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/capacity/final-651bf7/source-identity.json",
+    "sha256": "d1e1f099f997e54f911cb1218b0bcc050772200392da143f2bb3b26a055391bc"
+  },
+  "prohibition": "Do not copy source-view symlink forest, target, binaries or large raw corpus into stable validation source; preserve existing evidence in place."
+}
