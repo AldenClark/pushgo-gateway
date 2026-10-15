@@ -11,6 +11,19 @@ struct MySqlSandbox {
 }
 impl MySqlSandbox {
     fn guarded() -> Self {
+        if std::env::var_os("C9_TEST_URL_FILE").is_some() {
+            let raw = crate::private_contract_tests::assigned_c7_native_url(
+                "C9_TEST_URL_FILE",
+                "C9_NATIVE_DISPOSABLE",
+                true,
+                true,
+            );
+            return Self {
+                base: reqwest::Url::parse(&raw)
+                    .unwrap_or_else(|_| panic!("invalid assigned C9 native URL")),
+                created: std::sync::Mutex::new(Vec::new()),
+            };
+        }
         if std::env::var_os("C8_TEST_URL_FILE").is_some()
             || std::env::var_os("C7_TEST_URL_FILE").is_some()
         {
@@ -106,7 +119,8 @@ impl MySqlSandbox {
 #[ignore = "requires disposable loopback MySQL C5_MYSQL_TEST_URL and C5_MYSQL_DISPOSABLE=YES_NEW_SYNTHETIC; creates new c5_synthetic databases"]
 async fn mysql_shared_ordinary_contract_and_native_failures() {
     let sandbox = MySqlSandbox::guarded();
-    if std::env::var_os("C8_TEST_URL_FILE").is_some()
+    if std::env::var_os("C9_TEST_URL_FILE").is_some()
+        || std::env::var_os("C8_TEST_URL_FILE").is_some()
         || std::env::var_os("C7_TEST_URL_FILE").is_some()
     {
         crate::private_contract_tests::assert_empty_native_url(sandbox.base.as_str(), true).await;

@@ -1162,7 +1162,7 @@ async fn sqlite_shared_private_ledger_contract() {
     );
     run(Fixture::open(url, Some(dir)).await).await;
 }
-/// Explicit C7 test-only namespace. Historical C6 receipt/path rules below are
+/// Explicit C7/C8/C9 test-only namespaces. Historical C6 receipt/path rules below are
 /// unchanged. Ordinary factories retain their explicitly captured legacy base
 /// names and existing per-invocation child CREATE/DROP behavior.
 pub(crate) fn assigned_c7_native_url(
@@ -1171,8 +1171,32 @@ pub(crate) fn assigned_c7_native_url(
     mysql: bool,
     factory: bool,
 ) -> String {
+    let c9 = key.starts_with("C9_");
     let c8 = key.starts_with("C8_");
-    assert!(c8 || key.starts_with("C7_"), "explicit C7/C8 key required");
+    assert!(
+        c9 || c8 || key.starts_with("C7_"),
+        "explicit C7/C8/C9 key required"
+    );
+    if c9 {
+        assert_eq!(
+            key,
+            if factory {
+                "C9_TEST_URL_FILE"
+            } else if mysql {
+                "C9_PRIVATE_MYSQL_URL_FILE"
+            } else {
+                "C9_PRIVATE_PG_URL_FILE"
+            }
+        );
+        assert_eq!(
+            disposable,
+            if factory {
+                "C9_NATIVE_DISPOSABLE"
+            } else {
+                "C9_PRIVATE_DISPOSABLE"
+            }
+        );
+    }
     assert_eq!(
         std::env::var(disposable).ok().as_deref(),
         Some("YES_NEW_SYNTHETIC"),
@@ -1181,7 +1205,9 @@ pub(crate) fn assigned_c7_native_url(
     let file = PathBuf::from(std::env::var(key).expect("explicit C7 assigned URL file required"))
         .canonicalize()
         .unwrap();
-    let scope = PathBuf::from(if c8 {
+    let scope = PathBuf::from(if c9 {
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/env"
+    } else if c8 {
         "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/env"
     } else {
         "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env"
@@ -1222,6 +1248,8 @@ pub(crate) fn assigned_c7_native_url(
     assert!(
         db.starts_with(if factory {
             "c5_synthetic_"
+        } else if c9 {
+            "c9_synthetic_"
         } else if c8 {
             "c8_synthetic_"
         } else {
@@ -1267,6 +1295,14 @@ pub(crate) fn assigned_c7_native_url(
         url.port().expect("captured explicit port required")
     );
     assert_eq!(owned["endpoint"].as_str(), Some(endpoint.as_str()));
+    if c9 {
+        // Formal C9 tests use a dedicated captured case role, never the
+        // baseline's registry-wide role by accidental fallback.
+        assert!(
+            case["role"].as_str().is_some(),
+            "C9 test case requires an explicit dedicated role"
+        );
+    }
     let role = case["role"]
         .as_str()
         .unwrap_or_else(|| owned["user"].as_str().unwrap());
@@ -1293,9 +1329,15 @@ pub(crate) fn assigned_c7_native_url(
     assert_eq!(entry["role"].as_str(), Some(role));
     assert_eq!(
         entry["environment_namespace"],
-        if c8 { "C8/isolated" } else { "C7/isolated" }
+        if c9 {
+            "C9/isolated"
+        } else if c8 {
+            "C8/isolated"
+        } else {
+            "C7/isolated"
+        }
     );
-    if c8 {
+    if c9 || c8 {
         assert_eq!(owned["engine_lease_only"], true);
         assert!(hex(owned["case_registry_owner"].as_str().unwrap(), 32));
         assert_eq!(entry["case_registry_owner"], owned["case_registry_owner"]);
@@ -1338,6 +1380,10 @@ pub(crate) fn assigned_c7_native_url(
     raw.trim().into()
 }
 fn assigned_native_url(key: &str, mysql: bool) -> String {
+    let c9_key = key.replacen("C6_", "C9_", 1);
+    if std::env::var_os(&c9_key).is_some() {
+        return assigned_c7_native_url(&c9_key, "C9_PRIVATE_DISPOSABLE", mysql, false);
+    }
     let c8_key = key.replacen("C6_", "C8_", 1);
     if std::env::var_os(&c8_key).is_some() {
         return assigned_c7_native_url(&c8_key, "C8_PRIVATE_DISPOSABLE", mysql, false);
@@ -1454,12 +1500,12 @@ async fn new_native_fixture(key: &str, mysql: bool) -> Fixture {
     Fixture::open(url, None).await
 }
 #[tokio::test]
-#[ignore = "requires C6_PRIVATE_PG_URL_FILE/C6_PRIVATE_DISPOSABLE or C7_PRIVATE_PG_URL_FILE/C7_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC owned NEW EMPTY case, schema/function/trigger privileges"]
+#[ignore = "requires C6_PRIVATE_PG_URL_FILE/C6_PRIVATE_DISPOSABLE or C7_PRIVATE_PG_URL_FILE/C7_PRIVATE_DISPOSABLE or C8_PRIVATE_PG_URL_FILE/C8_PRIVATE_DISPOSABLE or C9_PRIVATE_PG_URL_FILE/C9_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC owned NEW EMPTY case, schema/function/trigger privileges"]
 async fn postgres_shared_private_ledger_contract() {
     run(new_native_fixture("C6_PRIVATE_PG_URL_FILE", false).await).await;
 }
 #[tokio::test]
-#[ignore = "requires C6_PRIVATE_MYSQL_URL_FILE/C6_PRIVATE_DISPOSABLE or C7_PRIVATE_MYSQL_URL_FILE/C7_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC owned NEW EMPTY case, CREATE TRIGGER and recorded trust-function prerequisite"]
+#[ignore = "requires C6_PRIVATE_MYSQL_URL_FILE/C6_PRIVATE_DISPOSABLE or C7_PRIVATE_MYSQL_URL_FILE/C7_PRIVATE_DISPOSABLE or C8_PRIVATE_MYSQL_URL_FILE/C8_PRIVATE_DISPOSABLE or C9_PRIVATE_MYSQL_URL_FILE/C9_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC owned NEW EMPTY case, CREATE TRIGGER and recorded trust-function prerequisite"]
 async fn mysql_shared_private_ledger_contract() {
     run(new_native_fixture("C6_PRIVATE_MYSQL_URL_FILE", true).await).await;
 }
