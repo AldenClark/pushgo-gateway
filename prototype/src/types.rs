@@ -5,6 +5,8 @@ pub enum Platform {
     Android,
     Ios,
     Macos,
+    /// Ordinary MQTT Private receiver; never a push Provider target.
+    Mqtt,
 }
 impl Platform {
     pub fn name(self) -> &'static str {
@@ -12,12 +14,14 @@ impl Platform {
             Self::Android => "android",
             Self::Ios => "ios",
             Self::Macos => "macos",
+            Self::Mqtt => "mqtt",
         }
     }
     pub fn provider_name(self) -> &'static str {
         match self {
             Self::Android => "FCM",
             Self::Ios | Self::Macos => "APNS",
+            Self::Mqtt => "PRIVATE",
         }
     }
 }
@@ -28,7 +32,8 @@ impl FromStr for Platform {
             "android" => Ok(Self::Android),
             "ios" | "ipados" => Ok(Self::Ios),
             "macos" => Ok(Self::Macos),
-            _ => Err("ordinary Android/iOS/macOS only".into()),
+            "mqtt" => Ok(Self::Mqtt),
+            _ => Err("ordinary Android/iOS/macOS/MQTT only".into()),
         }
     }
 }

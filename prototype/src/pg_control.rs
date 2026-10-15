@@ -184,6 +184,8 @@ impl PgDeliveryStore {
             ));
         }
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE devices SET provider=$1,provider_token=$2,route_generation=route_generation+$3,route_revision=route_revision+1 WHERE device_key=$4").bind(stored_provider).bind(&token).bind(i64::from(changed)).bind(device).execute(&mut *tx)).await?;
+        self.transition_private_mode_tx(&mut tx, device, stored_provider.is_none())
+            .await?;
         if let Some(token) = token.as_deref() {
             self.coalesce_owners_tx(&mut tx, device, platform.name(), token)
                 .await?;
@@ -204,6 +206,8 @@ impl PgDeliveryStore {
         platform: &str,
         token: &str,
     ) -> Result<()> {
+        self.fence_private_coalesce_tx(tx, winner, platform, token)
+            .await?;
         // SQL owns the set; no allocation proportional to historical owners or
         // deliveries. Frozen attempt rows survive under their original key.
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("INSERT INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,$1 FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=$2 AND d.provider_token=$3 AND d.device_key<>$4 AND d.retired_at IS NULL ON CONFLICT(channel_id,device_key) DO NOTHING").bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
@@ -363,21 +367,25 @@ impl PgDeliveryStore {
             .phase(Path::Control, Phase::Begin, profile_connection.begin())
             .await?;
         Self::lock_usage(&mut tx).await?;
-        let exists: Option<String> = self
+        let binding = self
             .counters
             .profile
             .sql(
                 Path::Control,
                 Statement::Control,
-                sqlx::query_scalar(
-                    "SELECT provider_token FROM devices WHERE device_key=$1 AND retired_at IS NULL",
+                sqlx::query(
+                    "SELECT provider,provider_token FROM devices WHERE device_key=$1 AND retired_at IS NULL",
                 )
                 .bind(device)
                 .fetch_optional(&mut *tx),
             )
             .await?
             .ok_or_else(|| control_error(400, "device_key_not_found", "device_key not found"))?;
-        if exists.is_none() {
+        let provider: Option<String> = binding.try_get("provider")?;
+        let token: Option<String> = binding.try_get("provider_token")?;
+        // A NULL provider is the current Private route. A non-NULL Provider
+        // with no token is a deleted Provider route and cannot subscribe.
+        if token.is_none() && !(self.config.private.enabled && provider.is_none()) {
             return Err(control_error(
                 400,
                 "provider_token_required",

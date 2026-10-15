@@ -23,6 +23,7 @@ pub struct OrdinaryStore {
     pub counters: Arc<Counters>,
     pub(super) wake: [Arc<Notify>; 2],
     pub(super) health: Arc<Health>,
+    pub(super) private_wake: Arc<Notify>,
 }
 impl From<DeliveryStore> for OrdinaryStore {
     fn from(store: DeliveryStore) -> Self {
@@ -31,6 +32,7 @@ impl From<DeliveryStore> for OrdinaryStore {
             counters: store.counters.clone(),
             wake: store.wake.clone(),
             health: store.health.clone(),
+            private_wake: Arc::new(Notify::new()),
             backend: Backend::Sqlite(store),
         }
     }
@@ -42,6 +44,7 @@ impl From<PgDeliveryStore> for OrdinaryStore {
             counters: store.counters.clone(),
             wake: store.wake.clone(),
             health: store.health.clone(),
+            private_wake: Arc::new(Notify::new()),
             backend: Backend::Postgres(store),
         }
     }
@@ -53,6 +56,7 @@ impl From<MySqlDeliveryStore> for OrdinaryStore {
             counters: store.counters.clone(),
             wake: store.wake.clone(),
             health: store.health.clone(),
+            private_wake: Arc::new(Notify::new()),
             backend: Backend::MySql(store),
         }
     }
@@ -82,6 +86,7 @@ impl OrdinaryStore {
         }
     }
     pub(super) fn notify(&self) {
+        self.private_wake.notify_one();
         for wake in &self.wake {
             wake.notify_one();
         }
@@ -145,6 +150,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.register_device(platform, requested).await,
             Backend::MySql(s) => s.register_device(platform, requested).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn update_route(
@@ -160,6 +168,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.update_route(device, platform, provider, raw).await,
             Backend::MySql(s) => s.update_route(device, platform, provider, raw).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn delete_route(&self, device: &str, channel_type: &str) -> Result<Value> {
@@ -169,6 +180,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.delete_route(device, channel_type).await,
             Backend::MySql(s) => s.delete_route(device, channel_type).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn retire_provider_token(&self, platform: &str, raw: &str) -> Result<()> {
@@ -178,6 +192,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.retire_provider_token(platform, raw).await,
             Backend::MySql(s) => s.retire_provider_token(platform, raw).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn subscribe(
@@ -193,6 +210,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.subscribe(device, channel_id, channel_name, auth).await,
             Backend::MySql(s) => s.subscribe(device, channel_id, channel_name, auth).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn unsubscribe(&self, device: &str, channel: &str) -> Result<Value> {
@@ -202,6 +222,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.unsubscribe(device, channel).await,
             Backend::MySql(s) => s.unsubscribe(device, channel).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn channel_info(&self, channel: &str) -> Result<Value> {
@@ -229,6 +252,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.sync_channels(device, items).await,
             Backend::MySql(s) => s.sync_channels(device, items).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn accept(&self, request: AcceptRequest) -> Result<Accepted> {
@@ -238,6 +264,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.accept(request).await,
             Backend::MySql(s) => s.accept(request).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn maintenance(&self) -> Result<usize> {
@@ -247,6 +276,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.maintenance().await,
             Backend::MySql(s) => s.maintenance().await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
@@ -274,6 +306,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.ack(device, ids).await,
             Backend::MySql(s) => s.ack(device, ids).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub(super) async fn claim_reserved(
@@ -288,6 +323,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.claim_reserved(provider, limit, retry_first).await,
             Backend::MySql(s) => s.claim_reserved(provider, limit, retry_first).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub(super) async fn authorize_ticket(&self, ticket: &Ticket) -> Result<bool> {
@@ -297,6 +335,9 @@ impl OrdinaryStore {
             Backend::Postgres(s) => s.authorize_ticket(ticket).await,
             Backend::MySql(s) => s.authorize_ticket(ticket).await,
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub(super) async fn settle(
@@ -323,6 +364,9 @@ impl OrdinaryStore {
                     .await
             }
         };
+        if result.is_ok() && self.config.private.enabled {
+            self.private_wake.notify_one();
+        }
         self.checked(result)
     }
     pub async fn status(&self, op: &str) -> Result<Value> {
@@ -369,5 +413,68 @@ impl OrdinaryStore {
         retry_first: bool,
     ) -> Result<ClaimBatch> {
         self.claim_reserved(provider, limit, retry_first).await
+    }
+}
+
+impl OrdinaryStore {
+    pub(crate) async fn private_route(
+        &self,
+        device: &str,
+    ) -> Result<crate::private_model::PrivateRoute> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.private_route(device).await,
+            Backend::Postgres(s) => s.private_route(device).await,
+            Backend::MySql(s) => s.private_route(device).await,
+        };
+        self.checked(result)
+    }
+    pub(crate) async fn private_claim(
+        &self,
+        route: &crate::private_model::PrivateRoute,
+        group: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::private_model::PrivateTicket>> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.private_claim(route, group, limit).await,
+            Backend::Postgres(s) => s.private_claim(route, group, limit).await,
+            Backend::MySql(s) => s.private_claim(route, group, limit).await,
+        };
+        self.checked(result)
+    }
+    pub(crate) async fn private_authorize(
+        &self,
+        ticket: &crate::private_model::PrivateTicket,
+    ) -> Result<bool> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.private_authorize(ticket).await,
+            Backend::Postgres(s) => s.private_authorize(ticket).await,
+            Backend::MySql(s) => s.private_authorize(ticket).await,
+        };
+        self.checked(result)
+    }
+    pub(crate) async fn private_ack(
+        &self,
+        route: &crate::private_model::PrivateRoute,
+        ticket: &crate::private_model::PrivateTicket,
+    ) -> Result<bool> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.private_ack(route, ticket).await,
+            Backend::Postgres(s) => s.private_ack(route, ticket).await,
+            Backend::MySql(s) => s.private_ack(route, ticket).await,
+        };
+        self.checked(result)
+    }
+    pub(crate) async fn private_release(&self, group: &str, tokens: &[String]) -> Result<usize> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.private_release(group, tokens).await,
+            Backend::Postgres(s) => s.private_release(group, tokens).await,
+            Backend::MySql(s) => s.private_release(group, tokens).await,
+        };
+        self.checked(result)
     }
 }

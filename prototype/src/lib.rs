@@ -5,9 +5,13 @@ mod http;
 mod ingress;
 pub mod metrics;
 mod mysql_control;
+mod mysql_private;
 mod mysql_store;
 mod ordinary_store;
 mod pg_control;
+mod pg_private;
+mod sqlite_private;
+pub mod private_model;
 mod pg_store;
 pub mod profiling;
 mod runtime;
@@ -44,3 +48,6 @@ mod backend_contract_tests;
 
 #[cfg(test)]
 mod mysql_plan_probe;
+
+#[cfg(test)]
+mod private_contract_tests;

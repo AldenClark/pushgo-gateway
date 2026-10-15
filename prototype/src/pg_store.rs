@@ -40,13 +40,13 @@ impl Drop for AdmissionWake {
         self.0.notify();
     }
 }
-pub(super) const PULL_BATCH_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE t.pull_owner=$1 AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>$2 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) AND NOT EXISTS(SELECT 1 FROM targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=sibling.platform AND r.provider_token=sibling.provider_token AND sibling.control_epoch<r.control_epoch)) ORDER BY t.accepted_at,t.delivery_id LIMIT $3";
-pub(super) const PULL_EXACT_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE t.pull_owner=$1 AND t.delivery_id=$2 AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>$3 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) LIMIT 1";
-pub(super) const RECOVER_RUNNING_SQL: &str = "UPDATE targets SET state='retry_wait',next_attempt_at=$1 WHERE provider=$2 AND state='running'";
+pub(super) const PULL_BATCH_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE t.pull_owner=$1 AND t.delivery_mode='provider' AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>$2 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) AND NOT EXISTS(SELECT 1 FROM targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='provider' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=sibling.platform AND r.provider_token=sibling.provider_token AND sibling.control_epoch<r.control_epoch)) ORDER BY t.accepted_at,t.delivery_id LIMIT $3";
+pub(super) const PULL_EXACT_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE t.pull_owner=$1 AND t.delivery_id=$2 AND t.delivery_mode='provider' AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>$3 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) LIMIT 1";
+pub(super) const RECOVER_RUNNING_SQL: &str = "UPDATE targets SET state=CASE WHEN delivery_mode='private' THEN 'superseded_route' ELSE 'retry_wait' END,next_attempt_at=$1 WHERE provider=$2 AND state='running'";
 // Markers are normally empty. Keep them outside the join so idle maintenance
 // never scans every retained target; the existing index bounds each token probe.
 // Matching retirement work and its ORDER BY remain data dependent.
-pub(super) const RETIRE_TOKEN_TARGETS_SQL: &str = "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256";
+pub(super) const RETIRE_TOKEN_TARGETS_SQL: &str = "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.delivery_mode='provider' AND t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256";
 
 impl PgDeliveryStore {
     pub(super) async fn acquire(&self) -> Result<PgGuard<'_>> {
@@ -87,6 +87,11 @@ impl PgDeliveryStore {
             || config.max_payload_bytes <= 0
             || config.default_ttl_secs <= 0
             || config.default_ttl_secs > 30 * 86_400
+            || (config.private.enabled
+                && (config.private.max_pending_per_device == 0
+                    || config.private.max_pending == 0
+                    || i64::try_from(config.private.max_pending_per_device).is_err()
+                    || i64::try_from(config.private.max_pending).is_err()))
         {
             return Err(KernelError::Invalid("positive budgets required".into()));
         }
@@ -142,13 +147,13 @@ impl PgDeliveryStore {
             &hex[16..20],
             &hex[20..]
         );
-        sqlx::query("INSERT INTO authority_metadata(singleton,dataset_uuid,schema_version) VALUES(1,$1,1) ON CONFLICT(singleton) DO NOTHING").bind(uuid).execute(&mut connection).await?;
+        sqlx::query("INSERT INTO authority_metadata(singleton,dataset_uuid,schema_version) VALUES(1,$1,2) ON CONFLICT(singleton) DO NOTHING").bind(uuid).execute(&mut connection).await?;
         let (uuid, version): (String, i64) = sqlx::query_as(
             "SELECT dataset_uuid,schema_version FROM authority_metadata WHERE singleton=1",
         )
         .fetch_one(&mut connection)
         .await?;
-        if version != 1
+        if version != 2
             || uuid.len() != 36
             || !uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
         {
@@ -184,8 +189,11 @@ impl PgDeliveryStore {
         sqlx::raw_sql(include_str!("pg_schema.sql"))
             .execute(&mut *tx)
             .await?;
+        sqlx::raw_sql(crate::pg_private::PRIVATE_USAGE_SCHEMA)
+            .execute(&mut *tx)
+            .await?;
         Self::lock_usage(&mut tx).await?;
-        sqlx::query("UPDATE messages SET status=CASE WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=$1 WHERE status='provider_queued' AND pending_targets=0 AND delivery_id IN (SELECT delivery_id FROM targets WHERE provider IN ('FCM','APNS') AND state='running' AND acked_at IS NOT NULL)").bind(now()).execute(&mut *tx).await?;
+        while self.recover_private_claims_tx(&mut tx).await? == 256 {}
         for provider in ["FCM", "APNS"] {
             sqlx::query("DELETE FROM targets WHERE provider=$1 AND state='running' AND acked_at IS NOT NULL").bind(provider).execute(&mut *tx).await?;
             sqlx::query(RECOVER_RUNNING_SQL)
@@ -194,6 +202,7 @@ impl PgDeliveryStore {
                 .execute(&mut *tx)
                 .await?;
         }
+        sqlx::query("UPDATE messages SET status=CASE WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=$1 WHERE status='provider_queued' AND NOT EXISTS(SELECT 1 FROM targets outstanding WHERE outstanding.delivery_id=messages.delivery_id AND outstanding.provider IN ('FCM','APNS') AND (outstanding.state='running' OR (outstanding.delivery_mode='provider' AND outstanding.acked_at IS NULL AND outstanding.state IN ('pending','retry_wait'))))").bind(now()).execute(&mut *tx).await?;
         self.health.ensure()?;
         tx.commit().await?;
         drop(connection);
@@ -259,10 +268,10 @@ impl PgDeliveryStore {
         let at = now();
         // Reclaim expired delivery bodies independently of their identity history.
         self.maintain_tx(&mut tx, at).await?;
-        if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,fingerprint FROM messages WHERE op_id=$1 AND dedupe_until>$2").bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
+        if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,fingerprint,provider_target_count,private_enqueued_count FROM messages WHERE op_id=$1 AND dedupe_until>$2").bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
             if row.get::<String,_>("channel_id")!=request.channel_id {return Err(KernelError::ScopeConflict)}
             if row.get::<String,_>("fingerprint")!=request.fingerprint {return Err(KernelError::Conflict)}
-            return Ok(Accepted{delivery_id:row.get("delivery_id"),message_id:row.get("message_id"),op_id:request.op_id,acceptance:"duplicate_completed",dispatch_status:"provider_queued"})
+            return Ok(Accepted{delivery_id:row.get("delivery_id"),message_id:row.get("message_id"),op_id:request.op_id,acceptance:"duplicate_completed",dispatch_status:if row.get::<i64,_>("private_enqueued_count")>0 && row.get::<i64,_>("provider_target_count")==0 {"attempted_accepted"}else{"provider_queued"}})
         }
         // An exact expired identity can be replaced even if bounded GC has backlog.
         self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("DELETE FROM messages WHERE op_id=$1 AND dedupe_until<=$2 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running')").bind(&request.op_id).bind(at).execute(&mut *tx)).await?;
@@ -305,7 +314,14 @@ impl PgDeliveryStore {
                     .fetch_one(&mut *tx),
             )
             .await?;
-        let fanout:i64=self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=$1 AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&request.channel_id).fetch_one(&mut *tx)).await?;
+        let provider_fanout:i64=self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=$1 AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&request.channel_id).fetch_one(&mut *tx)).await?;
+        let private_fanout = if expires > at {
+            self.check_private_admission_tx(&mut tx, &request.channel_id)
+                .await?
+        } else {
+            0
+        };
+        let fanout = provider_fanout.saturating_add(private_fanout);
         let live = fanout > 0 && expires > at;
         if live
             && (usage.get::<i64, _>("messages") >= self.config.max_messages
@@ -317,10 +333,24 @@ impl PgDeliveryStore {
         {
             return Err(KernelError::Capacity);
         }
-        let status = if live { "provider_queued" } else { "failed" };
-        self.counters.profile.sql(Path::Accept, Statement::MessageInsert, sqlx::query("INSERT INTO messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)").bind(&delivery_id).bind(&message_id).bind(&request.op_id).bind(&request.channel_id).bind(&request.fingerprint).bind(if live{payload.as_slice()}else{&[]}).bind(if live{payload.len() as i64}else{0}).bind(at).bind(expires).bind(at.saturating_add(self.config.dedupe_retention_ms)).bind(status).bind(at).execute(&mut *tx)).await?;
+        let status = if !live {
+            "failed"
+        } else if provider_fanout > 0 {
+            "provider_queued"
+        } else {
+            "sent"
+        };
+        let dispatch_status = if live && private_fanout > 0 && provider_fanout == 0 {
+            "attempted_accepted"
+        } else {
+            "provider_queued"
+        };
+        self.counters.profile.sql(Path::Accept, Statement::MessageInsert, sqlx::query("INSERT INTO messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at,provider_target_count,private_enqueued_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)").bind(&delivery_id).bind(&message_id).bind(&request.op_id).bind(&request.channel_id).bind(&request.fingerprint).bind(if live{payload.as_slice()}else{&[]}).bind(if live{payload.len() as i64}else{0}).bind(at).bind(expires).bind(at.saturating_add(self.config.dedupe_retention_ms)).bind(status).bind(at).bind(if live {provider_fanout}else{0}).bind(if live {private_fanout}else{0}).execute(&mut *tx)).await?;
         if live {
             self.counters.profile.sql(Path::Fanout, Statement::FanoutInsert, sqlx::query("INSERT INTO targets(delivery_id,device_key,platform,provider,provider_token,route_generation,accepted_at,state,next_attempt_at) SELECT $1,d.device_key,d.platform,d.provider,d.provider_token,d.route_generation,$2,'pending',$3 FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=$4 AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&delivery_id).bind(at).bind(at).bind(&request.channel_id).execute(&mut *tx)).await?;
+        }
+        if live && private_fanout > 0 {
+            self.counters.profile.sql(Path::Fanout, Statement::FanoutInsert, sqlx::query("INSERT INTO targets(delivery_id,device_key,pull_owner,owner_generation,control_epoch,platform,provider,provider_token,route_generation,accepted_at,state,next_attempt_at,delivery_mode) SELECT $1,d.device_key,d.device_key,d.route_generation,(SELECT control_epoch FROM ledger_usage WHERE singleton=1),d.platform,'PRIVATE','',d.route_generation,$2,'superseded_route',$3,'private' FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=$4 AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL").bind(&delivery_id).bind(at).bind(at).bind(&request.channel_id).execute(&mut *tx)).await?;
         }
         let commit_at = std::time::Instant::now();
         self.health.ensure()?;
@@ -348,7 +378,7 @@ impl PgDeliveryStore {
             message_id,
             op_id: request.op_id,
             acceptance: "new",
-            dispatch_status: "provider_queued",
+            dispatch_status,
         })
     }
     pub(super) async fn release_acked_tx(
@@ -360,7 +390,8 @@ impl PgDeliveryStore {
     ) -> Result<()> {
         // A completed client ACK is positive delivery evidence, independent of
         // whether a provider was attempted. Do not count it as provider acceptance.
-        self.counters.profile.sql(profile_path, Statement::ReleaseStatus, sqlx::query("UPDATE messages SET status='sent',updated_at=$1 WHERE delivery_id=$2 AND status='provider_queued' AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND (acked_at IS NULL OR state='running'))").bind(now()).bind(id).execute(&mut **tx)).await?;
+        self.refresh_provider_status_tx(tx, id, profile_path)
+            .await?;
         self.counters.profile.sql(profile_path, Statement::ReleaseTarget, sqlx::query("DELETE FROM targets WHERE delivery_id=$1 AND (device_key=$2 OR acked_at IS NOT NULL) AND acked_at IS NOT NULL AND state!='running'").bind(id).bind(device).execute(&mut **tx)).await?;
         self.counters.profile.sql(profile_path, Statement::ReleasePayload, sqlx::query("UPDATE messages SET payload_blob=''::bytea,payload_bytes=0 WHERE delivery_id=$1 AND payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL)").bind(id).execute(&mut **tx)).await?;
         Ok(())
@@ -434,9 +465,9 @@ impl PgDeliveryStore {
             sqlx::query_scalar("SELECT delivery_id FROM messages WHERE expires_at<=$1 AND payload_bytes>0 ORDER BY expires_at,delivery_id LIMIT 256 FOR UPDATE")
                 .bind(at).fetch_all(&mut **tx),
         ).await?;
-        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryCount, sqlx::query("UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id=ANY($1)").bind(&expiring).execute(&mut **tx)).await?;
-        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryAck, sqlx::query("UPDATE targets SET acked_at=$1,state=CASE WHEN state IN ('pending','retry_wait') THEN 'expired' ELSE state END WHERE acked_at IS NULL AND delivery_id=ANY($2)").bind(at).bind(&expiring).execute(&mut **tx)).await?;
-        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryStatus, sqlx::query("UPDATE messages SET status=CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=$1 WHERE status='provider_queued' AND provider_failed_count>0 AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') AND delivery_id=ANY($2)").bind(at).bind(&expiring).execute(&mut **tx)).await?;
+        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryCount, sqlx::query("UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND delivery_mode='provider' AND provider IN ('FCM','APNS') AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id=ANY($1)").bind(&expiring).execute(&mut **tx)).await?;
+        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryAck, sqlx::query("UPDATE targets SET private_claim=NULL,private_group=NULL,acked_at=$1,state=CASE WHEN state IN ('pending','retry_wait') THEN 'expired' ELSE state END WHERE acked_at IS NULL AND delivery_id=ANY($2)").bind(at).bind(&expiring).execute(&mut **tx)).await?;
+        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryStatus, sqlx::query("UPDATE messages SET status=CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=$1 WHERE status='provider_queued' AND provider_failed_count>0 AND NOT EXISTS(SELECT 1 FROM targets outstanding WHERE outstanding.delivery_id=messages.delivery_id AND outstanding.provider IN ('FCM','APNS') AND (outstanding.state='running' OR (outstanding.delivery_mode='provider' AND outstanding.acked_at IS NULL AND outstanding.state IN ('pending','retry_wait')))) AND delivery_id=ANY($2)").bind(at).bind(&expiring).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryDelete, sqlx::query("DELETE FROM targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id=ANY($1)").bind(&expiring).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryPayload, sqlx::query("UPDATE messages SET payload_blob=''::bytea,payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL) AND delivery_id=ANY($1)").bind(&expiring).execute(&mut **tx)).await?;
         let removed=self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceRetention, sqlx::query("DELETE FROM messages WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE dedupe_until<=$1 AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)").bind(at).execute(&mut **tx)).await?.rows_affected();
@@ -557,7 +588,7 @@ impl PgDeliveryStore {
             let id: String = row.get("delivery_id");
             let payload: Value = serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?;
             self.counters.sql(1);
-            self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE targets SET acked_at=$1 WHERE pull_owner=$2 AND delivery_id=$3 AND acked_at IS NULL")
+            self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE targets SET private_claim=NULL,private_group=NULL,acked_at=$1 WHERE delivery_mode='provider' AND pull_owner=$2 AND delivery_id=$3 AND acked_at IS NULL")
                 .bind(at).bind(device).bind(&id).execute(&mut *tx)).await?;
             self.release_acked_tx(&mut tx, device, &id, Path::Ack)
                 .await?;
@@ -612,7 +643,7 @@ impl PgDeliveryStore {
         let mut removed = 0;
         let at = now();
         for id in ids {
-            removed+=usize::from(self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE targets SET acked_at=$1 WHERE pull_owner=$2 AND delivery_id=$3 AND acked_at IS NULL AND EXISTS(SELECT 1 FROM devices WHERE devices.device_key=targets.pull_owner AND retired_at IS NULL) AND EXISTS(SELECT 1 FROM messages WHERE messages.delivery_id=targets.delivery_id AND expires_at>$4) AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=targets.platform AND r.provider_token=targets.provider_token AND targets.control_epoch<r.control_epoch)").bind(at).bind(device).bind(&id).bind(at).execute(&mut *tx)).await?.rows_affected()>0);
+            removed+=usize::from(self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE targets SET private_claim=NULL,private_group=NULL,acked_at=$1 WHERE delivery_mode='provider' AND pull_owner=$2 AND delivery_id=$3 AND acked_at IS NULL AND EXISTS(SELECT 1 FROM devices WHERE devices.device_key=targets.pull_owner AND retired_at IS NULL) AND EXISTS(SELECT 1 FROM messages WHERE messages.delivery_id=targets.delivery_id AND expires_at>$4) AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=targets.platform AND r.provider_token=targets.provider_token AND targets.control_epoch<r.control_epoch)").bind(at).bind(device).bind(&id).bind(at).execute(&mut *tx)).await?.rows_affected()>0);
             self.release_acked_tx(&mut tx, device, &id, Path::Ack)
                 .await?;
         }
@@ -696,7 +727,7 @@ impl PgDeliveryStore {
                 let mut selected = None;
                 for class in [classes[n % 2], classes[(n + 1) % 2]] {
                     self.counters.sql(1);
-                    let row=self.counters.profile.sql(Path::Claim, Statement::ClaimSelect, sqlx::query("SELECT t.*,m.payload_blob,m.expires_at FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE d.retired_at IS NULL AND t.provider=$1 AND t.state=$2 AND t.acked_at IS NULL AND t.next_attempt_at<=$3 AND m.expires_at>$4 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1").bind(provider).bind(class).bind(at).bind(at).fetch_optional(&mut *tx)).await?;
+                    let row=self.counters.profile.sql(Path::Claim, Statement::ClaimSelect, sqlx::query("SELECT t.*,m.payload_blob,m.expires_at FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE t.delivery_mode='provider' AND d.retired_at IS NULL AND t.provider=$1 AND t.state=$2 AND t.acked_at IS NULL AND t.next_attempt_at<=$3 AND m.expires_at>$4 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1").bind(provider).bind(class).bind(at).bind(at).fetch_optional(&mut *tx)).await?;
                     if row.is_some() {
                         selected = row;
                         break;
@@ -724,7 +755,7 @@ impl PgDeliveryStore {
                 drop(_compute);
             }
         }
-        let due:Option<i64>=self.counters.profile.sql(Path::Claim, Statement::ClaimNextDue, sqlx::query_scalar("SELECT MIN(next_attempt_at) FROM targets WHERE provider=$1 AND state IN ('pending','retry_wait') AND acked_at IS NULL").bind(provider).fetch_one(&mut *tx)).await?;
+        let due:Option<i64>=self.counters.profile.sql(Path::Claim, Statement::ClaimNextDue, sqlx::query_scalar("SELECT MIN(next_attempt_at) FROM targets WHERE delivery_mode='provider' AND provider=$1 AND state IN ('pending','retry_wait') AND acked_at IS NULL").bind(provider).fetch_one(&mut *tx)).await?;
         let retiring:bool=self.counters.profile.sql(Path::Claim, Statement::ClaimRetiring, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices d WHERE d.retired_at IS NOT NULL AND d.coalesced_to IS NULL AND (EXISTS(SELECT 1 FROM targets t WHERE t.pull_owner=d.device_key AND t.acked_at IS NULL) OR EXISTS(SELECT 1 FROM channel_subscriptions s WHERE s.device_key=d.device_key)))").fetch_one(&mut *tx)).await?;
         let next_due = if retiring {
             Some(at)
@@ -754,7 +785,7 @@ impl PgDeliveryStore {
                 .profile
                 .phase(Path::Claim, Phase::PoolAcquire, self.acquire())
                 .await?;
-            self.counters.profile.sql(Path::Claim, Statement::Read, sqlx::query_scalar("SELECT COUNT(*) FROM targets t JOIN devices d ON d.device_key=t.pull_owner JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=$1 AND t.device_key=$2 AND t.state='running' AND t.attempt_id=$3 AND t.acked_at IS NULL AND m.expires_at>$4 AND d.retired_at IS NULL AND d.platform=t.platform AND d.provider=t.provider AND d.provider_token=t.provider_token AND d.route_generation=t.owner_generation AND t.route_generation=$5 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch)").bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).bind(now()).bind(ticket.route_generation).fetch_one(&mut *profile_read_connection)).await
+            self.counters.profile.sql(Path::Claim, Statement::Read, sqlx::query_scalar("SELECT COUNT(*) FROM targets t JOIN devices d ON d.device_key=t.pull_owner JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_mode='provider' AND t.delivery_id=$1 AND t.device_key=$2 AND t.state='running' AND t.attempt_id=$3 AND t.acked_at IS NULL AND m.expires_at>$4 AND d.retired_at IS NULL AND d.platform=t.platform AND d.provider=t.provider AND d.provider_token=t.provider_token AND d.route_generation=t.owner_generation AND t.route_generation=$5 AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch)").bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).bind(now()).bind(ticket.route_generation).fetch_one(&mut *profile_read_connection)).await
         }?;
         Ok(current != 0)
     }
@@ -798,7 +829,7 @@ impl PgDeliveryStore {
         } else {
             state
         };
-        let changed=self.counters.profile.sql(Path::Receipt, Statement::ReceiptTarget, sqlx::query("UPDATE targets SET state=$1,provider_status=$2,provider_error=$3,receipt_at=$4,next_attempt_at=$5 WHERE delivery_id=$6 AND device_key=$7 AND state='running' AND attempt_id=$8").bind(state).bind(i64::from(status)).bind(error).bind(now()).bind(next_due).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).execute(&mut *tx)).await?.rows_affected();
+        let changed=self.counters.profile.sql(Path::Receipt, Statement::ReceiptTarget, sqlx::query("UPDATE targets SET state=CASE WHEN delivery_mode='private' AND $1 IN ('pending','retry_wait') THEN 'superseded_route' ELSE $1 END,provider_status=$2,provider_error=$3,receipt_at=$4,next_attempt_at=$5 WHERE delivery_id=$6 AND device_key=$7 AND state='running' AND attempt_id=$8").bind(state).bind(i64::from(status)).bind(error).bind(now()).bind(next_due).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).execute(&mut *tx)).await?.rows_affected();
         if let Some(due) = cooldown {
             self.counters.profile.sql(Path::Receipt, Statement::ReceiptCooldown, sqlx::query("INSERT INTO provider_cooldowns(provider,next_attempt_at) VALUES($1,$2) ON CONFLICT(provider) DO UPDATE SET next_attempt_at=GREATEST(provider_cooldowns.next_attempt_at,excluded.next_attempt_at)").bind(&ticket.provider).bind(due).execute(&mut *tx)).await?;
         }
@@ -810,7 +841,8 @@ impl PgDeliveryStore {
                     .bind(&ticket.device_key).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(&ticket.platform).bind(&ticket.provider).bind(&ticket.token).bind(ticket.route_generation).execute(&mut *tx)).await?;
             }
             self.counters.profile.sql(Path::Receipt, Statement::ReceiptCounts, sqlx::query("UPDATE messages SET provider_accepted_count=provider_accepted_count+$1,provider_failed_count=provider_failed_count+$2 WHERE delivery_id=$3").bind(i64::from(state=="provider_accepted")).bind(i64::from(matches!(state,"permanent_failed"|"expired"|"cancelled"))).bind(&ticket.delivery_id).execute(&mut *tx)).await?;
-            self.counters.profile.sql(Path::Receipt, Statement::ReceiptStatus, sqlx::query("UPDATE messages SET status=CASE WHEN pending_targets>0 OR EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') THEN 'provider_queued' WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=$1 WHERE delivery_id=$2").bind(now()).bind(&ticket.delivery_id).execute(&mut *tx)).await?;
+            self.refresh_provider_status_tx(&mut tx, &ticket.delivery_id, Path::Receipt)
+                .await?;
             self.release_acked_tx(
                 &mut tx,
                 &ticket.device_key,
@@ -872,8 +904,9 @@ impl PgDeliveryStore {
         for row in &ids {
             let id: String = row.get("delivery_id");
             let original: String = row.get("device_key");
-            self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("UPDATE targets SET acked_at=$1,state=CASE WHEN state='running' THEN state ELSE 'superseded_route' END WHERE device_key=$2 AND delivery_id=$3 AND acked_at IS NULL").bind(at).bind(&original).bind(&id).execute(&mut **tx)).await?;
-            self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("UPDATE messages SET status=CASE WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=$1 WHERE delivery_id=$2 AND status='provider_queued' AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running')").bind(at).bind(&id).execute(&mut **tx)).await?;
+            self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("UPDATE targets SET private_claim=NULL,private_group=NULL,acked_at=$1,state=CASE WHEN state='running' THEN state ELSE 'superseded_route' END WHERE device_key=$2 AND delivery_id=$3 AND acked_at IS NULL").bind(at).bind(&original).bind(&id).execute(&mut **tx)).await?;
+            self.refresh_provider_status_tx(tx, &id, Path::Maintenance)
+                .await?;
             self.release_acked_tx(tx, &original, &id, Path::Maintenance)
                 .await?;
         }
@@ -895,11 +928,11 @@ impl PgDeliveryStore {
         for row in rows {
             let id: String = row.get("delivery_id");
             let key: String = row.get("device_key");
-            self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("UPDATE targets SET acked_at=$1,state=CASE WHEN state='running' THEN state ELSE 'superseded_route' END WHERE delivery_id=$2 AND device_key=$3 AND acked_at IS NULL").bind(now()).bind(&id).bind(&key).execute(&mut **tx)).await?;
+            self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("UPDATE targets SET private_claim=NULL,private_group=NULL,acked_at=$1,state=CASE WHEN state='running' THEN state ELSE 'superseded_route' END WHERE delivery_id=$2 AND device_key=$3 AND acked_at IS NULL").bind(now()).bind(&id).bind(&key).execute(&mut **tx)).await?;
             self.release_acked_tx(tx, &key, &id, Path::Maintenance)
                 .await?;
         }
-        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("DELETE FROM retired_provider_tokens WHERE (platform,provider_token) IN (SELECT r.platform,r.provider_token FROM retired_provider_tokens r WHERE NOT EXISTS(SELECT 1 FROM targets t WHERE t.platform=r.platform AND t.provider_token=r.provider_token AND t.control_epoch<r.control_epoch) LIMIT 256)").execute(&mut **tx)).await?;
+        self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("DELETE FROM retired_provider_tokens WHERE (platform,provider_token) IN (SELECT r.platform,r.provider_token FROM retired_provider_tokens r WHERE NOT EXISTS(SELECT 1 FROM targets t WHERE t.delivery_mode='provider' AND t.platform=r.platform AND t.provider_token=r.provider_token AND t.control_epoch<r.control_epoch) LIMIT 256)").execute(&mut **tx)).await?;
         Ok(())
     }
 }

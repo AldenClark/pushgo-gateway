@@ -192,6 +192,10 @@ impl MySqlDeliveryStore {
             ));
         }
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE devices SET provider=?,provider_token=?,route_generation=route_generation+?,route_revision=route_revision+1 WHERE device_key=?").bind(stored_provider).bind(&token).bind(i64::from(changed)).bind(device).execute(&mut *tx)).await?;
+        if changed {
+            self.transition_private_mode_tx(&mut tx, device, stored_provider.is_none())
+                .await?;
+        }
         if let Some(token) = token.as_deref() {
             self.coalesce_owners_tx(&mut tx, device, platform.name(), token)
                 .await?;
@@ -223,7 +227,8 @@ impl MySqlDeliveryStore {
         // provider jobs retain their original wire ACK capability and must never
         // start/retry under the winner. An already-owned network future may
         // still return its receipt to the frozen original target key.
-        self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE targets t JOIN devices d ON d.device_key=t.pull_owner SET t.pull_owner=?,t.owner_generation=-1 WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL").bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
+        self.coalesce_private_owners_tx(tx, winner, platform, token)
+            .await?;
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("DELETE s FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL").bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL").bind(now()).bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
         Ok(())
@@ -385,21 +390,29 @@ impl MySqlDeliveryStore {
             .phase(Path::Control, Phase::Begin, profile_connection.begin())
             .await?;
         Self::lock_usage(&mut tx).await?;
-        let exists: Option<String> = self
+        // A NULL token alone does not identify a Private route: a deleted
+        // Provider route keeps its provider kind with a NULL token. Read both
+        // fields so enabling Private never reauthorizes a deleted Provider.
+        let binding = self
             .counters
             .profile
             .sql(
                 Path::Control,
                 Statement::Control,
-                sqlx::query_scalar(
-                    "SELECT CAST(provider_token AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_as_cs AS provider_token FROM devices WHERE device_key=? AND retired_at IS NULL",
-                )
-                .bind(device)
-                .fetch_optional(&mut *tx),
+                sqlx::query("SELECT provider,provider_token FROM devices WHERE device_key=? AND retired_at IS NULL")
+                    .bind(device)
+                    .fetch_optional(&mut *tx),
             )
             .await?
             .ok_or_else(|| control_error(400, "device_key_not_found", "device_key not found"))?;
-        if exists.is_none() {
+        let provider: Option<String> = binding.try_get_unchecked("provider")?;
+        let token: Option<String> = binding.try_get_unchecked("provider_token")?;
+        let subscribable = if provider.is_none() {
+            self.config.private.enabled
+        } else {
+            token.is_some()
+        };
+        if !subscribable {
             return Err(control_error(
                 400,
                 "provider_token_required",
