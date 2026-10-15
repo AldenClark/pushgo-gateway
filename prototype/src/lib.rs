@@ -4,6 +4,8 @@ pub mod credentials;
 mod http;
 mod ingress;
 pub mod metrics;
+mod mysql_control;
+mod mysql_store;
 mod ordinary_store;
 mod pg_control;
 mod pg_store;

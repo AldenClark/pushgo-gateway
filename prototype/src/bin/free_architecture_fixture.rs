@@ -52,19 +52,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "sqlite"
     } else {
         let database = reqwest::Url::parse(&cli.db_url)?;
-        if !matches!(database.scheme(), "postgres" | "postgresql")
+        if !matches!(database.scheme(), "postgres" | "postgresql" | "mysql")
             || !database.host_str().is_some_and(|h| {
                 h == "localhost"
                     || h.parse::<std::net::IpAddr>()
                         .is_ok_and(|ip| ip.is_loopback())
             })
-            || !database.path().trim_start_matches('/').starts_with("c4_")
+            || !["c4_", "c5_"]
+                .iter()
+                .any(|prefix| database.path().trim_start_matches('/').starts_with(prefix))
+            || database.query_pairs().any(|(key, _)| {
+                matches!(
+                    key.as_ref(),
+                    "host" | "hostaddr" | "port" | "dbname" | "database" | "socket"
+                )
+            })
         {
             return Err(
-                "fixture PostgreSQL requires an explicit loopback c4_ synthetic database".into(),
+                "fixture SQL requires an explicit loopback c4_/c5_ synthetic database without endpoint overrides".into(),
             );
         }
-        "postgres"
+        if database.scheme() == "mysql" {
+            "mysql"
+        } else {
+            "postgres"
+        }
     };
     if !provider_addr.ip().is_loopback()
         || provider_addr.port() == 0

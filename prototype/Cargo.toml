@@ -21,7 +21,7 @@ tokio = { version = "=1.53.1", features = ["io-util", "macros", "net", "signal",
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "json", "tokio"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "postgres"] }
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "mysql"] }
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "http2", "rustls"] }
 futures-util = "=0.3.33"
 rand = "=0.10.2"

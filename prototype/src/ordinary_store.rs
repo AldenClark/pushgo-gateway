@@ -1,5 +1,6 @@
 //! The runtime and HTTP layer select whole ledger operations, not SQL dialects.
 //! Each backend retains its native connection, transactions and query plans.
+use crate::mysql_store::MySqlDeliveryStore;
 use crate::pg_store::PgDeliveryStore;
 use crate::store::{
     AcceptRequest, Accepted, ClaimBatch, Config, Counters, DeliveryStore, Health, KernelError,
@@ -13,6 +14,7 @@ use tokio::sync::Notify;
 enum Backend {
     Sqlite(DeliveryStore),
     Postgres(PgDeliveryStore),
+    MySql(MySqlDeliveryStore),
 }
 #[derive(Clone)]
 pub struct OrdinaryStore {
@@ -44,6 +46,17 @@ impl From<PgDeliveryStore> for OrdinaryStore {
         }
     }
 }
+impl From<MySqlDeliveryStore> for OrdinaryStore {
+    fn from(store: MySqlDeliveryStore) -> Self {
+        Self {
+            config: store.config.clone(),
+            counters: store.counters.clone(),
+            wake: store.wake.clone(),
+            health: store.health.clone(),
+            backend: Backend::MySql(store),
+        }
+    }
+}
 impl OrdinaryStore {
     pub(super) async fn open(url: &str, config: Config) -> Result<(Self, OwnerLock)> {
         if url.starts_with("sqlite:") {
@@ -52,9 +65,12 @@ impl OrdinaryStore {
         } else if url.starts_with("postgres:") || url.starts_with("postgresql:") {
             let (s, o) = PgDeliveryStore::open(url, config).await?;
             Ok((s.into(), o))
+        } else if url.starts_with("mysql:") {
+            let (s, o) = MySqlDeliveryStore::open(url, config).await?;
+            Ok((s.into(), o))
         } else {
             Err(KernelError::Invalid(
-                "supported ordinary backends: SQLite or PostgreSQL".into(),
+                "supported ordinary backends: SQLite, PostgreSQL or MySQL".into(),
             ))
         }
     }
@@ -62,6 +78,7 @@ impl OrdinaryStore {
         match &self.backend {
             Backend::Sqlite(s) => s.pool.close().await,
             Backend::Postgres(s) => s.close().await,
+            Backend::MySql(s) => s.close().await,
         }
     }
     pub(super) fn notify(&self) {
@@ -84,6 +101,11 @@ impl OrdinaryStore {
                 .is_some_and(|c| {
                     c.starts_with("08") || matches!(c.as_ref(), "57P01" | "57P02" | "57P03")
                 });
+            let disconnected = disconnected
+                || error
+                    .as_database_error()
+                    .and_then(|e| e.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+                    .is_some_and(|e| matches!(e.number(), 1053 | 2006 | 2013 | 2055 | 4031));
             if disconnected {
                 self.health
                     .fail("ledger connection failed; exclusive-owner restart required");
@@ -106,6 +128,13 @@ impl OrdinaryStore {
             _ => None,
         }
     }
+    #[cfg(test)]
+    pub(super) fn mysql_store(&self) -> Option<MySqlDeliveryStore> {
+        match &self.backend {
+            Backend::MySql(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl OrdinaryStore {
@@ -114,6 +143,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.register_device(platform, requested).await,
             Backend::Postgres(s) => s.register_device(platform, requested).await,
+            Backend::MySql(s) => s.register_device(platform, requested).await,
         };
         self.checked(result)
     }
@@ -128,6 +158,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.update_route(device, platform, provider, raw).await,
             Backend::Postgres(s) => s.update_route(device, platform, provider, raw).await,
+            Backend::MySql(s) => s.update_route(device, platform, provider, raw).await,
         };
         self.checked(result)
     }
@@ -136,6 +167,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.delete_route(device, channel_type).await,
             Backend::Postgres(s) => s.delete_route(device, channel_type).await,
+            Backend::MySql(s) => s.delete_route(device, channel_type).await,
         };
         self.checked(result)
     }
@@ -144,6 +176,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.retire_provider_token(platform, raw).await,
             Backend::Postgres(s) => s.retire_provider_token(platform, raw).await,
+            Backend::MySql(s) => s.retire_provider_token(platform, raw).await,
         };
         self.checked(result)
     }
@@ -158,6 +191,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.subscribe(device, channel_id, channel_name, auth).await,
             Backend::Postgres(s) => s.subscribe(device, channel_id, channel_name, auth).await,
+            Backend::MySql(s) => s.subscribe(device, channel_id, channel_name, auth).await,
         };
         self.checked(result)
     }
@@ -166,6 +200,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.unsubscribe(device, channel).await,
             Backend::Postgres(s) => s.unsubscribe(device, channel).await,
+            Backend::MySql(s) => s.unsubscribe(device, channel).await,
         };
         self.checked(result)
     }
@@ -174,6 +209,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.channel_info(channel).await,
             Backend::Postgres(s) => s.channel_info(channel).await,
+            Backend::MySql(s) => s.channel_info(channel).await,
         };
         self.checked(result)
     }
@@ -182,6 +218,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.rename_channel(channel, name, password).await,
             Backend::Postgres(s) => s.rename_channel(channel, name, password).await,
+            Backend::MySql(s) => s.rename_channel(channel, name, password).await,
         };
         self.checked(result)
     }
@@ -190,6 +227,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.sync_channels(device, items).await,
             Backend::Postgres(s) => s.sync_channels(device, items).await,
+            Backend::MySql(s) => s.sync_channels(device, items).await,
         };
         self.checked(result)
     }
@@ -198,6 +236,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.accept(request).await,
             Backend::Postgres(s) => s.accept(request).await,
+            Backend::MySql(s) => s.accept(request).await,
         };
         self.checked(result)
     }
@@ -206,6 +245,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.maintenance().await,
             Backend::Postgres(s) => s.maintenance().await,
+            Backend::MySql(s) => s.maintenance().await,
         };
         self.checked(result)
     }
@@ -214,6 +254,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.pull(device, delivery).await,
             Backend::Postgres(s) => s.pull(device, delivery).await,
+            Backend::MySql(s) => s.pull(device, delivery).await,
         };
         self.checked(result)
     }
@@ -222,6 +263,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.pull_legacy(device, delivery).await,
             Backend::Postgres(s) => s.pull_legacy(device, delivery).await,
+            Backend::MySql(s) => s.pull_legacy(device, delivery).await,
         };
         self.checked(result)
     }
@@ -230,6 +272,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.ack(device, ids).await,
             Backend::Postgres(s) => s.ack(device, ids).await,
+            Backend::MySql(s) => s.ack(device, ids).await,
         };
         self.checked(result)
     }
@@ -243,6 +286,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.claim_reserved(provider, limit, retry_first).await,
             Backend::Postgres(s) => s.claim_reserved(provider, limit, retry_first).await,
+            Backend::MySql(s) => s.claim_reserved(provider, limit, retry_first).await,
         };
         self.checked(result)
     }
@@ -251,6 +295,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.authorize_ticket(ticket).await,
             Backend::Postgres(s) => s.authorize_ticket(ticket).await,
+            Backend::MySql(s) => s.authorize_ticket(ticket).await,
         };
         self.checked(result)
     }
@@ -273,6 +318,10 @@ impl OrdinaryStore {
                 s.settle(ticket, state, status, error, next_due, cooldown)
                     .await
             }
+            Backend::MySql(s) => {
+                s.settle(ticket, state, status, error, next_due, cooldown)
+                    .await
+            }
         };
         self.checked(result)
     }
@@ -281,6 +330,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.status(op).await,
             Backend::Postgres(s) => s.status(op).await,
+            Backend::MySql(s) => s.status(op).await,
         };
         self.checked(result)
     }
@@ -289,6 +339,7 @@ impl OrdinaryStore {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.target_status(op).await,
             Backend::Postgres(s) => s.target_status(op).await,
+            Backend::MySql(s) => s.target_status(op).await,
         };
         self.checked(result)
     }
