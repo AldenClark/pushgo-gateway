@@ -1,6 +1,6 @@
 # C：普通消息合同候选
 
-独立单机普通消息 crate，已实现 SQLite、PostgreSQL、MySQL 原生存储及普通 Private 数据面。C8 将消息提交整 JSON 上限调整为48KiB，其他控制接口默认仍为32KiB；Private 完整 DELIVER 固定128KiB，配套客户端必须升级，旧客户端可能在 WELCOME 阶段拒连。三库共享合同、Android 真实 JNI/Room/Keystore 和 Windows macOS host 生产 Rust/SQLite 的 TCP TLS 闭环通过；Windows OS/GUI 和客户端 QUIC/WSS 未运行。原40,960目标有限容量回归两库通过，MySQL窗口余量约7.15秒，不代表持续容量。Android路径扫描有一项测试系统失败。当前交付入口为 [C8结果](docs/c8-results.md)、[有限容量解释](docs/c8-capacity.md)及[验证源码](validation/c8/README.md)。C3至C7报告、原始失败和冻结产物保持各自历史含义；C7容量未运行不能改称通过。Provider仅本地Mock，PG/MySQL为获准隔离新库，不代表旧库迁移或断电验收。Event、Thing、Watch、WNS不在范围，真实APNs未验证。
+独立单机普通消息 crate，已实现 SQLite、PostgreSQL、MySQL 原生存储及普通 Private 数据面。C9完成空闲与同进程两轮升降负载测量，修复Android源码扫描；一次MySQL读取合并未通过收益门槛，已单独撤回，保留H32和按需有界执行，不新增伸缩控制器。当前交付入口为 [C9结果](docs/c9-results.md) 与 [验证源码](validation/c9/README.md)。48KiB整个消息JSON、控制接口32KiB、Private完整帧/WELCOME128KiB及旧客户端硬切决定不变。C8的三库、Android真实JNI/Room/Keystore和Windows macOS host生产Rust/SQLite的TCP TLS结果保留原版本与范围，见 [C8结果](docs/c8-results.md)；C9未新跑这些客户端闭环、PG或Windows OS/客户端QUIC/WSS。原C5失败、C6/C7/C8容量结果保持各自历史含义；C9有限窗口不代表持续容量。仅本地Mock与获准隔离新库，不代表真实APNs、旧库迁移、断电或物理Watch验收；Event、Thing、Watch、WNS不在范围。
 
 ## 已实现的普通消息边界
 
@@ -20,7 +20,7 @@
 
 `POST /message` 整个请求 JSON 限48KiB，其他控制接口默认32KiB；128 个连接在创建连接任务前受限，HTTP/2 每连接默认通告 1 个并发 stream，使合规客户端在协议层排队。保留原 128 个请求总接纳许可；控制响应另用 16 个工作许可有界等待，等待时已持总许可且尚未解析 JSON，没有新增 16/112 并发拒收。许可随响应 Body 到 EOF、错误或 drop 释放。Provider 回复最多累计 16 KiB，保留状态与 Retry-After，2xx 的诊断正文失败不触发重发。Provider 连接池按安全上限配置，连续积压保留，真正空闲后释放，无额外清理定时器。
 
-未完成冻结消息 10,000、待执行 Provider 目标 1,000,000 沿用主线边界；事务计数避免每次接纳全表 COUNT/SUM。实验聚合正文限额默认关闭。ACK 释放正文和投递队列，进行中工作保留到结果提交；身份、指纹和状态完整保留 30 天。过期正文和身份清理各采用有界 256 条批次，索引不把整段历史加载到内存。
+未完成冻结消息 10,000、待执行目标 1,000,000（Provider与Private合计） 沿用主线边界；事务计数避免每次接纳全表 COUNT/SUM。实验聚合正文限额默认关闭。ACK 释放正文和投递队列，进行中工作保留到结果提交；身份、指纹和状态完整保留 30 天。过期正文和身份清理各采用有界 256 条批次，索引不把整段历史加载到内存。
 
 **本轮没有历史数量或字节硬配额。磁盘随 30 天接纳量增长，不能声称存在固定磁盘上限。** 逻辑删除、可复用空闲页、WAL checkpoint 和文件实际大小分别测量。SQLite WAL+FULL、单连接和短时进程内 mutation 锁保留；规范化路径 OS 文件锁阻止多进程误开。没有分布式调度、选主或租约。
 
