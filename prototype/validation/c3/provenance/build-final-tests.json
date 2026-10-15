@@ -1,0 +1,14 @@
+{
+  "source_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+  "source_clean": true,
+  "binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-final",
+  "binary_sha256": "52e1102109523365d006dbb94c885afdbfca0341b166a78579931858ad454202",
+  "passed": 80,
+  "failed": 0,
+  "ignored": 2,
+  "ignored_scope": "two explicitly scheduled native history measurements",
+  "test_log": "rust-tests-final-first.log",
+  "build_log": "rust-build-tests-final-first.log",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "profile": "release opt3 fatLTO cgu1; Cargo test panic policy"
+}

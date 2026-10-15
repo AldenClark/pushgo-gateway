@@ -1,0 +1,576 @@
+[
+  {
+    "path": "control",
+    "label": "empty_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "empty_original",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "empty_cross",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "empty_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "empty_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "all_targets_future_epoch_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "all_targets_future_epoch_seed0",
+    "sql": "UPDATE targets SET control_epoch=2",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "all_targets_future_epoch_seed1",
+    "sql": "INSERT INTO retired_provider_tokens VALUES('android','bulk',1)",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "all_targets_future_epoch_original",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "all_targets_future_epoch_cross",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "all_targets_future_epoch_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "all_targets_future_epoch_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "one_marker_many_old_and_future_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "one_marker_many_old_and_future_seed0",
+    "sql": "UPDATE targets SET control_epoch=2 WHERE device_key>='d002500' AND device_key<'d005000'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "one_marker_many_old_and_future_seed1",
+    "sql": "INSERT INTO retired_provider_tokens VALUES('android','bulk',1)",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "one_marker_many_old_and_future_original",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "one_marker_many_old_and_future_cross",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "one_marker_many_old_and_future_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "one_marker_many_old_and_future_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "multiple_markers_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "multiple_markers_seed0",
+    "sql": "UPDATE targets SET control_epoch=2 WHERE device_key<'d004900'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "multiple_markers_seed1",
+    "sql": "INSERT INTO retired_provider_tokens VALUES('android','bulk',1),('android','t005001',1),('android','t005002',0),('android','missing',99)",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "multiple_markers_original",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "multiple_markers_cross",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "multiple_markers_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "multiple_markers_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_seed0",
+    "sql": "INSERT INTO devices(device_key,platform,retired_at,coalesced_to) VALUES('orphan','android',1000,'winner'),('orphan_null_retired','android',NULL,'winner')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_seed1",
+    "sql": "UPDATE devices SET retired_at=1000,coalesced_to='winner' WHERE device_key IN ('d000000','d000001')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_seed2",
+    "sql": "DELETE FROM targets WHERE device_key='d000001'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_seed3",
+    "sql": "UPDATE targets SET pull_owner='d000001' WHERE device_key='d000002'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_seed4",
+    "sql": "UPDATE targets SET pull_owner='winner' WHERE device_key='d000000'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "plan",
+    "label": "cleanup_original",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "cleanup_original",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256) RETURNING device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "cleanup_original_retained",
+    "sql": "SELECT device_key FROM devices WHERE coalesced_to IS NOT NULL ORDER BY device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_original_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_index",
+    "sql": "CREATE INDEX diagnostic_devices_coalesced_key ON devices(device_key) WHERE coalesced_to IS NOT NULL",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_seed0",
+    "sql": "INSERT INTO devices(device_key,platform,retired_at,coalesced_to) VALUES('orphan','android',1000,'winner'),('orphan_null_retired','android',NULL,'winner')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_seed1",
+    "sql": "UPDATE devices SET retired_at=1000,coalesced_to='winner' WHERE device_key IN ('d000000','d000001')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_seed2",
+    "sql": "DELETE FROM targets WHERE device_key='d000001'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_seed3",
+    "sql": "UPDATE targets SET pull_owner='d000001' WHERE device_key='d000002'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_seed4",
+    "sql": "UPDATE targets SET pull_owner='winner' WHERE device_key='d000000'",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "plan",
+    "label": "cleanup_indexed",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "cleanup_indexed",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256) RETURNING device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "cleanup_indexed_retained",
+    "sql": "SELECT device_key FROM devices WHERE coalesced_to IS NOT NULL ORDER BY device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "cleanup_indexed_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_original_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_original_seed0",
+    "sql": "INSERT INTO channels VALUES('c0','c0','synthetic'),('c1','c1','synthetic'),('c2','c2','synthetic')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_original_seed1",
+    "sql": "UPDATE devices SET provider_token='shared' WHERE device_key IN ('d000000','d000001','d005000')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_original_seed2",
+    "sql": "INSERT INTO channel_subscriptions VALUES('c0','d005000'),('c0','d000000'),('c1','d000000'),('c2','d000001')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_original_source0",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "d005000",
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_original_source1",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "d005000",
+      "d005000",
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_original_source2",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_original_source3",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "d005000",
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_original_subscriptions",
+    "sql": "SELECT channel_id,device_key FROM channel_subscriptions ORDER BY channel_id,device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "union_original_owners",
+    "sql": "SELECT device_key,pull_owner,owner_generation FROM targets WHERE device_key IN ('d000000','d000001') ORDER BY device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "union_original_devices",
+    "sql": "SELECT device_key,retired_at,coalesced_to FROM devices WHERE device_key IN ('d000000','d000001','d005000') ORDER BY device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "union_original_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_original_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_indexed_save",
+    "sql": "SAVEPOINT compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_indexed_index",
+    "sql": "CREATE INDEX diagnostic_devices_token ON devices(platform,provider_token,device_key) WHERE retired_at IS NULL",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_indexed_seed0",
+    "sql": "INSERT INTO channels VALUES('c0','c0','synthetic'),('c1','c1','synthetic'),('c2','c2','synthetic')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_indexed_seed1",
+    "sql": "UPDATE devices SET provider_token='shared' WHERE device_key IN ('d000000','d000001','d005000')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_indexed_seed2",
+    "sql": "INSERT INTO channel_subscriptions VALUES('c0','d005000'),('c0','d000000'),('c1','d000000'),('c2','d000001')",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_indexed_source0",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "d005000",
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_indexed_source1",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "d005000",
+      "d005000",
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_indexed_source2",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_indexed_source3",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "d005000",
+      "android",
+      "shared",
+      "d005000"
+    ],
+    "capture_rows": false
+  },
+  {
+    "path": "semantics",
+    "label": "union_indexed_subscriptions",
+    "sql": "SELECT channel_id,device_key FROM channel_subscriptions ORDER BY channel_id,device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "union_indexed_owners",
+    "sql": "SELECT device_key,pull_owner,owner_generation FROM targets WHERE device_key IN ('d000000','d000001') ORDER BY device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "semantics",
+    "label": "union_indexed_devices",
+    "sql": "SELECT device_key,retired_at,coalesced_to FROM devices WHERE device_key IN ('d000000','d000001','d005000') ORDER BY device_key",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "control",
+    "label": "union_indexed_rollback",
+    "sql": "ROLLBACK TO compare",
+    "binds": [],
+    "capture_rows": false
+  },
+  {
+    "path": "control",
+    "label": "union_indexed_release",
+    "sql": "RELEASE compare",
+    "binds": [],
+    "capture_rows": false
+  }
+]

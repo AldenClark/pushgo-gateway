@@ -1,0 +1,15 @@
+{
+  "source_sha256": "d5d4bdba79f611b3353dfbfa69337614767a18edeb946067d57b9dbbfcbf8d77",
+  "schema_sha256": "2496ebbc10d10f292e7d4079b188f2dd5dd8e80fb268deb43642b588ca35073f",
+  "python_sqlite": "3.54.0",
+  "targets": [
+    10000,
+    20000
+  ],
+  "repeats": 3,
+  "retired_initial": 0,
+  "clock_at": 1000,
+  "all_messages_unexpired": true,
+  "all_devices_active": true,
+  "claims": "independent SQLite engine; not SQLx runtime evidence"
+}

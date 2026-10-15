@@ -1,0 +1,18 @@
+{
+  "source": "/Users/ethan/Repo/PushGo/gateway/bench/scripts/resource_monitor.py",
+  "git_root": "/Users/ethan/Repo/PushGo/gateway",
+  "source_commit": "dfb6b7c2cfd1b2f8e6d7fe7c95d8bf59473ed0b6",
+  "source_relative_path": "bench/scripts/resource_monitor.py",
+  "source_clean": true,
+  "sha256": "b019060657a25c18d282da9ccd433cb7f2f110df1ee90782472d24031999554e",
+  "copy_semantics": "exact bytes; no algorithm or sampling cadence changes",
+  "original_A128": "retained executed runner bytes unchanged; helper identity recovered from identical tracked source at recorded gateway commit",
+  "transitive_imports": {
+    "common.py": {
+      "source": "/Users/ethan/Repo/PushGo/gateway/bench/scripts/common.py",
+      "source_commit": "dfb6b7c2cfd1b2f8e6d7fe7c95d8bf59473ed0b6",
+      "sha256": "afcdade74a552af14c4748abcca430096a76a3477e2b2205b238715f83a54b7e",
+      "copy": "exact tracked bytes; only ps_metrics is invoked by runner; default network/database configuration unused"
+    }
+  }
+}

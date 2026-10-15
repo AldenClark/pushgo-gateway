@@ -1,0 +1,28 @@
+[
+  {
+    "path": "control",
+    "label": "coalesced_partial_index",
+    "sql": "CREATE INDEX diagnostic_devices_coalesced_key ON devices(device_key) WHERE coalesced_to IS NOT NULL"
+  },
+  {
+    "path": "plan",
+    "label": "cleanup_key_index",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "capture_rows": true
+  },
+  {
+    "path": "measure",
+    "label": "cleanup_key_index",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)"
+  },
+  {
+    "path": "measure",
+    "label": "cleanup_key_index",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)"
+  },
+  {
+    "path": "measure",
+    "label": "cleanup_key_index",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)"
+  }
+]

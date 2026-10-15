@@ -1,0 +1,468 @@
+{
+  "package_scope": "source-only; excludes raw logs, SQLite DBs, binaries/APKs and staged production source copies",
+  "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015",
+  "original_out_relation": "entries name original immutable evidence workspace paths; these historical absolute paths are provenance, not portable defaults",
+  "known_final_runtime_source_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+  "later_source_boundary": "Any later SQLite BUSY/product change is not covered by the 10e final native/process-restart evidence. Use new source/binary/hash/evidence receipts.",
+  "portable_execution": "NOT RUN; packaging path edits are syntax-inspected only; original OUT executions do not verify packaged adapters",
+  "entries": [
+    {
+      "original_out_relative": "harness/c3_mock.py",
+      "packaged_relative": "harness/c3_mock.py",
+      "original_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "packaged_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/test_c3_mock.py",
+      "packaged_relative": "harness/test_c3_mock.py",
+      "original_sha256": "a7335967be5b50081ec624b7cab5791cf8be647fce0c814800c831057ad4bd40",
+      "packaged_sha256": "a7335967be5b50081ec624b7cab5791cf8be647fce0c814800c831057ad4bd40",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/run_c3_mock_smoke.py",
+      "packaged_relative": "harness/run_c3_mock_smoke.py",
+      "original_sha256": "6d6bcdf1c8d730da9b04bb30a012f486e6015921c6f25a603a000fd240891a79",
+      "packaged_sha256": "6d6bcdf1c8d730da9b04bb30a012f486e6015921c6f25a603a000fd240891a79",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/run_c3_control_restart.py",
+      "packaged_relative": "harness/run_c3_control_restart.py",
+      "original_sha256": "55a7ae9199d172fd9326d52a0638d676e468f656458f3b9502871fefca529a85",
+      "packaged_sha256": "55a7ae9199d172fd9326d52a0638d676e468f656458f3b9502871fefca529a85",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/run_profile_capacity.py",
+      "packaged_relative": "harness/run_profile_capacity.py",
+      "original_sha256": "3b762307eddce97f27896f49843f7d34b86c99f21e4d5c3aeb9f433a6b7b48a6",
+      "packaged_sha256": "3b762307eddce97f27896f49843f7d34b86c99f21e4d5c3aeb9f433a6b7b48a6",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/resource_monitor.py",
+      "packaged_relative": "harness/resource_monitor.py",
+      "original_sha256": "b019060657a25c18d282da9ccd433cb7f2f110df1ee90782472d24031999554e",
+      "packaged_sha256": "b019060657a25c18d282da9ccd433cb7f2f110df1ee90782472d24031999554e",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/common.py",
+      "packaged_relative": "harness/common.py",
+      "original_sha256": "afcdade74a552af14c4748abcca430096a76a3477e2b2205b238715f83a54b7e",
+      "packaged_sha256": "afcdade74a552af14c4748abcca430096a76a3477e2b2205b238715f83a54b7e",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/resource-monitor-source-provenance.json",
+      "packaged_relative": "harness/resource-monitor-source-provenance.json",
+      "original_sha256": "f686a3329022e4d4b8442c6e210bc53a110e8eb90897d10941a8557ee7e687a4",
+      "packaged_sha256": "f686a3329022e4d4b8442c6e210bc53a110e8eb90897d10941a8557ee7e687a4",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/reduce_profile_capacity.py",
+      "packaged_relative": "harness/reduce_profile_capacity.py",
+      "original_sha256": "83432df2df2ff1fca3be7497d576c85b897aaeafeab3cfdaa14964ab72d258ac",
+      "packaged_sha256": "83432df2df2ff1fca3be7497d576c85b897aaeafeab3cfdaa14964ab72d258ac",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/analyse_c2.py",
+      "packaged_relative": "harness/analyse_c2.py",
+      "original_sha256": "4c7dd1145d79118b8b17f5cf608f7ce6b50a21e4ed1e96b435fb8d4a982db333",
+      "packaged_sha256": "4c7dd1145d79118b8b17f5cf608f7ce6b50a21e4ed1e96b435fb8d4a982db333",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/analyse_c1_base.py",
+      "packaged_relative": "harness/analyse_c1_base.py",
+      "original_sha256": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+      "packaged_sha256": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/c3_pid_rusage.c",
+      "packaged_relative": "harness/c3_pid_rusage.c",
+      "original_sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "packaged_sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/c3_history_probe.py",
+      "packaged_relative": "harness/c3_history_probe.py",
+      "original_sha256": "9ac042161aaa7c9654d903e290ce6b124a403a717a4073eafd66e2bbaaef828f",
+      "packaged_sha256": "9ac042161aaa7c9654d903e290ce6b124a403a717a4073eafd66e2bbaaef828f",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/c3_history_analyze.py",
+      "packaged_relative": "harness/c3_history_analyze.py",
+      "original_sha256": "05bf60bb0ce968e1f3e1d1b7d7afd44fe3530e41d4b92bd5da988ab52d67a577",
+      "packaged_sha256": "05bf60bb0ce968e1f3e1d1b7d7afd44fe3530e41d4b92bd5da988ab52d67a577",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/sqlite_native_profile.py",
+      "packaged_relative": "harness/sqlite_native_profile.py",
+      "original_sha256": "f4b97c269b993bd3dcc775d5b3b7c8b9caa9e9932c9ebd1a6e190f2a13c5795e",
+      "packaged_sha256": "f4b97c269b993bd3dcc775d5b3b7c8b9caa9e9932c9ebd1a6e190f2a13c5795e",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/summarize_matched.py",
+      "packaged_relative": "harness/summarize_matched.py",
+      "original_sha256": "f159b03e55602a287d3c6dc6dc3ad894e2d54455b3a4a15f9d7834ef9524627d",
+      "packaged_sha256": "f159b03e55602a287d3c6dc6dc3ad894e2d54455b3a4a15f9d7834ef9524627d",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/capacity-manifest.template.json",
+      "packaged_relative": "harness/capacity-manifest.template.json",
+      "original_sha256": "f28deef101f0bdadab00aed3bf6ace00f50444a651fb0ab22c4e8ef772086f7a",
+      "packaged_sha256": "f28deef101f0bdadab00aed3bf6ace00f50444a651fb0ab22c4e8ef772086f7a",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/C3_MOCK_API.md",
+      "packaged_relative": "harness/C3_MOCK_API.md",
+      "original_sha256": "d3b626397f9abee091ba5ddd30b5e141b75f8d2885e2a12a1e6c0f4a8de94e78",
+      "packaged_sha256": "d3b626397f9abee091ba5ddd30b5e141b75f8d2885e2a12a1e6c0f4a8de94e78",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/run_c3_campaign.py",
+      "packaged_relative": "harness/run_c3_campaign.py",
+      "original_sha256": "6957298e2ad9e857b0612cc4718de6ef5b95c0471db7b9355e8fd1965c243984",
+      "packaged_sha256": "362f39ba7500a46d5d2c848a665adb6a48bb9b1fee38b5aef3f82c3d6ef02191",
+      "transform": "path/CLI relocation only; portable version NOT RUN"
+    },
+    {
+      "original_out_relative": "harness/current500_run_compare.py",
+      "packaged_relative": "harness/current500_run_compare.py",
+      "original_sha256": "4572c68c449a213da4a01f44207b70e4feb1b8b550c1e4feaab4a895309c0126",
+      "packaged_sha256": "03e1349e97599a339c5f04e500a7e0e24de8996a41bdae2347f14aa15a1a18da",
+      "transform": "path/CLI relocation only; portable version NOT RUN"
+    },
+    {
+      "original_out_relative": "harness/current500_fixture.rs",
+      "packaged_relative": "current500/fixture.rs",
+      "original_sha256": "f1c5585f238da52363e0c93f5bd13104d123b936ffaa9754282702a35329ef0d",
+      "packaged_sha256": "f1c5585f238da52363e0c93f5bd13104d123b936ffaa9754282702a35329ef0d",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "current500/fixture-package/Cargo.lock",
+      "packaged_relative": "current500/Cargo.lock",
+      "original_sha256": "78bce87bdfd5fda6fbbca7e7966e84dd2ab2964e7fe3a1e41207189e06ec6cd0",
+      "packaged_sha256": "78bce87bdfd5fda6fbbca7e7966e84dd2ab2964e7fe3a1e41207189e06ec6cd0",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "current500/fixture-package/Cargo.toml",
+      "packaged_relative": "current500/Cargo.toml.template",
+      "original_sha256": "91c5967b1b13ae9265ecfcfaddec7c857acfe8bcc3ccdf5f3e6d4e05a39a8795",
+      "packaged_sha256": "6bb225a4f06bd7d905d4b40b785e5f1332711742cc383d43648b56845001580c",
+      "transform": "path/CLI relocation only; portable version NOT RUN"
+    },
+    {
+      "original_out_relative": "harness/prepare_native_diag.py",
+      "packaged_relative": "harness/prepare_native_diag.py",
+      "original_sha256": "9bd1fa93fa15184a916176c093213ca6d26d742ab7b49d66a320a8b9988aab1d",
+      "packaged_sha256": "bdf6dabd485705dad0ac24c54e11d5c25f925c97d320cce628dcd136c36aac51",
+      "transform": "path/CLI relocation only; portable version NOT RUN"
+    },
+    {
+      "original_out_relative": "harness/prepare_native_diag_controls.py",
+      "packaged_relative": "harness/prepare_native_diag_controls.py",
+      "original_sha256": "97a6b38ee0e44be5ad184c65be6b5c35ba588e6728bba2e6b9f86d15087d76e6",
+      "packaged_sha256": "b82946be18e46aafe9dcf004368577f66cfb2e567ae556cbb23ef6e9fb952a39",
+      "transform": "path/CLI relocation only; portable version NOT RUN"
+    },
+    {
+      "original_out_relative": "harness/prepare_native_semantics.py",
+      "packaged_relative": "harness/prepare_native_semantics.py",
+      "original_sha256": "6c47d88a8665140843ea241e30f63d057e59f6ce20b530eefdb7f63b0dcfbc7b",
+      "packaged_sha256": "46ddba6921e8fa1b9ba05fc07b3f356207602e8d200d3f22e86bd6ac0a426c58",
+      "transform": "path/CLI relocation only; portable version NOT RUN"
+    },
+    {
+      "original_out_relative": "native-diag/steps-10000.json",
+      "packaged_relative": "native-diag-inputs/steps-10000.json",
+      "original_sha256": "f15b7815ae8bbfec4653e13f0bb90657559dd721c4703c4f64c6d6d7cc4e9724",
+      "packaged_sha256": "f15b7815ae8bbfec4653e13f0bb90657559dd721c4703c4f64c6d6d7cc4e9724",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "native-diag/steps-20000.json",
+      "packaged_relative": "native-diag-inputs/steps-20000.json",
+      "original_sha256": "f15b7815ae8bbfec4653e13f0bb90657559dd721c4703c4f64c6d6d7cc4e9724",
+      "packaged_sha256": "f15b7815ae8bbfec4653e13f0bb90657559dd721c4703c4f64c6d6d7cc4e9724",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "native-diag/steps-controls.json",
+      "packaged_relative": "native-diag-inputs/steps-controls.json",
+      "original_sha256": "accb6c841ba2c754c96c870bb1bce00cb828db3f29d22b0e33c4781cd1a9daf5",
+      "packaged_sha256": "accb6c841ba2c754c96c870bb1bce00cb828db3f29d22b0e33c4781cd1a9daf5",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "native-diag/steps-key-index.json",
+      "packaged_relative": "native-diag-inputs/steps-key-index.json",
+      "original_sha256": "0ae85c374b74756dabc381c3548cadee4b8c55b31b57ce291818c714e83a5624",
+      "packaged_sha256": "0ae85c374b74756dabc381c3548cadee4b8c55b31b57ce291818c714e83a5624",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "native-diag/steps-semantics.json",
+      "packaged_relative": "native-diag-inputs/steps-semantics.json",
+      "original_sha256": "c6f2f698e200bf9e761569e191b9ee45ea8e58c2e12339e15535b63a0d481d76",
+      "packaged_sha256": "c6f2f698e200bf9e761569e191b9ee45ea8e58c2e12339e15535b63a0d481d76",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "native-diag/schema.sql",
+      "packaged_relative": "native-diag-inputs/schema.sql",
+      "original_sha256": "2496ebbc10d10f292e7d4079b188f2dd5dd8e80fb268deb43642b588ca35073f",
+      "packaged_sha256": "2496ebbc10d10f292e7d4079b188f2dd5dd8e80fb268deb43642b588ca35073f",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "native-diag/provenance.json",
+      "packaged_relative": "native-diag-inputs/provenance.json",
+      "original_sha256": "1fafa91594682f93d79ed73fcbf16d9a9a0ba8cb574a22d8888206113c609f10",
+      "packaged_sha256": "1fafa91594682f93d79ed73fcbf16d9a9a0ba8cb574a22d8888206113c609f10",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "build-A.json",
+      "packaged_relative": "provenance/build-A.json",
+      "original_sha256": "27af0e5e68b4ebf6241511aa33876debadce50cde3353462e27e13b349d1c326",
+      "packaged_sha256": "27af0e5e68b4ebf6241511aa33876debadce50cde3353462e27e13b349d1c326",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "build-matched-control.json",
+      "packaged_relative": "provenance/build-matched-control.json",
+      "original_sha256": "8878d5abee009dc124b1a04dc6c219bfe77e4337a2e5aa92bdd98d5625e8158f",
+      "packaged_sha256": "8878d5abee009dc124b1a04dc6c219bfe77e4337a2e5aa92bdd98d5625e8158f",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "artifacts-profile-matched.json",
+      "packaged_relative": "provenance/artifacts-profile-matched.json",
+      "original_sha256": "01a66eab6aa8d8db207ee50daa29906e2b92d55bd9a0416a000799b77eb4ce34",
+      "packaged_sha256": "01a66eab6aa8d8db207ee50daa29906e2b92d55bd9a0416a000799b77eb4ce34",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "history/execution.json",
+      "packaged_relative": "provenance/history/execution.json",
+      "original_sha256": "e42210ce6696ce5442dd2ac2ace79f08dfef706f24d9fa5b632530aa7ce7ce4f",
+      "packaged_sha256": "e42210ce6696ce5442dd2ac2ace79f08dfef706f24d9fa5b632530aa7ce7ce4f",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "current500/build-input.json",
+      "packaged_relative": "provenance/current500-build-input.json",
+      "original_sha256": "c83264bd9a3c8956462b1671567e435df256e4b77a1225924e1cb0b6a6de9820",
+      "packaged_sha256": "c83264bd9a3c8956462b1671567e435df256e4b77a1225924e1cb0b6a6de9820",
+      "transform": "exact bytes from retained source/manifest; hash equality does not imply new execution"
+    },
+    {
+      "original_out_relative": "harness/run_writerfix_followup.py",
+      "packaged_relative": "harness/run_writerfix_followup.py",
+      "original_sha256": "2f7ba40456848824e13426dcc2a27574c507b4c5243798bfdf76927c4ad30a15",
+      "packaged_sha256": "5ecbcb43b9aebc62cda341b9957ffcef1eff1b24e8efbb41c9c2114bdf0f670f",
+      "transform": "require fresh external --out for portable execution; original prepared follow-up NOT RUN at package time, relocated version NOT RUN"
+    },
+    {
+      "original_out_relative": "history/analysis.md",
+      "packaged_relative": "provenance/history/analysis.md",
+      "original_sha256": "7fd7b5df6d8fcbdc0456adc064c760d0ca4810e14dff1a32270b19d03d688730",
+      "packaged_sha256": "7fd7b5df6d8fcbdc0456adc064c760d0ca4810e14dff1a32270b19d03d688730",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "history/analysis.json",
+      "packaged_relative": "provenance/history/analysis.json",
+      "original_sha256": "f2cda70960815112a842b0fe28b3c81c1d81856a54ad8c8a9f4532854c55cc2e",
+      "packaged_sha256": "f2cda70960815112a842b0fe28b3c81c1d81856a54ad8c8a9f4532854c55cc2e",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "history/identity-costs.csv",
+      "packaged_relative": "provenance/history/identity-costs.csv",
+      "original_sha256": "489f5ac7789eb7ac9259fc57100517289de5d090a8a370af01181ee5e65d23db",
+      "packaged_sha256": "489f5ac7789eb7ac9259fc57100517289de5d090a8a370af01181ee5e65d23db",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "history/identity-30d-projections.csv",
+      "packaged_relative": "provenance/history/identity-30d-projections.csv",
+      "original_sha256": "3ce897f7e6dae3c8b38a2202111fc3b13971f52dccb99db0f5da551c99741ec9",
+      "packaged_sha256": "3ce897f7e6dae3c8b38a2202111fc3b13971f52dccb99db0f5da551c99741ec9",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "history/active-fanout-projections.csv",
+      "packaged_relative": "provenance/history/active-fanout-projections.csv",
+      "original_sha256": "004a5cb40baeafda4f7145272a73a9d2c340e9a28151fca06f8e81a4f3f4bcb8",
+      "packaged_sha256": "004a5cb40baeafda4f7145272a73a9d2c340e9a28151fca06f8e81a4f3f4bcb8",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "db-block-audit/conclusion.md",
+      "packaged_relative": "provenance/db-block-audit/conclusion.md",
+      "original_sha256": "9ab931decbf3e39a3e374bd661a8b71fab444c0faa7683288f046629ad7610c1",
+      "packaged_sha256": "9ab931decbf3e39a3e374bd661a8b71fab444c0faa7683288f046629ad7610c1",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "independent-review.md",
+      "packaged_relative": "provenance/independent-review.md",
+      "original_sha256": "f740a3e87af1134c0bf14a5484b3443b243d95283d5d0bc83aa5211a500b240c",
+      "packaged_sha256": "f740a3e87af1134c0bf14a5484b3443b243d95283d5d0bc83aa5211a500b240c",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "independent-review-writer.md",
+      "packaged_relative": "provenance/independent-review-writer.md",
+      "original_sha256": "ed736009e226bb346d18a12955cc821fe532d66d7bdec07f1eca2678de4ac11a",
+      "packaged_sha256": "ed736009e226bb346d18a12955cc821fe532d66d7bdec07f1eca2678de4ac11a",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "build-final.json",
+      "packaged_relative": "provenance/build-final.json",
+      "original_sha256": "7222658594b8c94a49273aaa17be8fd578a3b4de0e564eb08d9b18a90e14d497",
+      "packaged_sha256": "7222658594b8c94a49273aaa17be8fd578a3b4de0e564eb08d9b18a90e14d497",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "build-final-tests.json",
+      "packaged_relative": "provenance/build-final-tests.json",
+      "original_sha256": "8718be378fa5738453c158a0572cb980c0283b15303afaa3fca3500c5305fe5d",
+      "packaged_sha256": "8718be378fa5738453c158a0572cb980c0283b15303afaa3fca3500c5305fe5d",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "build-writer-final.json",
+      "packaged_relative": "provenance/build-writer-final.json",
+      "original_sha256": "473dd47404b13b9929e9375dc75e200c39ff71aed7fe20769c86de91e21de01b",
+      "packaged_sha256": "473dd47404b13b9929e9375dc75e200c39ff71aed7fe20769c86de91e21de01b",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "build-writer-final-tests.json",
+      "packaged_relative": "provenance/build-writer-final-tests.json",
+      "original_sha256": "1798f442d38072d1708badb74d9f875725f295776e1cc0514afc8e1ad6d47037",
+      "packaged_sha256": "1798f442d38072d1708badb74d9f875725f295776e1cc0514afc8e1ad6d47037",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "artifacts-profile-writerfix.json",
+      "packaged_relative": "provenance/artifacts-profile-writerfix.json",
+      "original_sha256": "dabb8576539e5904849dee0547821adb60794a4b7d08339ceed9cee6e1334b6d",
+      "packaged_sha256": "dabb8576539e5904849dee0547821adb60794a4b7d08339ceed9cee6e1334b6d",
+      "transform": "exact compact evidence/identity document; source revision and original execution boundary retained; not a portable rerun"
+    },
+    {
+      "original_out_relative": "capacity-final-state.json",
+      "packaged_relative": "provenance/capacity-final-state.json",
+      "original_sha256": "755c46ba56e0551483f84a2c8d2ccb68f463278d62e0ca71260a3c61663a6b93",
+      "packaged_sha256": "755c46ba56e0551483f84a2c8d2ccb68f463278d62e0ca71260a3c61663a6b93",
+      "transform": "exact final compact capacity evidence/identity text; no runtime rerun"
+    },
+    {
+      "original_out_relative": "capacity-source-handoff-current.json",
+      "packaged_relative": "provenance/capacity-source-handoff-current.json",
+      "original_sha256": "510edde860946f86c00870b781e555356a1678b75e6a6e347c273963d7d6d8ba",
+      "packaged_sha256": "510edde860946f86c00870b781e555356a1678b75e6a6e347c273963d7d6d8ba",
+      "transform": "exact final compact capacity evidence/identity text; no runtime rerun"
+    },
+    {
+      "original_out_relative": "capacity-results-final.md",
+      "packaged_relative": "provenance/capacity/capacity-results-final.md",
+      "original_sha256": "fc482544d081e12190381465a0f7c0992955765d6b4373d24b12ae0b003611c9",
+      "packaged_sha256": "fc482544d081e12190381465a0f7c0992955765d6b4373d24b12ae0b003611c9",
+      "transform": "exact final compact capacity evidence/identity text; no runtime rerun"
+    },
+    {
+      "original_out_relative": "capacity-writerfix256-cost-comparison.json",
+      "packaged_relative": "provenance/capacity/capacity-writerfix256-cost-comparison.json",
+      "original_sha256": "06c4402d4428d88f8a1e311019b20f793fa66b5b59efa08493d2d74d75460753",
+      "packaged_sha256": "06c4402d4428d88f8a1e311019b20f793fa66b5b59efa08493d2d74d75460753",
+      "transform": "exact final compact capacity evidence/identity text; no runtime rerun"
+    },
+    {
+      "original_out_relative": "capacity-frontend-admission-comparison.json",
+      "packaged_relative": "provenance/capacity/capacity-frontend-admission-comparison.json",
+      "original_sha256": "e86fa6cf4b1f998f9a8c6577dcdf4e6c495c7a7b488a9f792c346ddaeefc4463",
+      "packaged_sha256": "e86fa6cf4b1f998f9a8c6577dcdf4e6c495c7a7b488a9f792c346ddaeefc4463",
+      "transform": "exact final compact capacity evidence/identity text; no runtime rerun"
+    }
+  ],
+  "additional_generated_files": [
+    {
+      "packaged_relative": "README.md",
+      "sha256": "7014f6656de90693cc70ad5e62fa9887f35862fe4d5c19e3b9ff42f6fc3f6001",
+      "semantics": "new delivery documentation/materializer; NOT RUN"
+    },
+    {
+      "packaged_relative": "current500/prepare_package.py",
+      "sha256": "e5c40249d1bc36503135b603b8f1f799832a6334bb224bf241744ffdcc2e1dac",
+      "semantics": "new delivery documentation/materializer; NOT RUN"
+    }
+  ],
+  "executed_capacity_dependency_archive": "executed-sources/campaign-matched-observerfix-baseline-offer128-r1",
+  "executed_dependency_byte_checks": {
+    "run_profile_capacity.py": {
+      "archive_present": true,
+      "equal": true
+    },
+    "common.py": {
+      "archive_present": true,
+      "equal": true
+    },
+    "resource_monitor.py": {
+      "archive_present": true,
+      "equal": true
+    },
+    "resource-monitor-source-provenance.json": {
+      "archive_present": true,
+      "equal": true
+    },
+    "c3_mock.py": {
+      "archive_present": true,
+      "equal": true
+    },
+    "analyse_c1_base.py": {
+      "archive_present": true,
+      "equal": true
+    },
+    "analyse_c2.py": {
+      "archive_present": true,
+      "equal": true
+    },
+    "reduce_profile_capacity.py": {
+      "archive_present": true,
+      "equal": true
+    }
+  },
+  "capacity_execution_boundary": "Historical matched primary8 PASS + first db-block FAIL + remaining original7 NOT RUN. Separately identified writerfix followup9 PASS/0FAIL/0NOTRUN under19cc candidate andcb0d control; never relabel old lanes. Portable package adapters NOT RUN.",
+  "later_product_source_reported_by_root": {
+    "commit": "19cc5c686419255739776611d1fae25b8ed7b6fa",
+    "change": "explicit write BEGIN IMMEDIATE, existing 3s budget, no database retry",
+    "execution_boundary": "root reported82 native tests; final client/restart/history original10e reused, NOT RERUN; writerfix lane source artifact distinct"
+  },
+  "final_source_handoff": "provenance/capacity-source-handoff-current.json; all12 original source SHA verified against packaged original-hash mappings",
+  "subdirectory_owners": {
+    "apple": "13 source/manifest files; owner reports static AST/zsh checks only on portable packaging; original native7/7 tied10e/c22",
+    "android": "14 source/manifest files; owner reports static AST/bash/JSON checks only on portable packaging; original native2/2 tied10e/c22"
+  },
+  "final_capacity_summary": "provenance/capacity/capacity-results-final.md; fc482544d081e12190381465a0f7c0992955765d6b4373d24b12ae0b003611c9"
+}

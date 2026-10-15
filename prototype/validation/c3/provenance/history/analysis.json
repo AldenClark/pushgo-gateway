@@ -1,0 +1,1896 @@
+{
+  "scope": "Measured local synthetic SQLite plus explicitly arithmetic extrapolations; no soak or sustained throughput acceptance",
+  "native_provenance": {
+    "status": "PASSED",
+    "started_at": "2026-10-15T03:45:03.977180+00:00",
+    "source_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+    "source_tree": "22be0da2ad792bea35a2a67dbe61d12e3f7d9695",
+    "source_root": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/frozen-matched-candidate-source",
+    "source_archive_sha256": "1071a520c70ecf238fdda47fe62d99095bd2a803db5d8ccb3bc0bbc4c2790a1f",
+    "source_store_sha256": "2c1539a481375d7acd8530828de4134c8cf4683d1703739b6424febed2b11488",
+    "native_binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-final",
+    "native_binary_sha256": "52e1102109523365d006dbb94c885afdbfca0341b166a78579931858ad454202",
+    "build_receipt": "../build-final-tests.json",
+    "available_filesystem_bytes_start": 16350793728,
+    "runs": [
+      {
+        "test": "history_tests::measure_compact_history_query_admission_gc_and_disk_space",
+        "command": [
+          "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-final",
+          "--ignored",
+          "--exact",
+          "history_tests::measure_compact_history_query_admission_gc_and_disk_space",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "environment": {
+          "C2_HISTORY_OUT": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/history/native-scale"
+        },
+        "exit_code": 0,
+        "elapsed_s": 6.676850792,
+        "first_log": "native-scale-first.log",
+        "finished_at": "2026-10-15T03:45:22.004239+00:00",
+        "available_filesystem_bytes_after": 15909969920,
+        "sqlx_sqlite_version": "3.46.0",
+        "stages_disk": [
+          {
+            "db_bytes": 4096000,
+            "shm_bytes": 32768,
+            "wal_bytes": 0
+          },
+          {
+            "db_bytes": 39997440,
+            "shm_bytes": 32768,
+            "wal_bytes": 0
+          },
+          {
+            "db_bytes": 400183296,
+            "shm_bytes": 32768,
+            "wal_bytes": 0
+          }
+        ]
+      },
+      {
+        "test": "history_tests::measure_op_widths_16_46_128_and_actual_freepage_reuse",
+        "command": [
+          "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-final",
+          "--ignored",
+          "--exact",
+          "history_tests::measure_op_widths_16_46_128_and_actual_freepage_reuse",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "environment": {
+          "C2_HISTORY_WIDTH_OUT": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/history/native-width"
+        },
+        "exit_code": 0,
+        "elapsed_s": 23.874376166,
+        "first_log": "native-width-first.log",
+        "finished_at": "2026-10-15T03:45:55.782744+00:00",
+        "available_filesystem_bytes_after": 15666589696,
+        "sqlx_sqlite_versions": [
+          "3.46.0"
+        ],
+        "case_db_bytes": [
+          36777984,
+          43069440,
+          61136896,
+          36491264,
+          42770432,
+          61292544
+        ]
+      },
+      {
+        "name": "supplemental-fixed-schema-layout",
+        "command": [
+          "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+          "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/harness/c3_history_probe.py",
+          "--source",
+          "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/frozen-matched-candidate-source",
+          "--source-identity",
+          "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/frozen-matched-candidate-source-identity.json",
+          "--out",
+          "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/history/layout"
+        ],
+        "exit_code": 0,
+        "elapsed_s": 0.62948825,
+        "first_log": "layout-first.log",
+        "finished_at": "2026-10-15T03:46:04.795347+00:00",
+        "available_filesystem_bytes_after": 15642693632,
+        "python_sqlite_version": "3.54.0",
+        "cases": [
+          {
+            "fanout": 1,
+            "body_bytes": 448,
+            "messages": 256,
+            "targets": 256,
+            "target_bytes_per_row": 864.0
+          },
+          {
+            "fanout": 16,
+            "body_bytes": 448,
+            "messages": 256,
+            "targets": 4096,
+            "target_bytes_per_row": 903.0
+          },
+          {
+            "fanout": 32,
+            "body_bytes": 448,
+            "messages": 256,
+            "targets": 8192,
+            "target_bytes_per_row": 897.0
+          },
+          {
+            "fanout": 16,
+            "body_bytes": 1024,
+            "messages": 256,
+            "targets": 4096,
+            "target_bytes_per_row": 903.0
+          },
+          {
+            "fanout": 16,
+            "body_bytes": 4096,
+            "messages": 256,
+            "targets": 4096,
+            "target_bytes_per_row": 903.0
+          }
+        ]
+      }
+    ],
+    "finished_at": "2026-10-15T03:46:04.795347+00:00",
+    "final_readonly_verification": {
+      "at": "2026-10-15T03:46:50.306728+00:00",
+      "binary_hash_unchanged": true,
+      "ack_zero_targets_body_at_all_native_stages": true,
+      "gc_remaining_identity_rows": 990150,
+      "active_fanout_legal_cases": [
+        1,
+        16,
+        32
+      ],
+      "available_filesystem_bytes": 15615799296,
+      "harness_sha256": {
+        "c3_history_analyze.py": "05bf60bb0ce968e1f3e1d1b7d7afd44fe3530e41d4b92bd5da988ab52d67a577",
+        "c3_history_probe.py": "9ac042161aaa7c9654d903e290ce6b124a403a717a4073eafd66e2bbaaef828f"
+      }
+    }
+  },
+  "python_layout_provenance": {
+    "scope": "Python SQLite direct fixed-schema layout; no native admission, provider, HTTP, ACK or performance equivalence claimed",
+    "source_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+    "source_tree": "22be0da2ad792bea35a2a67dbe61d12e3f7d9695",
+    "source_archive_sha256": "1071a520c70ecf238fdda47fe62d99095bd2a803db5d8ccb3bc0bbc4c2790a1f",
+    "source_store_sha256": "2c1539a481375d7acd8530828de4134c8cf4683d1703739b6424febed2b11488",
+    "schema_sha256": "2496ebbc10d10f292e7d4079b188f2dd5dd8e80fb268deb43642b588ca35073f",
+    "schema_version_note": "prototype manifest schema_version=1; schema extracted verbatim from measured store.rs",
+    "sqlite_version": "3.54.0",
+    "python": "3.9.6 (default, Aug 25 2026, 21:26:21) \n[Clang 21.0.0 (clang-2100.3.34.2)]",
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "sqlite_compile_options": [
+      "ATOMIC_INTRINSICS=1",
+      "BUG_COMPATIBLE_20160819",
+      "CCCRYPT256",
+      "CODEC=see-cccrypt",
+      "COMPILER=clang-21.0.0",
+      "DEFAULT_AUTOVACUUM",
+      "DEFAULT_CACHE_SIZE=2000",
+      "DEFAULT_CKPTFULLFSYNC",
+      "DEFAULT_FILE_FORMAT=4",
+      "DEFAULT_JOURNAL_SIZE_LIMIT=32768",
+      "DEFAULT_LOOKASIDE=1200,102",
+      "DEFAULT_MEMSTATUS=0",
+      "DEFAULT_MMAP_SIZE=0",
+      "DEFAULT_PAGE_SIZE=4096",
+      "DEFAULT_PCACHE_INITSZ=20",
+      "DEFAULT_RECURSIVE_TRIGGERS",
+      "DEFAULT_SECTOR_SIZE=4096",
+      "DEFAULT_SYNCHRONOUS=2",
+      "DEFAULT_WAL_AUTOCHECKPOINT=1000",
+      "DEFAULT_WAL_SYNCHRONOUS=1",
+      "DEFAULT_WORKER_THREADS=0",
+      "DIRECT_OVERFLOW_READ",
+      "DQS=3",
+      "ENABLE_API_ARMOR",
+      "ENABLE_BYTECODE_VTAB",
+      "ENABLE_CARRAY",
+      "ENABLE_COLUMN_METADATA",
+      "ENABLE_DBSTAT_VTAB",
+      "ENABLE_FTS3",
+      "ENABLE_FTS3_PARENTHESIS",
+      "ENABLE_FTS3_TOKENIZER",
+      "ENABLE_FTS4",
+      "ENABLE_FTS5",
+      "ENABLE_LOCKING_STYLE=1",
+      "ENABLE_MATH_FUNCTIONS",
+      "ENABLE_NORMALIZE",
+      "ENABLE_PERCENTILE",
+      "ENABLE_PREUPDATE_HOOK",
+      "ENABLE_RTREE",
+      "ENABLE_SESSION",
+      "ENABLE_SETLK_TIMEOUT",
+      "ENABLE_SNAPSHOT",
+      "ENABLE_SQLLOG",
+      "ENABLE_STMT_SCANSTATUS",
+      "ENABLE_UNKNOWN_SQL_FUNCTION",
+      "ENABLE_UPDATE_DELETE_LIMIT",
+      "HAS_CODEC_RESTRICTED",
+      "HAVE_ISNAN",
+      "MALLOC_SOFT_LIMIT=1024",
+      "MAX_ATTACHED=10",
+      "MAX_COLUMN=2000",
+      "MAX_COMPOUND_SELECT=500",
+      "MAX_DEFAULT_PAGE_SIZE=8192",
+      "MAX_EXPR_DEPTH=1000",
+      "MAX_FUNCTION_ARG=127",
+      "MAX_LENGTH=2147483645",
+      "MAX_LIKE_PATTERN_LENGTH=50000",
+      "MAX_MMAP_SIZE=1073741824",
+      "MAX_PAGE_COUNT=1073741823",
+      "MAX_PAGE_SIZE=65536",
+      "MAX_SQL_LENGTH=1000000000",
+      "MAX_TRIGGER_DEPTH=1000",
+      "MAX_VARIABLE_NUMBER=500000",
+      "MAX_VDBE_OP=250000000",
+      "MAX_WORKER_THREADS=8",
+      "MUTEX_UNFAIR",
+      "OMIT_AUTORESET",
+      "OMIT_LOAD_EXTENSION",
+      "STMTJRNL_SPILL=131072",
+      "SYSTEM_MALLOC",
+      "TEMP_STORE=1",
+      "THREADSAFE=2",
+      "USE_URI"
+    ]
+  },
+  "identity_costs": [
+    {
+      "op_bytes": 16,
+      "order": "lexical",
+      "rows": 100000,
+      "table_B_per_message": 228.1472,
+      "index_B_per_message": 138.36288,
+      "total_B_per_message": 366.51008,
+      "free_pages_after_delete": 881,
+      "free_pages_consumed_by_reinsert": 879,
+      "db_growth_on_reinsert_B": 0
+    },
+    {
+      "op_bytes": 46,
+      "order": "lexical",
+      "rows": 100000,
+      "table_B_per_message": 256.6144,
+      "index_B_per_message": 172.81024,
+      "total_B_per_message": 429.42463999999995,
+      "free_pages_after_delete": 1035,
+      "free_pages_consumed_by_reinsert": 1018,
+      "db_growth_on_reinsert_B": 0
+    },
+    {
+      "op_bytes": 128,
+      "order": "lexical",
+      "rows": 100000,
+      "table_B_per_message": 342.2208,
+      "index_B_per_message": 267.8784,
+      "total_B_per_message": 610.0992,
+      "free_pages_after_delete": 1476,
+      "free_pages_consumed_by_reinsert": 1451,
+      "db_growth_on_reinsert_B": 0
+    },
+    {
+      "op_bytes": 16,
+      "order": "deterministic-random",
+      "rows": 100000,
+      "table_B_per_message": 228.1472,
+      "index_B_per_message": 135.49568,
+      "total_B_per_message": 363.64288,
+      "free_pages_after_delete": 594,
+      "free_pages_consumed_by_reinsert": 594,
+      "db_growth_on_reinsert_B": 40960
+    },
+    {
+      "op_bytes": 46,
+      "order": "deterministic-random",
+      "rows": 100000,
+      "table_B_per_message": 256.6144,
+      "index_B_per_message": 169.82016,
+      "total_B_per_message": 426.43456,
+      "free_pages_after_delete": 663,
+      "free_pages_consumed_by_reinsert": 663,
+      "db_growth_on_reinsert_B": 24576
+    },
+    {
+      "op_bytes": 128,
+      "order": "deterministic-random",
+      "rows": 100000,
+      "table_B_per_message": 342.2208,
+      "index_B_per_message": 269.43488,
+      "total_B_per_message": 611.6556800000001,
+      "free_pages_after_delete": 875,
+      "free_pages_consumed_by_reinsert": 875,
+      "db_growth_on_reinsert_B": 8192
+    }
+  ],
+  "target_dbstat_B_per_target": {
+    "sqlite_autoindex_targets_1": 83.5584,
+    "targets": 316.2112,
+    "targets_device": 90.9312,
+    "targets_due": 67.1744,
+    "targets_owner_delivery": 120.832,
+    "targets_token_retirement": 205.6192
+  },
+  "target_total_B_per_target": 884.3264,
+  "identity_30d_projections": [
+    {
+      "messages_per_second": 1,
+      "days": 30,
+      "identity_messages": 2592000,
+      "op_bytes": 16,
+      "identity_GB_low": 0.9425623449599999,
+      "identity_GB_high": 0.94999412736
+    },
+    {
+      "messages_per_second": 1,
+      "days": 30,
+      "identity_messages": 2592000,
+      "op_bytes": 46,
+      "identity_GB_low": 1.10531837952,
+      "identity_GB_high": 1.1130686668799998
+    },
+    {
+      "messages_per_second": 1,
+      "days": 30,
+      "identity_messages": 2592000,
+      "op_bytes": 128,
+      "identity_GB_low": 1.5813771264,
+      "identity_GB_high": 1.5854115225600003
+    },
+    {
+      "messages_per_second": 64,
+      "days": 30,
+      "identity_messages": 165888000,
+      "op_bytes": 16,
+      "identity_GB_low": 60.323990077439994,
+      "identity_GB_high": 60.79962415104
+    },
+    {
+      "messages_per_second": 64,
+      "days": 30,
+      "identity_messages": 165888000,
+      "op_bytes": 46,
+      "identity_GB_low": 70.74037628928,
+      "identity_GB_high": 71.23639468031999
+    },
+    {
+      "messages_per_second": 64,
+      "days": 30,
+      "identity_messages": 165888000,
+      "op_bytes": 128,
+      "identity_GB_low": 101.2081360896,
+      "identity_GB_high": 101.46633744384002
+    },
+    {
+      "messages_per_second": 128,
+      "days": 30,
+      "identity_messages": 331776000,
+      "op_bytes": 16,
+      "identity_GB_low": 120.64798015487999,
+      "identity_GB_high": 121.59924830208
+    },
+    {
+      "messages_per_second": 128,
+      "days": 30,
+      "identity_messages": 331776000,
+      "op_bytes": 46,
+      "identity_GB_low": 141.48075257856,
+      "identity_GB_high": 142.47278936063998
+    },
+    {
+      "messages_per_second": 128,
+      "days": 30,
+      "identity_messages": 331776000,
+      "op_bytes": 128,
+      "identity_GB_low": 202.4162721792,
+      "identity_GB_high": 202.93267488768004
+    },
+    {
+      "messages_per_second": 256,
+      "days": 30,
+      "identity_messages": 663552000,
+      "op_bytes": 16,
+      "identity_GB_low": 241.29596030975998,
+      "identity_GB_high": 243.19849660416
+    },
+    {
+      "messages_per_second": 256,
+      "days": 30,
+      "identity_messages": 663552000,
+      "op_bytes": 46,
+      "identity_GB_low": 282.96150515712,
+      "identity_GB_high": 284.94557872127996
+    },
+    {
+      "messages_per_second": 256,
+      "days": 30,
+      "identity_messages": 663552000,
+      "op_bytes": 128,
+      "identity_GB_low": 404.8325443584,
+      "identity_GB_high": 405.8653497753601
+    }
+  ],
+  "active_fanout_projections": [
+    {
+      "messages_per_second": 1,
+      "hold_days": 7,
+      "active_messages": 604800,
+      "fanout": 1,
+      "target_rows": 604800,
+      "target_GB": 0.53484060672,
+      "shared_448B_GB": 0.2709504,
+      "shared_1KiB_GB": 0.6193152,
+      "shared_4KiB_GB": 2.4772608
+    },
+    {
+      "messages_per_second": 1,
+      "hold_days": 7,
+      "active_messages": 604800,
+      "fanout": 16,
+      "target_rows": 9676800,
+      "target_GB": 8.55744970752,
+      "shared_448B_GB": 0.2709504,
+      "shared_1KiB_GB": 0.6193152,
+      "shared_4KiB_GB": 2.4772608
+    },
+    {
+      "messages_per_second": 1,
+      "hold_days": 7,
+      "active_messages": 604800,
+      "fanout": 32,
+      "target_rows": 19353600,
+      "target_GB": 17.11489941504,
+      "shared_448B_GB": 0.2709504,
+      "shared_1KiB_GB": 0.6193152,
+      "shared_4KiB_GB": 2.4772608
+    },
+    {
+      "messages_per_second": 1,
+      "hold_days": 30,
+      "active_messages": 2592000,
+      "fanout": 1,
+      "target_rows": 2592000,
+      "target_GB": 2.2921740288000003,
+      "shared_448B_GB": 1.161216,
+      "shared_1KiB_GB": 2.654208,
+      "shared_4KiB_GB": 10.616832
+    },
+    {
+      "messages_per_second": 1,
+      "hold_days": 30,
+      "active_messages": 2592000,
+      "fanout": 16,
+      "target_rows": 41472000,
+      "target_GB": 36.674784460800005,
+      "shared_448B_GB": 1.161216,
+      "shared_1KiB_GB": 2.654208,
+      "shared_4KiB_GB": 10.616832
+    },
+    {
+      "messages_per_second": 1,
+      "hold_days": 30,
+      "active_messages": 2592000,
+      "fanout": 32,
+      "target_rows": 82944000,
+      "target_GB": 73.34956892160001,
+      "shared_448B_GB": 1.161216,
+      "shared_1KiB_GB": 2.654208,
+      "shared_4KiB_GB": 10.616832
+    },
+    {
+      "messages_per_second": 64,
+      "hold_days": 7,
+      "active_messages": 38707200,
+      "fanout": 1,
+      "target_rows": 38707200,
+      "target_GB": 34.22979883008,
+      "shared_448B_GB": 17.3408256,
+      "shared_1KiB_GB": 39.6361728,
+      "shared_4KiB_GB": 158.5446912
+    },
+    {
+      "messages_per_second": 64,
+      "hold_days": 7,
+      "active_messages": 38707200,
+      "fanout": 16,
+      "target_rows": 619315200,
+      "target_GB": 547.67678128128,
+      "shared_448B_GB": 17.3408256,
+      "shared_1KiB_GB": 39.6361728,
+      "shared_4KiB_GB": 158.5446912
+    },
+    {
+      "messages_per_second": 64,
+      "hold_days": 7,
+      "active_messages": 38707200,
+      "fanout": 32,
+      "target_rows": 1238630400,
+      "target_GB": 1095.35356256256,
+      "shared_448B_GB": 17.3408256,
+      "shared_1KiB_GB": 39.6361728,
+      "shared_4KiB_GB": 158.5446912
+    },
+    {
+      "messages_per_second": 64,
+      "hold_days": 30,
+      "active_messages": 165888000,
+      "fanout": 1,
+      "target_rows": 165888000,
+      "target_GB": 146.69913784320002,
+      "shared_448B_GB": 74.317824,
+      "shared_1KiB_GB": 169.869312,
+      "shared_4KiB_GB": 679.477248
+    },
+    {
+      "messages_per_second": 64,
+      "hold_days": 30,
+      "active_messages": 165888000,
+      "fanout": 16,
+      "target_rows": 2654208000,
+      "target_GB": 2347.1862054912003,
+      "shared_448B_GB": 74.317824,
+      "shared_1KiB_GB": 169.869312,
+      "shared_4KiB_GB": 679.477248
+    },
+    {
+      "messages_per_second": 64,
+      "hold_days": 30,
+      "active_messages": 165888000,
+      "fanout": 32,
+      "target_rows": 5308416000,
+      "target_GB": 4694.372410982401,
+      "shared_448B_GB": 74.317824,
+      "shared_1KiB_GB": 169.869312,
+      "shared_4KiB_GB": 679.477248
+    },
+    {
+      "messages_per_second": 128,
+      "hold_days": 7,
+      "active_messages": 77414400,
+      "fanout": 1,
+      "target_rows": 77414400,
+      "target_GB": 68.45959766016,
+      "shared_448B_GB": 34.6816512,
+      "shared_1KiB_GB": 79.2723456,
+      "shared_4KiB_GB": 317.0893824
+    },
+    {
+      "messages_per_second": 128,
+      "hold_days": 7,
+      "active_messages": 77414400,
+      "fanout": 16,
+      "target_rows": 1238630400,
+      "target_GB": 1095.35356256256,
+      "shared_448B_GB": 34.6816512,
+      "shared_1KiB_GB": 79.2723456,
+      "shared_4KiB_GB": 317.0893824
+    },
+    {
+      "messages_per_second": 128,
+      "hold_days": 7,
+      "active_messages": 77414400,
+      "fanout": 32,
+      "target_rows": 2477260800,
+      "target_GB": 2190.70712512512,
+      "shared_448B_GB": 34.6816512,
+      "shared_1KiB_GB": 79.2723456,
+      "shared_4KiB_GB": 317.0893824
+    },
+    {
+      "messages_per_second": 128,
+      "hold_days": 30,
+      "active_messages": 331776000,
+      "fanout": 1,
+      "target_rows": 331776000,
+      "target_GB": 293.39827568640004,
+      "shared_448B_GB": 148.635648,
+      "shared_1KiB_GB": 339.738624,
+      "shared_4KiB_GB": 1358.954496
+    },
+    {
+      "messages_per_second": 128,
+      "hold_days": 30,
+      "active_messages": 331776000,
+      "fanout": 16,
+      "target_rows": 5308416000,
+      "target_GB": 4694.372410982401,
+      "shared_448B_GB": 148.635648,
+      "shared_1KiB_GB": 339.738624,
+      "shared_4KiB_GB": 1358.954496
+    },
+    {
+      "messages_per_second": 128,
+      "hold_days": 30,
+      "active_messages": 331776000,
+      "fanout": 32,
+      "target_rows": 10616832000,
+      "target_GB": 9388.744821964801,
+      "shared_448B_GB": 148.635648,
+      "shared_1KiB_GB": 339.738624,
+      "shared_4KiB_GB": 1358.954496
+    },
+    {
+      "messages_per_second": 256,
+      "hold_days": 7,
+      "active_messages": 154828800,
+      "fanout": 1,
+      "target_rows": 154828800,
+      "target_GB": 136.91919532032,
+      "shared_448B_GB": 69.3633024,
+      "shared_1KiB_GB": 158.5446912,
+      "shared_4KiB_GB": 634.1787648
+    },
+    {
+      "messages_per_second": 256,
+      "hold_days": 7,
+      "active_messages": 154828800,
+      "fanout": 16,
+      "target_rows": 2477260800,
+      "target_GB": 2190.70712512512,
+      "shared_448B_GB": 69.3633024,
+      "shared_1KiB_GB": 158.5446912,
+      "shared_4KiB_GB": 634.1787648
+    },
+    {
+      "messages_per_second": 256,
+      "hold_days": 7,
+      "active_messages": 154828800,
+      "fanout": 32,
+      "target_rows": 4954521600,
+      "target_GB": 4381.41425025024,
+      "shared_448B_GB": 69.3633024,
+      "shared_1KiB_GB": 158.5446912,
+      "shared_4KiB_GB": 634.1787648
+    },
+    {
+      "messages_per_second": 256,
+      "hold_days": 30,
+      "active_messages": 663552000,
+      "fanout": 1,
+      "target_rows": 663552000,
+      "target_GB": 586.7965513728001,
+      "shared_448B_GB": 297.271296,
+      "shared_1KiB_GB": 679.477248,
+      "shared_4KiB_GB": 2717.908992
+    },
+    {
+      "messages_per_second": 256,
+      "hold_days": 30,
+      "active_messages": 663552000,
+      "fanout": 16,
+      "target_rows": 10616832000,
+      "target_GB": 9388.744821964801,
+      "shared_448B_GB": 297.271296,
+      "shared_1KiB_GB": 679.477248,
+      "shared_4KiB_GB": 2717.908992
+    },
+    {
+      "messages_per_second": 256,
+      "hold_days": 30,
+      "active_messages": 663552000,
+      "fanout": 32,
+      "target_rows": 21233664000,
+      "target_GB": 18777.489643929603,
+      "shared_448B_GB": 297.271296,
+      "shared_1KiB_GB": 679.477248,
+      "shared_4KiB_GB": 2717.908992
+    }
+  ],
+  "native_operations": [
+    {
+      "seeded_rows": 10000,
+      "actual_rows": 10050,
+      "db_bytes": 4096000,
+      "status": {
+        "max_us": 83,
+        "n": 50,
+        "p50_us": 35,
+        "p95_us": 41,
+        "total_us": 1706
+      },
+      "duplicate": {
+        "max_us": 176,
+        "n": 50,
+        "p50_us": 122,
+        "p95_us": 162,
+        "total_us": 6346
+      },
+      "new_admission": {
+        "max_us": 1854,
+        "n": 50,
+        "p50_us": 236,
+        "p95_us": 358,
+        "total_us": 13668
+      }
+    },
+    {
+      "seeded_rows": 100000,
+      "actual_rows": 100100,
+      "db_bytes": 39997440,
+      "status": {
+        "max_us": 50,
+        "n": 50,
+        "p50_us": 35,
+        "p95_us": 44,
+        "total_us": 1725
+      },
+      "duplicate": {
+        "max_us": 175,
+        "n": 50,
+        "p50_us": 122,
+        "p95_us": 142,
+        "total_us": 6226
+      },
+      "new_admission": {
+        "max_us": 259,
+        "n": 50,
+        "p50_us": 236,
+        "p95_us": 257,
+        "total_us": 11805
+      }
+    },
+    {
+      "seeded_rows": 1000000,
+      "actual_rows": 1000150,
+      "db_bytes": 400183296,
+      "status": {
+        "max_us": 52,
+        "n": 50,
+        "p50_us": 37,
+        "p95_us": 43,
+        "total_us": 1790
+      },
+      "duplicate": {
+        "max_us": 181,
+        "n": 50,
+        "p50_us": 124,
+        "p95_us": 149,
+        "total_us": 6337
+      },
+      "new_admission": {
+        "max_us": 1684,
+        "n": 50,
+        "p50_us": 239,
+        "p95_us": 447,
+        "total_us": 13979
+      }
+    }
+  ],
+  "native_gc": {
+    "after_logical_delete": {
+      "allocated_db_bytes": 400183296,
+      "cache_size_pragma": -2000,
+      "dbstat": [
+        {
+          "bytes": 4096,
+          "name": "channel_subscriptions"
+        },
+        {
+          "bytes": 4096,
+          "name": "channels"
+        },
+        {
+          "bytes": 4096,
+          "name": "devices"
+        },
+        {
+          "bytes": 4096,
+          "name": "devices_retired"
+        },
+        {
+          "bytes": 4096,
+          "name": "ledger_usage"
+        },
+        {
+          "bytes": 239177728,
+          "name": "messages"
+        },
+        {
+          "bytes": 4096,
+          "name": "messages_expiry"
+        },
+        {
+          "bytes": 17035264,
+          "name": "messages_retention"
+        },
+        {
+          "bytes": 4096,
+          "name": "provider_cooldowns"
+        },
+        {
+          "bytes": 4096,
+          "name": "registration_alias_expiry"
+        },
+        {
+          "bytes": 4096,
+          "name": "registration_aliases"
+        },
+        {
+          "bytes": 4096,
+          "name": "retired_provider_tokens"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_channel_subscriptions_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_channels_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_devices_1"
+        },
+        {
+          "bytes": 46645248,
+          "name": "sqlite_autoindex_messages_1"
+        },
+        {
+          "bytes": 46645248,
+          "name": "sqlite_autoindex_messages_2"
+        },
+        {
+          "bytes": 46641152,
+          "name": "sqlite_autoindex_messages_3"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_provider_cooldowns_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_registration_aliases_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_retired_provider_tokens_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_targets_1"
+        },
+        {
+          "bytes": 12288,
+          "name": "sqlite_schema"
+        },
+        {
+          "bytes": 4096,
+          "name": "subscriptions_device"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_device"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_due"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_owner_delivery"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_token_retirement"
+        }
+      ],
+      "freelist_count": 960,
+      "identity_rows": 990150,
+      "logical_payload_bytes": 0,
+      "page_count": 97701,
+      "page_size": 4096,
+      "physical": {
+        "db_bytes": 400183296,
+        "shm_bytes": 32768,
+        "wal_bytes": 4276592
+      },
+      "sqlite_version": "3.46.0",
+      "target_rows": 0,
+      "used_pages_bytes": 396251136
+    },
+    "after_truncate_checkpoint": {
+      "allocated_db_bytes": 400183296,
+      "cache_size_pragma": -2000,
+      "dbstat": [
+        {
+          "bytes": 4096,
+          "name": "channel_subscriptions"
+        },
+        {
+          "bytes": 4096,
+          "name": "channels"
+        },
+        {
+          "bytes": 4096,
+          "name": "devices"
+        },
+        {
+          "bytes": 4096,
+          "name": "devices_retired"
+        },
+        {
+          "bytes": 4096,
+          "name": "ledger_usage"
+        },
+        {
+          "bytes": 239177728,
+          "name": "messages"
+        },
+        {
+          "bytes": 4096,
+          "name": "messages_expiry"
+        },
+        {
+          "bytes": 17035264,
+          "name": "messages_retention"
+        },
+        {
+          "bytes": 4096,
+          "name": "provider_cooldowns"
+        },
+        {
+          "bytes": 4096,
+          "name": "registration_alias_expiry"
+        },
+        {
+          "bytes": 4096,
+          "name": "registration_aliases"
+        },
+        {
+          "bytes": 4096,
+          "name": "retired_provider_tokens"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_channel_subscriptions_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_channels_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_devices_1"
+        },
+        {
+          "bytes": 46645248,
+          "name": "sqlite_autoindex_messages_1"
+        },
+        {
+          "bytes": 46645248,
+          "name": "sqlite_autoindex_messages_2"
+        },
+        {
+          "bytes": 46641152,
+          "name": "sqlite_autoindex_messages_3"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_provider_cooldowns_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_registration_aliases_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_retired_provider_tokens_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_targets_1"
+        },
+        {
+          "bytes": 12288,
+          "name": "sqlite_schema"
+        },
+        {
+          "bytes": 4096,
+          "name": "subscriptions_device"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_device"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_due"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_owner_delivery"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_token_retirement"
+        }
+      ],
+      "freelist_count": 960,
+      "identity_rows": 990150,
+      "logical_payload_bytes": 0,
+      "page_count": 97701,
+      "page_size": 4096,
+      "physical": {
+        "db_bytes": 400183296,
+        "shm_bytes": 32768,
+        "wal_bytes": 0
+      },
+      "sqlite_version": "3.46.0",
+      "target_rows": 0,
+      "used_pages_bytes": 396251136
+    },
+    "batches": 40,
+    "before": {
+      "allocated_db_bytes": 400183296,
+      "cache_size_pragma": -2000,
+      "dbstat": [
+        {
+          "bytes": 4096,
+          "name": "channel_subscriptions"
+        },
+        {
+          "bytes": 4096,
+          "name": "channels"
+        },
+        {
+          "bytes": 4096,
+          "name": "devices"
+        },
+        {
+          "bytes": 4096,
+          "name": "devices_retired"
+        },
+        {
+          "bytes": 4096,
+          "name": "ledger_usage"
+        },
+        {
+          "bytes": 241590272,
+          "name": "messages"
+        },
+        {
+          "bytes": 4096,
+          "name": "messages_expiry"
+        },
+        {
+          "bytes": 17195008,
+          "name": "messages_retention"
+        },
+        {
+          "bytes": 4096,
+          "name": "provider_cooldowns"
+        },
+        {
+          "bytes": 4096,
+          "name": "registration_alias_expiry"
+        },
+        {
+          "bytes": 4096,
+          "name": "registration_aliases"
+        },
+        {
+          "bytes": 4096,
+          "name": "retired_provider_tokens"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_channel_subscriptions_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_channels_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_devices_1"
+        },
+        {
+          "bytes": 47099904,
+          "name": "sqlite_autoindex_messages_1"
+        },
+        {
+          "bytes": 47099904,
+          "name": "sqlite_autoindex_messages_2"
+        },
+        {
+          "bytes": 47091712,
+          "name": "sqlite_autoindex_messages_3"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_provider_cooldowns_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_registration_aliases_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_retired_provider_tokens_1"
+        },
+        {
+          "bytes": 4096,
+          "name": "sqlite_autoindex_targets_1"
+        },
+        {
+          "bytes": 12288,
+          "name": "sqlite_schema"
+        },
+        {
+          "bytes": 4096,
+          "name": "subscriptions_device"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_device"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_due"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_owner_delivery"
+        },
+        {
+          "bytes": 4096,
+          "name": "targets_token_retirement"
+        }
+      ],
+      "freelist_count": 0,
+      "identity_rows": 1000150,
+      "logical_payload_bytes": 0,
+      "page_count": 97701,
+      "page_size": 4096,
+      "physical": {
+        "db_bytes": 400183296,
+        "shm_bytes": 32768,
+        "wal_bytes": 2591512
+      },
+      "sqlite_version": "3.46.0",
+      "target_rows": 0,
+      "used_pages_bytes": 400183296
+    },
+    "expired_sample": 10000,
+    "falloff_vmmap": {
+      "exit_code": 0,
+      "file": "vmmap-after-gc.txt",
+      "pid": 19266,
+      "success": true
+    },
+    "maintenance": {
+      "max_us": 2942,
+      "n": 40,
+      "p50_us": 908,
+      "p95_us": 2457,
+      "total_us": 40132
+    },
+    "max_deletes_per_batch": 256
+  },
+  "native_after_accept_ack": [
+    {
+      "identity_rows": 10050,
+      "target_rows": 0,
+      "logical_payload_bytes": 0,
+      "sqlite_version": "3.46.0"
+    },
+    {
+      "identity_rows": 100100,
+      "target_rows": 0,
+      "logical_payload_bytes": 0,
+      "sqlite_version": "3.46.0"
+    },
+    {
+      "identity_rows": 1000150,
+      "target_rows": 0,
+      "logical_payload_bytes": 0,
+      "sqlite_version": "3.46.0"
+    }
+  ],
+  "python_layout_cases": [
+    {
+      "fanout": 1,
+      "body_bytes": 448,
+      "messages": 256,
+      "targets": 256,
+      "seed_us": 6995,
+      "cold": {
+        "identity_rows": 0,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 31,
+        "freelist_count": 0,
+        "db_bytes": 126976,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 4096,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 4096,
+          "sqlite_autoindex_messages_2": 4096,
+          "sqlite_autoindex_messages_3": 4096,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "active": {
+        "identity_rows": 256,
+        "target_rows": 256,
+        "logical_payload_bytes": 114688,
+        "page_size": 4096,
+        "page_count": 150,
+        "freelist_count": 0,
+        "db_bytes": 614400,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 217088,
+          "messages_expiry": 16384,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 24576,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 86016,
+          "targets_device": 28672,
+          "targets_due": 20480,
+          "targets_owner_delivery": 32768,
+          "targets_token_retirement": 53248
+        }
+      },
+      "after_direct_sql_release": {
+        "identity_rows": 256,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 150,
+        "freelist_count": 57,
+        "db_bytes": 614400,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 217088,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "target_dbstat_delta": {
+        "sqlite_autoindex_targets_1": 20480,
+        "targets": 81920,
+        "targets_device": 24576,
+        "targets_due": 16384,
+        "targets_owner_delivery": 28672,
+        "targets_token_retirement": 49152
+      },
+      "target_bytes_per_row": 864.0,
+      "message_plus_index_bytes_per_row": 1040.0
+    },
+    {
+      "fanout": 16,
+      "body_bytes": 448,
+      "messages": 256,
+      "targets": 4096,
+      "seed_us": 67848,
+      "cold": {
+        "identity_rows": 0,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 31,
+        "freelist_count": 0,
+        "db_bytes": 126976,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 4096,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 4096,
+          "sqlite_autoindex_messages_2": 4096,
+          "sqlite_autoindex_messages_3": 4096,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "active": {
+        "identity_rows": 256,
+        "target_rows": 4096,
+        "logical_payload_bytes": 114688,
+        "page_size": 4096,
+        "page_count": 999,
+        "freelist_count": 0,
+        "db_bytes": 4091904,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 217088,
+          "messages_expiry": 16384,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 348160,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 1298432,
+          "targets_device": 401408,
+          "targets_due": 282624,
+          "targets_owner_delivery": 516096,
+          "targets_token_retirement": 876544
+        }
+      },
+      "after_direct_sql_release": {
+        "identity_rows": 256,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 999,
+        "freelist_count": 906,
+        "db_bytes": 4091904,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 217088,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "target_dbstat_delta": {
+        "sqlite_autoindex_targets_1": 344064,
+        "targets": 1294336,
+        "targets_device": 397312,
+        "targets_due": 278528,
+        "targets_owner_delivery": 512000,
+        "targets_token_retirement": 872448
+      },
+      "target_bytes_per_row": 903.0,
+      "message_plus_index_bytes_per_row": 1040.0
+    },
+    {
+      "fanout": 32,
+      "body_bytes": 448,
+      "messages": 256,
+      "targets": 8192,
+      "seed_us": 133825,
+      "cold": {
+        "identity_rows": 0,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 31,
+        "freelist_count": 0,
+        "db_bytes": 126976,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 4096,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 4096,
+          "sqlite_autoindex_messages_2": 4096,
+          "sqlite_autoindex_messages_3": 4096,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "active": {
+        "identity_rows": 256,
+        "target_rows": 8192,
+        "logical_payload_bytes": 114688,
+        "page_size": 4096,
+        "page_count": 1890,
+        "freelist_count": 0,
+        "db_bytes": 7741440,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 217088,
+          "messages_expiry": 16384,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 692224,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 2596864,
+          "targets_device": 786432,
+          "targets_due": 557056,
+          "targets_owner_delivery": 1011712,
+          "targets_token_retirement": 1728512
+        }
+      },
+      "after_direct_sql_release": {
+        "identity_rows": 256,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 1890,
+        "freelist_count": 1797,
+        "db_bytes": 7741440,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 217088,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "target_dbstat_delta": {
+        "sqlite_autoindex_targets_1": 688128,
+        "targets": 2592768,
+        "targets_device": 782336,
+        "targets_due": 552960,
+        "targets_owner_delivery": 1007616,
+        "targets_token_retirement": 1724416
+      },
+      "target_bytes_per_row": 897.0,
+      "message_plus_index_bytes_per_row": 1040.0
+    },
+    {
+      "fanout": 16,
+      "body_bytes": 1024,
+      "messages": 256,
+      "targets": 4096,
+      "seed_us": 69498,
+      "cold": {
+        "identity_rows": 0,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 31,
+        "freelist_count": 0,
+        "db_bytes": 126976,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 4096,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 4096,
+          "sqlite_autoindex_messages_2": 4096,
+          "sqlite_autoindex_messages_3": 4096,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "active": {
+        "identity_rows": 256,
+        "target_rows": 4096,
+        "logical_payload_bytes": 262144,
+        "page_size": 4096,
+        "page_count": 1033,
+        "freelist_count": 0,
+        "db_bytes": 4231168,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 356352,
+          "messages_expiry": 16384,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 348160,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 1298432,
+          "targets_device": 401408,
+          "targets_due": 282624,
+          "targets_owner_delivery": 516096,
+          "targets_token_retirement": 876544
+        }
+      },
+      "after_direct_sql_release": {
+        "identity_rows": 256,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 1033,
+        "freelist_count": 906,
+        "db_bytes": 4231168,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 356352,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "target_dbstat_delta": {
+        "sqlite_autoindex_targets_1": 344064,
+        "targets": 1294336,
+        "targets_device": 397312,
+        "targets_due": 278528,
+        "targets_owner_delivery": 512000,
+        "targets_token_retirement": 872448
+      },
+      "target_bytes_per_row": 903.0,
+      "message_plus_index_bytes_per_row": 1584.0
+    },
+    {
+      "fanout": 16,
+      "body_bytes": 4096,
+      "messages": 256,
+      "targets": 4096,
+      "seed_us": 74169,
+      "cold": {
+        "identity_rows": 0,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 31,
+        "freelist_count": 0,
+        "db_bytes": 126976,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 4096,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 4096,
+          "sqlite_autoindex_messages_2": 4096,
+          "sqlite_autoindex_messages_3": 4096,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "active": {
+        "identity_rows": 256,
+        "target_rows": 4096,
+        "logical_payload_bytes": 1048576,
+        "page_size": 4096,
+        "page_count": 1235,
+        "freelist_count": 0,
+        "db_bytes": 5058560,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 1183744,
+          "messages_expiry": 16384,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 348160,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 1298432,
+          "targets_device": 401408,
+          "targets_due": 282624,
+          "targets_owner_delivery": 516096,
+          "targets_token_retirement": 876544
+        }
+      },
+      "after_direct_sql_release": {
+        "identity_rows": 256,
+        "target_rows": 0,
+        "logical_payload_bytes": 0,
+        "page_size": 4096,
+        "page_count": 1236,
+        "freelist_count": 1163,
+        "db_bytes": 5062656,
+        "dbstat": {
+          "channel_subscriptions": 4096,
+          "channels": 4096,
+          "devices": 4096,
+          "devices_retired": 4096,
+          "ledger_usage": 4096,
+          "messages": 135168,
+          "messages_expiry": 4096,
+          "messages_retention": 4096,
+          "provider_cooldowns": 4096,
+          "registration_alias_expiry": 4096,
+          "registration_aliases": 4096,
+          "retired_provider_tokens": 4096,
+          "sqlite_autoindex_channel_subscriptions_1": 4096,
+          "sqlite_autoindex_channels_1": 4096,
+          "sqlite_autoindex_devices_1": 4096,
+          "sqlite_autoindex_messages_1": 16384,
+          "sqlite_autoindex_messages_2": 16384,
+          "sqlite_autoindex_messages_3": 20480,
+          "sqlite_autoindex_provider_cooldowns_1": 4096,
+          "sqlite_autoindex_registration_aliases_1": 4096,
+          "sqlite_autoindex_retired_provider_tokens_1": 4096,
+          "sqlite_autoindex_targets_1": 4096,
+          "sqlite_schema": 12288,
+          "subscriptions_device": 4096,
+          "targets": 4096,
+          "targets_device": 4096,
+          "targets_due": 4096,
+          "targets_owner_delivery": 4096,
+          "targets_token_retirement": 4096
+        }
+      },
+      "target_dbstat_delta": {
+        "sqlite_autoindex_targets_1": 344064,
+        "targets": 1294336,
+        "targets_device": 397312,
+        "targets_due": 278528,
+        "targets_owner_delivery": 512000,
+        "targets_token_retirement": 872448
+      },
+      "target_bytes_per_row": 903.0,
+      "message_plus_index_bytes_per_row": 4816.0
+    }
+  ]
+}

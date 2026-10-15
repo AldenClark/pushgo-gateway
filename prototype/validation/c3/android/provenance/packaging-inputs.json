@@ -1,0 +1,37 @@
+{
+  "original_evidence_locator": "gateway/build/quality-results/c-client-loop-gate-20261015/android/run-final-01 (external; not packaged)",
+  "executed_candidate_source": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+  "executed_candidate_binary_sha256": "c22a71df7fc12d8b30a63bfbb24d7f3d8d895f62c35dcab58d2f3d894f1d1e9a",
+  "native_actual_methods": 2,
+  "skipped": 0,
+  "pids": [
+    3992,
+    4093
+  ],
+  "Room_counts": [
+    5,
+    6
+  ],
+  "ACK_outbox_counts": [
+    1,
+    0
+  ],
+  "original_inputs_sha256": {
+    "stage-native.sh": "064ab4e51018951007e86e0f2216cd4defdb679430dabd6a5d9042949ec15845",
+    "run-native.sh": "f82bd4f4cc79f7f140465cba540748f152bfd6909b838e605b7fa4a9e15193c6",
+    "run-loop.py": "6456783db68c4264559840530996bab93cf0f68dbe66a3c06c359fbe90e6d84a",
+    "verify-existing-room.py": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+    "source/CandidateNetworkBoundary.kt": "bfb597d5cd39b5318edbccaba456dd1775aa26b27f59ae4f58dee0ea83e501c3",
+    "source/CandidateOrdinaryC3DeviceTest.kt": "257fced2ea9e62c86fe2dd3cafb8c2f1aa8e84ea8ca314cb325b0f52db078a44"
+  },
+  "portable_execution_status": "NOT RUN; static packaging checks only",
+  "scope_note": "Actual Kotlin test files are byte-for-byte executed source; portable script changes have not been built or executed. Native final evidence is not evidence for later gateway commits.",
+  "original_provenance_sha256": {
+    "native-apk-manifest.json": "46e232317939245f2871abf012dfd597e09d0177ae988efe2ee03e33c8a9ccf7",
+    "cached-jni-identity.json": "22f2330fa0dc9a9e5f30f71cdb33cc1328fc798eea4312367e62ec7367f5875e",
+    "staged-source-identity.json": "b71c5369e8c1e664e502266ac0cb56cc911e71cd1cdc23563cd3b6faa156e9b0",
+    "production-main-source-manifest.json": "9c00e9871a303763b5692761e2f39b3e3c1fcee0a3159ace4d483a1542e853ed",
+    "harness-source-identity.json": "138f04957bc79b122f8e25a7965e318e6f25489edc876a3d66238a8e7db0d859"
+  },
+  "provenance_path_normalization": "Only path strings in cached-JNI/APK provenance are changed to external-location placeholders; artifact hashes/sizes remain the actual executed inputs. Production and Kotlin source hash manifests are copied unchanged."
+}

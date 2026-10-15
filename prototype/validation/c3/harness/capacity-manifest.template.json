@@ -1,0 +1,45 @@
+{
+  "comparison_claim": "instrumented-full-candidate-hotspot-ab",
+  "effective_profile": {
+    "opt_level": 3,
+    "lto": "fat",
+    "codegen_units": 1,
+    "panic": "abort",
+    "tokio_workers": 4
+  },
+  "artifacts": {
+    "BASELINE": {
+      "binary": "REPLACE_FROZEN_BINARY",
+      "binary_sha256": "REPLACE_SHA256",
+      "build_receipt": "REPLACE_BUILD_RECEIPT",
+      "build_receipt_sha256": "REPLACE_SHA256",
+      "source_root": "REPLACE_FROZEN_GIT_ROOT",
+      "source_commit": "REPLACE_FULL_COMMIT",
+      "fixture_source": "REPLACE_FIXTURE_SOURCE",
+      "profiling_schema_sha256": "REPLACE_PROFILING_RS_SHA256",
+      "kernel_sampler": "REPLACE_PRECOMPILED_OWNED_PID_SAMPLER",
+      "kernel_sampler_sha256": "REPLACE_SHA256",
+      "documentation_drift_allowlist": [],
+      "profiling_source": "REPLACE_FROZEN_PROFILING_RS"
+    },
+    "CANDIDATE": {
+      "binary": "REPLACE_FROZEN_BINARY",
+      "binary_sha256": "REPLACE_SHA256",
+      "build_receipt": "REPLACE_BUILD_RECEIPT",
+      "build_receipt_sha256": "REPLACE_SHA256",
+      "source_root": "REPLACE_FROZEN_GIT_ROOT",
+      "source_commit": "REPLACE_FULL_COMMIT",
+      "fixture_source": "REPLACE_FIXTURE_SOURCE",
+      "profiling_schema_sha256": "REPLACE_PROFILING_RS_SHA256",
+      "kernel_sampler": "REPLACE_PRECOMPILED_OWNED_PID_SAMPLER",
+      "kernel_sampler_sha256": "REPLACE_SHA256",
+      "documentation_drift_allowlist": [],
+      "profiling_source": "REPLACE_FROZEN_PROFILING_RS"
+    }
+  },
+  "notes": [
+    "Template only; no binary is selected or authorized by this file.",
+    "Source roots must retain the exact frozen build source bytes. Build receipt source_sha256 maps root-relative source paths to SHA256.",
+    "Both sources must retain identical profiling.rs instrumentation and toolchain/config. Root supplies frozen identities and explicit run clearance."
+  ]
+}

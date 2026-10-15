@@ -1,0 +1,450 @@
+{
+  "primary": "read only /Users/ethan/Repo/PushGo/pushgo",
+  "all_shared_identical": true,
+  "files": [
+    {
+      "path": ".DS_Store",
+      "sha256": "4239025af250dfedb8bc5c724fd12eb3ca052fdede6bb24fa15a69e43d2d3ce7"
+    },
+    {
+      "path": "Application/AppNavigationState.swift",
+      "sha256": "6ec60391b9a4abf0d0be40c33234e17b3a6e7a445930706e1c0ca1a609cb499c"
+    },
+    {
+      "path": "Application/ChannelSubscriptionController.swift",
+      "sha256": "0b9495dafe4fe6aa07a965f8af94178e0e5478b5fd805a1785c44bf461a38b73"
+    },
+    {
+      "path": "Application/ChannelSyncController.swift",
+      "sha256": "35c431a1944d66788eec5864c9dac1f9ee063d10e895621082722d63b47d7f93"
+    },
+    {
+      "path": "Application/DataPageVisibilityController.swift",
+      "sha256": "5dcc3ca3d4c1c8a35dc371780b999449959517c2a5b56106b8686232edee49b5"
+    },
+    {
+      "path": "Application/FeedbackPresentationPolicy.swift",
+      "sha256": "460fba67fb628d2a4fcea6dfaa21c72fd99bc6a624951284557dd836ce453b63"
+    },
+    {
+      "path": "Application/LocalDeletionConfirmationController.swift",
+      "sha256": "1cd75010e78d22b2063da38a2d1393d9f53cb0f51389b237c0e64787b4d34e7a"
+    },
+    {
+      "path": "Application/LocalStoreRecoveryController.swift",
+      "sha256": "6a80381e7a3c29bfc558d7c26ba04584b99a9ee6cb49ea07c9939e56917a88ec"
+    },
+    {
+      "path": "Application/LocalStoreRecoveryState.swift",
+      "sha256": "be090f6ab427d21aaae02feef9490c22300022204f67e2827a973ed1b354da4c"
+    },
+    {
+      "path": "Application/MacMainWindowPresenter.swift",
+      "sha256": "3e0b5f8b00085ffdee06971cc0c248ce83b105c35d07cba4d7f541b50a20f311"
+    },
+    {
+      "path": "Application/MainTab.swift",
+      "sha256": "8a9226e141b414edb7ef0cb23b0735bf16472b7c9f29e0db98c0a701798cb53d"
+    },
+    {
+      "path": "Application/NotificationIngressController.swift",
+      "sha256": "726240dc02550a92b46debae49ca71c77ac3ffec9cf23587891de72f5bbb4b84"
+    },
+    {
+      "path": "Application/NotificationOpenController.swift",
+      "sha256": "b1ec2778676a06211e03bed6b5586ffcc05d9445d5c8f23cdb64977ef755b10e"
+    },
+    {
+      "path": "Application/PendingLocalDeletionController.swift",
+      "sha256": "7a35b77d7becbac399d2a876ab6dd75f8a40f56713d40daa292a9fa2083d941f"
+    },
+    {
+      "path": "Application/ProviderRouteController.swift",
+      "sha256": "7d69763e201bf31d61666a2eb255fa6b420ce9eee30606248421e5c81a575817"
+    },
+    {
+      "path": "Models/AppError.swift",
+      "sha256": "efb81b9b050111b222741a7ab2e3d03126809c2c4088c41056b0ae35e7a01de7"
+    },
+    {
+      "path": "Models/EntityProjectionDetail.swift",
+      "sha256": "2feb27e88477565230f289620ab1b09be8b5acae6831424f8aec941b89f94757"
+    },
+    {
+      "path": "Models/MessageFilter.swift",
+      "sha256": "ba007d3ab5601c706b8ebbaca7e5a0721e13d84bf1b6055953060f1bae0f7b18"
+    },
+    {
+      "path": "Models/NotificationSoundSettings.swift",
+      "sha256": "d47755f953de6aa0d914f145163ddbd61d2662007630c44bf16128a1267dc795"
+    },
+    {
+      "path": "Models/PushMessage.swift",
+      "sha256": "b4fa4eef3bb6ccb2d4457f6992dae7bc714ae8d13dc7f169360125fc6f15de82"
+    },
+    {
+      "path": "Models/PushMessageSummary.swift",
+      "sha256": "0194be4e550bb2f9692c76fbb3c1c94956cf2c0ce14d31bdba254e12786c290f"
+    },
+    {
+      "path": "Models/ServerConfig.swift",
+      "sha256": "201cb7229c5f0577c8b0093c5a728cc729dac0e033c132f8eafbc42f63778695"
+    },
+    {
+      "path": "Models/SystemIntegrationSettings.swift",
+      "sha256": "5d1f7a932d9fb3a42eb2a7d2ec39bee41c7f19d8e0418925984b7e6a201551b2"
+    },
+    {
+      "path": "Models/WatchLightModels.swift",
+      "sha256": "2c95b2ff6929ab4d09957eb4b315a7421fdcfca1ec613dedafa2a066e25abb30"
+    },
+    {
+      "path": "Repositories/ChannelSubscriptionStore.swift",
+      "sha256": "dda9b75f64b106eb544de201f599122d75abc483c5b156bba6c05c0f956dbc3c"
+    },
+    {
+      "path": "Repositories/LocalDataStore.swift",
+      "sha256": "20b4906792fa41e92570ee9d6700f17cba9e7a722a29e295326ad679d22d00be"
+    },
+    {
+      "path": "Repositories/MessageSearchIndex.swift",
+      "sha256": "cd9a3fbe15515227b740ad1e8330df5311909dfc74816cc9623d89f9e90fdadc"
+    },
+    {
+      "path": "Repositories/SwiftDataModels.swift",
+      "sha256": "29d607fd083d675b0b4494e78ae0140ec7f2d583ccd8222a55393216d8098912"
+    },
+    {
+      "path": "Services/BadgeManager.swift",
+      "sha256": "f896c86585a4c0bafb048d3b3f189cef3cf47695430679782f2dc39b49da9471"
+    },
+    {
+      "path": "Services/ChannelSubscriptionService.swift",
+      "sha256": "ea216509fee41117e06fb0f081d5f95a9c303d14222456be8e09799095b4f3ac"
+    },
+    {
+      "path": "Services/ChannelSubscriptionSyncStore.swift",
+      "sha256": "dda9b75f64b106eb544de201f599122d75abc483c5b156bba6c05c0f956dbc3c"
+    },
+    {
+      "path": "Services/DurableIngressJournal.swift",
+      "sha256": "2965f1822afcf2c576a02e4a2c78911f6207aa1e73413920206abdde9543b737"
+    },
+    {
+      "path": "Services/MessageStateCoordinator.swift",
+      "sha256": "97dfe6778be156e0a3d7ce667c42e87414a6bcb589a5519ac4942edf07a5ea97"
+    },
+    {
+      "path": "Services/NotificationContentPreparer.swift",
+      "sha256": "06d5ef7d917e3e5f051b8081d516fc6dce9ea5ce0ea910a1989090d935bb6ff3"
+    },
+    {
+      "path": "Services/NotificationHandling.swift",
+      "sha256": "fd4e0213404472f32165b44ab66fa8a7daf612274bcac75dab541319598a7836"
+    },
+    {
+      "path": "Services/NotificationIngressInbox.swift",
+      "sha256": "7dce5e5ed12f0f0670eb0cf3bd7e4b4b68128836514d4b2eebf600be3947bcd0"
+    },
+    {
+      "path": "Services/NotificationServiceProcessor.swift",
+      "sha256": "2f4d5d978535a26bf360d3c038bb48774bbc8d6b1faf5f658a82f264376a7139"
+    },
+    {
+      "path": "Services/NotificationSoundManager.swift",
+      "sha256": "84e0b581c556a0a55725a2e4cfe000f912bba9fa9ba2dcb7424ca3c670f46566"
+    },
+    {
+      "path": "Services/NotificationSoundPreviewPlayer.swift",
+      "sha256": "44da002d9e6bc9890ad026f552d5e59714ac7f900b3c32aebb097341dcae969e"
+    },
+    {
+      "path": "Services/ProviderDeliveryAckFailureStore.swift",
+      "sha256": "6937afab57057ffea51932d662a0bb7caae8f32c5a2976c9db86f41b63ae1fd2"
+    },
+    {
+      "path": "Services/ProviderIngressCoordinator.swift",
+      "sha256": "834991db19f66a4b7793abf786722957941adbb35bda4ba0dac17ee47d332067"
+    },
+    {
+      "path": "Services/PushRegistrationService.swift",
+      "sha256": "982be6777b28f33150d7de0259d8dae7dbb09c7f234dd573a0e9afcd3f8a48d3"
+    },
+    {
+      "path": "SystemIntegration/PushGoAccessibilitySummaryBuilder.swift",
+      "sha256": "5aede3fc1612d14739e7f21b1ff3a46ee2335d6b9fb0b38ef7417e8a7b087ae4"
+    },
+    {
+      "path": "SystemIntegration/PushGoAdvancedSiriIntents.swift",
+      "sha256": "d8dfc570dc2dbc773ebbee766ae392d7aec6d3db832f2eea02839bf5afc5a4c8"
+    },
+    {
+      "path": "SystemIntegration/PushGoAppEntities.swift",
+      "sha256": "0511b6824b350bea5eadc637fc456429257dde24fafa60981ff25b28a3796432"
+    },
+    {
+      "path": "SystemIntegration/PushGoAppEntityQueries.swift",
+      "sha256": "a81671a83deb6d90c51cc025d21c6cb29e52fab02831f568bc0f6ebc4b6c1c04"
+    },
+    {
+      "path": "SystemIntegration/PushGoAppIntents.swift",
+      "sha256": "056338c96429ae3fd78216d0474a2d26270ab8800e6462779ce28dcc508959f3"
+    },
+    {
+      "path": "SystemIntegration/PushGoAppShortcuts.swift",
+      "sha256": "8eba7cb30dbb112554d373591dbe29c772ab95bf39b1d99915edc9bee7ecc4a7"
+    },
+    {
+      "path": "SystemIntegration/PushGoDeepLink.swift",
+      "sha256": "8cae702e9eb7dc0cd960fb482d0358e094b15e5a81ec23c4456d75bb88e3a3fc"
+    },
+    {
+      "path": "SystemIntegration/PushGoFocusStateStore.swift",
+      "sha256": "e638dae557124020ea5ffe50146bb19d4b2a440f322e77f62234ce455762a9e2"
+    },
+    {
+      "path": "SystemIntegration/PushGoLiveActivityCoordinator.swift",
+      "sha256": "b1ca7ade5a9cef55a64202003a76a0c31ce7f464e6d728f47cf93f542b1a9e5d"
+    },
+    {
+      "path": "SystemIntegration/PushGoLiveActivityModels.swift",
+      "sha256": "c83200056c6910c367ed6ebd8a25cb7011d81421e69735416f7148e42ea8b7bd"
+    },
+    {
+      "path": "SystemIntegration/PushGoLiveActivityTokenRegistrationService.swift",
+      "sha256": "eaea42aa1a1db97a5ef427cbfb896135b37f9b23d34744b8b5073a2a4db6a266"
+    },
+    {
+      "path": "SystemIntegration/PushGoMessageSummarySystemBridge.swift",
+      "sha256": "ee7af50a69b34afe6bb6a5e3a3e33c8a826067e2dda1e856bf3b90a50bae4143"
+    },
+    {
+      "path": "SystemIntegration/PushGoNotificationActionPolicy.swift",
+      "sha256": "4f20a21f70c2c22454fadf43cbdb85a30522815b0244ce789380d940be92ab9f"
+    },
+    {
+      "path": "SystemIntegration/PushGoNotificationProjectionUpdater.swift",
+      "sha256": "83d4aa7e1e8705df331e80d935c6932c67e8d64e9078d96021f52e47c6487036"
+    },
+    {
+      "path": "SystemIntegration/PushGoProjectionSummaryBuilder.swift",
+      "sha256": "70d7b5b304903a88ea66b26758abbc658f6a4d4a5fafdef9e6a3bd6e151f9492"
+    },
+    {
+      "path": "SystemIntegration/PushGoShortcutOutput.swift",
+      "sha256": "a6389563bc3050d4aeb996ec1e7ac7c69ce22bbdc393c33ac4bc0fa4fec4ff36"
+    },
+    {
+      "path": "SystemIntegration/PushGoSpotlightIdentifier.swift",
+      "sha256": "ab62ec15eea337b56aa2100b28c0e85a5bf59f5ef0f4eb902cd689762c0264bb"
+    },
+    {
+      "path": "SystemIntegration/PushGoSpotlightIndexer.swift",
+      "sha256": "87c48103947007788f629dc1c0a1aaaa734e9407457fc6bca42bfaf90e2f9554"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemEntityKind.swift",
+      "sha256": "2f393fa515c2d57ea9cbce51e89382cee617b342734951753d392669cfb6315c"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemIntentRouter.swift",
+      "sha256": "cdf6d7b7615e3b243e58df16f554f9a9faba9d795fbc015bb04915bc963ae7fe"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemOpenTarget.swift",
+      "sha256": "95356aaab21381e72c60c2eb2b8f890240fffac20ab0ff0ffe480749b9be5427"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemPendingActionStore.swift",
+      "sha256": "cd4ead767274e796ca66c380795106d3567521cdc9cc3bd2473b881ad33bf5e3"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemPrivacyPolicy.swift",
+      "sha256": "bf9ea0691b1d98482f65839c929ec5649bf2c344fba49c1da2b5d413b90aadf9"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemRouter.swift",
+      "sha256": "dc4b2b8540a00cd24b301deb2de5a1d465d5129702de6cb8fdbea82aefd12b31"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemSnapshotProjector.swift",
+      "sha256": "741626fccec6d7f51b8e8500467561c4bdb739cd7a91663de4152943fe506ad9"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemSnapshotStore.swift",
+      "sha256": "c1a9a704a3e24042aab3fb1c75a29a9603ee3e887b19e10fcf6ffbe0a92f64d6"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemSummary.swift",
+      "sha256": "4048ee0e0a274cf99feeb34213bfb08a5c1cc6559bf79d837bb89da817b4a4de"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemSummaryBuilder.swift",
+      "sha256": "810d0986b9ac3212e25c8d163661b05de95ef6dc01bc4531a78fd6b992eb4f43"
+    },
+    {
+      "path": "SystemIntegration/PushGoSystemSurfaceSnapshot.swift",
+      "sha256": "4336cb30a9e976a52aa368bfa9febc3cb13a468a24115f550cfda274039b37b9"
+    },
+    {
+      "path": "SystemIntegration/PushGoUserActivityBuilder.swift",
+      "sha256": "92190f361ed35656ecc497cd2471350a62dbb046ab40d6898a6fcd4aefe8e25e"
+    },
+    {
+      "path": "SystemIntegration/PushGoWidgetPushTokenStore.swift",
+      "sha256": "12868b470aefcd96286ebfaac6e96e7a8146555feb2822f7d90b75bacccaa1ab"
+    },
+    {
+      "path": "UI/AppFormControls.swift",
+      "sha256": "1b002abe5313c769fd5f791e089594fa3ffa260e2a162f531592aa1ba1e84488"
+    },
+    {
+      "path": "UI/AutomationRuntime.swift",
+      "sha256": "6574c720fae9d3c2627891d6d25ea538c13e4bb98dac7d23422937c500c7c6fb"
+    },
+    {
+      "path": "UI/EntityProjectionModels.swift",
+      "sha256": "61254c88310fa45bed9c2f37babf9bb9d5b728138dba5c2013299d11f170f15a"
+    },
+    {
+      "path": "UI/EntityScreens.swift",
+      "sha256": "f0d26190cefa815de600bafbd65c1167e56084fee79afc7f89c12ed0a73d60f8"
+    },
+    {
+      "path": "UI/KeyboardDismiss.swift",
+      "sha256": "be2d0d42302e79b034f52986411161e81bb1ee6c05e2df9678e204e1ed6d27cb"
+    },
+    {
+      "path": "UI/LiquidGlassEffect.swift",
+      "sha256": "00718ff9297f4575d714ad309bd060fc514c1c6287a78a13b176c5cd28ec99a4"
+    },
+    {
+      "path": "UI/LocalDeletionConfirmationHost.swift",
+      "sha256": "0704d5c578ddfa3b6b78d2fb7efe9471246493f9d64142a74c4aff2625269041"
+    },
+    {
+      "path": "UI/MessageDetailViewModel.swift",
+      "sha256": "5713140bd374008d5b9c3cabace79083350de33045601c09855c245a165a4ddc"
+    },
+    {
+      "path": "UI/MessageListViewModel.swift",
+      "sha256": "034a7d81f65552cd1095c8d932450661110a68b8090ca9f5d5f33e1cbebc92cd"
+    },
+    {
+      "path": "UI/MessageSearchViewModel.swift",
+      "sha256": "40442b8b8341fb05f159fe106c987665b08006e2ddb9f37b8cd0a3a688382c87"
+    },
+    {
+      "path": "UI/NotificationSoundEditorView.swift",
+      "sha256": "e15137c5233c051be1e257b68776530d6df6b78ca70400571900f160cccd2d83"
+    },
+    {
+      "path": "UI/PlatformColor.swift",
+      "sha256": "930834f91bd349ca8b6a7355b707fc804ecb76f8f0ca2e282726ff38ab6badab"
+    },
+    {
+      "path": "UI/PushGoMarkdownView.swift",
+      "sha256": "3cba39c46663771cfcd93fa9cc8ea8d6d53e3f6658fc328390d4bcc6321cf46b"
+    },
+    {
+      "path": "UI/RemoteImageView.swift",
+      "sha256": "f0df1180462b3956a1e8b4dcb0bfc161b49e2eb729bd835466b08f0bdca57c6d"
+    },
+    {
+      "path": "UI/RootView.swift",
+      "sha256": "380e13d5e97e7d3d30c4793ab4c6bd2e40f753ed107c1e8b668281caf055d4f1"
+    },
+    {
+      "path": "UI/SettingsViewModel.swift",
+      "sha256": "6a62119369608aab942584975b5c4bb619b8234f1d357778d4e7468c519e0c65"
+    },
+    {
+      "path": "UI/ToastView.swift",
+      "sha256": "57f145c7534370b3ca93a89227aa05b79378350adb1a10d7099264d326aecd0f"
+    },
+    {
+      "path": "Utilities/AnyCodable.swift",
+      "sha256": "6421b71a45214673b4dcf08164b28be64f4a157d1bf196eb11ba848b577749d7"
+    },
+    {
+      "path": "Utilities/AppConstants.swift",
+      "sha256": "4a0588018e901cc488c4d950488dfb1dc5a4d97c9afe11109f2fb73bab85fa68"
+    },
+    {
+      "path": "Utilities/ChannelNameValidator.swift",
+      "sha256": "ab747b8b0ffe06fa4b10ce18eb4f6fc2d2835cc7c04c4c94d693cc30fcc7e195"
+    },
+    {
+      "path": "Utilities/ChannelPasswordValidator.swift",
+      "sha256": "9b2fabb3dafe2bd8eff468b23e933e01ab09e46dd88eafb843bf4f369878ada0"
+    },
+    {
+      "path": "Utilities/KeychainStore.swift",
+      "sha256": "57200283d634a0865f9cf830868fc7baa085cc68b80d8892e15bbcfc0eb2225e"
+    },
+    {
+      "path": "Utilities/LocalizationManager.swift",
+      "sha256": "0abce5d43dcffa46ca40e253317d1a88b09bf9d8856226ac5c6f95c82a61c2bf"
+    },
+    {
+      "path": "Utilities/LocalizationProvider.swift",
+      "sha256": "b1948ac689cb153c90701b298859f211d33a4f7ad09d9ec827d56be416491013"
+    },
+    {
+      "path": "Utilities/ManualNotificationKeyValidator.swift",
+      "sha256": "c339433a86a9a111a04bbf293d8f9a491b494e1149f8d9166e913790ec5b51ed"
+    },
+    {
+      "path": "Utilities/NotificationContextSnapshot.swift",
+      "sha256": "ac3a12269ac5bb158484dec5b5b19d0ef0325d331ec4f30595c6e9668ba1349d"
+    },
+    {
+      "path": "Utilities/NotificationPayloadSemantics.swift",
+      "sha256": "d5560439f714887b42bb1989fa72f60386581942f99cdc08ae5235e16ccd235e"
+    },
+    {
+      "path": "Utilities/NotificationSoundResolver.swift",
+      "sha256": "ca644e285939fa007fc1bbcaa49286d9ee1145af82096d127dce10c2e880ddfb"
+    },
+    {
+      "path": "Utilities/NotificationSoundSharedState.swift",
+      "sha256": "68f14efcbe7b75ce5a0802bded696d7a5f89a5374735829f86b25cb110137516"
+    },
+    {
+      "path": "Utilities/ProjectionSemantics.swift",
+      "sha256": "4050ffffbb055ebbabd9e4ed79c2c808e90ae6f27b5c928c4beb4e8a3d3d0b65"
+    },
+    {
+      "path": "Utilities/PushGoMarkdownCore.swift",
+      "sha256": "1a31a786f9f7e60bf8871b523c360d22371de422f2461913b0ba624bc404e39e"
+    },
+    {
+      "path": "Utilities/PushGoNotificationNames.swift",
+      "sha256": "ea78dd032091e3f08e4e45b426496c3fa7459d88242e8051f2a7a712efd4261f"
+    },
+    {
+      "path": "Utilities/PushRegistrationSemantics.swift",
+      "sha256": "a73a44d6b8cb1118e8d1e36ec2e2dce3db17acf3ac03220a9082c6293c73537d"
+    },
+    {
+      "path": "Utilities/SearchQuerySemantics.swift",
+      "sha256": "d1ff5b4b393903aefcd6b1060911cea469374bae50cfc3b06b9ba71648fe0e0f"
+    },
+    {
+      "path": "Utilities/SharedImageCache.swift",
+      "sha256": "574b948ac0a7ceb459174629970b4e359b36c47212a237c7290d813a73526c92"
+    },
+    {
+      "path": "Utilities/UserInfoSanitizer.swift",
+      "sha256": "d9106fd288cb17b30309f7bf408492f4a962e4dc7d86b8c8afed50e615eac439"
+    },
+    {
+      "path": "Utilities/WatchLightQuantizer.swift",
+      "sha256": "db1b42bbff886a11f6e8a2eadfe64fcd42f4ecdd5734ab3227c952616da97236"
+    },
+    {
+      "path": "Utilities/WatchNotificationFreshness.swift",
+      "sha256": "8ca1555af5eeba437603e4e827fe9a83b8faaafc6b24c93f355b5fa7b5f7e1a3"
+    }
+  ]
+}

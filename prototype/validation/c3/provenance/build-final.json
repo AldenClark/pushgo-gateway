@@ -1,0 +1,22 @@
+{
+  "source_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+  "source_clean": true,
+  "binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/c3-final",
+  "binary_sha256": "c22a71df7fc12d8b30a63bfbb24d7f3d8d895f62c35dcab58d2f3d894f1d1e9a",
+  "build_receipt": "rust-build-final-fixture-first.log",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)\n",
+  "profile": {
+    "name": "release",
+    "opt-level": 3,
+    "lto": "fat",
+    "codegen-units": 1,
+    "panic": "abort"
+  },
+  "lock_sha256": "a18fe536ca64253dc935dfd7a69ec3f808376498fc5033e4a6ecb6a6ba6edbd6",
+  "profiling_sha256": "70a373a4a6f6c1f94f83db19e5fd3993891efed5b285c74c9301b64472a3ad21",
+  "fixture_sha256": "5847ebff2389f9424ba5fb4238bcaf6133acba8f399a13ece4bbd2b1764a7490",
+  "store_sha256": "2c1539a481375d7acd8530828de4134c8cf4683d1703739b6424febed2b11488",
+  "coalescing": "frozen prior jobs fenced; retained Pull capability moves; owned callback original key; stable IDs/time/TTL/history",
+  "native_tests": "80 passed,0 failed;2 history scheduled separately"
+}

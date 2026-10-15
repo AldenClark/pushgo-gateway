@@ -1,0 +1,482 @@
+[
+  {
+    "path": "plan",
+    "label": "retire_join",
+    "sql": "EXPLAIN QUERY PLAN SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "retire_cross",
+    "sql": "EXPLAIN QUERY PLAN SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_lookup",
+    "sql": "EXPLAIN QUERY PLAN SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "retire_gc",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM retired_provider_tokens WHERE rowid IN (SELECT r.rowid FROM retired_provider_tokens r WHERE NOT EXISTS(SELECT 1 FROM targets t WHERE t.platform=r.platform AND t.provider_token=r.provider_token AND t.control_epoch<r.control_epoch) LIMIT 256)",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_0",
+    "sql": "EXPLAIN QUERY PLAN SELECT device_key FROM devices WHERE retired_at IS NOT NULL AND coalesced_to IS NULL ORDER BY retired_at LIMIT 256",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_1",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_2",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM registration_aliases WHERE old_key IN (SELECT old_key FROM registration_aliases WHERE expires_at<? ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_3",
+    "sql": "EXPLAIN QUERY PLAN UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_4",
+    "sql": "EXPLAIN QUERY PLAN UPDATE targets SET acked_at=?,state=CASE WHEN state IN ('pending','retry_wait') THEN 'expired' ELSE state END WHERE acked_at IS NULL AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_5",
+    "sql": "EXPLAIN QUERY PLAN UPDATE messages SET status=CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=? WHERE status='provider_queued' AND provider_failed_count>0 AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_6",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_7",
+    "sql": "EXPLAIN QUERY PLAN UPDATE messages SET payload_blob=X'',payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL) AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "empty_maintenance_8",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM messages WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)",
+    "binds": [
+      1000
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "measure",
+    "label": "retire_join",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "retire_cross",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_lookup",
+    "sql": "SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "retire_gc",
+    "sql": "DELETE FROM retired_provider_tokens WHERE rowid IN (SELECT r.rowid FROM retired_provider_tokens r WHERE NOT EXISTS(SELECT 1 FROM targets t WHERE t.platform=r.platform AND t.provider_token=r.provider_token AND t.control_epoch<r.control_epoch) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_0",
+    "sql": "SELECT device_key FROM devices WHERE retired_at IS NOT NULL AND coalesced_to IS NULL ORDER BY retired_at LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_1",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_2",
+    "sql": "DELETE FROM registration_aliases WHERE old_key IN (SELECT old_key FROM registration_aliases WHERE expires_at<? ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_3",
+    "sql": "UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_4",
+    "sql": "UPDATE targets SET acked_at=?,state=CASE WHEN state IN ('pending','retry_wait') THEN 'expired' ELSE state END WHERE acked_at IS NULL AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_5",
+    "sql": "UPDATE messages SET status=CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=? WHERE status='provider_queued' AND provider_failed_count>0 AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_6",
+    "sql": "DELETE FROM targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_7",
+    "sql": "UPDATE messages SET payload_blob=X'',payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL) AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_8",
+    "sql": "DELETE FROM messages WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "retire_join",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "retire_cross",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_lookup",
+    "sql": "SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "retire_gc",
+    "sql": "DELETE FROM retired_provider_tokens WHERE rowid IN (SELECT r.rowid FROM retired_provider_tokens r WHERE NOT EXISTS(SELECT 1 FROM targets t WHERE t.platform=r.platform AND t.provider_token=r.provider_token AND t.control_epoch<r.control_epoch) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_0",
+    "sql": "SELECT device_key FROM devices WHERE retired_at IS NOT NULL AND coalesced_to IS NULL ORDER BY retired_at LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_1",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_2",
+    "sql": "DELETE FROM registration_aliases WHERE old_key IN (SELECT old_key FROM registration_aliases WHERE expires_at<? ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_3",
+    "sql": "UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_4",
+    "sql": "UPDATE targets SET acked_at=?,state=CASE WHEN state IN ('pending','retry_wait') THEN 'expired' ELSE state END WHERE acked_at IS NULL AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_5",
+    "sql": "UPDATE messages SET status=CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=? WHERE status='provider_queued' AND provider_failed_count>0 AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_6",
+    "sql": "DELETE FROM targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_7",
+    "sql": "UPDATE messages SET payload_blob=X'',payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL) AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_8",
+    "sql": "DELETE FROM messages WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "retire_join",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "retire_cross",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_lookup",
+    "sql": "SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "retire_gc",
+    "sql": "DELETE FROM retired_provider_tokens WHERE rowid IN (SELECT r.rowid FROM retired_provider_tokens r WHERE NOT EXISTS(SELECT 1 FROM targets t WHERE t.platform=r.platform AND t.provider_token=r.provider_token AND t.control_epoch<r.control_epoch) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_0",
+    "sql": "SELECT device_key FROM devices WHERE retired_at IS NOT NULL AND coalesced_to IS NULL ORDER BY retired_at LIMIT 256",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_1",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_2",
+    "sql": "DELETE FROM registration_aliases WHERE old_key IN (SELECT old_key FROM registration_aliases WHERE expires_at<? ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_3",
+    "sql": "UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_4",
+    "sql": "UPDATE targets SET acked_at=?,state=CASE WHEN state IN ('pending','retry_wait') THEN 'expired' ELSE state END WHERE acked_at IS NULL AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_5",
+    "sql": "UPDATE messages SET status=CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=? WHERE status='provider_queued' AND provider_failed_count>0 AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000,
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_6",
+    "sql": "DELETE FROM targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_7",
+    "sql": "UPDATE messages SET payload_blob=X'',payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL) AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "empty_maintenance_8",
+    "sql": "DELETE FROM messages WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)",
+    "binds": [
+      1000
+    ]
+  },
+  {
+    "path": "control",
+    "label": "create_devices_index",
+    "sql": "CREATE INDEX diagnostic_devices_token ON devices(platform,provider_token,device_key) WHERE retired_at IS NULL"
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_lookup_indexed",
+    "sql": "EXPLAIN QUERY PLAN SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_lookup_indexed",
+    "sql": "SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_lookup_indexed",
+    "sql": "SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_lookup_indexed",
+    "sql": "SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "control",
+    "label": "seed_one_retired",
+    "sql": "INSERT INTO retired_provider_tokens VALUES('android','t000001',1)"
+  },
+  {
+    "path": "plan",
+    "label": "retire_join_one",
+    "sql": "EXPLAIN QUERY PLAN SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "capture_rows": true
+  },
+  {
+    "path": "measure",
+    "label": "retire_join_one",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "retire_cross_one",
+    "sql": "EXPLAIN QUERY PLAN SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "capture_rows": true
+  },
+  {
+    "path": "measure",
+    "label": "retire_cross_one",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "capture_rows": true
+  }
+]

@@ -1,0 +1,96 @@
+{
+  "original_final_source_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+  "original_final_binary_sha256": "c22a71df7fc12d8b30a63bfbb24d7f3d8d895f62c35dcab58d2f3d894f1d1e9a",
+  "original_final_out_run": "apple/run-final-01",
+  "original_apple_primary": "151d50c",
+  "portable_execution_status": "NOT RUN",
+  "packaging_checks": "static syntax/hash only; no stage/build/test/daemon/native invocation",
+  "production_shared_bodies_in_bundle": false,
+  "common_dependency": "../harness/c3_mock.py",
+  "files": [
+    {
+      "packaged_path": "Package.swift",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/package/Package.swift",
+      "original_sha256": "94038fb24773e7c8fb5639c3126ac35b3ab952247e217cc061804c3be73954f6",
+      "packaged_sha256": "94038fb24773e7c8fb5639c3126ac35b3ab952247e217cc061804c3be73954f6",
+      "relationship": "exact executed input bytes",
+      "relocation": "none"
+    },
+    {
+      "packaged_path": "Package.resolved",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/package/Package.resolved",
+      "original_sha256": "59c8582c2af3e7b15309a19496a75660c3715d1b4b6fe8cb05756485229e8fd9",
+      "packaged_sha256": "59c8582c2af3e7b15309a19496a75660c3715d1b4b6fe8cb05756485229e8fd9",
+      "relationship": "exact executed input bytes",
+      "relocation": "none"
+    },
+    {
+      "packaged_path": "Tests/PushGoAppleCoreTests/C3OrdinaryClientLoopTests.swift",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/package/Tests/PushGoAppleCoreTests/C3OrdinaryClientLoopTests.swift",
+      "original_sha256": "df60570b96b25500488ce1b5f4b0e0859adb48141e44fbebbb972679b89da418",
+      "packaged_sha256": "df60570b96b25500488ce1b5f4b0e0859adb48141e44fbebbb972679b89da418",
+      "relationship": "exact executed input bytes",
+      "relocation": "none"
+    },
+    {
+      "packaged_path": "Tests/Fixtures/sqlite_migration_child.swift",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/package/Tests/Fixtures/sqlite_migration_child.swift",
+      "original_sha256": "4255772ec64084adb1e76ad3f7d0ad9363ffc6de3996cad097469b8c1a682551",
+      "packaged_sha256": "4255772ec64084adb1e76ad3f7d0ad9363ffc6de3996cad097469b8c1a682551",
+      "relationship": "exact executed input bytes",
+      "relocation": "none"
+    },
+    {
+      "packaged_path": "source-copy-manifest.json",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/source-copy-manifest.json",
+      "original_sha256": "0455c29e0b7b3707650c654c1de5f9999271c053962f430f790c12ccf9a59a09",
+      "packaged_sha256": "0455c29e0b7b3707650c654c1de5f9999271c053962f430f790c12ccf9a59a09",
+      "relationship": "exact executed input bytes",
+      "relocation": "none"
+    },
+    {
+      "packaged_path": "executed/run-loop.py",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/run-loop.py",
+      "original_sha256": "ef407ce5a02f93ad1b08ffc03032960520df7757b5b956a6a0fded97351c26fb",
+      "packaged_sha256": "ef407ce5a02f93ad1b08ffc03032960520df7757b5b956a6a0fded97351c26fb",
+      "relationship": "exact executed input bytes",
+      "relocation": "none"
+    },
+    {
+      "packaged_path": "executed/run-native.sh",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/run-native.sh",
+      "original_sha256": "4957210c88665cde0896ff82d674f63cf3691aec48820d978285e8446048c3c4",
+      "packaged_sha256": "4957210c88665cde0896ff82d674f63cf3691aec48820d978285e8446048c3c4",
+      "relationship": "exact executed input bytes",
+      "relocation": "none"
+    },
+    {
+      "packaged_path": "run-loop.py",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/run-loop.py",
+      "original_sha256": "ef407ce5a02f93ad1b08ffc03032960520df7757b5b956a6a0fded97351c26fb",
+      "packaged_sha256": "12ece061635a6863100689bb00db8b5f4024c251b9e5e8d6a949e7cd355dec6f",
+      "relationship": "portable adapter NOT RUN",
+      "relocation": "required --apple-work-root, explicit SHA/source declaration checks, external source-copy manifest/work env"
+    },
+    {
+      "packaged_path": "run-native.sh",
+      "original_out_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/apple/run-native.sh",
+      "original_sha256": "4957210c88665cde0896ff82d674f63cf3691aec48820d978285e8446048c3c4",
+      "packaged_sha256": "38889b9cd4e9742f5e2e4459984839a4fb3647d22a1f75c9135932e390cb826c",
+      "relationship": "portable adapter NOT RUN",
+      "relocation": "explicit C3_APPLE_WORK_ROOT package/scratch paths"
+    }
+  ],
+  "new_adapter_files": [
+    {
+      "path": "stage.py",
+      "sha256": "5023ef02a0a4817bf84b5345cd2fdf6b9d6fdc5b33461be549b8b11d7f83820b",
+      "status": "portable adapter NOT RUN"
+    },
+    {
+      "path": "README.md",
+      "sha256": "1be539f70065e829104ff62f1bed22ef89222fe181354ae192e625d800d44aa6",
+      "status": "new documentation"
+    }
+  ]
+}

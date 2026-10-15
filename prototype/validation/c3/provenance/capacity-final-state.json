@@ -1,0 +1,345 @@
+{
+  "runtime_state": "QUIET",
+  "matched_primary8": {
+    "pass": 8,
+    "fail": 0,
+    "candidate_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+    "control_commit": "cb0da19cfc1ca542e14a19e506a086a830103bcd"
+  },
+  "matched_attribution_first_failure": {
+    "pass": 0,
+    "fail": 1,
+    "notrun_original_labels": 7,
+    "case": "matched-observerfix-baseline-db-block-r1",
+    "cause": "realSQLitecode5 under2s externalBEGINIMMEDIATE, ownerdriverfatalfixtureexit70",
+    "preserved": true
+  },
+  "writerfix_followup": {
+    "pass": 9,
+    "fail": 0,
+    "notrun": 0,
+    "candidate_commit": "19cc5c686419255739776611d1fae25b8ed7b6fa",
+    "control_commit": "cb0da19cfc1ca542e14a19e506a086a830103bcd",
+    "causal_claim": "regression and originalfailureclosure only; not matchedoptimizationAB",
+    "lanes": [
+      {
+        "label": "writerfix-baseline-cleanup-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 352256
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 16,
+            "submitted": 16,
+            "started": 16,
+            "finished": 16,
+            "accepted": 16
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 4.056754874999999,
+          "mock_counts": {
+            "fcm": 128,
+            "apns": 128
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 256,
+        "first_sql_s": 0.33954445799999977
+      },
+      {
+        "label": "writerfix-baseline-fanout-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 188416
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 2,
+            "submitted": 2,
+            "started": 2,
+            "finished": 2,
+            "accepted": 2
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 3.9778532089999996,
+          "mock_counts": {
+            "fcm": 32,
+            "apns": 32
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 64,
+        "first_sql_s": 0.2760437910000002
+      },
+      {
+        "label": "writerfix-candidate-cleanup-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 348160
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 16,
+            "submitted": 16,
+            "started": 16,
+            "finished": 16,
+            "accepted": 16
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 4.09287,
+          "mock_counts": {
+            "fcm": 128,
+            "apns": 128
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 256,
+        "first_sql_s": 0.33630066700000016
+      },
+      {
+        "label": "writerfix-candidate-db-block-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 348160
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 32,
+            "submitted": 32,
+            "started": 32,
+            "finished": 32,
+            "accepted": 32
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 6.238754834000001,
+          "mock_counts": {
+            "fcm": 128,
+            "apns": 128
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 256,
+        "first_sql_s": 2.4865970000000006
+      },
+      {
+        "label": "writerfix-candidate-falloff-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 1032192
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 64,
+            "submitted": 64,
+            "started": 67,
+            "finished": 67,
+            "accepted": 67
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 17.974566458,
+          "mock_counts": {
+            "fcm": 536,
+            "apns": 536
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 1072,
+        "first_sql_s": 3.716271458
+      },
+      {
+        "label": "writerfix-candidate-fanout-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 188416
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 2,
+            "submitted": 2,
+            "started": 2,
+            "finished": 2,
+            "accepted": 2
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 4.222244916999999,
+          "mock_counts": {
+            "fcm": 32,
+            "apns": 32
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 64,
+        "first_sql_s": 0.28914233300000003
+      },
+      {
+        "label": "writerfix-candidate-idle-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 126976
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 0,
+            "submitted": 0,
+            "started": 0,
+            "finished": 0,
+            "accepted": 0
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 62.688184875,
+          "mock_counts": {
+            "fcm": 0,
+            "apns": 0
+          },
+          "mock_peak_attempts": {
+            "fcm": 0,
+            "apns": 0
+          }
+        },
+        "targets": 0,
+        "first_sql_s": null
+      },
+      {
+        "label": "writerfix-candidate-offer128-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 17874944
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 1280,
+            "submitted": 1280,
+            "started": 1280,
+            "finished": 1280,
+            "accepted": 1280
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 19.004041625,
+          "mock_counts": {
+            "fcm": 10240,
+            "apns": 10240
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 20480,
+        "first_sql_s": 10.613667666
+      },
+      {
+        "label": "writerfix-candidate-offer256-r1",
+        "pass": true,
+        "result": {
+          "failure": null,
+          "exit_codes": [
+            0
+          ],
+          "database_file_bytes_after_shutdown": {
+            "gateway.sqlite": 36143104
+          },
+          "daemon_exited": true,
+          "log_readers_joined": true,
+          "producer_final": {
+            "scheduled": 2560,
+            "submitted": 2560,
+            "started": 2560,
+            "finished": 2560,
+            "accepted": 2560
+          },
+          "sampler_joined": true,
+          "shared_mock_server_joined": true,
+          "elapsed_seconds": 42.914439625,
+          "mock_counts": {
+            "fcm": 20480,
+            "apns": 20480
+          },
+          "mock_peak_attempts": {
+            "fcm": 32,
+            "apns": 32
+          }
+        },
+        "targets": 40960,
+        "first_sql_s": 28.726301708
+      }
+    ]
+  },
+  "zero_lane_observer_startup": "matched prefix failed common import beforedaemon; preserved; matched-observerfix usedexacttransitivehelpercopy",
+  "old_A128": "initialhotspotlocalizationonly;excludedfrommatched8/finalwriterfix",
+  "all_owned_processes_exited": true
+}

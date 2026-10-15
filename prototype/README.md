@@ -1,6 +1,6 @@
 # C：普通消息合同候选
 
-独立单机 SQLite crate，当前可执行入口只连接本地 Provider Mock。保留主线 SQLite、PostgreSQL、MySQL 的产品范围；本候选尚无 PG/MySQL 适配，也没有接通远程 Token Service 或真实 APNs。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。
+独立单机 SQLite crate，当前可执行入口只连接本地 Provider Mock。保留主线 SQLite、PostgreSQL、MySQL 的产品范围；本候选尚无 PG/MySQL 适配，已复用现有 Remote 凭据 owner/Token Service 接口，本轮仅对本地 Mock 端点实测，真实 APNs 未验证。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。
 
 ## 已实现的普通消息边界
 
@@ -12,7 +12,7 @@
 
 频道密码保存为主线格式的加盐哈希，兼容旧 Argon2 验证，旧算法执行位置有界。共享 Bearer 认证先于 JSON 解析；关闭共享认证时沿用现行密码接口每 IP 每分钟 60、全局每分钟 1200 次限制。错误不返回数据库错误、凭据或请求正文。路由版本随实际变更递增，旧 A→B→A 回执不能删除新订阅；失效令牌只清理匹配原版本的受影响频道订阅。
 
-凭据注入接口遵循现行 FCM/APNs 获取和强制刷新语义；没有新增缓存或内联重新发送。只有合成凭据和 Mock 覆盖，远程凭据服务及生产传输接线仍未验证。
+凭据复用主仓库真实 FCM/APNs Remote owner、Token Service client、缓存、single-flight 和强制刷新；Provider 保留候选有界读取。合成凭据经本地 Token Service/Provider Mock 实测；真实服务未验证。设备/频道完整普通控制面、订阅变化、coalescing、logout 已接入，具体合同见 [C3 报告](docs/c3-results.md)。
 
 ## 所有权和资源
 
@@ -26,8 +26,10 @@
 
 ## 验证与复现
 
-在 prototype 目录使用缓存依赖：`cargo test --locked --offline --lib`；`cargo clippy --locked --offline --all-targets -- -D warnings`。最终原生 64 项通过、Clippy 通过。历史测量单独显式运行 ignored 的 `measure_compact_history_query_admission_gc_and_disk_space` 和 `measure_op_widths_16_46_128_and_actual_freepage_reuse`；分别要求 C2_HISTORY_OUT、C2_HISTORY_WIDTH_OUT 指向尚不存在的目录，本轮两项 Release 测量均通过。测试覆盖真实 SQL COMMIT 前后、接管前、结果未知、等待提交、ACK 两种顺序、重启、SQLITE_FULL、延迟约束 COMMIT 失败和有限重复请求；不把 Mock 结果当生产验收。
+在 prototype 目录可用缓存依赖运行 `cargo test --release --locked --offline --lib`。C3 最终写事务修复的原生 82 项通过；两个 ignored 历史测量在同一 schema 的冻结 `10e59ec` 显式各跑一次通过，不计为新二进制的执行结果。C2 的 Clippy 收据保留；C3 不冒用它声称新依赖接线已完成 strict Clippy。
 
-本轮原始日志、第一次失败、客户端原生测试、三方 Release 比较和源文件/二进制身份记录位于主仓库 `build/quality-results/c-single-ledger-contract-20261015/`。上一轮 C1 及原 C32 目录保持原样。最终报告记录准确提交和对应测试，客户端应用控制器、原生存储、进程重开、系统后台交付分别标明范围。
+C3 的 Apple 未改生产 controllers/GRDB 和 Android 未改生产 repository/Room/AndroidKeystore 均直接连接本地候选，包含独立进程恢复；wakeup 由捕获的真实候选 payload 进入生产处理路径。真实系统 APNs/FCM 调度、物理 Watch 后台、PG/MySQL 实库仍未运行。
 
-本轮交付和未完成范围见 [c2-results.md](docs/c2-results.md)，逐项合同、容量、历史成本及下一阶段适配计划分别在同目录；新增客户端测试和容量 runner 源码归档在 `validation/`，不包含二进制、数据库或日志。
+C3 证据在主仓库 `build/quality-results/c-client-loop-gate-20261015/`，源/二进制/工具链对应关系和首个失败均保留；旧 C32/C2 对照产物不替换。最终交付见 [c3-results.md](docs/c3-results.md)，先前报告 [c2-results.md](docs/c2-results.md) 保留历史含义。验证源码在 `validation/c3/`，不含二进制、数据库、日志或凭据。
+
+SQLite 写事务显式 `BEGIN IMMEDIATE`，沿用 3 秒 busy timeout。预算内写锁释放可继续；超时仍失败关闭并依赖持久化身份和独占 owner 重启恢复，不承诺任意长阻塞在线重试。没有增加重试队列或放宽接纳成功条件。

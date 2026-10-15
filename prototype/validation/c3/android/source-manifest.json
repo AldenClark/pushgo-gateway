@@ -1,0 +1,123 @@
+{
+  "execution": "Kotlin exact actual bytes; portability edits NOT RUN",
+  "actual_native_binding": {
+    "source": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+    "binary_sha256": "c22a71df7fc12d8b30a63bfbb24d7f3d8d895f62c35dcab58d2f3d894f1d1e9a",
+    "methods": 2,
+    "skipped": 0
+  },
+  "checks": [
+    "Python AST parse",
+    "bash -n",
+    "4 embedded Python AST blocks",
+    "JSON parse",
+    "no machine absolute defaults",
+    "no production source/artifact/DB/rawlog/private-key payloads"
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 6069,
+      "packaged_sha256": "198147361273dfb1e14db0044c901e47c0372236fc72a1a5d9f9e48dfb49af44",
+      "original_executed_input_sha256": null,
+      "classification": "documentation or hash provenance",
+      "unchanged_from_original": null
+    },
+    {
+      "path": "provenance/cached-jni-identity.json",
+      "bytes": 1616,
+      "packaged_sha256": "8cdd56311cfdc064a0152e80b5c6699ed24d65c6ea2eb573bb963b697244aa37",
+      "original_executed_input_sha256": null,
+      "classification": "documentation or hash provenance",
+      "unchanged_from_original": null
+    },
+    {
+      "path": "provenance/executed-apk-hashes.json",
+      "bytes": 565,
+      "packaged_sha256": "81cf69fdb318a40fe601e3605b84541e638bffe70acb588f312c96d857b15cc2",
+      "original_executed_input_sha256": null,
+      "classification": "documentation or hash provenance",
+      "unchanged_from_original": null
+    },
+    {
+      "path": "provenance/executed-harness-source-identity.json",
+      "bytes": 503,
+      "packaged_sha256": "138f04957bc79b122f8e25a7965e318e6f25489edc876a3d66238a8e7db0d859",
+      "original_executed_input_sha256": null,
+      "classification": "documentation or hash provenance",
+      "unchanged_from_original": null
+    },
+    {
+      "path": "provenance/packaging-inputs.json",
+      "bytes": 2194,
+      "packaged_sha256": "a3bfd8d82062eff1432b8876555d49112818e0075bf6f08a6245980bd425f191",
+      "original_executed_input_sha256": null,
+      "classification": "documentation or hash provenance",
+      "unchanged_from_original": null
+    },
+    {
+      "path": "provenance/production-boundary-hashes.json",
+      "bytes": 3692,
+      "packaged_sha256": "b71c5369e8c1e664e502266ac0cb56cc911e71cd1cdc23563cd3b6faa156e9b0",
+      "original_executed_input_sha256": null,
+      "classification": "documentation or hash provenance",
+      "unchanged_from_original": null
+    },
+    {
+      "path": "provenance/production-main-source-hashes.json",
+      "bytes": 51651,
+      "packaged_sha256": "9c00e9871a303763b5692761e2f39b3e3c1fcee0a3159ace4d483a1542e853ed",
+      "original_executed_input_sha256": null,
+      "classification": "documentation or hash provenance",
+      "unchanged_from_original": null
+    },
+    {
+      "path": "run-loop.py",
+      "bytes": 9484,
+      "packaged_sha256": "598547fbf41fbd333e066fe3805237cc71b80ff744369a4f6023499537e4146b",
+      "original_executed_input_sha256": "6456783db68c4264559840530996bab93cf0f68dbe66a3c06c359fbe90e6d84a",
+      "classification": "portable script edits NOT RUN",
+      "unchanged_from_original": false
+    },
+    {
+      "path": "run-native.sh",
+      "bytes": 4745,
+      "packaged_sha256": "420ede78aeeb3bce9b7d9e6c559a3dc02ab5a98f92e67b08c845bd1c7adca9fc",
+      "original_executed_input_sha256": "f82bd4f4cc79f7f140465cba540748f152bfd6909b838e605b7fa4a9e15193c6",
+      "classification": "portable script edits NOT RUN",
+      "unchanged_from_original": false
+    },
+    {
+      "path": "source/CandidateNetworkBoundary.kt",
+      "bytes": 6064,
+      "packaged_sha256": "bfb597d5cd39b5318edbccaba456dd1775aa26b27f59ae4f58dee0ea83e501c3",
+      "original_executed_input_sha256": "bfb597d5cd39b5318edbccaba456dd1775aa26b27f59ae4f58dee0ea83e501c3",
+      "classification": "exact executed Kotlin bytes",
+      "unchanged_from_original": true
+    },
+    {
+      "path": "source/CandidateOrdinaryC3DeviceTest.kt",
+      "bytes": 17063,
+      "packaged_sha256": "257fced2ea9e62c86fe2dd3cafb8c2f1aa8e84ea8ca314cb325b0f52db078a44",
+      "original_executed_input_sha256": "257fced2ea9e62c86fe2dd3cafb8c2f1aa8e84ea8ca314cb325b0f52db078a44",
+      "classification": "exact executed Kotlin bytes",
+      "unchanged_from_original": true
+    },
+    {
+      "path": "stage-native.sh",
+      "bytes": 3176,
+      "packaged_sha256": "3d3c59ea379e9b71199476b212a3cac6086fb437a27ca24cbafea8749a0eef96",
+      "original_executed_input_sha256": "064ab4e51018951007e86e0f2216cd4defdb679430dabd6a5d9042949ec15845",
+      "classification": "portable script edits NOT RUN",
+      "unchanged_from_original": false
+    },
+    {
+      "path": "verify-existing-room.py",
+      "bytes": 3707,
+      "packaged_sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+      "original_executed_input_sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+      "classification": "exact executed script bytes (package runtime NOT RUN)",
+      "unchanged_from_original": true
+    }
+  ]
+}

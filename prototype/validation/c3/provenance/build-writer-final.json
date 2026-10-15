@@ -1,0 +1,25 @@
+{
+  "source_commit": "19cc5c686419255739776611d1fae25b8ed7b6fa",
+  "source_clean": null,
+  "binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/c3-writer-final",
+  "binary_sha256": "6a6e760f51db767ef7a7a69287a63b4cbb252d5812a701caa59dce63eac046f1",
+  "build_receipt": "rust-build-writer-final-first.log",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)\n",
+  "profile": {
+    "name": "release",
+    "opt-level": 3,
+    "lto": "fat",
+    "codegen-units": 1,
+    "panic": "abort"
+  },
+  "lock_sha256": "a18fe536ca64253dc935dfd7a69ec3f808376498fc5033e4a6ecb6a6ba6edbd6",
+  "profiling_sha256": "70a373a4a6f6c1f94f83db19e5fd3993891efed5b285c74c9301b64472a3ad21",
+  "fixture_sha256": "5847ebff2389f9424ba5fb4238bcaf6133acba8f399a13ece4bbd2b1764a7490",
+  "store_sha256": "395c54d1034d1dd1422cebac5bc43660704eed0d9e123235a668b8dcf82cecbb",
+  "coalescing": "frozen prior jobs fenced; retained Pull capability moves; owned callback original key; stable IDs/time/TTL/history",
+  "native_tests": "82 passed,0 failed,2 ignored; histories on same schema frozen10e separately",
+  "product_sources_clean": true,
+  "workspace_documentation_pending": true,
+  "repair": "All expected write transactions SQLx BEGIN IMMEDIATE; unchanged3sbusy_timeout; runtimeunchanged; longerlockfailclosed/exclusive-ownerrecover"
+}

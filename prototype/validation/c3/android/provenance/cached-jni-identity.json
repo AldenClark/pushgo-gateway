@@ -1,0 +1,30 @@
+{
+  "reuse": "existing cached JNI, no fresh Rust/JNI build",
+  "copy_method": "cp -cR (APFS copy-on-write)",
+  "current_android_source_head": "b831a5eadbe8f67b64535868af91aa74dbe1ba3f",
+  "exact_jni_source_revision": "UNVERIFIED: cached binaries do not embed a verified source-revision receipt",
+  "scope": "ordinary provider HTTP/parser/Room/ACK evidence; no private-channel JNI implementation claim",
+  "files": [
+    {
+      "source_path": "[external Android checkout]/app/build/generated/rustJniLibs/main/arm64-v8a/libpushgo_quinn_jni.so",
+      "staged_path": "[external stage]/app/build/generated/rustJniLibs/main/arm64-v8a/libpushgo_quinn_jni.so",
+      "sha256": "ebe2e1f3011340c09b419ffdb838408debcf3060fabf0d2fe3ac94f49b6b32f2",
+      "bytes": 7514744,
+      "source_mtime_ns": 1791683607530248899
+    },
+    {
+      "source_path": "[external Android checkout]/app/build/generated/rustJniLibs/main/armeabi-v7a/libpushgo_quinn_jni.so",
+      "staged_path": "[external stage]/app/build/generated/rustJniLibs/main/armeabi-v7a/libpushgo_quinn_jni.so",
+      "sha256": "2df4326c5c5d9aa33ef46fc29903315bfd5a9dfa83ccf90bcae5f06cfd0f1dd0",
+      "bytes": 5035080,
+      "source_mtime_ns": 1791683633598919913
+    },
+    {
+      "source_path": "[external Android checkout]/app/build/generated/rustJniLibs/main/x86_64/libpushgo_quinn_jni.so",
+      "staged_path": "[external stage]/app/build/generated/rustJniLibs/main/x86_64/libpushgo_quinn_jni.so",
+      "sha256": "65f4e64ac2eaf3d1c9289e2532a2ea63661024cb1da915f67e575c73fd87f989",
+      "bytes": 8051992,
+      "source_mtime_ns": 1791683710046685692
+    }
+  ]
+}

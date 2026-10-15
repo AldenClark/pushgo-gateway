@@ -1,12 +1,12 @@
 # 下一阶段：普通消息的 PG / MySQL 适配
 
-本文件是下一阶段执行计划，不是本轮实现或验收结果。当前隔离 crate 的 `store.rs` 使用 `SqlitePool`、SQLite DDL、触发器及本机文件 owner；`Cargo.toml` 仅启用 SQLx 的 SQLite 功能，尚无 PG / MySQL 适配。主线 Gateway 支持三库不能证明这个 crate 已具备三库事务、迁移或故障恢复能力。本轮不增加驱动、依赖或服务，不连接真实 Provider。
+本文件是下一阶段执行计划，不是本轮实现或验收结果。当前隔离 crate 的 `store.rs` 使用 `SqlitePool`、SQLite DDL、触发器及本机文件 owner；原型自己的 SQLx storage 仍只有 SQLite；主仓库凭据 owner 的 path dependency 会编译其他依赖，不等于已有 PG / MySQL storage 适配。主线 Gateway 支持三库不能证明这个 crate 已具备三库事务、迁移或故障恢复能力。本轮没有新增数据库适配器或启动实库服务，不连接真实 Provider。
 
-容量证据提示共享 mutation gate/结果提交前排队先于提高 H 获益。进入适配前，先对现有 SQLite 边界做一次有针对性的占用 profile，区分领取、维护、receipt SQL 与 trigger 的成本；有证据再决定是否采用有界批量提交，保留原子接纳和稳定回执条件。不因 H 数值可变而恢复旧控制器，也不把本轮短 Mock 完成量当部署容量。
+容量证据提示共享 mutation gate/结果提交前排队先于提高 H 获益。C3 已对现有 SQLite 各路径分开 profile，并以同工具链/完整合同的一行 SQL 对照证明空 retirement marker 下的 target 扫描热点；仅固定 join 顺序，未扩池、批量提交或拆接纳事务。SQLx SQL 时间包含 trigger；未证明 trigger 独占时间。优化后高负载 gate 仍占明显比例，继续适配不应预设批量提交为答案。不因 H 数值可变而恢复旧控制器，也不把本轮短 Mock 完成量当部署容量。
 
 ## 1. 先固定事务合同，再替换 SQL
 
-保留单机、单进程 owner 和现有写入 gate。PG / MySQL 使用明确的 authority 配置标识取得本机排他锁，禁止通过不同配置重复启动同一 authority；数据库连接池不能绕过 owner。连接失效应停止接纳，完成恢复后再继续。这里不扩展跨主机协调或分布式租约。`attempt_id`、路由 generation 仍是旧回执的条件更新凭据。
+保留单机、单进程 owner 和现有写入 gate。PG / MySQL 使用明确的 authority 配置标识取得本机排他锁，禁止通过不同配置重复启动同一 authority；数据库连接池不能绕过 owner。连接失效应停止接纳，完成恢复后再继续。这里不扩展跨主机协调或分布式租约。`attempt_id`、冻结 route_generation/device_key 仍是旧回执的条件更新凭据。C3 新增 pull_owner 与 frozen owner 分离、独立 route_revision/actual-change generation、token retirement control_epoch；coalescing 只转 retained Pull，旧未授权工作永久 fenced，已授权回执仍归原 frozen key。三库共同 oracle 必须含这些条件。
 
 先将现有 store 方法及测试 oracle 固定，抽取一个后端事务边界；不把整套数据库驱动暴露给 runtime。三库必须满足以下相同结果：
 
