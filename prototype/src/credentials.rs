@@ -79,6 +79,90 @@ pub trait CredentialProvider: Send + Sync {
     ) -> BoxFuture<'a, Result<ApnsCredential, CredentialError>>;
 }
 
+/// Adapts the production Gateway credential contracts without owning another
+/// cache, signer, HTTP client, or token-service protocol. The injected owners
+/// retain their refresh lifecycle; this adapter only validates a wire snapshot.
+pub struct ExistingTokenCredentials {
+    fcm: Arc<dyn pushgo_gateway::providers::FcmTokenProvider>,
+    apns: Arc<dyn pushgo_gateway::providers::ApnsTokenProvider>,
+}
+
+impl ExistingTokenCredentials {
+    /// Use the Gateway's actual Remote owners and Token Service client policy.
+    /// Callers select the service explicitly; this never reads configuration.
+    pub fn remote(token_service_url: &str) -> Result<Self, CredentialError> {
+        let client = pushgo_gateway::token_service_http_client()
+            .map_err(|_| CredentialError::Unavailable)?;
+        Ok(Self::new(
+            pushgo_gateway::remote_fcm_token_provider(token_service_url, client.clone()),
+            pushgo_gateway::remote_apns_token_provider(token_service_url, client),
+        ))
+    }
+
+    /// Explicit synthetic entrypoint: credentials can only be acquired from a
+    /// loopback HTTP Token Service. No environment/configuration is consulted.
+    pub fn loopback_remote(token_service_url: &str) -> Result<Self, CredentialError> {
+        let url = reqwest::Url::parse(token_service_url).map_err(|_| CredentialError::Invalid)?;
+        let ip = url.host_str().and_then(|value| {
+            value
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .ok()
+        });
+        if url.scheme() != "http"
+            || !ip.is_some_and(|ip| ip.is_loopback())
+            || url.port().is_none_or(|port| port == 0)
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(CredentialError::Invalid);
+        }
+        Self::remote(token_service_url)
+    }
+
+    pub fn new(
+        fcm: Arc<dyn pushgo_gateway::providers::FcmTokenProvider>,
+        apns: Arc<dyn pushgo_gateway::providers::ApnsTokenProvider>,
+    ) -> Self {
+        Self { fcm, apns }
+    }
+}
+
+impl CredentialProvider for ExistingTokenCredentials {
+    fn fcm<'a>(
+        &'a self,
+        force_refresh: bool,
+    ) -> BoxFuture<'a, Result<FcmCredential, CredentialError>> {
+        Box::pin(async move {
+            let access = if force_refresh {
+                self.fcm.token_info_fresh().await
+            } else {
+                self.fcm.token_info().await
+            }
+            .map_err(|_| CredentialError::Unavailable)?;
+            FcmCredential::new(&access.project_id, &access.token.token)
+        })
+    }
+
+    fn apns<'a>(
+        &'a self,
+        force_refresh: bool,
+    ) -> BoxFuture<'a, Result<ApnsCredential, CredentialError>> {
+        Box::pin(async move {
+            let token = if force_refresh {
+                self.apns.refresh_now().await
+            } else {
+                self.apns.token_info().await.map(|info| info.token)
+            }
+            .map_err(|_| CredentialError::Unavailable)?;
+            ApnsCredential::new(&token)
+        })
+    }
+}
+
 /// Synthetic credentials for the explicitly loopback-only provider transport.
 pub struct FixtureCredentials;
 

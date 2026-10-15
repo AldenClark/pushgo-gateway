@@ -1,10 +1,10 @@
 //! Ordinary FCM/APNs only, using synthetic credentials and loopback HTTP.
-//! No Watch snapshots, credential framework, invalid-token directory cleanup,
-//! production credential acquisition is connected. Oversize ordinary payloads
+//! Existing Gateway token owners can be injected; the fixture connects only to
+//! explicit synthetic loopback endpoints. Oversize ordinary payloads
 //! use a bounded wakeup projection; their Pull copy already lives in the ledger.
 use crate::{
     ProviderTransport,
-    credentials::{CredentialProvider, FixtureCredentials},
+    credentials::{CredentialProvider, ExistingTokenCredentials, FixtureCredentials},
     store::{KernelError, now},
     types::Platform,
 };
@@ -90,7 +90,8 @@ impl DispatchResult {
 }
 pub struct RealProviders {
     clients: [Mutex<Option<reqwest::Client>>; 2],
-    endpoint: Arc<str>,
+    fcm_endpoint: Arc<str>,
+    apns_endpoint: Arc<str>,
     transport_errors: AtomicUsize,
     oversized_responses: AtomicUsize,
     idle_budget: usize,
@@ -115,19 +116,6 @@ impl RealProviders {
         credentials: Arc<dyn CredentialProvider>,
         apns_topic: Arc<str>,
     ) -> Result<Self, KernelError> {
-        if apns_topic.is_empty()
-            || apns_topic.len() > 255
-            || !apns_topic
-                .bytes()
-                .all(|v| v.is_ascii_alphanumeric() || b".-".contains(&v))
-        {
-            return Err(KernelError::Invalid("invalid APNs topic".into()));
-        }
-        if idle_budget == 0 {
-            return Err(KernelError::Invalid(
-                "positive provider connection budget required".into(),
-            ));
-        }
         let url = reqwest::Url::parse(endpoint)
             .map_err(|_| KernelError::Invalid("provider endpoint".into()))?;
         let ip = url
@@ -146,9 +134,69 @@ impl RealProviders {
                 "loopback HTTP endpoint with explicit port required".into(),
             ));
         }
+        Self::with_validated_endpoints(endpoint, endpoint, idle_budget, credentials, apns_topic)
+    }
+
+    /// Configure ordinary provider HTTPS origins with existing production token
+    /// owners. Construction performs no I/O and never reads configuration.
+    pub fn configured(
+        fcm_endpoint: &str,
+        apns_endpoint: &str,
+        idle_budget: usize,
+        fcm_tokens: Arc<dyn pushgo_gateway::providers::FcmTokenProvider>,
+        apns_tokens: Arc<dyn pushgo_gateway::providers::ApnsTokenProvider>,
+        apns_topic: Arc<str>,
+    ) -> Result<Self, KernelError> {
+        for endpoint in [fcm_endpoint, apns_endpoint] {
+            let url = reqwest::Url::parse(endpoint)
+                .map_err(|_| KernelError::Invalid("provider HTTPS origin required".into()))?;
+            if url.scheme() != "https"
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.port() == Some(0)
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(KernelError::Invalid(
+                    "provider HTTPS origin required".into(),
+                ));
+            }
+        }
+        Self::with_validated_endpoints(
+            fcm_endpoint,
+            apns_endpoint,
+            idle_budget,
+            Arc::new(ExistingTokenCredentials::new(fcm_tokens, apns_tokens)),
+            apns_topic,
+        )
+    }
+
+    fn with_validated_endpoints(
+        fcm_endpoint: &str,
+        apns_endpoint: &str,
+        idle_budget: usize,
+        credentials: Arc<dyn CredentialProvider>,
+        apns_topic: Arc<str>,
+    ) -> Result<Self, KernelError> {
+        if apns_topic.is_empty()
+            || apns_topic.len() > 255
+            || !apns_topic
+                .bytes()
+                .all(|v| v.is_ascii_alphanumeric() || b".-".contains(&v))
+        {
+            return Err(KernelError::Invalid("invalid APNs topic".into()));
+        }
+        if idle_budget == 0 {
+            return Err(KernelError::Invalid(
+                "positive provider connection budget required".into(),
+            ));
+        }
         Ok(Self {
             clients: [Mutex::new(None), Mutex::new(None)],
-            endpoint: Arc::from(endpoint.trim_end_matches('/')),
+            fcm_endpoint: Arc::from(fcm_endpoint.trim_end_matches('/')),
+            apns_endpoint: Arc::from(apns_endpoint.trim_end_matches('/')),
             transport_errors: AtomicUsize::new(0),
             oversized_responses: AtomicUsize::new(0),
             idle_budget,
@@ -165,7 +213,10 @@ impl RealProviders {
         // Retain the bounded provider window during continuous work, avoiding
         // TCP churn. Its pump releases this owner on proven quiescence instead
         // of adding an idle-pool timer. Each HTTP future owns its own clone.
+        // A configured origin remains authoritative; a provider response must
+        // not redirect credentials or downgrade the validated HTTPS boundary.
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .pool_max_idle_per_host(self.idle_budget)
             .pool_idle_timeout(None)
             .connect_timeout(Duration::from_secs(5))
@@ -300,12 +351,12 @@ impl RealProviders {
         let request = if fcm {
             client.post(format!(
                 "{}/v1/projects/{}/messages:send",
-                self.endpoint,
+                self.fcm_endpoint,
                 project_id.as_deref().unwrap()
             ))
         } else {
             client
-                .post(format!("{}/3/device/{}", self.endpoint, token))
+                .post(format!("{}/3/device/{}", self.apns_endpoint, token))
                 .header("apns-topic", self.apns_topic.as_ref())
                 .header("apns-push-type", "alert")
                 .header("apns-priority", "10")

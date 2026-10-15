@@ -935,7 +935,7 @@ async fn actual_pull_and_recovery_queries_use_ordered_indexes() {
     assert!(
         details.iter().any(|text| text.contains("SEARCH t")
             && text.contains("delivery_id=?")
-            && text.contains("device_key=?")),
+            && text.contains("pull_owner=?")),
         "{details:?}"
     );
     assert!(

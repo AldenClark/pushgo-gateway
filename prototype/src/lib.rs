@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
-//! Independent single-host delivery prototype; no production Gateway dependency.
+//! Single-host delivery candidate; credential owners are reused from Gateway.
 pub mod credentials;
 mod http;
 mod ingress;
 pub mod metrics;
+pub mod profiling;
 mod runtime;
 mod sender;
 mod server;
@@ -26,3 +27,8 @@ mod store_contract_tests;
 mod tests;
 #[cfg(test)]
 mod wire_tests;
+
+#[cfg(test)]
+mod control_tests;
+#[cfg(test)]
+mod control_wire_tests;

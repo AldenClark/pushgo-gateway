@@ -129,6 +129,10 @@ fn physical(path: &Path) -> Value {
     json!({"db_bytes":bytes(path),"wal_bytes":bytes(&PathBuf::from(format!("{}-wal",path.display()))),"shm_bytes":bytes(&PathBuf::from(format!("{}-shm",path.display())))})
 }
 async fn disk(store: &DeliveryStore, path: &Path) -> Value {
+    let sqlite_version: String = sqlx::query_scalar("SELECT sqlite_version()")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
     let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
         .fetch_one(&store.pool)
         .await
@@ -170,7 +174,7 @@ async fn disk(store: &DeliveryStore, path: &Path) -> Value {
         ),
         Err(error) => json!({"unavailable":error.to_string()}),
     };
-    json!({"page_size":page_size,"page_count":pages,"freelist_count":free,"allocated_db_bytes":page_size*pages,"used_pages_bytes":page_size*(pages-free),"cache_size_pragma":cache,"identity_rows":rows,"target_rows":targets,"logical_payload_bytes":payload,"physical":physical(path),"dbstat":dbstat})
+    json!({"sqlite_version":sqlite_version,"page_size":page_size,"page_count":pages,"freelist_count":free,"allocated_db_bytes":page_size*pages,"used_pages_bytes":page_size*(pages-free),"cache_size_pragma":cache,"identity_rows":rows,"target_rows":targets,"logical_payload_bytes":payload,"physical":physical(path),"dbstat":dbstat})
 }
 fn vmmap(out: &Path, label: &str) -> Value {
     match std::process::Command::new("/usr/bin/vmmap")

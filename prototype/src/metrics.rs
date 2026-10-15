@@ -28,6 +28,11 @@ impl Histogram {
         self.total_us.fetch_add(us, Ordering::Relaxed);
         self.max_us.fetch_max(us, Ordering::Relaxed);
     }
+    pub(crate) fn has_samples(&self) -> bool {
+        self.buckets
+            .iter()
+            .any(|bucket| bucket.load(Ordering::Relaxed) != 0)
+    }
     pub fn snapshot(&self) -> Value {
         let counts: Vec<u64> = self
             .buckets

@@ -1,7 +1,9 @@
 //! Synthetic loopback-only fixture for the independent SQLite authority.
 use clap::Parser;
 use free_delivery_prototype::{
-    Config, DeliveryRuntime, HttpLimits, RealProviders, router_with_auth, serve,
+    Config, DeliveryRuntime, HttpLimits, RealProviders,
+    credentials::{CredentialProvider, ExistingTokenCredentials, FixtureCredentials},
+    router_with_auth, serve,
 };
 use std::{
     collections::BTreeMap,
@@ -25,6 +27,9 @@ struct Cli {
     http_addr: SocketAddr,
     #[arg(long)]
     mock_endpoint: String,
+    /// Explicit loopback synthetic Token Service; uses the existing Remote owners.
+    #[arg(long)]
+    mock_token_service_endpoint: Option<String>,
     #[arg(long)]
     provider_budget: Option<usize>,
     #[arg(long)]
@@ -68,9 +73,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or_else(|| format!("http://{address}")),
         ..Config::default()
     };
-    let transport = Arc::new(RealProviders::loopback_with_budget(
+    let credentials: Arc<dyn CredentialProvider> = match cli.mock_token_service_endpoint.as_deref()
+    {
+        Some(endpoint) => Arc::new(ExistingTokenCredentials::loopback_remote(endpoint)?),
+        None => Arc::new(FixtureCredentials),
+    };
+    let transport = Arc::new(RealProviders::loopback_with_credentials(
         &cli.mock_endpoint,
         config.provider_budget,
+        credentials,
+        Arc::from("io.ethan.pushgo"),
     )?);
     let mut runtime = DeliveryRuntime::start(&cli.db_url, config, transport.clone()).await?;
     let counters = runtime.store.counters.clone();

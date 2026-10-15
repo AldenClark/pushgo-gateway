@@ -2,7 +2,7 @@ use super::store::{AcceptRequest, DeliveryStore, KernelError};
 use axum::{
     Json, Router,
     body::{Body, HttpBody},
-    extract::{ConnectInfo, DefaultBodyLimit, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -50,6 +50,12 @@ pub fn router_with_auth(store: DeliveryStore, stats: Stats, shared_token: Option
         .route("/device/register", post(register))
         .route("/channel/device", post(route))
         .route("/channel/subscribe", post(subscribe))
+        .route("/channel/unsubscribe", post(unsubscribe))
+        .route("/channel/sync", post(sync_channels))
+        .route("/channel/rename", post(rename_channel))
+        .route("/channel/exists", get(channel_exists))
+        .route("/channel/device/delete", post(delete_route))
+        .route("/channel/device/provider-token/retire", post(retire_token))
         .route("/message", post(message))
         .route("/send_status/{op_id}", get(send_status))
         .route("/messages/pull", post(pull_legacy))
@@ -110,7 +116,11 @@ async fn bound_handlers(
         if !valid {
             return KernelError::Unauthorized.into_response();
         }
-    } else if ingress || path.ends_with("/channel/subscribe") {
+    } else if ingress
+        || path.ends_with("/channel/subscribe")
+        || path.ends_with("/channel/sync")
+        || path.ends_with("/channel/rename")
+    {
         let ip = request
             .extensions()
             .get::<ConnectInfo<SocketAddr>>()
@@ -195,6 +205,15 @@ mod budget_tests;
 impl IntoResponse for KernelError {
     fn into_response(self) -> Response {
         let (status, code, message) = match &self {
+            Self::Control {
+                status,
+                code,
+                message,
+            } => (
+                StatusCode::from_u16(*status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                *code,
+                message.as_str(),
+            ),
             Self::Invalid(message) => (
                 StatusCode::BAD_REQUEST,
                 "validation_error",
@@ -230,7 +249,7 @@ impl IntoResponse for KernelError {
         (
             status,
             Json(
-                json!({"success":false,"code":status.as_u16(),"error_code":code,"message":message}),
+                json!({"success":false,"code":status.as_u16(),"error_code":code,"error":message,"message":message,"problem":{"code":code,"category":if status==StatusCode::FORBIDDEN || status==StatusCode::CONFLICT {"conflict"} else if status==StatusCode::NOT_FOUND {"not_found"} else if status==StatusCode::UNAUTHORIZED {"authentication"} else if status.is_server_error() {"internal"} else {"validation"},"status":status.as_u16(),"detail":message,"retryable":status.is_server_error()}}),
             ),
         )
             .into_response()
@@ -262,24 +281,22 @@ struct Route {
     #[serde(alias = "provider")]
     channel_type: String,
     #[serde(alias = "token")]
-    provider_token: String,
+    #[serde(default)]
+    provider_token: Option<String>,
 }
 async fn route(
     State(state): State<HttpState>,
     Json(input): Json<Route>,
 ) -> Result<Json<Value>, KernelError> {
-    state
+    Ok(ok(state
         .store
-        .route(
+        .update_route(
             &input.device_key,
             input.platform.as_deref(),
             &input.channel_type,
-            &input.provider_token,
+            input.provider_token.as_deref(),
         )
-        .await?;
-    Ok(ok(
-        json!({"device_key":input.device_key,"channel_type":input.channel_type}),
-    ))
+        .await?))
 }
 #[derive(Deserialize)]
 struct Subscribe {
@@ -303,6 +320,100 @@ async fn subscribe(
             &input.password,
         )
         .await?))
+}
+#[derive(Deserialize)]
+struct Unsubscribe {
+    device_key: String,
+    channel_id: String,
+}
+async fn unsubscribe(
+    State(state): State<HttpState>,
+    Json(input): Json<Unsubscribe>,
+) -> Result<Json<Value>, KernelError> {
+    Ok(ok(state
+        .store
+        .unsubscribe(&input.device_key, &input.channel_id)
+        .await?))
+}
+#[derive(Deserialize)]
+struct SyncItem {
+    channel_id: String,
+    password: String,
+}
+#[derive(Deserialize)]
+struct SyncRequest {
+    device_key: String,
+    channels: Vec<SyncItem>,
+}
+async fn sync_channels(
+    State(state): State<HttpState>,
+    Json(input): Json<SyncRequest>,
+) -> Result<Json<Value>, KernelError> {
+    Ok(ok(state
+        .store
+        .sync_channels(
+            &input.device_key,
+            input
+                .channels
+                .into_iter()
+                .map(|item| (item.channel_id, item.password))
+                .collect(),
+        )
+        .await?))
+}
+#[derive(Deserialize)]
+struct Rename {
+    channel_id: String,
+    channel_name: String,
+    password: String,
+}
+async fn rename_channel(
+    State(state): State<HttpState>,
+    Json(input): Json<Rename>,
+) -> Result<Json<Value>, KernelError> {
+    Ok(ok(state
+        .store
+        .rename_channel(&input.channel_id, &input.channel_name, &input.password)
+        .await?))
+}
+#[derive(Deserialize)]
+struct ChannelQuery {
+    channel_id: String,
+}
+async fn channel_exists(
+    State(state): State<HttpState>,
+    Query(input): Query<ChannelQuery>,
+) -> Result<Json<Value>, KernelError> {
+    Ok(ok(state.store.channel_info(&input.channel_id).await?))
+}
+#[derive(Deserialize)]
+struct DeleteRoute {
+    device_key: String,
+    channel_type: String,
+}
+async fn delete_route(
+    State(state): State<HttpState>,
+    Json(input): Json<DeleteRoute>,
+) -> Result<Json<Value>, KernelError> {
+    Ok(ok(state
+        .store
+        .delete_route(&input.device_key, &input.channel_type)
+        .await?))
+}
+#[derive(Deserialize)]
+struct RetireToken {
+    platform: String,
+    provider_token: String,
+}
+async fn retire_token(
+    State(state): State<HttpState>,
+    Json(input): Json<RetireToken>,
+) -> Result<Json<Value>, KernelError> {
+    state
+        .store
+        .retire_provider_token(&input.platform, &input.provider_token)
+        .await?;
+    Ok(ok(json!({"retired":true})))
 }
 async fn message(
     State(state): State<HttpState>,

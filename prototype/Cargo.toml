@@ -16,6 +16,7 @@ panic = "abort"
 opt-level = 3
 
 [dependencies]
+pushgo-gateway = { path = ".." }
 tokio = { version = "=1.53.1", features = ["io-util", "macros", "net", "signal", "rt-multi-thread", "sync", "time"] }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "json", "tokio"] }
 serde = { version = "=1.0.229", features = ["derive"] }
