@@ -1,4 +1,4 @@
-use super::store::{AcceptRequest, KernelError};
+use super::store::{AcceptRequest, KernelError, MESSAGE_SUBMISSION_BODY_BYTES};
 use crate::{ordinary_store::OrdinaryStore, private_http::PrivateHttp};
 use axum::{
     Json, Router,
@@ -75,7 +75,10 @@ pub fn router_with_private(
         .route("/channel/exists", get(channel_exists))
         .route("/channel/device/delete", post(delete_route))
         .route("/channel/device/provider-token/retire", post(retire_token))
-        .route("/message", post(message))
+        .route(
+            "/message",
+            post(message).layer(DefaultBodyLimit::max(MESSAGE_SUBMISSION_BODY_BYTES)),
+        )
         .route("/send_status/{op_id}", get(send_status))
         .route("/messages/pull", post(pull_legacy))
         .route("/messages/ack", post(ack_legacy))
@@ -682,6 +685,111 @@ mod tests {
         }
         store.pool.close().await;
         owner.release();
+    }
+
+    async fn sized_json_response(
+        app: &Router,
+        path: &str,
+        input: &Value,
+        bytes: usize,
+    ) -> Response {
+        let mut body = serde_json::to_vec(input).unwrap();
+        assert!(body.len() <= bytes);
+        body.resize(bytes, b' ');
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn message_body_limit_is_49152_without_expanding_control_routes() {
+        assert_eq!(MESSAGE_SUBMISSION_BODY_BYTES, 49152);
+        assert_eq!(crate::Config::default().max_body_bytes, 32768);
+        for (prefix, control_limit) in [("", 32768), ("/gateway", 32768), ("/custom", 1024)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::Config {
+                public_base_url: format!("http://127.0.0.1:65535{prefix}"),
+                max_body_bytes: control_limit,
+                ..Default::default()
+            };
+            config.private.enabled = true;
+            let (store, owner) = DeliveryStore::open(
+                &format!("sqlite://{}/body-limits.sqlite", dir.path().display()),
+                config,
+            )
+            .await
+            .unwrap();
+            let device = store.register("android").await.unwrap();
+            let password = crate::types::generate_hex_id_128();
+            let channel = store
+                .subscribe(&device, None, Some("body limit"), &password)
+                .await
+                .unwrap()["channel_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let app = router(store.clone(), Arc::new(|| json!({})));
+            for bytes in [32769, MESSAGE_SUBMISSION_BODY_BYTES] {
+                let input = json!({"channel_id":channel,"password":password,"op_id":format!("limit-{bytes}"),"title":"limit","body":"retained"});
+                let response =
+                    sized_json_response(&app, &format!("{prefix}/message"), &input, bytes).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "message {prefix} at {bytes}"
+                );
+            }
+            let response = sized_json_response(
+                &app,
+                &format!("{prefix}/message"),
+                &json!({}),
+                MESSAGE_SUBMISSION_BODY_BYTES + 1,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+            for path in [
+                "/device/register",
+                "/channel/device",
+                "/channel/subscribe",
+                "/channel/unsubscribe",
+                "/channel/sync",
+                "/channel/rename",
+                "/channel/device/delete",
+                "/channel/device/provider-token/retire",
+                "/messages/pull",
+                "/messages/ack",
+                "/v2/messages/pull",
+                "/v2/messages/ack",
+                "/__fixture/status",
+            ] {
+                // Missing required fields distinguish accepted body extraction
+                // (422) from an over-limit body (413), without mutating control state.
+                for (bytes, expected) in [
+                    (control_limit, StatusCode::UNPROCESSABLE_ENTITY),
+                    (control_limit + 1, StatusCode::PAYLOAD_TOO_LARGE),
+                    (MESSAGE_SUBMISSION_BODY_BYTES, StatusCode::PAYLOAD_TOO_LARGE),
+                ] {
+                    let response =
+                        sized_json_response(&app, &format!("{prefix}{path}"), &json!({}), bytes)
+                            .await;
+                    assert_eq!(
+                        response.status(),
+                        expected,
+                        "control {prefix}{path} at {bytes}"
+                    );
+                }
+            }
+            store.pool.close().await;
+            owner.release();
+        }
     }
 
     #[test]

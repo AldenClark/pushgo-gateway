@@ -27,11 +27,15 @@ use tokio::sync::{Mutex, Notify};
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
+/// Complete JSON request limit for ordinary message submission only.
+pub const MESSAGE_SUBMISSION_BODY_BYTES: usize = 48 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub max_messages: i64,
     pub max_targets: i64,
     pub max_payload_bytes: i64,
+    /// Body limit for control requests; message submission has its own fixed limit.
     pub max_body_bytes: usize,
     pub max_handlers: usize,
     pub provider_budget: usize,

@@ -30,7 +30,10 @@ pub use ordinary_store::OrdinaryStore;
 pub use private_http::PrivateHttp;
 pub use runtime::{DeliveryRuntime, ProviderTransport, ShutdownReport};
 pub use server::{HttpLimits, serve};
-pub use store::{AcceptRequest, Accepted, Config, Counters, DeliveryStore, KernelError};
+pub use store::{
+    AcceptRequest, Accepted, Config, Counters, DeliveryStore, KernelError,
+    MESSAGE_SUBMISSION_BODY_BYTES,
+};
 pub use transport::RealProviders;
 #[cfg(test)]
 mod credentials_tests;
