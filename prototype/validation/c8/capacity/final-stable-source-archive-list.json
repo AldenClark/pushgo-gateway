@@ -1,0 +1,371 @@
+{
+  "scope": "final stable source archive list and source layout denormalization only; no execution config, URL, state, cert, binary, log or DB files",
+  "unique_sources": 20,
+  "entries": [
+    {
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/reduce_commits.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/reduce_commits.py",
+          "denormalized_path": "capacity/runner-source-c8-small/reduce_commits.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/reduce_commits.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/reduce_commits.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/reduce_commits.py",
+          "denormalized_path": "capacity/runner-source-c8-large/reduce_commits.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/reduce_commits.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/reduce_commits.py"
+        }
+      ],
+      "archive_path": "capacity/source/6ca68dc05db2-reduce_commits.py"
+    },
+    {
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/observer_library.rs",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/observer_library.rs",
+          "denormalized_path": "capacity/runner-source-c8-small/observer_library.rs"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/observer_library.rs",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/observer_library.rs"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/observer_library.rs",
+          "denormalized_path": "capacity/runner-source-c8-large/observer_library.rs"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/observer_library.rs",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/observer_library.rs"
+        }
+      ],
+      "archive_path": "capacity/source/66a1d7acb628-observer_library.rs"
+    },
+    {
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/observer_fixture.rs",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/observer_fixture.rs",
+          "denormalized_path": "capacity/runner-source-c8-small/observer_fixture.rs"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/observer_fixture.rs",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/observer_fixture.rs"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/observer_fixture.rs",
+          "denormalized_path": "capacity/runner-source-c8-large/observer_fixture.rs"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/observer_fixture.rs",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/observer_fixture.rs"
+        }
+      ],
+      "archive_path": "capacity/source/be5053d1895e-observer_fixture.rs"
+    },
+    {
+      "sha256": "5d212c259151bc18f25503e925288866c17d1ad8fbe7853afd1e25d444fc48c1",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/prepared-query-hash-map.json",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/prepared-query-hash-map.json",
+          "denormalized_path": "capacity/runner-source-c8-small/prepared-query-hash-map.json"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/prepared-query-hash-map.json",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/prepared-query-hash-map.json"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/prepared-query-hash-map.json",
+          "denormalized_path": "capacity/runner-source-c8-large/prepared-query-hash-map.json"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/prepared-query-hash-map.json",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/prepared-query-hash-map.json"
+        }
+      ],
+      "archive_path": "capacity/source/5d212c259151-prepared-query-hash-map.json"
+    },
+    {
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/source_provenance.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/source_provenance.py",
+          "denormalized_path": "capacity/runner-source-c8-small/source_provenance.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/source_provenance.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/source_provenance.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/source_provenance.py",
+          "denormalized_path": "capacity/runner-source-c8-large/source_provenance.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/source_provenance.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/source_provenance.py"
+        }
+      ],
+      "archive_path": "capacity/source/5501ca8319b6-source_provenance.py"
+    },
+    {
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/summarize_resources_final.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/summarize_resources_final.py",
+          "denormalized_path": "capacity/runner-source-c8-small/summarize_resources_final.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/summarize_resources_final.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/summarize_resources_final.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/summarize_resources_final.py",
+          "denormalized_path": "capacity/runner-source-c8-large/summarize_resources_final.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/summarize_resources_final.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/summarize_resources_final.py"
+        }
+      ],
+      "archive_path": "capacity/source/c237562dfea5-summarize_resources_final.py"
+    },
+    {
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/db_os_observer.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/db_os_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-small/db_os_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/db_os_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/db_os_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/db_os_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-large/db_os_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/db_os_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/db_os_observer.py"
+        }
+      ],
+      "archive_path": "capacity/source/82ba85f3b1e8-db_os_observer.py"
+    },
+    {
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/prepared_completion_observer.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/prepared_completion_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-small/prepared_completion_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/prepared_completion_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/prepared_completion_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/prepared_completion_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-large/prepared_completion_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/prepared_completion_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/prepared_completion_observer.py"
+        }
+      ],
+      "archive_path": "capacity/source/d53600172c08-prepared_completion_observer.py"
+    },
+    {
+      "sha256": "f3487d3290047317268d587a686a7c85ced25b8f123a0c1e577977d990526dad",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/run_c8_capacity.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/run_c8_capacity.py",
+          "denormalized_path": "capacity/runner-source-c8-small/run_c8_capacity.py"
+        }
+      ],
+      "archive_path": "capacity/source/f3487d329004-run_c8_capacity.py"
+    },
+    {
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/c3_mock.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/c3_mock.py",
+          "denormalized_path": "capacity/runner-source-c8-small/c3_mock.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/c3_mock.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/c3_mock.py"
+        }
+      ],
+      "archive_path": "capacity/source/25d792438432-c3_mock.py"
+    },
+    {
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/summarize_profile_window.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/summarize_profile_window.py",
+          "denormalized_path": "capacity/runner-source-c8-small/summarize_profile_window.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/summarize_profile_window.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/summarize_profile_window.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/summarize_profile_window.py",
+          "denormalized_path": "capacity/runner-source-c8-large/summarize_profile_window.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/summarize_profile_window.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/summarize_profile_window.py"
+        }
+      ],
+      "archive_path": "capacity/source/41d923c938ff-summarize_profile_window.py"
+    },
+    {
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/host_observer.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/host_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-small/host_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/host_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/host_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/host_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-large/host_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/host_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/host_observer.py"
+        }
+      ],
+      "archive_path": "capacity/source/f4f380cb4fc9-host_observer.py"
+    },
+    {
+      "sha256": "d4bb8f0eb0527b4fec24e09d3f9bb7cfe85f173449b3fb31d2a4da248753ae72",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/db_statement_observer.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-small/db_statement_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-small/db_statement_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/db_statement_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-large/db_statement_observer.py"
+        }
+      ],
+      "archive_path": "capacity/source/d4bb8f0eb052-db_statement_observer.py"
+    },
+    {
+      "sha256": "8e9abcbc5249a6476992c06cf5f3ae967999ca1fa6f2f564ea051c14677a4818",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/run_c8_pg_capacity.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/run_c8_pg_capacity.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/run_c8_pg_capacity.py"
+        }
+      ],
+      "archive_path": "capacity/source/8e9abcbc5249-run_c8_pg_capacity.py"
+    },
+    {
+      "sha256": "8bf6e37e1c458f69d5f81c98858be949ce54c198bee7553be0bcea3eaa814efe",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/db_statement_observer.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-small-v2/db_statement_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-small-v2/db_statement_observer.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/db_statement_observer.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/db_statement_observer.py"
+        }
+      ],
+      "archive_path": "capacity/source/8bf6e37e1c45-db_statement_observer.py"
+    },
+    {
+      "sha256": "49962e38ac212362393f4aca4f8a0667e904be362f744173adea2a6e97978ec6",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/run_c8_large_cohort.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/run_c8_large_cohort.py",
+          "denormalized_path": "capacity/runner-source-c8-large/run_c8_large_cohort.py"
+        }
+      ],
+      "archive_path": "capacity/source/49962e38ac21-run_c8_large_cohort.py"
+    },
+    {
+      "sha256": "dc3e9b0cf76f0f12c467dfe0169b60f6af0ce553ac67c30cd9dcbd783767e93e",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/c3_mock.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-large/c3_mock.py",
+          "denormalized_path": "capacity/runner-source-c8-large/c3_mock.py"
+        },
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/c3_mock.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/c3_mock.py"
+        }
+      ],
+      "archive_path": "capacity/source/dc3e9b0cf76f-c3_mock.py"
+    },
+    {
+      "sha256": "0069112b867ef1dedc43e43a2c6a4ebb9b19db3f043cd15f254412ae50aaeeca",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/run_c8_pg_large_cohort.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/runner-source-c8-pg-large-v2/run_c8_pg_large_cohort.py",
+          "denormalized_path": "capacity/runner-source-c8-pg-large-v2/run_c8_pg_large_cohort.py"
+        }
+      ],
+      "archive_path": "capacity/source/0069112b867e-run_c8_pg_large_cohort.py"
+    },
+    {
+      "sha256": "1858f4628950898e4d6d868b728cac284b8eb0363c0bd1eb1517a10c8c97a579",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/prepared-be3bc95/build_transient_observer.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/prepared-be3bc95/build_transient_observer.py",
+          "denormalized_path": "capacity/prepared-be3bc95/build_transient_observer.py"
+        }
+      ],
+      "archive_path": "capacity/source/1858f4628950-build_transient_observer.py"
+    },
+    {
+      "sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "canonical_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/prepared-be3bc95/harness/prepare_observer.py",
+      "aliases": [
+        {
+          "source_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/prepared-be3bc95/harness/prepare_observer.py",
+          "denormalized_path": "capacity/prepared-be3bc95/prepare_observer.py"
+        }
+      ],
+      "archive_path": "capacity/source/b8317418eeac-prepare_observer.py"
+    }
+  ],
+  "product_commit": "be3bc95c58500ee9913dbc2d9b442d5eb6a74227",
+  "product_source_proof": "capacity/final-be3bc95-observer/replay-source-identity.json",
+  "observer_patch_path": "capacity/final-be3bc95-observer/observer.patch",
+  "observer_patch_sha256": "e647fd10866062265b7209d3667074bb04c1eab61df3ae591f8bd5f54dbc78ef",
+  "original_sources_preserved": [
+    "runner-source-c8-pg-small",
+    "runner-source-c8-pg-large"
+  ],
+  "denormalization": "copy each unique archive file to its alias denormalized paths to reconstruct HERE-relative helper imports; source-only, not a runtime authorization"
+}

@@ -1,0 +1,42 @@
+--- C8-mysql/run_c8_capacity.py
++++ C8-pg/run_c8_pg_capacity.py
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""One explicitly authorized C8 MySQL capacity lane; never builds or creates DBs.
++"""One explicitly authorized C8 PostgreSQL capacity lane; never builds or creates DBs.
+ 
+ Fixed: H32/Q32, real candidate Provider+Remote Token owner, Mock20ms,
+ 16 targets, 8 HTTP callers, 256 msg/s x10s, 180s maximum after planned input end,
+@@ -71,7 +71,7 @@
+     assert a.db_helper.resolve()==pathlib.Path('/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/env/isolated_db.py'),'exact C8 helper path required'
+     helper=load_helper(a.db_helper.resolve())
+     assert helper.R.resolve()==a.db_helper.resolve().parent,'C8 registry root mismatch'
+-    assert a.engine=='mysql' and helper.KEY=='io.pushgo.c7.isolated.synthetic.owner','exact C8 leased MySQL helper required'
++    assert a.engine=='pg' and helper.KEY=='io.pushgo.c7.isolated.synthetic.owner','exact C8 leased PostgreSQL helper required'
+     assert a.db_url_file.resolve().parent==a.db_helper.resolve().parent,'URL must belong to this C8 env directory'
+     helper.check(); owned,container_inspect=helper.owned(a.engine)
+     assert a.environment_identity.resolve()==helper.R/'environment-identity.json','exact C8 environment identity path required'
+@@ -80,10 +80,10 @@
+     assert owned['engine_authority_source']==environment['engine_authority_source'] and owned['engine_authority_sha256']==environment['engine_authority_sha256'],'captured parent engine authority mismatch'
+     assert len(owned['case_registry_owner'])==32,'C8 independent case registry owner required'
+     assert owned['id']==environment['id'] and container_inspect['Image']==environment['image_id'],'environment identity mismatch'
+-    storage=environment['storage'];assert storage['medium']=='disk-backed-named-volume'
+-    mounts=[m for m in container_inspect['Mounts'] if m['Destination']=='/var/lib/mysql']
+-    assert len(mounts)==1 and mounts[0]['Type']=='volume' and mounts[0]['Name']==storage['volume_name'] and mounts[0]['Source']==storage['mountpoint'],'exact disk3 volume mount mismatch'
+-    assert owned['volume_name']==storage['volume_name'] and owned['owner']==storage['owner_uuid']
++    storage=environment['storage'];assert storage['medium']=='bounded-tmpfs'
++    assert storage['destination']=='/var/lib/postgresql/data' and storage['mountpoint']==storage['destination'],'captured PostgreSQL datadir required'
++    assert container_inspect['HostConfig']['Tmpfs'].get(storage['destination'])==storage['tmpfs_option'],'exact PostgreSQL tmpfs configuration mismatch'
++    assert storage['volume_name'] is None and owned['owner']==storage['owner_uuid'],'captured PostgreSQL owner and tmpfs identity required'
+     assert a.db_url_file.is_file() and not a.db_url_file.is_symlink() and stat.S_IMODE(a.db_url_file.stat().st_mode)==0o600,'private regular URL file mode0600 required'
+     url=a.db_url_file.read_text().strip();parsed=urlsplit(url);database=parsed.path.lstrip('/')
+     assert database in owned['cases'],'fresh captured C8 case required'
+@@ -139,7 +139,7 @@
+           'quantiles':'exact nearest-rank observed completions; all offered targets retained in denominator',
+           'toolchain_required':'Rust 1.97.1 release; no build in runner','retries':0,'host_load_observer':'sanitized pid/ppid/comm/CPU/TIME at start and5s; no args/env, no quiet assumption',
+           'environment_comparison':'C8 independently owned cases on exact leased C7 engines, P_S ON; no reuse of C7 business data, no absolute cross-environment timing ranking',
+-          'storage_scope':'MySQL8.4.11 exact owned disk-backed named volume in OrbStack VM; VM filesystem/fsync boundary, no host power-loss durability claim','storage_identity':storage}
++          'storage_scope':'PostgreSQL16.14 exact leased bounded-tmpfs datadir in OrbStack VM; main PID RSS only, not cluster physical RAM; no host power-loss durability claim','storage_identity':storage}
+     receipt=json.loads(a.build_receipt.read_text())
+     assert receipt.get('binary_sha256')==plan['binary_sha256'],'build/binary identity mismatch'
+     assert receipt.get('source_commit')==a.source_commit,'build/source commit mismatch'
