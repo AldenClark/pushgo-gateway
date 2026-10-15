@@ -661,11 +661,11 @@ impl DeliveryStore {
         // SQL owns the set; no allocation proportional to historical owners or
         // deliveries. Frozen attempt rows survive under their original key.
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL").bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
-        // Retained capability transfer cannot revive a previously superseded
-        // network attempt. SQLite evaluates both RHS expressions against the
-        // old row: validate its source-owner generation before assigning the
-        // winner. A negative generation stays ineligible across later merges.
-        self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)").bind(winner).bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
+        // Coalescing transfers retained Pull ownership only. Already-materialized
+        // provider jobs retain their original wire ACK capability and must never
+        // start/retry under the winner. An already-owned network future may
+        // still return its receipt to the frozen original target key.
+        self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE targets SET pull_owner=?,owner_generation=-1 WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)").bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)").bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL").bind(now()).bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
         Ok(())

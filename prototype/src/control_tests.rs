@@ -286,7 +286,7 @@ async fn coalesced_old_capability_cannot_read_winning_owner_acks_late_receipt() 
         store.pull(&winner, None).await.unwrap()["items"][0]["delivery_id"],
         accepted.delivery_id
     );
-    assert!(store.authorize_ticket(&ticket).await.unwrap());
+    assert!(!store.authorize_ticket(&ticket).await.unwrap());
     assert_eq!(
         store
             .ack(&winner, vec![accepted.delivery_id.clone()])
@@ -606,5 +606,239 @@ async fn identical_route_upsert_advances_display_revision_without_revoking_accep
         .await
         .unwrap();
     assert_eq!(epoch, 0);
+    close(store, owner).await;
+}
+
+#[derive(Default)]
+struct CapabilityTransport {
+    calls: std::sync::atomic::AtomicUsize,
+    devices: std::sync::Mutex<Vec<String>>,
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    hold: bool,
+}
+impl crate::ProviderTransport for CapabilityTransport {
+    fn send<'a>(
+        &'a self,
+        _provider: &'a str,
+        _platform: crate::types::Platform,
+        _token: &'a str,
+        _payload: serde_json::Value,
+        _delivery: &'a str,
+        device: &'a str,
+        _accepted: i64,
+        _expiry: i64,
+    ) -> crate::transport::BoxFuture<'a, crate::transport::DispatchResult> {
+        Box::pin(async move {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.devices.lock().unwrap().push(device.into());
+            self.started.notify_one();
+            if self.hold {
+                self.release.notified().await;
+            }
+            crate::transport::DispatchResult::success(200)
+        })
+    }
+}
+#[tokio::test]
+async fn coalescing_supersedes_pending_retry_and_claimed_jobs_before_transport() {
+    let (_dir, store, owner, old, channel, password) = fixture().await;
+    let claimed = store
+        .accept(input(&channel, &password, "capability-already-claimed"))
+        .await
+        .unwrap();
+    let claimed_ticket = store
+        .claim("FCM", 1, false)
+        .await
+        .unwrap()
+        .tickets
+        .pop()
+        .unwrap();
+    let retry = store
+        .accept(input(&channel, &password, "capability-retry"))
+        .await
+        .unwrap();
+    let retry_ticket = store
+        .claim("FCM", 1, false)
+        .await
+        .unwrap()
+        .tickets
+        .pop()
+        .unwrap();
+    store
+        .settle(
+            &retry_ticket,
+            "retry_wait",
+            503,
+            "temporary_unavailable",
+            now(),
+            None,
+        )
+        .await
+        .unwrap();
+    let pending = store
+        .accept(input(&channel, &password, "capability-pending"))
+        .await
+        .unwrap();
+    let winner = store.register("android").await.unwrap();
+    store
+        .route(&winner, None, "FCM", "synthetic-control-route-a")
+        .await
+        .unwrap();
+    let transport = std::sync::Arc::new(CapabilityTransport::default());
+    crate::runtime::attempt(store.clone(), transport.clone(), claimed_ticket)
+        .await
+        .unwrap();
+    let tickets = store.claim("FCM", 2, false).await.unwrap().tickets;
+    assert_eq!(tickets.len(), 2);
+    for ticket in tickets {
+        crate::runtime::attempt(store.clone(), transport.clone(), ticket)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        transport.calls.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    let states: Vec<String> = sqlx::query_scalar("SELECT state FROM targets ORDER BY delivery_id")
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(states, vec!["superseded_route"; 3]);
+    assert!(
+        store.pull(&old, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.pull(&winner, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        store
+            .ack(
+                &winner,
+                vec![claimed.delivery_id, retry.delivery_id, pending.delivery_id]
+            )
+            .await
+            .unwrap(),
+        3
+    );
+    let body: i64 = sqlx::query_scalar("SELECT SUM(payload_bytes) FROM messages")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(body, 0);
+    let targets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM targets")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(targets, 0);
+    // Fresh winner acceptance freezes winner's capability and sends normally.
+    store
+        .accept(input(&channel, &password, "capability-fresh-winner"))
+        .await
+        .unwrap();
+    let fresh = store
+        .claim("FCM", 1, false)
+        .await
+        .unwrap()
+        .tickets
+        .pop()
+        .unwrap();
+    crate::runtime::attempt(store.clone(), transport.clone(), fresh)
+        .await
+        .unwrap();
+    assert_eq!(
+        transport.calls.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(*transport.devices.lock().unwrap(), vec![winner]);
+    close(store, owner).await;
+}
+#[tokio::test]
+async fn coalescing_preserves_already_authorized_network_receipt_after_winner_ack() {
+    let (_dir, store, owner, old, channel, password) = fixture().await;
+    let accepted = store
+        .accept(input(&channel, &password, "capability-owned-network"))
+        .await
+        .unwrap();
+    let ticket = store
+        .claim("FCM", 1, false)
+        .await
+        .unwrap()
+        .tickets
+        .pop()
+        .unwrap();
+    let transport = std::sync::Arc::new(CapabilityTransport {
+        hold: true,
+        ..Default::default()
+    });
+    let task = tokio::spawn(crate::runtime::attempt(
+        store.clone(),
+        transport.clone(),
+        ticket,
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        transport.started.notified(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*transport.devices.lock().unwrap(), vec![old.clone()]);
+    let winner = store.register("android").await.unwrap();
+    store
+        .route(&winner, None, "FCM", "synthetic-control-route-a")
+        .await
+        .unwrap();
+    assert!(
+        store.pull(&old, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.pull(&winner, None).await.unwrap()["items"][0]["delivery_id"],
+        accepted.delivery_id
+    );
+    assert_eq!(
+        store
+            .ack(&winner, vec![accepted.delivery_id.clone()])
+            .await
+            .unwrap(),
+        1
+    );
+    transport.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        transport.calls.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        store.status(&accepted.op_id).await.unwrap()["status"],
+        "sent"
+    );
+    let counters: (i64, i64) = sqlx::query_as(
+        "SELECT provider_accepted_count,provider_failed_count FROM messages WHERE delivery_id=?",
+    )
+    .bind(&accepted.delivery_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(counters, (1, 0));
+    let targets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM targets")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(targets, 0);
     close(store, owner).await;
 }
