@@ -504,6 +504,24 @@ async fn external_writer(url: &str) -> sqlx::SqliteConnection {
         .unwrap()
 }
 
+async fn until_writer_phase(
+    store: &DeliveryStore,
+    phase: &str,
+    mut condition: impl FnMut() -> bool,
+) {
+    let result = tokio::time::timeout(Duration::from_secs(3), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "writer phase {phase}: {}",
+        store.counters.snapshot()
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sqlite_writer_contention_within_budget_keeps_claims_and_receipts_alive() {
     use sqlx::Connection;
@@ -513,22 +531,46 @@ async fn sqlite_writer_contention_within_budget_keeps_claims_and_receipts_alive(
         .accept(request(&channel, &auth, "short-writer-lock"))
         .await
         .unwrap();
-    until(|| transport.started.load(Ordering::Relaxed) == 1).await;
+    until_writer_phase(&store, "network started", || {
+        transport.started.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    // Drain earlier critical sections before taking the external writer. A
+    // claim can otherwise already be blocked with its counter incremented
+    // before our snapshot; notify does not replace that pending future.
+    let claim_gate = store.gate.lock().await;
     let mut blocker = external_writer(&url).await;
     let lock = blocker.begin_with("BEGIN IMMEDIATE").await.unwrap();
     let claims = store.counters.claim_queries.load(Ordering::Relaxed);
     store.notify();
-    until(|| store.counters.claim_queries.load(Ordering::Relaxed) > claims).await;
+    drop(claim_gate);
+    until_writer_phase(&store, "claim entered behind external writer", || {
+        store.counters.claim_queries.load(Ordering::Relaxed) > claims
+    })
+    .await;
     transport.release.notify_one();
-    until(|| transport.finished.load(Ordering::Relaxed) == 1).await;
+    until_writer_phase(&store, "network finished behind blocked claim", || {
+        transport.finished.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let blocked_claim = store.counters.claim_queries.load(Ordering::Relaxed);
+    store.notify();
     tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        store.counters.claim_queries.load(Ordering::Relaxed),
+        blocked_claim,
+        "a wake cannot replace an already pending claim; snapshot must precede gate release"
+    );
     assert_eq!(store.counters.num_alive.load(Ordering::Relaxed), 2);
     assert_eq!(store.counters.db_errors.load(Ordering::Relaxed), 0);
     assert_eq!(store.counters.owned_attempts.load(Ordering::Relaxed), 1);
     assert_eq!(store.counters.receipt_commits.load(Ordering::Relaxed), 0);
     lock.rollback().await.unwrap();
     blocker.close().await.unwrap();
-    until(|| store.counters.receipt_commits.load(Ordering::Relaxed) == 1).await;
+    until_writer_phase(&store, "receipt committed after writer release", || {
+        store.counters.receipt_commits.load(Ordering::Relaxed) == 1
+    })
+    .await;
     store
         .ack(&device, vec![accepted.delivery_id])
         .await
@@ -548,7 +590,10 @@ async fn sqlite_writer_timeout_fails_closed_and_recovers_accepted_identity() {
         .accept(request(&channel, &auth, "long-writer-lock"))
         .await
         .unwrap();
-    until(|| transport.started.load(Ordering::Relaxed) == 1).await;
+    until_writer_phase(&store, "network started", || {
+        transport.started.load(Ordering::Relaxed) == 1
+    })
+    .await;
     let before = store.status("long-writer-lock").await.unwrap();
     let absolute_expiry: i64 = sqlx::query_scalar("SELECT expires_at FROM messages WHERE op_id=?")
         .bind("long-writer-lock")
@@ -602,12 +647,23 @@ async fn failed_owner_fences_cloned_and_already_waiting_admission_without_wait_f
         .accept(request(&channel, &auth, "health-prior"))
         .await
         .unwrap();
-    until(|| transport.started.load(Ordering::Relaxed) == 1).await;
+    until_writer_phase(&store, "network started", || {
+        transport.started.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    // Drain earlier critical sections before taking the external writer. A
+    // claim can otherwise already be blocked with its counter incremented
+    // before our snapshot; notify does not replace that pending future.
+    let claim_gate = store.gate.lock().await;
     let mut blocker = external_writer(&url).await;
     let lock = blocker.begin_with("BEGIN IMMEDIATE").await.unwrap();
     let claims = store.counters.claim_queries.load(Ordering::Relaxed);
     store.notify();
-    until(|| store.counters.claim_queries.load(Ordering::Relaxed) > claims).await;
+    drop(claim_gate);
+    until_writer_phase(&store, "claim entered behind external writer", || {
+        store.counters.claim_queries.load(Ordering::Relaxed) > claims
+    })
+    .await;
     let waiting_store = store.clone();
     let input = request(&channel, &auth, "health-waiting");
     let waiting = tokio::spawn(async move { waiting_store.accept(input).await });
