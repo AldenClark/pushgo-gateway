@@ -259,3 +259,120 @@ async fn sender_router_preserves_full_fields_and_generates_distinct_omitted_op_i
     store.pool.close().await;
     owner.release();
 }
+
+#[tokio::test]
+async fn repeated_register_reuses_current_ordinary_identity_and_route() {
+    let (_dir, store, owner, server, base) = fixture().await;
+    let client = reqwest::Client::new();
+    let first = post(
+        &client,
+        &base,
+        "/device/register",
+        json!({"platform":"android"}),
+    )
+    .await;
+    let key = first["data"]["device_key"].as_str().unwrap();
+    assert_eq!(first["data"]["issued_new_key"], true);
+    assert_eq!(first["data"]["issue_reason"], "device_key_missing");
+    assert_eq!(
+        first["data"]["route"],
+        json!({"channel_type":"private","route_revision":1,"provider_token_present":false})
+    );
+    post(&client,&base,"/channel/device",json!({"device_key":key,"channel_type":"FCM","provider_token":"synthetic-registration-provider-token"})).await;
+    let auth = crate::types::generate_hex_id_128();
+    let subscribed = post(
+        &client,
+        &base,
+        "/channel/subscribe",
+        json!({"device_key":key,"channel_name":"synthetic reused registration","password":auth}),
+    )
+    .await;
+    let channel = subscribed["data"]["channel_id"].as_str().unwrap();
+    let send = json!({"channel_id":channel,"password":auth,"title":"unchanged registration message","op_id":"register-stable-op","ttl":crate::store::now()+60_000});
+    let accepted = post(&client, &base, "/message", send.clone()).await;
+    let before:(String,String,Vec<u8>,i64,i64)=sqlx::query_as("SELECT delivery_id,message_id,payload_blob,accepted_at,dedupe_until FROM messages WHERE op_id='register-stable-op'").fetch_one(&store.pool).await.unwrap();
+    let registered = post(
+        &client,
+        &base,
+        "/device/register",
+        json!({"platform":"android","device_key":format!(" {key} ")}),
+    )
+    .await;
+    assert_eq!(registered["data"]["device_key"], key);
+    assert_eq!(registered["data"]["issued_new_key"], false);
+    assert!(registered["data"].get("issue_reason").is_none());
+    assert_eq!(registered["data"]["route"]["channel_type"], "fcm");
+    assert_eq!(registered["data"]["route"]["provider_token_present"], true);
+    assert_eq!(
+        registered["data"]["route_revision"],
+        registered["data"]["route"]["route_revision"]
+    );
+    let after:(String,String,Vec<u8>,i64,i64)=sqlx::query_as("SELECT delivery_id,message_id,payload_blob,accepted_at,dedupe_until FROM messages WHERE op_id='register-stable-op'").fetch_one(&store.pool).await.unwrap();
+    assert_eq!(after, before);
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM channel_subscriptions WHERE channel_id=? AND device_key=?",
+    )
+    .bind(channel)
+    .bind(key)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    let target: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM targets WHERE delivery_id=? AND device_key=?")
+            .bind(&before.0)
+            .bind(key)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(target, 1);
+    let ack = post(
+        &client,
+        &base,
+        "/v2/messages/ack",
+        json!({"device_key":registered["data"]["device_key"],"delivery_ids":[before.0]}),
+    )
+    .await;
+    assert_eq!(ack["data"]["removed_count"], 1);
+    let duplicate = post(&client, &base, "/message", send).await;
+    assert_eq!(
+        duplicate["data"]["message_id"],
+        accepted["data"]["message_id"]
+    );
+    let pull = post(
+        &client,
+        &base,
+        "/v2/messages/pull",
+        json!({"device_key":key}),
+    )
+    .await;
+    assert!(pull["data"]["items"].as_array().unwrap().is_empty());
+    server.abort();
+    store.pool.close().await;
+    owner.release();
+}
+#[tokio::test]
+async fn blank_and_unknown_keys_get_fresh_identity_with_mainline_reason() {
+    let (_dir, store, owner, server, base) = fixture().await;
+    let client = reqwest::Client::new();
+    for (key, reason) in [
+        ("   ", "device_key_missing"),
+        ("synthetic-unknown-device", "device_key_not_found"),
+    ] {
+        let response = post(
+            &client,
+            &base,
+            "/device/register",
+            json!({"platform":"android","device_key":key}),
+        )
+        .await;
+        assert_eq!(response["data"]["issued_new_key"], true);
+        assert_eq!(response["data"]["issue_reason"], reason);
+        assert_ne!(response["data"]["device_key"], key);
+        assert_eq!(response["data"]["route"]["channel_type"], "private");
+        assert_eq!(response["data"]["route"]["provider_token_present"], false);
+    }
+    server.abort();
+    store.pool.close().await;
+    owner.release();
+}

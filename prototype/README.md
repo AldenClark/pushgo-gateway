@@ -4,7 +4,9 @@
 
 ## 已实现的普通消息边界
 
-`POST /message` 接受可选 op_id、body、severity、绝对 TTL、occurred_at、URL、images、ciphertext、tags、metadata，按主线规则规范化；拒绝由 Sender 指定 message_id。省略 op_id 每次生成新操作，显式 op_id 的相同输入保持同一消息、投递身份、正文和首次时间，冲突不修改已接纳结果。省略 TTL 不向客户端补写 TTL；账本默认采用现行低资源配置的 7 天队列保留，显式绝对 TTL 最多到首次接纳后 30 天。
+`POST /message` 接受可选 op_id、body、severity、绝对 TTL、occurred_at、URL、images、ciphertext、tags、metadata，按主线规则规范化；拒绝由 Sender 指定 message_id。省略 op_id 每次生成新操作，显式 op_id 的相同输入保持同一消息、投递身份、正文和首次时间，冲突不修改已接纳结果。省略 TTL 不向客户端补写 TTL；账本默认采用现行 Small 配置的 7 天正文/投递期限，显式绝对 TTL 最多到首次接纳后 30 天。
+
+正文 TTL 与身份历史是两个维度。本轮用户明确选择完整 30 天身份/指纹/状态历史，C2 的 30 天来自这一选择；不是所有主线 profile 都有 30 天去重窗口。主线 Small 的队列默认 TTL 和维护去重保留期分别均为 7 天，Public 分别均为 30 天（`src/runtime_config.rs:191,213,283,305`）；`MaintenanceCleanupConfig::default()` 的 30 天不覆盖正数的 profile 配置。
 
 正文保存一次，全部有效收件人用一笔 INSERT SELECT 事务冻结。Direct、V2 Pull、直接单条 ACK、V2 批量 ACK 共用稳定身份和可信配置 base_url，支持路径前缀；V2 外层 delivery_id 为准。`GET /send_status/{op_id}` 与 fixture 目标诊断分离。普通客户端所用 ACK 路径不意味着对退役客户端新增兼容承诺。
 

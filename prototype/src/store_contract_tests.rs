@@ -45,6 +45,23 @@ async fn close(store: DeliveryStore, owner: OwnerLock) {
     store.pool.close().await;
     owner.release();
 }
+
+#[tokio::test]
+async fn low_resource_payload_ttl_cannot_shorten_selected_identity_retention() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("must-not-create.sqlite");
+    let config = Config {
+        dedupe_retention_ms: 7 * 86_400_000,
+        ..Default::default()
+    };
+    assert!(matches!(
+        DeliveryStore::open(&format!("sqlite://{}", path.display()), config).await,
+        Err(KernelError::Invalid(_))
+    ));
+    assert!(!path.exists());
+    assert_eq!(Config::default().default_ttl_secs, 7 * 86_400);
+    assert_eq!(Config::default().dedupe_retention_ms, 30 * 86_400_000);
+}
 #[tokio::test]
 async fn ordinary_full_fields_absolute_ttl_identity_and_auth_preserve_first_acceptance() {
     let (_dir, store, owner, device, channel, auth) = fixture(Config::default()).await;
@@ -692,5 +709,365 @@ async fn token_aba_generation_rejects_old_attempt_and_blocks_stale_invalid_clean
         .await
         .unwrap();
     assert_eq!(failure, "superseded_route");
+    close(store, owner).await;
+}
+#[tokio::test]
+async fn replacement_retires_in_batches_preserves_other_recipient_and_owned_result() {
+    let (dir, store, owner, old, channel, auth) = fixture(Config::default()).await;
+    let other = store.register("android").await.unwrap();
+    store
+        .route(&other, None, "FCM", "synthetic-other-recipient-provider")
+        .await
+        .unwrap();
+    store
+        .subscribe(&other, Some(&channel), None, &auth)
+        .await
+        .unwrap();
+    let accepted = store
+        .accept(input(&channel, &auth, "replacement-accepted"))
+        .await
+        .unwrap();
+    let mut tickets = store.claim("FCM", 2, false).await.unwrap().tickets;
+    let old_index = tickets
+        .iter()
+        .position(|ticket| ticket.device_key == old)
+        .unwrap();
+    let old_ticket = tickets.remove(old_index);
+    store
+        .settle(
+            &tickets.pop().unwrap(),
+            "provider_accepted",
+            200,
+            "",
+            now(),
+            None,
+        )
+        .await
+        .unwrap();
+    let before: (Vec<u8>, i64, i64) = sqlx::query_as(
+        "SELECT payload_blob,accepted_at,dedupe_until FROM messages WHERE delivery_id=?",
+    )
+    .bind(&accepted.delivery_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    // Per-device channel memberships have no32 limit; the bound is per channel.
+    sqlx::query("WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<600) INSERT INTO channels(channel_id,channel_name,password_hash) SELECT 'retirement-channel-'||n,'synthetic retirement',password_hash FROM seq CROSS JOIN channels WHERE channel_id=?").bind(&channel).execute(&store.pool).await.unwrap();
+    sqlx::query("INSERT INTO channel_subscriptions(channel_id,device_key) SELECT channel_id,? FROM channels WHERE channel_id LIKE 'retirement-channel-%'").bind(&old).execute(&store.pool).await.unwrap();
+    let replacement = store.register_device("ios", Some(&old)).await.unwrap();
+    let new_key = replacement["device_key"].as_str().unwrap().to_owned();
+    assert_ne!(new_key, old);
+    assert_eq!(replacement["issue_reason"], "platform_mismatch");
+    assert_eq!(
+        replacement["route"],
+        json!({"channel_type":"private","route_revision":1,"provider_token_present":false})
+    );
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions WHERE device_key=?")
+            .bind(&old)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 601 - 256);
+    assert!(
+        store.pull(&old, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .ack(&old, vec![accepted.delivery_id.clone()])
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(!store.authorize_ticket(&old_ticket).await.unwrap());
+    let owned: String =
+        sqlx::query_scalar("SELECT state FROM targets WHERE device_key=? AND delivery_id=?")
+            .bind(&old)
+            .bind(&accepted.delivery_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(owned, "running");
+    assert_eq!(
+        store.pull(&other, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let after: (Vec<u8>, i64, i64) = sqlx::query_as(
+        "SELECT payload_blob,accepted_at,dedupe_until FROM messages WHERE delivery_id=?",
+    )
+    .bind(&accepted.delivery_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(after, before);
+    assert_eq!(
+        store.register_device("ios", Some(&old)).await.unwrap()["device_key"],
+        new_key
+    );
+    let draining = store.claim("FCM", 1, false).await.unwrap();
+    assert!(draining.tickets.is_empty());
+    assert!(draining.next_due.is_some());
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions WHERE device_key=?")
+            .bind(&old)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 601 - 512);
+    let drained = store.claim("FCM", 1, false).await.unwrap();
+    assert!(drained.tickets.is_empty());
+    assert!(
+        drained.next_due.is_none(),
+        "ACKed owned receipt alone must not busy-spin"
+    );
+    // The former process may still own a valid network receipt. Retain its outcome.
+    store
+        .settle(&old_ticket, "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.status(&accepted.op_id).await.unwrap()["status"],
+        "sent"
+    );
+    let new_subscriptions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions WHERE device_key=?")
+            .bind(&new_key)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(new_subscriptions, 0);
+    close(store, owner).await;
+    let url = format!("sqlite://{}", dir.path().join("contract.sqlite").display());
+    let (store, owner) = DeliveryStore::open(&url, Config::default()).await.unwrap();
+    assert_eq!(
+        store.register_device("ios", Some(&old)).await.unwrap()["device_key"],
+        new_key
+    );
+    // Alias is a registration-only retry aid, not an old-key delivery capability.
+    assert!(
+        store.pull(&old, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    sqlx::query("UPDATE registration_aliases SET expires_at=0 WHERE old_key=?")
+        .bind(&old)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let expired_alias = store.register_device("ios", Some(&old)).await.unwrap();
+    assert_ne!(expired_alias["device_key"], new_key);
+    assert_eq!(expired_alias["issue_reason"], "device_key_not_found");
+    close(store, owner).await;
+}
+#[tokio::test]
+async fn actual_pull_and_recovery_queries_use_ordered_indexes() {
+    let (_dir, store, owner, device, channel, auth) = fixture(Config::default()).await;
+    let first = store
+        .accept(input(&channel, &auth, "ordered-first"))
+        .await
+        .unwrap();
+    let second = store
+        .accept(input(&channel, &auth, "ordered-second"))
+        .await
+        .unwrap();
+    // Deliberately make the second accepted operation sort first by the frozen time.
+    for (id, at) in [
+        (&first.delivery_id, now() - 1000),
+        (&second.delivery_id, now() - 2000),
+    ] {
+        sqlx::query("UPDATE messages SET accepted_at=? WHERE delivery_id=?")
+            .bind(at)
+            .bind(id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE targets SET accepted_at=? WHERE delivery_id=?")
+            .bind(at)
+            .bind(id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+    }
+    let batch = store.pull(&device, None).await.unwrap();
+    assert_eq!(batch["items"][0]["delivery_id"], second.delivery_id);
+    assert_eq!(batch["items"][1]["delivery_id"], first.delivery_id);
+    let exact = store.pull(&device, Some(&first.delivery_id)).await.unwrap();
+    assert_eq!(exact["items"].as_array().unwrap().len(), 1);
+    assert_eq!(exact["items"][0]["delivery_id"], first.delivery_id);
+    assert_eq!(exact["has_more"], false);
+    let plan = sqlx::query(&format!(
+        "EXPLAIN QUERY PLAN {}",
+        crate::store::PULL_BATCH_SQL
+    ))
+    .bind(&device)
+    .bind(now())
+    .bind(201_i64)
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    let details: Vec<String> = plan.iter().map(|row| row.get("detail")).collect();
+    assert!(
+        details.iter().any(|text| text.contains("targets_device")),
+        "{details:?}"
+    );
+    assert!(
+        !details.iter().any(|text| text.contains("TEMP B-TREE")),
+        "{details:?}"
+    );
+    let exact_plan = sqlx::query(&format!(
+        "EXPLAIN QUERY PLAN {}",
+        crate::store::PULL_EXACT_SQL
+    ))
+    .bind(&device)
+    .bind(&first.delivery_id)
+    .bind(now())
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    let details: Vec<String> = exact_plan.iter().map(|row| row.get("detail")).collect();
+    assert!(
+        details.iter().any(|text| text.contains("SEARCH t")
+            && text.contains("delivery_id=?")
+            && text.contains("device_key=?")),
+        "{details:?}"
+    );
+    assert!(
+        !details.iter().any(|text| text.contains("TEMP B-TREE")),
+        "{details:?}"
+    );
+    for provider in ["FCM", "APNS"] {
+        let plan = sqlx::query(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            crate::store::RECOVER_RUNNING_SQL
+        ))
+        .bind(now())
+        .bind(provider)
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        let details: Vec<String> = plan.iter().map(|row| row.get("detail")).collect();
+        assert!(
+            details.iter().any(|text| text.contains("targets_due")
+                && text.contains("provider=?")
+                && text.contains("state=?")),
+            "{details:?}"
+        );
+        assert!(
+            !details.iter().any(|text| text.starts_with("SCAN targets")),
+            "{details:?}"
+        );
+    }
+    close(store, owner).await;
+}
+#[tokio::test]
+async fn restart_consumes_acked_running_but_recovers_unacked_running() {
+    let (dir, store, owner, device, channel, auth) = fixture(Config::default()).await;
+    let acked = store
+        .accept(input(&channel, &auth, "restart-acked-running"))
+        .await
+        .unwrap();
+    let pending = store
+        .accept(input(&channel, &auth, "restart-unacked-running"))
+        .await
+        .unwrap();
+    let tickets = store.claim("FCM", 2, false).await.unwrap().tickets;
+    assert_eq!(tickets.len(), 2);
+    store
+        .ack(&device, vec![acked.delivery_id.clone()])
+        .await
+        .unwrap();
+    close(store, owner).await;
+    let url = format!("sqlite://{}", dir.path().join("contract.sqlite").display());
+    let (store, owner) = DeliveryStore::open(&url, Config::default()).await.unwrap();
+    let running_acked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM targets WHERE delivery_id=?")
+        .bind(&acked.delivery_id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(running_acked, 0);
+    assert_eq!(store.status(&acked.op_id).await.unwrap()["status"], "sent");
+    assert_eq!(
+        store.ack(&device, vec![acked.delivery_id]).await.unwrap(),
+        0
+    );
+    let recovered = store.claim("FCM", 2, false).await.unwrap().tickets;
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].delivery_id, pending.delivery_id);
+    assert!(
+        recovered[0].attempt_id
+            > tickets
+                .iter()
+                .find(|ticket| ticket.delivery_id == pending.delivery_id)
+                .unwrap()
+                .attempt_id
+    );
+    close(store, owner).await;
+}
+#[tokio::test]
+async fn retirement_queued_targets_are_immediately_hidden_and_physically_drained_in_batches() {
+    let (_dir, store, owner, old, channel, auth) = fixture(Config::default()).await;
+    let mut ids = Vec::new();
+    for index in 0..300 {
+        ids.push(
+            store
+                .accept(input(
+                    &channel,
+                    &auth,
+                    &format!("retirement-pending-{index}"),
+                ))
+                .await
+                .unwrap(),
+        );
+    }
+    let new = store.register_device("ios", Some(&old)).await.unwrap();
+    assert_eq!(new["issue_reason"], "platform_mismatch");
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM targets WHERE device_key=? AND acked_at IS NULL")
+            .bind(&old)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 44);
+    assert!(
+        store.pull(&old, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .ack(&old, vec![ids[299].delivery_id.clone()])
+            .await
+            .unwrap(),
+        0
+    );
+    let drained = store.claim("FCM", 1, false).await.unwrap();
+    assert!(drained.tickets.is_empty());
+    assert!(drained.next_due.is_none());
+    let targets: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM targets WHERE device_key=? AND acked_at IS NULL")
+            .bind(&old)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(targets, 0);
+    for id in [&ids[0], &ids[299]] {
+        let row: (String, i64) =
+            sqlx::query_as("SELECT message_id,payload_bytes FROM messages WHERE delivery_id=?")
+                .bind(&id.delivery_id)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, id.message_id);
+        assert_eq!(row.1, 0);
+        assert_eq!(store.status(&id.op_id).await.unwrap()["status"], "sent");
+    }
     close(store, owner).await;
 }

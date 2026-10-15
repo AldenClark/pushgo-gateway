@@ -221,11 +221,15 @@ pub(super) struct ClaimBatch {
     pub next_due: Option<i64>,
     pub has_more: bool,
 }
+pub(super) const PULL_BATCH_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.device_key WHERE t.device_key=? AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>? ORDER BY t.accepted_at,t.delivery_id LIMIT ?";
+pub(super) const PULL_EXACT_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.device_key WHERE t.device_key=? AND t.delivery_id=? AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>? LIMIT 1";
+pub(super) const RECOVER_RUNNING_SQL: &str =
+    "UPDATE targets SET state='retry_wait',next_attempt_at=? WHERE provider=? AND state='running'";
 const SCHEMA:&str="
 CREATE TABLE IF NOT EXISTS messages(delivery_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,fingerprint TEXT NOT NULL,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,dedupe_until INTEGER NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,pending_targets INTEGER NOT NULL DEFAULT 0,provider_accepted_count INTEGER NOT NULL DEFAULT 0,provider_failed_count INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS targets(delivery_id TEXT NOT NULL REFERENCES messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,route_generation INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,PRIMARY KEY(delivery_id,device_key));
-CREATE INDEX IF NOT EXISTS targets_due ON targets(provider,state,next_attempt_at,delivery_id) WHERE acked_at IS NULL;
-CREATE INDEX IF NOT EXISTS targets_device ON targets(device_key,delivery_id) WHERE acked_at IS NULL;
+CREATE TABLE IF NOT EXISTS targets(delivery_id TEXT NOT NULL REFERENCES messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,route_generation INTEGER NOT NULL DEFAULT 0,accepted_at INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,PRIMARY KEY(delivery_id,device_key));
+CREATE INDEX IF NOT EXISTS targets_due ON targets(provider,state,next_attempt_at,delivery_id);
+CREATE INDEX IF NOT EXISTS targets_device ON targets(device_key,accepted_at,delivery_id) WHERE acked_at IS NULL;
 CREATE INDEX IF NOT EXISTS messages_retention ON messages(dedupe_until);
 CREATE INDEX IF NOT EXISTS messages_expiry ON messages(expires_at,delivery_id) WHERE payload_bytes>0;
 CREATE TABLE IF NOT EXISTS ledger_usage(singleton INTEGER PRIMARY KEY CHECK(singleton=1),messages INTEGER NOT NULL,targets INTEGER NOT NULL,bytes INTEGER NOT NULL);
@@ -236,13 +240,24 @@ CREATE TRIGGER IF NOT EXISTS messages_usage_delete AFTER DELETE ON messages BEGI
 CREATE TRIGGER IF NOT EXISTS targets_usage_insert AFTER INSERT ON targets WHEN NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait') BEGIN UPDATE ledger_usage SET targets=targets+1 WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets+1 WHERE delivery_id=NEW.delivery_id; END;
 CREATE TRIGGER IF NOT EXISTS targets_usage_update AFTER UPDATE OF acked_at,state ON targets BEGIN UPDATE ledger_usage SET targets=targets+(NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait'))-(OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait')) WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets+(NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait'))-(OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait')) WHERE delivery_id=NEW.delivery_id; END;
 CREATE TRIGGER IF NOT EXISTS targets_usage_delete AFTER DELETE ON targets WHEN OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait') BEGIN UPDATE ledger_usage SET targets=targets-1 WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets-1 WHERE delivery_id=OLD.delivery_id; END;
-CREATE TABLE IF NOT EXISTS devices(device_key TEXT PRIMARY KEY,platform TEXT NOT NULL,provider TEXT,provider_token TEXT,route_generation INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS devices(device_key TEXT PRIMARY KEY,platform TEXT NOT NULL,provider TEXT,provider_token TEXT,route_generation INTEGER NOT NULL DEFAULT 0,retired_at INTEGER);
+CREATE INDEX IF NOT EXISTS devices_retired ON devices(retired_at,device_key) WHERE retired_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS registration_aliases(old_key TEXT PRIMARY KEY,new_key TEXT NOT NULL,platform TEXT NOT NULL,expires_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS registration_alias_expiry ON registration_aliases(expires_at);
 CREATE TABLE IF NOT EXISTS channels(channel_id TEXT PRIMARY KEY,channel_name TEXT NOT NULL,password_hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS channel_subscriptions(channel_id TEXT NOT NULL REFERENCES channels(channel_id),device_key TEXT NOT NULL REFERENCES devices(device_key),PRIMARY KEY(channel_id,device_key));
+CREATE INDEX IF NOT EXISTS subscriptions_device ON channel_subscriptions(device_key,channel_id);
 CREATE TABLE IF NOT EXISTS provider_cooldowns(provider TEXT PRIMARY KEY,next_attempt_at INTEGER NOT NULL);
 ";
 impl DeliveryStore {
     pub(super) async fn open(db_url: &str, mut config: Config) -> Result<(Self, OwnerLock)> {
+        // This candidate follows the explicitly selected full 30-day identity
+        // contract even when its payload TTL uses the low-resource profile.
+        if config.dedupe_retention_ms < 30 * 86_400_000 {
+            return Err(KernelError::Invalid(
+                "at least 30 days of identity retention required".into(),
+            ));
+        }
         if config.provider_budget == 0
             || config.claim_quantum == 0
             || config.claim_quantum > config.provider_budget
@@ -252,7 +267,6 @@ impl DeliveryStore {
             || config.max_payload_bytes <= 0
             || config.default_ttl_secs <= 0
             || config.default_ttl_secs > 30 * 86_400
-            || config.dedupe_retention_ms <= 0
         {
             return Err(KernelError::Invalid("positive budgets required".into()));
         }
@@ -360,12 +374,24 @@ impl DeliveryStore {
         }
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
         // Recovery is only permitted after acquiring the exclusive OS lock.
-        sqlx::query(
-            "UPDATE targets SET state='retry_wait',next_attempt_at=? WHERE state='running'",
-        )
-        .bind(now())
-        .execute(&self.pool)
-        .await?;
+        // ACKed owned attempts lost with the former process have no callback.
+        // Client confirmation is sufficient to close them without a network retry.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE messages SET status=CASE WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=? WHERE status='provider_queued' AND pending_targets=0 AND delivery_id IN (SELECT delivery_id FROM targets WHERE provider IN ('FCM','APNS') AND state='running' AND acked_at IS NOT NULL)").bind(now()).execute(&mut *tx).await?;
+        for provider in ["FCM", "APNS"] {
+            sqlx::query(
+                "DELETE FROM targets WHERE provider=? AND state='running' AND acked_at IS NOT NULL",
+            )
+            .bind(provider)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(RECOVER_RUNNING_SQL)
+                .bind(now())
+                .bind(provider)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         self.maintenance().await?;
         Ok(())
     }
@@ -375,23 +401,69 @@ impl DeliveryStore {
         }
     }
     pub async fn register(&self, platform: &str) -> Result<String> {
+        Ok(self.register_device(platform, None).await?["device_key"]
+            .as_str()
+            .expect("registration key")
+            .into())
+    }
+    pub async fn register_device(&self, platform: &str, requested: Option<&str>) -> Result<Value> {
         let platform = supported_platform(platform)?;
-        let key = generate_hex_id_128();
-        let gate_at = std::time::Instant::now();
+        let requested = requested.map(str::trim).filter(|key| !key.is_empty());
         let _gate = self.gate.lock().await;
-        record_duration(
-            &self.counters.gate_wait_samples,
-            &self.counters.gate_wait_total_us,
-            &self.counters.gate_wait_max_us,
-            gate_at.elapsed(),
-        );
-        self.counters.sql(1);
+        let at = now();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM registration_aliases WHERE old_key IN (SELECT old_key FROM registration_aliases WHERE expires_at<? ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut *tx).await?;
+        let mut old_key = None;
+        if let Some(key) = requested {
+            if let Some(row)=sqlx::query("SELECT device_key,platform,provider,provider_token,route_generation FROM devices WHERE device_key=? AND retired_at IS NULL").bind(key).fetch_optional(&mut *tx).await?{
+                if row.get::<String,_>("platform")==platform.name(){let result=registration_response(&row,false,None)?;tx.commit().await?;return Ok(result)}
+                old_key=Some(key);
+            } else if let Some(row)=sqlx::query("SELECT d.device_key,d.platform,d.provider,d.provider_token,d.route_generation FROM registration_aliases a JOIN devices d ON d.device_key=a.new_key WHERE a.old_key=? AND a.platform=? AND a.expires_at>=? AND d.platform=? AND d.retired_at IS NULL").bind(key).bind(platform.name()).bind(at).bind(platform.name()).fetch_optional(&mut *tx).await? {
+                let result=registration_response(&row,true,Some("platform_mismatch"))?;tx.commit().await?;return Ok(result)
+            }
+        }
+        let key = generate_hex_id_128();
         sqlx::query("INSERT INTO devices(device_key,platform) VALUES(?,?)")
             .bind(&key)
             .bind(platform.name())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
-        Ok(key)
+        let reason = if let Some(old) = old_key {
+            // Retire instead of migrating subscriptions or accepted targets.
+            sqlx::query("UPDATE devices SET retired_at=? WHERE device_key=?")
+                .bind(at)
+                .bind(old)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM channel_subscriptions WHERE device_key=? AND channel_id IN (SELECT channel_id FROM channel_subscriptions WHERE device_key=? ORDER BY channel_id LIMIT 256)").bind(old).bind(old).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO registration_aliases(old_key,new_key,platform,expires_at) VALUES(?,?,?,?) ON CONFLICT(old_key) DO UPDATE SET new_key=excluded.new_key,platform=excluded.platform,expires_at=excluded.expires_at").bind(old).bind(&key).bind(platform.name()).bind(at.saturating_add(600_000)).execute(&mut *tx).await?;
+            self.retire_targets_tx(&mut tx, old, at, 256).await?;
+            "platform_mismatch"
+        } else if requested.is_some() {
+            "device_key_not_found"
+        } else {
+            "device_key_missing"
+        };
+        let row=sqlx::query("SELECT device_key,platform,provider,provider_token,route_generation FROM devices WHERE device_key=? AND retired_at IS NULL").bind(&key).fetch_one(&mut *tx).await?;
+        let result = registration_response(&row, true, Some(reason))?;
+        tx.commit().await?;
+        self.notify();
+        Ok(result)
+    }
+    async fn retire_targets_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        key: &str,
+        at: i64,
+        limit: usize,
+    ) -> Result<usize> {
+        let ids:Vec<String>=sqlx::query_scalar("SELECT delivery_id FROM targets WHERE device_key=? AND acked_at IS NULL ORDER BY accepted_at,delivery_id LIMIT ?").bind(key).bind(limit as i64).fetch_all(&mut **tx).await?;
+        for id in &ids {
+            sqlx::query("UPDATE targets SET acked_at=?,state=CASE WHEN state='running' THEN state ELSE 'superseded_route' END WHERE device_key=? AND delivery_id=? AND acked_at IS NULL").bind(at).bind(key).bind(id).execute(&mut **tx).await?;
+            sqlx::query("UPDATE messages SET status=CASE WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=? WHERE delivery_id=? AND status='provider_queued' AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running')").bind(at).bind(id).execute(&mut **tx).await?;
+            self.release_acked_tx(tx, key, id).await?;
+        }
+        Ok(ids.len())
     }
     pub async fn route(
         &self,
@@ -410,7 +482,7 @@ impl DeliveryStore {
         );
         self.counters.sql(2);
         let existing =
-            sqlx::query("SELECT platform,provider,provider_token,route_generation FROM devices WHERE device_key=?")
+            sqlx::query("SELECT platform,provider,provider_token,route_generation FROM devices WHERE device_key=? AND retired_at IS NULL")
                 .bind(device)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -460,10 +532,12 @@ impl DeliveryStore {
         );
         self.counters.sql(5);
         let mut tx = self.pool.begin().await?;
-        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE device_key=?")
-            .bind(device)
-            .fetch_one(&mut *tx)
-            .await?;
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM devices WHERE device_key=? AND retired_at IS NULL",
+        )
+        .bind(device)
+        .fetch_one(&mut *tx)
+        .await?;
         if exists == 0 {
             return Err(KernelError::Invalid("unknown device".into()));
         }
@@ -587,7 +661,7 @@ impl DeliveryStore {
             sqlx::query("SELECT messages,targets,bytes FROM ledger_usage WHERE singleton=1")
                 .fetch_one(&mut *tx)
                 .await?;
-        let fanout:i64=sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&request.channel_id).fetch_one(&mut *tx).await?;
+        let fanout:i64=sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&request.channel_id).fetch_one(&mut *tx).await?;
         let live = fanout > 0 && expires > at;
         if live
             && (usage.get::<i64, _>("messages") >= self.config.max_messages
@@ -602,7 +676,7 @@ impl DeliveryStore {
         let status = if live { "provider_queued" } else { "failed" };
         sqlx::query("INSERT INTO messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").bind(&delivery_id).bind(&message_id).bind(&request.op_id).bind(&request.channel_id).bind(&request.fingerprint).bind(if live{payload.as_slice()}else{&[]}).bind(if live{payload.len() as i64}else{0}).bind(at).bind(expires).bind(at.saturating_add(self.config.dedupe_retention_ms)).bind(status).bind(at).execute(&mut *tx).await?;
         if live {
-            sqlx::query("INSERT INTO targets(delivery_id,device_key,platform,provider,provider_token,route_generation,state,next_attempt_at) SELECT ?,d.device_key,d.platform,d.provider,d.provider_token,d.route_generation,'pending',? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&delivery_id).bind(at).bind(&request.channel_id).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO targets(delivery_id,device_key,platform,provider,provider_token,route_generation,accepted_at,state,next_attempt_at) SELECT ?,d.device_key,d.platform,d.provider,d.provider_token,d.route_generation,?,'pending',? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&delivery_id).bind(at).bind(at).bind(&request.channel_id).execute(&mut *tx).await?;
         }
         let commit_at = std::time::Instant::now();
         tx.commit().await?;
@@ -668,6 +742,20 @@ impl DeliveryStore {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         at: i64,
     ) -> Result<usize> {
+        let retired:Vec<String>=sqlx::query_scalar("SELECT device_key FROM devices WHERE retired_at IS NOT NULL ORDER BY retired_at LIMIT 256").fetch_all(&mut **tx).await?;
+        let mut remaining = 256;
+        let mut subscriptions_remaining = 256;
+        for key in retired {
+            if subscriptions_remaining > 0 {
+                let removed=sqlx::query("DELETE FROM channel_subscriptions WHERE device_key=? AND channel_id IN (SELECT channel_id FROM channel_subscriptions WHERE device_key=? ORDER BY channel_id LIMIT ?)").bind(&key).bind(&key).bind(subscriptions_remaining as i64).execute(&mut **tx).await?.rows_affected() as usize;
+                subscriptions_remaining -= removed;
+            }
+            if remaining > 0 {
+                remaining -= self.retire_targets_tx(tx, &key, at, remaining).await?;
+            }
+            sqlx::query("DELETE FROM devices WHERE device_key=? AND retired_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.device_key=devices.device_key AND acked_at IS NULL) AND NOT EXISTS(SELECT 1 FROM targets WHERE provider IN ('FCM','APNS') AND state='running' AND targets.device_key=devices.device_key) AND NOT EXISTS(SELECT 1 FROM channel_subscriptions WHERE channel_subscriptions.device_key=devices.device_key)").bind(key).execute(&mut **tx).await?;
+        }
+        sqlx::query("DELETE FROM registration_aliases WHERE old_key IN (SELECT old_key FROM registration_aliases WHERE expires_at<? ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx).await?;
         // Expiry is a terminal failure only for targets not yet accepted by a
         // provider. Running attempts retain their unknown outcome until receipt.
         sqlx::query("UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx).await?;
@@ -680,7 +768,21 @@ impl DeliveryStore {
     }
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
         self.counters.sql(1);
-        let rows=sqlx::query("SELECT m.delivery_id,m.payload_blob FROM messages m JOIN targets t ON t.delivery_id=m.delivery_id WHERE t.device_key=? AND t.acked_at IS NULL AND m.expires_at>? AND (? IS NULL OR m.delivery_id=?) ORDER BY m.accepted_at,m.delivery_id LIMIT 201").bind(device).bind(now()).bind(delivery).bind(delivery).fetch_all(&self.pool).await?;
+        let rows = if let Some(id) = delivery {
+            sqlx::query(PULL_EXACT_SQL)
+                .bind(device)
+                .bind(id)
+                .bind(now())
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            sqlx::query(PULL_BATCH_SQL)
+                .bind(device)
+                .bind(now())
+                .bind(201_i64)
+                .fetch_all(&self.pool)
+                .await?
+        };
         let more = rows.len() > 200;
         let mut items = Vec::new();
         for row in rows.into_iter().take(200) {
@@ -705,8 +807,21 @@ impl DeliveryStore {
         let mut tx = self.pool.begin().await?;
         let at = now();
         self.counters.sql(1);
-        let rows = sqlx::query("SELECT m.delivery_id,m.payload_blob FROM messages m JOIN targets t ON t.delivery_id=m.delivery_id WHERE t.device_key=? AND t.acked_at IS NULL AND m.expires_at>? AND (? IS NULL OR m.delivery_id=?) ORDER BY m.accepted_at,m.delivery_id LIMIT 512")
-            .bind(device).bind(at).bind(delivery).bind(delivery).fetch_all(&mut *tx).await?;
+        let rows = if let Some(id) = delivery {
+            sqlx::query(PULL_EXACT_SQL)
+                .bind(device)
+                .bind(id)
+                .bind(at)
+                .fetch_all(&mut *tx)
+                .await?
+        } else {
+            sqlx::query(PULL_BATCH_SQL)
+                .bind(device)
+                .bind(at)
+                .bind(512_i64)
+                .fetch_all(&mut *tx)
+                .await?
+        };
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
             let id: String = row.get("delivery_id");
@@ -745,7 +860,7 @@ impl DeliveryStore {
         let mut removed = 0;
         let at = now();
         for id in ids {
-            removed+=sqlx::query("UPDATE targets SET acked_at=? WHERE device_key=? AND delivery_id=? AND acked_at IS NULL AND EXISTS(SELECT 1 FROM messages WHERE messages.delivery_id=targets.delivery_id AND expires_at>?)").bind(at).bind(device).bind(&id).bind(at).execute(&mut *tx).await?.rows_affected() as usize;
+            removed+=sqlx::query("UPDATE targets SET acked_at=? WHERE device_key=? AND delivery_id=? AND acked_at IS NULL AND EXISTS(SELECT 1 FROM devices WHERE devices.device_key=targets.device_key AND retired_at IS NULL) AND EXISTS(SELECT 1 FROM messages WHERE messages.delivery_id=targets.delivery_id AND expires_at>?)").bind(at).bind(device).bind(&id).bind(at).execute(&mut *tx).await?.rows_affected() as usize;
             self.release_acked_tx(&mut tx, device, &id).await?;
         }
         tx.commit().await?;
@@ -806,7 +921,7 @@ impl DeliveryStore {
                 let mut selected = None;
                 for class in [classes[n % 2], classes[(n + 1) % 2]] {
                     self.counters.sql(1);
-                    let row=sqlx::query("SELECT t.*,m.payload_blob,m.accepted_at,m.expires_at FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.provider=? AND t.state=? AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1").bind(provider).bind(class).bind(at).bind(at).fetch_optional(&mut *tx).await?;
+                    let row=sqlx::query("SELECT t.*,m.payload_blob,m.expires_at FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.device_key WHERE d.retired_at IS NULL AND t.provider=? AND t.state=? AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1").bind(provider).bind(class).bind(at).bind(at).fetch_optional(&mut *tx).await?;
                     if row.is_some() {
                         selected = row;
                         break;
@@ -833,7 +948,12 @@ impl DeliveryStore {
             }
         }
         let due:Option<i64>=sqlx::query_scalar("SELECT MIN(next_attempt_at) FROM targets WHERE provider=? AND state IN ('pending','retry_wait') AND acked_at IS NULL").bind(provider).fetch_one(&mut *tx).await?;
-        let next_due = due.map(|due| due.max(cooldown.unwrap_or(0)));
+        let retiring:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices d WHERE d.retired_at IS NOT NULL AND (EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key AND t.acked_at IS NULL) OR EXISTS(SELECT 1 FROM channel_subscriptions s WHERE s.device_key=d.device_key)))").fetch_one(&mut *tx).await?;
+        let next_due = if retiring {
+            Some(at)
+        } else {
+            due.map(|due| due.max(cooldown.unwrap_or(0)))
+        };
         tx.commit().await?;
         drop(_gate);
         #[cfg(test)]
@@ -852,7 +972,7 @@ impl DeliveryStore {
     }
     pub(super) async fn authorize_ticket(&self, ticket: &Ticket) -> Result<bool> {
         self.counters.sql(1);
-        let current:i64=sqlx::query_scalar("SELECT COUNT(*) FROM targets t JOIN devices d ON d.device_key=t.device_key JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.state='running' AND t.attempt_id=? AND t.acked_at IS NULL AND m.expires_at>? AND d.platform=t.platform AND d.provider=t.provider AND d.provider_token=t.provider_token AND d.route_generation=t.route_generation AND t.route_generation=?").bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).bind(now()).bind(ticket.route_generation).fetch_one(&self.pool).await?;
+        let current:i64=sqlx::query_scalar("SELECT COUNT(*) FROM targets t JOIN devices d ON d.device_key=t.device_key JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.state='running' AND t.attempt_id=? AND t.acked_at IS NULL AND m.expires_at>? AND d.retired_at IS NULL AND d.platform=t.platform AND d.provider=t.provider AND d.provider_token=t.provider_token AND d.route_generation=t.route_generation AND t.route_generation=?").bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).bind(now()).bind(ticket.route_generation).fetch_one(&self.pool).await?;
         Ok(current != 0)
     }
     pub(super) async fn settle(
@@ -894,7 +1014,7 @@ impl DeliveryStore {
             // Invalidate only this channel's subscription for the exact frozen
             // route. A token that changes A -> B -> A is a different generation.
             if error == "invalid_token" {
-                sqlx::query("DELETE FROM channel_subscriptions WHERE device_key=? AND channel_id=(SELECT channel_id FROM messages WHERE delivery_id=?) AND EXISTS(SELECT 1 FROM devices WHERE device_key=? AND platform=? AND provider=? AND provider_token=? AND route_generation=?)")
+                sqlx::query("DELETE FROM channel_subscriptions WHERE device_key=? AND channel_id=(SELECT channel_id FROM messages WHERE delivery_id=?) AND EXISTS(SELECT 1 FROM devices WHERE device_key=? AND retired_at IS NULL AND platform=? AND provider=? AND provider_token=? AND route_generation=?)")
                     .bind(&ticket.device_key).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(&ticket.platform).bind(&ticket.provider).bind(&ticket.token).bind(ticket.route_generation).execute(&mut *tx).await?;
             }
             sqlx::query("UPDATE messages SET provider_accepted_count=provider_accepted_count+?,provider_failed_count=provider_failed_count+? WHERE delivery_id=?").bind(i64::from(state=="provider_accepted")).bind(i64::from(matches!(state,"permanent_failed"|"expired"|"cancelled"))).bind(&ticket.delivery_id).execute(&mut *tx).await?;
@@ -1026,4 +1146,24 @@ async fn verify_password_async(hash: String, value: String) -> Result<bool> {
     })
     .await
     .map_err(|_| KernelError::Invalid("credential verification failed".into()))
+}
+
+fn registration_response(
+    row: &sqlx::sqlite::SqliteRow,
+    issued: bool,
+    reason: Option<&str>,
+) -> Result<Value> {
+    let revision = row
+        .get::<i64, _>("route_generation")
+        .checked_add(1)
+        .ok_or_else(|| KernelError::Invalid("route revision exhausted".into()))?;
+    let channel = row
+        .get::<Option<String>, _>("provider")
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| "private".into());
+    let mut result = json!({"device_key":row.get::<String,_>("device_key"),"issued_new_key":issued,"route_revision":revision,"route":{"channel_type":channel,"route_revision":revision,"provider_token_present":row.get::<Option<String>,_>("provider_token").is_some()}});
+    if let Some(reason) = reason {
+        result["issue_reason"] = reason.into();
+    }
+    Ok(result)
 }

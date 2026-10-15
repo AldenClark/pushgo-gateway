@@ -1,12 +1,14 @@
 use super::store::{AcceptRequest, DeliveryStore, KernelError};
 use axum::{
     Json, Router,
+    body::{Body, HttpBody},
     extract::{ConnectInfo, DefaultBodyLimit, Path, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -14,7 +16,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 type Stats = Arc<dyn Fn() -> Value + Send + Sync>;
 #[derive(Clone)]
@@ -24,7 +26,7 @@ struct HttpState {
 }
 #[derive(Clone)]
 struct Admission {
-    ingress: Arc<Semaphore>,
+    requests: Arc<Semaphore>,
     control: Arc<Semaphore>,
     auth_hash: Option<[u8; 32]>,
     password_window: Arc<Mutex<PasswordWindow>>,
@@ -37,21 +39,11 @@ pub fn router(store: DeliveryStore, stats: Stats) -> Router {
 pub fn router_with_auth(store: DeliveryStore, stats: Stats, shared_token: Option<&str>) -> Router {
     let total = store.config.max_handlers;
     let reserve = (total / 8).max(1).min(total);
-    let admission = if total == 1 {
-        let single = Arc::new(Semaphore::new(1));
-        Admission {
-            ingress: single.clone(),
-            control: single,
-            auth_hash: shared_token.map(|v| *blake3::hash(v.as_bytes()).as_bytes()),
-            password_window: Arc::default(),
-        }
-    } else {
-        Admission {
-            ingress: Arc::new(Semaphore::new(total - reserve)),
-            control: Arc::new(Semaphore::new(reserve)),
-            auth_hash: shared_token.map(|v| *blake3::hash(v.as_bytes()).as_bytes()),
-            password_window: Arc::default(),
-        }
+    let admission = Admission {
+        requests: Arc::new(Semaphore::new(total)),
+        control: Arc::new(Semaphore::new(reserve)),
+        auth_hash: shared_token.map(|v| *blake3::hash(v.as_bytes()).as_bytes()),
+        password_window: Arc::default(),
     };
     let limit = store.config.max_body_bytes;
     let app = Router::new()
@@ -132,21 +124,74 @@ async fn bound_handlers(
             return (StatusCode::TOO_MANY_REQUESTS, Json(json!({"success":false,"code":429,"error_code":"rate_limited","message":"rate limited"}))).into_response();
         }
     }
-    let permit = if ingress {
-        state.ingress.clone()
+    let request_permit = match state.requests.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"code":"handler_capacity"})),
+            )
+                .into_response();
+        }
+    };
+    // Wait before handler JSON extraction while already owning a request slot:
+    // at most max_handlers requests can wait, with no parsed response payload.
+    // Separate semaphores also avoid double-acquiring a shared slot at total=1.
+    let control_permit = if ingress {
+        None
     } else {
-        state.control.clone()
-    }
-    .try_acquire_owned();
-    match permit {
-        Ok(_permit) => next.run(request).await,
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"code":"handler_capacity"})),
-        )
-            .into_response(),
-    }
+        match state.control.clone().acquire_owned().await {
+            Ok(permit) => Some(permit),
+            Err(_) => return KernelError::Capacity.into_response(),
+        }
+    };
+    retain_response_permit(
+        next.run(request).await,
+        ResponsePermits {
+            _request: request_permit,
+            _control: control_permit,
+        },
+    )
 }
+struct ResponsePermits {
+    _request: OwnedSemaphorePermit,
+    _control: Option<OwnedSemaphorePermit>,
+}
+// Existing routes return JSON or empty bodies. This data-stream adapter owns
+// their admission slot through response EOF/drop; it is not a proxy/trailer
+// adapter. Preserve known wire lengths when replacing Body's exact size hint.
+fn retain_response_permit(response: Response, permit: ResponsePermits) -> Response {
+    let (mut parts, body) = response.into_parts();
+    if body.is_end_stream() {
+        drop(permit);
+        return Response::from_parts(parts, body);
+    }
+    if !parts
+        .headers
+        .contains_key(axum::http::header::CONTENT_LENGTH)
+        && let Some(length) = body.size_hint().exact()
+    {
+        parts
+            .headers
+            .insert(axum::http::header::CONTENT_LENGTH, length.into());
+    }
+    let stream = stream::try_unfold(
+        (body.into_data_stream(), permit),
+        |(mut body, permit)| async move {
+            match body.next().await {
+                Some(Ok(data)) => Ok(Some((data, (body, permit)))),
+                Some(Err(error)) => Err(error),
+                None => Ok(None),
+            }
+        },
+    );
+    Response::from_parts(parts, Body::from_stream(stream))
+}
+
+#[cfg(test)]
+#[path = "http_budget_tests.rs"]
+mod budget_tests;
+
 impl IntoResponse for KernelError {
     fn into_response(self) -> Response {
         let (status, code, message) = match &self {
@@ -197,13 +242,17 @@ fn ok(data: Value) -> Json<Value> {
 #[derive(Deserialize)]
 struct Register {
     platform: String,
+    #[serde(default)]
+    device_key: Option<String>,
 }
 async fn register(
     State(state): State<HttpState>,
     Json(input): Json<Register>,
 ) -> Result<Json<Value>, KernelError> {
-    let key = state.store.register(&input.platform).await?;
-    Ok(ok(json!({"device_key":key,"issued_new_key":true})))
+    Ok(ok(state
+        .store
+        .register_device(&input.platform, input.device_key.as_deref())
+        .await?))
 }
 #[derive(Deserialize)]
 struct Route {
