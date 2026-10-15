@@ -1,0 +1,23 @@
+{
+  "labels": [
+    "final-bound32x60",
+    "final-bound64x30"
+  ],
+  "rates": [
+    32,
+    64
+  ],
+  "seconds": [
+    60,
+    30
+  ],
+  "messages_per_case": 1920,
+  "targets_per_message": 16,
+  "targets_per_case": 30720,
+  "provider_delay_ms": 20,
+  "claim_quantum": 32,
+  "ceiling": 32,
+  "settle_seconds": 180,
+  "artifact_registry": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/artifacts-final.json",
+  "scope": "exactly two finite observations; not soak or repeated evidence"
+}

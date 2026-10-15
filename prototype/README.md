@@ -18,7 +18,7 @@
 
 库与 fixture 都以 Config 为默认来源。当前 H32/Q32 是实验默认，可配置安全上限；不是已批准的产品最大值。两个 Provider 驱动按需持有 FuturesUnordered 工作，不预建全部 worker。领取 reservation 在加载正文前占预算；工作持续拥有执行位置直到结果事务提交。退避留在 SQL，不占网络位置；没有动态目标控制器和周期空队列扫描。关闭时先释放 attempt/receipt，再等待已保留的 claim，避免持锁等待环。
 
-输入沿用 32 KiB；128 个连接在创建连接任务前受限，HTTP/2 每连接默认通告 1 个并发 stream，使合规客户端在协议层排队；128 个请求处理位置为发送和控制请求保留独立预算。Provider 回复最多累计 16 KiB，保留状态与 Retry-After，2xx 的诊断正文失败不触发重发。Provider 连接池按安全上限配置，连续积压保留，真正空闲后释放，无额外清理定时器。
+输入沿用 32 KiB；128 个连接在创建连接任务前受限，HTTP/2 每连接默认通告 1 个并发 stream，使合规客户端在协议层排队。保留原 128 个请求总接纳许可；控制响应另用 16 个工作许可有界等待，等待时已持总许可且尚未解析 JSON，没有新增 16/112 并发拒收。许可随响应 Body 到 EOF、错误或 drop 释放。Provider 回复最多累计 16 KiB，保留状态与 Retry-After，2xx 的诊断正文失败不触发重发。Provider 连接池按安全上限配置，连续积压保留，真正空闲后释放，无额外清理定时器。
 
 未完成冻结消息 10,000、待执行 Provider 目标 1,000,000 沿用主线边界；事务计数避免每次接纳全表 COUNT/SUM。实验聚合正文限额默认关闭。ACK 释放正文和投递队列，进行中工作保留到结果提交；身份、指纹和状态完整保留 30 天。过期正文和身份清理各采用有界 256 条批次，索引不把整段历史加载到内存。
 
@@ -26,6 +26,8 @@
 
 ## 验证与复现
 
-使用缓存依赖：`cargo test --locked --offline --lib`；`cargo clippy --locked --offline --all-targets -- -D warnings`。历史测量单独显式运行 ignored 的 `measure_compact_history_query_admission_gc_and_disk_space`，环境变量 C2_HISTORY_OUT 必须指向尚不存在的目录。测试覆盖真实 SQL COMMIT 前后、接管前、结果未知、等待提交、ACK 两种顺序、重启、SQLITE_FULL 和有限重复请求；不把 Mock 结果当生产验收。
+在 prototype 目录使用缓存依赖：`cargo test --locked --offline --lib`；`cargo clippy --locked --offline --all-targets -- -D warnings`。最终原生 64 项通过、Clippy 通过。历史测量单独显式运行 ignored 的 `measure_compact_history_query_admission_gc_and_disk_space` 和 `measure_op_widths_16_46_128_and_actual_freepage_reuse`；分别要求 C2_HISTORY_OUT、C2_HISTORY_WIDTH_OUT 指向尚不存在的目录，本轮两项 Release 测量均通过。测试覆盖真实 SQL COMMIT 前后、接管前、结果未知、等待提交、ACK 两种顺序、重启、SQLITE_FULL、延迟约束 COMMIT 失败和有限重复请求；不把 Mock 结果当生产验收。
 
 本轮原始日志、第一次失败、客户端原生测试、三方 Release 比较和源文件/二进制身份记录位于主仓库 `build/quality-results/c-single-ledger-contract-20261015/`。上一轮 C1 及原 C32 目录保持原样。最终报告记录准确提交和对应测试，客户端应用控制器、原生存储、进程重开、系统后台交付分别标明范围。
+
+本轮交付和未完成范围见 [c2-results.md](docs/c2-results.md)，逐项合同、容量、历史成本及下一阶段适配计划分别在同目录；新增客户端测试和容量 runner 源码归档在 `validation/`，不包含二进制、数据库或日志。
