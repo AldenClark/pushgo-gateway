@@ -5,6 +5,8 @@ pub enum Platform {
     Android,
     Ios,
     Macos,
+    /// Ordinary Windows Private receiver; WNS is outside this candidate.
+    Windows,
     /// Ordinary MQTT Private receiver; never a push Provider target.
     Mqtt,
 }
@@ -14,6 +16,7 @@ impl Platform {
             Self::Android => "android",
             Self::Ios => "ios",
             Self::Macos => "macos",
+            Self::Windows => "windows",
             Self::Mqtt => "mqtt",
         }
     }
@@ -21,7 +24,7 @@ impl Platform {
         match self {
             Self::Android => "FCM",
             Self::Ios | Self::Macos => "APNS",
-            Self::Mqtt => "PRIVATE",
+            Self::Windows | Self::Mqtt => "PRIVATE",
         }
     }
 }
@@ -32,8 +35,9 @@ impl FromStr for Platform {
             "android" => Ok(Self::Android),
             "ios" | "ipados" => Ok(Self::Ios),
             "macos" => Ok(Self::Macos),
+            "windows" | "win" => Ok(Self::Windows),
             "mqtt" => Ok(Self::Mqtt),
-            _ => Err("ordinary Android/iOS/macOS/MQTT only".into()),
+            _ => Err("ordinary Android/iOS/macOS/Windows/MQTT only".into()),
         }
     }
 }
@@ -60,4 +64,23 @@ pub(crate) fn generate_hex_id_128() -> String {
         id.push(HEX[(byte & 15) as usize] as char);
     }
     id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_is_a_private_receiver_and_never_a_provider_token_platform() {
+        for raw in ["windows", "win", " WINDOWS "] {
+            let platform = Platform::from_str(raw).unwrap();
+            assert_eq!(platform, Platform::Windows);
+            assert_eq!(platform.name(), "windows");
+            assert_eq!(platform.provider_name(), "PRIVATE");
+            assert!(normalize_provider_token(&"a".repeat(64), platform).is_err());
+            assert!(
+                normalize_provider_token("https://synthetic.invalid/wns-token", platform).is_err()
+            );
+        }
+    }
 }

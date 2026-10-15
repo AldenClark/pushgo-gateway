@@ -1573,6 +1573,53 @@ async fn shared_router_contract(f: &mut Fixture) {
         StatusCode::NOT_FOUND,
         "mounted router preserves the configured prefix"
     );
+    // Default-disabled Private still permits the real Windows bootstrap,
+    // without admitting Private subscriptions or adding a WNS provider lane.
+    let windows = handler_post(
+        &app,
+        &credential,
+        "/device/register",
+        json!({"platform":"windows"}),
+    )
+    .await;
+    assert_eq!(windows["route"]["channel_type"], "private");
+    let windows_key = windows["device_key"].as_str().unwrap();
+    let configured_windows = handler_post(
+        &app,
+        &credential,
+        "/channel/device",
+        json!({"device_key":windows_key,"platform":"windows","channel_type":"private"}),
+    )
+    .await;
+    for provider in ["wns", "fcm", "apns"] {
+        let (status, rejected) = handler_call(&app, "POST", "/mount/c4/channel/device", Some(&credential), json!({"device_key":windows_key,"platform":"windows","channel_type":provider,"provider_token":"synthetic-windows-provider-token"}).to_string()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(rejected["error_code"], "invalid_channel_type");
+        let unchanged = handler_post(
+            &app,
+            &credential,
+            "/device/register",
+            json!({"platform":"windows","device_key":windows_key}),
+        )
+        .await;
+        assert_eq!(unchanged["device_key"], windows_key);
+        assert_eq!(unchanged["route"]["channel_type"], "private");
+        assert_eq!(
+            unchanged["route_revision"],
+            configured_windows["route_revision"]
+        );
+    }
+    assert!(!f.store.config.private.enabled);
+    assert!(matches!(
+        f.store.private_route(windows_key).await,
+        Err(KernelError::Control {
+            code: "private_channel_disabled",
+            ..
+        })
+    ));
+    let (status, rejected) = handler_call(&app, "POST", "/mount/c4/channel/subscribe", Some(&credential), json!({"device_key":windows_key,"channel_name":"disabled Windows Private","password":crate::types::generate_hex_id_128()}).to_string()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(rejected["error_code"], "provider_token_required");
     let device = handler_post(
         &app,
         &credential,

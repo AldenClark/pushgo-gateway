@@ -2101,10 +2101,10 @@ pub(super) fn supported_platform(raw: &str) -> Result<Platform> {
     let platform = Platform::from_str(raw).map_err(|_| KernelError::Invalid("platform".into()))?;
     if !matches!(
         platform,
-        Platform::Android | Platform::Ios | Platform::Macos | Platform::Mqtt
+        Platform::Android | Platform::Ios | Platform::Macos | Platform::Windows | Platform::Mqtt
     ) {
         return Err(KernelError::Invalid(
-            "ordinary Android/iOS/macOS/MQTT only".into(),
+            "ordinary Android/iOS/macOS/Windows/MQTT only".into(),
         ));
     }
     Ok(platform)

@@ -1030,7 +1030,119 @@ async fn large_http_body_migration_replay(f: &mut Fixture) {
     }
 }
 
+/// Production Windows bootstraps through HTTP, without a preseeded device.
+async fn windows_http_private_bootstrap(f: &mut Fixture) {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    async fn post(store: &OrdinaryStore, path: &str, input: Value) -> (StatusCode, Value) {
+        let app = crate::router(store.clone(), Arc::new(|| json!({})));
+        let base = reqwest::Url::parse(&store.config.public_base_url).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("{}{path}", base.path().trim_end_matches('/')))
+                    .header("content-type", "application/json")
+                    .body(Body::from(input.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        (status, value)
+    }
+    let (status, registered) =
+        post(&f.store, "/device/register", json!({"platform":"windows"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(registered["data"]["route"]["channel_type"], "private");
+    let device = registered["data"]["device_key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A newly registered NULL-provider route is already Private when enabled.
+    let implicit = f.store.private_route(&device).await.unwrap();
+    let (status, configured) = post(
+        &f.store,
+        "/channel/device",
+        json!({"device_key":device,"platform":"windows","channel_type":"private"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(configured["data"]["channel_type"], "private");
+    let route = f.store.private_route(&device).await.unwrap();
+    assert_eq!(route.route_generation, implicit.route_generation);
+    for provider in ["wns", "fcm", "apns"] {
+        let (status, rejected) = post(&f.store, "/channel/device", json!({"device_key":device,"platform":"windows","channel_type":provider,"provider_token":"synthetic-windows-provider-token"})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(rejected["error_code"], "invalid_channel_type");
+        assert_eq!(f.store.private_route(&device).await.unwrap(), route);
+    }
+    let (status, rejected) = post(&f.store, "/channel/device", json!({"device_key":device,"platform":"windows","channel_type":"private","provider_token":"forbidden-synthetic-token"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        rejected["error_code"],
+        "provider_token_forbidden_for_private_channel"
+    );
+    assert_eq!(f.store.private_route(&device).await.unwrap(), route);
+    let password = crate::types::generate_hex_id_128();
+    let (status, subscribed) = post(
+        &f.store,
+        "/channel/subscribe",
+        json!({"device_key":device,"channel_name":"Windows Private bootstrap","password":password}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let channel = subscribed["data"]["channel_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let subject = Subject {
+        device,
+        channel,
+        password,
+    };
+    let (status, accepted) = post(&f.store, "/message", json!({"channel_id":subject.channel,"password":subject.password,"title":"Windows Private","body":"native bootstrap retained body","op_id":"windows-private-http-bootstrap"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(accepted["data"]["dispatch_status"], "attempted_accepted");
+    let id = accepted["data"]["delivery_id"].as_str().unwrap();
+    f.http_cannot_consume(&subject, id).await;
+    let grants = f.claim(&subject, "windows-private-http").await;
+    assert_eq!(grants.len(), 1);
+    let ticket = &grants[0];
+    assert_eq!(ticket.delivery_id, id);
+    assert_eq!(body(ticket)["body"], "native bootstrap retained body");
+    assert!(f.store.private_ack(&route, ticket).await.unwrap());
+    assert_eq!(f.payload_bytes(id).await, 0);
+    // Exit the subscription using the ordinary production control route.
+    let (status, _) = post(
+        &f.store,
+        "/channel/unsubscribe",
+        json!({"device_key":subject.device,"channel_id":subject.channel}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, deleted) = post(
+        &f.store,
+        "/channel/device/delete",
+        json!({"device_key":subject.device,"channel_type":"private"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(deleted["data"]["channel_type"], "private");
+    assert!(f.claim(&subject, "windows-after-exit").await.is_empty());
+    assert_eq!(f.pending(&subject).await, 0);
+    f.counters().await;
+}
+
 async fn run(mut f: Fixture) {
+    windows_http_private_bootstrap(&mut f).await;
     large_http_body_migration_replay(&mut f).await;
     migration_reserves_shared_live_budget(&mut f).await;
     frozen_identity_capability_capacity(&mut f).await;
