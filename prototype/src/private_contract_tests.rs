@@ -1054,6 +1054,8 @@ pub(crate) fn assigned_c7_native_url(
     mysql: bool,
     factory: bool,
 ) -> String {
+    let c8 = key.starts_with("C8_");
+    assert!(c8 || key.starts_with("C7_"), "explicit C7/C8 key required");
     assert_eq!(
         std::env::var(disposable).ok().as_deref(),
         Some("YES_NEW_SYNTHETIC"),
@@ -1062,9 +1064,11 @@ pub(crate) fn assigned_c7_native_url(
     let file = PathBuf::from(std::env::var(key).expect("explicit C7 assigned URL file required"))
         .canonicalize()
         .unwrap();
-    let scope = PathBuf::from(
-        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env",
-    )
+    let scope = PathBuf::from(if c8 {
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/env"
+    } else {
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env"
+    })
     .canonicalize()
     .unwrap();
     assert_eq!(
@@ -1101,6 +1105,8 @@ pub(crate) fn assigned_c7_native_url(
     assert!(
         db.starts_with(if factory {
             "c5_synthetic_"
+        } else if c8 {
+            "c8_synthetic_"
         } else {
             "c7_synthetic_"
         }) && db
@@ -1168,7 +1174,34 @@ pub(crate) fn assigned_c7_native_url(
     assert_eq!(entry["owner_uuid"], owned["owner"]);
     assert_eq!(entry["url_file"].as_str(), file.to_str());
     assert_eq!(entry["role"].as_str(), Some(role));
-    assert_eq!(entry["environment_namespace"], "C7/isolated");
+    assert_eq!(
+        entry["environment_namespace"],
+        if c8 { "C8/isolated" } else { "C7/isolated" }
+    );
+    if c8 {
+        assert_eq!(owned["engine_lease_only"], true);
+        assert!(hex(owned["case_registry_owner"].as_str().unwrap(), 32));
+        assert_eq!(entry["case_registry_owner"], owned["case_registry_owner"]);
+        let parent_path = PathBuf::from(
+            "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env",
+        )
+        .join(if mysql { "mysql-owned.json" } else { "pg-owned.json" });
+        assert_eq!(
+            owned["engine_authority_source"].as_str(),
+            parent_path.to_str()
+        );
+        assert_eq!(
+            entry["engine_authority_source"].as_str(),
+            parent_path.to_str()
+        );
+        let parent: Value = serde_json::from_slice(&std::fs::read(parent_path).unwrap()).unwrap();
+        for field in ["id", "owner", "endpoint", "image"] {
+            assert_eq!(
+                owned[field], parent[field],
+                "exact inherited engine authority required"
+            );
+        }
+    }
     assert_eq!(entry["label"], case["label"]);
     assert_eq!(
         entry["environment_helper"].as_str(),
@@ -1188,6 +1221,10 @@ pub(crate) fn assigned_c7_native_url(
     raw.trim().into()
 }
 fn assigned_native_url(key: &str, mysql: bool) -> String {
+    let c8_key = key.replacen("C6_", "C8_", 1);
+    if std::env::var_os(&c8_key).is_some() {
+        return assigned_c7_native_url(&c8_key, "C8_PRIVATE_DISPOSABLE", mysql, false);
+    }
     let c7_key = key.replacen("C6_", "C7_", 1);
     if std::env::var_os(&c7_key).is_some() {
         return assigned_c7_native_url(&c7_key, "C7_PRIVATE_DISPOSABLE", mysql, false);
