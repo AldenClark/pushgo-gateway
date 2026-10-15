@@ -490,6 +490,101 @@ async fn idle_runtime() -> (
     drop(idle_gate);
     (dir, url, runtime, transport, device, channel, auth)
 }
+// Use a separate SQLite connection to exercise the actual engine's writer lock,
+// independently of the process-local mutation gate and its sole SQLx connection.
+async fn external_writer(url: &str) -> sqlx::SqliteConnection {
+    use sqlx::Connection;
+    let options = url
+        .parse::<sqlx::sqlite::SqliteConnectOptions>()
+        .unwrap()
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+    sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sqlite_writer_contention_within_budget_keeps_claims_and_receipts_alive() {
+    use sqlx::Connection;
+    let (_dir, url, runtime, transport, device, channel, auth) = idle_runtime().await;
+    let store = runtime.store.clone();
+    let accepted = store
+        .accept(request(&channel, &auth, "short-writer-lock"))
+        .await
+        .unwrap();
+    until(|| transport.started.load(Ordering::Relaxed) == 1).await;
+    let mut blocker = external_writer(&url).await;
+    let lock = blocker.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let claims = store.counters.claim_queries.load(Ordering::Relaxed);
+    store.notify();
+    until(|| store.counters.claim_queries.load(Ordering::Relaxed) > claims).await;
+    transport.release.notify_one();
+    until(|| transport.finished.load(Ordering::Relaxed) == 1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(store.counters.num_alive.load(Ordering::Relaxed), 2);
+    assert_eq!(store.counters.db_errors.load(Ordering::Relaxed), 0);
+    assert_eq!(store.counters.owned_attempts.load(Ordering::Relaxed), 1);
+    assert_eq!(store.counters.receipt_commits.load(Ordering::Relaxed), 0);
+    lock.rollback().await.unwrap();
+    blocker.close().await.unwrap();
+    until(|| store.counters.receipt_commits.load(Ordering::Relaxed) == 1).await;
+    store
+        .ack(&device, vec![accepted.delivery_id])
+        .await
+        .unwrap();
+    assert_eq!(store.counters.db_errors.load(Ordering::Relaxed), 0);
+    let report = runtime.shutdown().await;
+    assert_eq!(report.joined, 2);
+    assert_eq!(report.failed, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sqlite_writer_timeout_fails_closed_and_recovers_accepted_identity() {
+    use sqlx::Connection;
+    let (_dir, url, mut runtime, transport, _device, channel, auth) = idle_runtime().await;
+    let store = runtime.store.clone();
+    let accepted = store
+        .accept(request(&channel, &auth, "long-writer-lock"))
+        .await
+        .unwrap();
+    until(|| transport.started.load(Ordering::Relaxed) == 1).await;
+    let before = store.status("long-writer-lock").await.unwrap();
+    let absolute_expiry: i64 = sqlx::query_scalar("SELECT expires_at FROM messages WHERE op_id=?")
+        .bind("long-writer-lock")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let mut blocker = external_writer(&url).await;
+    let lock = blocker.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    store.notify();
+    transport.release.notify_one();
+    let error = tokio::time::timeout(Duration::from_secs(6), runtime.wait_failure())
+        .await
+        .unwrap();
+    assert!(error.contains("code: 5"), "unexpected failure: {error}");
+    assert_eq!(store.counters.receipt_commits.load(Ordering::Relaxed), 0);
+    lock.rollback().await.unwrap();
+    blocker.close().await.unwrap();
+    let report = runtime.shutdown().await;
+    assert!(report.failed > 0);
+    let (reopened, owner) = DeliveryStore::open(&url, Config::default()).await.unwrap();
+    let after = reopened.status("long-writer-lock").await.unwrap();
+    for field in ["entity_id", "accepted_at", "expires_at"] {
+        assert_eq!(before[field], after[field], "changed {field}");
+    }
+    let ticket = reopened
+        .claim("FCM", 1, true)
+        .await
+        .unwrap()
+        .tickets
+        .remove(0);
+    assert_eq!(ticket.delivery_id, accepted.delivery_id);
+    assert_eq!(ticket.payload["message_id"], json!(accepted.message_id));
+    assert_eq!(ticket.accepted_at, before["accepted_at"].as_i64().unwrap());
+    assert_eq!(ticket.expires_at, absolute_expiry);
+    assert_eq!(transport.started.load(Ordering::Relaxed), 1);
+    close(reopened, owner).await;
+}
 async fn reached(barrier: &super::store::CommitBarrier) {
     tokio::time::timeout(Duration::from_secs(3), barrier.reached.notified())
         .await

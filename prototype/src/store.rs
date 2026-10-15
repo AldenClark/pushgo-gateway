@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{
-    Row, SqlitePool,
+    Connection, Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use std::{
@@ -313,6 +313,9 @@ impl DeliveryStore {
             .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Full)
+            // Reserve the writer before reading: a deferred read/write upgrade
+            // may return BUSY without waiting this budget. Longer contention
+            // still fails closed; unknown COMMIT outcomes are never replayed.
             .busy_timeout(Duration::from_secs(3));
         let filename = options.get_filename();
         if filename.to_string_lossy().contains(":memory:") {
@@ -415,7 +418,7 @@ impl DeliveryStore {
         // Recovery is only permitted after acquiring the exclusive OS lock.
         // ACKed owned attempts lost with the former process have no callback.
         // Client confirmation is sufficient to close them without a network retry.
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query("UPDATE messages SET status=CASE WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=? WHERE status='provider_queued' AND pending_targets=0 AND delivery_id IN (SELECT delivery_id FROM targets WHERE provider IN ('FCM','APNS') AND state='running' AND acked_at IS NOT NULL)").bind(now()).execute(&mut *tx).await?;
         for provider in ["FCM", "APNS"] {
             sqlx::query(
@@ -466,7 +469,7 @@ impl DeliveryStore {
             .phase(
                 Path::Control,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("DELETE FROM registration_aliases WHERE old_key IN (SELECT old_key FROM registration_aliases WHERE expires_at<? ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut *tx)).await?;
@@ -628,7 +631,7 @@ impl DeliveryStore {
             .phase(
                 Path::Control,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         if row.get::<i64, _>("route_revision") == i64::MAX
@@ -737,7 +740,7 @@ impl DeliveryStore {
             .phase(
                 Path::Control,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         let exhausted:bool=self.counters.profile.sql(Path::Control,Statement::Control,sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices WHERE platform=? AND provider_token=? AND retired_at IS NULL AND (route_generation=? OR route_revision=?))").bind(platform.name()).bind(&token).bind(i64::MAX).bind(i64::MAX).fetch_one(&mut *tx)).await?;
@@ -833,7 +836,7 @@ impl DeliveryStore {
             .phase(
                 Path::Control,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         let exists: Option<String> = self
@@ -1230,7 +1233,7 @@ impl DeliveryStore {
             .phase(
                 Path::Accept,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         let auth: Option<String> = self
@@ -1401,7 +1404,7 @@ impl DeliveryStore {
             .phase(
                 Path::Maintenance,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         let removed = self.maintain_tx(&mut tx, now()).await?;
@@ -1523,7 +1526,7 @@ impl DeliveryStore {
             .phase(
                 Path::Ack,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         let at = now();
@@ -1610,7 +1613,7 @@ impl DeliveryStore {
             .phase(
                 Path::Ack,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         let mut removed = 0;
@@ -1680,7 +1683,7 @@ impl DeliveryStore {
             .phase(
                 Path::Claim,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         self.maintain_tx(&mut tx, at).await?;
@@ -1810,7 +1813,7 @@ impl DeliveryStore {
             .phase(
                 Path::Receipt,
                 Phase::Begin,
-                sqlx::Acquire::begin(&mut *profile_connection),
+                profile_connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         #[cfg(test)]
