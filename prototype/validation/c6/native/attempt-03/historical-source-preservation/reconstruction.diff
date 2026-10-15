@@ -1,0 +1,13 @@
+--- attempt-02/private_native_coordination.executed.py
++++ attempt-03 exact reconstructed private_native_coordination.py
+@@ -203,7 +203,9 @@
+             self.fault_installed = True
+             result = {"fault": FAULT, "classification": "actual server storage ACK failure; not wire loss"}
+         elif action == "server-ack-storage-failed":
+-            result = self.candidate.wait_expected_exit(70, FAULT, 15)
++            assert self.fault_installed
++            result = self.candidate.wait_expected_exit(70, "Private ACK COMMIT failed", 15)
++            result["installed_native_trigger"] = FAULT
+             rows = self.targets(data["delivery_id"])
+             assert rows and all(row["acked_at"] is None for row in rows)
+             assert int(self.message(data["delivery_id"])["payload_bytes"]) > 0

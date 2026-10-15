@@ -1,0 +1,121 @@
+--- c5/run_c5_capacity_final.py
++++ c6/run_c6_capacity.py
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""One explicitly authorized C5 PG/MySQL capacity lane; never builds or creates DBs.
++"""One explicitly authorized C6 paired PG/MySQL capacity lane; never builds or creates DBs.
+ 
+ Fixed: H32/Q32, real candidate Provider+Remote Token owner, Mock20ms,
+ 16 targets, 8 HTTP callers, 256 msg/s x10s, 180s maximum after planned input end,
+@@ -10,6 +10,8 @@
+ from urllib.parse import urlsplit
+ import c3_mock
+ import db_os_observer
++import source_provenance
++import host_observer
+ 
+ HERE=pathlib.Path(__file__).resolve().parent
+ def digest(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+@@ -52,22 +54,28 @@
+ 
+ def main(a):
+     out=a.out.resolve();out.mkdir(parents=True,exist_ok=False)
+-    for name in (pathlib.Path(__file__).name,'db_os_observer.py','c3_mock.py','observer_fixture.rs','observer_library.rs','reduce_commits.py'):
++    for name in (pathlib.Path(__file__).name,'db_os_observer.py','source_provenance.py','host_observer.py','c3_mock.py','observer_fixture.rs','observer_library.rs','reduce_commits.py'):
+         (out/('executed-'+name)).write_bytes((HERE/name).read_bytes())
+     # Shared monotonic source with the fixture. Import does not call these APIs.
+     mach=ctypes.CDLL('/usr/lib/libSystem.B.dylib');mach.mach_absolute_time.restype=ctypes.c_uint64
+     class Timebase(ctypes.Structure): _fields_=[('numer',ctypes.c_uint32),('denom',ctypes.c_uint32)]
+     base=Timebase();assert mach.mach_timebase_info(ctypes.byref(base))==0
+     scale=base.numer/base.denom/1_000_000
+-    helper=load_helper(a.db_helper.resolve()); helper.check(); owned,_=helper.owned(a.engine)
++    helper=load_helper(a.db_helper.resolve())
++    assert helper.KEY=='io.pushgo.c6.synthetic.owner','C6 ownership helper required'
++    assert a.db_url_file.resolve().parent==a.db_helper.resolve().parent,'URL must belong to this C6 env directory'
++    helper.check(); owned,container_inspect=helper.owned(a.engine)
++    environment=json.loads(a.environment_identity.read_text())['engines'][a.engine]
++    assert owned['id']==environment['id'] and container_inspect['Image']==environment['image_id'],'environment identity mismatch'
+     url=a.db_url_file.read_text().strip();parsed=urlsplit(url);database=parsed.path.lstrip('/')
+-    assert database in owned['cases'],'fresh captured case required'
++    assert database in owned['cases'],'fresh captured C6 case required'
++    assert database.startswith('c5_synthetic_'),'legacy fixture compatibility name in new C6 container required'
+     assert pathlib.Path(owned['cases'][database]['url_file']).resolve()==a.db_url_file.resolve()
+     assert parsed.netloc.endswith('@'+owned['endpoint']) and parsed.hostname in ('127.0.0.1','localhost')
+     assert parsed.scheme in (('postgres','postgresql') if a.engine=='pg' else ('mysql',))
+     # No URL/password is emitted to plans, logs, or subprocess receipts.
+     lock=threading.RLock(); files={}; rows={}; phase='startup'; beginning=time.monotonic()
+-    for name in ('phases','rss','db-process','db-connections','snapshots','requests','offers','producer'):
++    for name in ('phases','rss','db-process','db-connections','snapshots','requests','offers','producer','host-load'):
+         files[name]=(out/(name+'.jsonl')).open('x');rows[name]=[]
+     def emit(kind,row):
+         with lock:
+@@ -94,6 +102,7 @@
+     env.update(NO_PROXY='127.0.0.1,localhost',DUAL_ROUTE_TEST_AUTH=secret,C2_MOCK_SHARED_TOKEN=secret,
+                C5_COMMIT_STREAM=str(out/'commits.bin'))
+     plan={'status':'AUTHORIZED_RUNTIME_INPUT','engine':a.engine,'database':database,
++          'comparison_arm':a.comparison_arm,'environment_identity_sha256':digest(a.environment_identity),
+           'source_commit':a.source_commit,'source_root':str(a.source_root.resolve()),
+           'binary':str(a.binary.resolve()),'binary_sha256':digest(a.binary),
+           'build_receipt_sha256':digest(a.build_receipt),'build_receipt':str(a.build_receipt.resolve()),
+@@ -106,9 +115,10 @@
+           'deadline_anchor':'planned ten-second input end; no reset after HTTP waits or SQL polls',
+           'idle_observation':'OS-only ps and owned PID Mach sampler; no Gateway HTTP and no SQL during idle',
+           'fixture_baseline':'unchanged fixture emits its own stats heartbeat once/second; included in idle cost',
+-          'db_observation':'1Hz owned-container native PID1 /proc VmRSS kB; supported Docker top per-process cumulative TIME+elapsed; no pcpu or humanized RSS conversion; SQL connection snapshots only at non-idle boundaries',
++          'db_observation':'1Hz owned-container native PID1 /proc VmRSS kB; supported Docker top per-process cumulative TIME; no pcpu or humanized RSS conversion; SQL connection snapshots only at non-idle boundaries',
+           'quantiles':'exact nearest-rank observed completions; all offered targets retained in denominator',
+-          'toolchain_required':'Rust 1.97.1 release; no build in runner','retries':0,
++          'toolchain_required':'Rust 1.97.1 release; no build in runner','retries':0,'host_load_observer':'sanitized pid/ppid/comm/CPU/TIME at start and5s; no args/env, no quiet assumption',
++          'environment_comparison':'C6 owned containers with P_S ON / pg_stat_statements ON; pair only, no absolute C5 OFF timing comparison',
+           'storage_scope':'owned pinned PG16.14 / MySQL8.4.11 tmpfs cluster; not physical disk durability'}
+     receipt=json.loads(a.build_receipt.read_text())
+     assert receipt.get('binary_sha256')==plan['binary_sha256'],'build/binary identity mismatch'
+@@ -116,9 +126,13 @@
+     assert '1.97.1' in receipt.get('rustc',''),'wrong toolchain receipt'
+     assert receipt.get('profile',{}).get('name')=='release','release receipt required'
+     identity=json.loads(a.source_identity.read_text());assert identity['source_commit']==a.source_commit
+-    assert pathlib.Path(identity['source_root']).resolve()==a.source_root.resolve()
+-    for rel,expected in identity['source_sha256'].items():
+-        assert digest(a.source_root/rel)==expected,('source identity changed',rel)
++    plan['source_verification']=source_provenance.verify(identity,a.source_root.resolve())
++    if identity.get('verification_mode')=='git-objects-and-frozen-overlay':
++        assert receipt.get('source_identity_sha256')==identity['upstream_source_identity_sha256']
++        assert plan['binary_sha256']==identity['binary_sha256']
++    if a.comparison_arm=='baseline-c5':
++        assert a.source_commit=='651bf7e7e4691bd5a78b36625ff34b693be83590'
++        assert plan['binary_sha256']=='52731d4a4599a379984e16734c9b9f304593aefe64b86563c6e7032e2a16e4af'
+     (out/'plan.json').write_text(json.dumps(plan,indent=2)+'\n')
+     def bounded_db_run(arguments,stdin=None):
+         remaining=deadline-time.monotonic() if enforce_deadline else 10
+@@ -143,7 +157,12 @@
+         nonlocal phase
+         phase=name;emit('phases',{'label':name,'kernel':kernel()})
+     def sampler():
++        next_host=time.monotonic()
+         while not stop.is_set():
++            if time.monotonic()>=next_host:
++                try:emit('host-load',host_observer.sample(pid))
++                except BaseException as error:emit('host-load',{'observation_status':'UNAVAILABLE','error':repr(error)})
++                next_host=time.monotonic()+5
+             if pid:
+                 p=subprocess.run(['/bin/ps','-p',str(pid),'-o','%cpu=,rss=,time='],text=True,capture_output=True,timeout=2)
+                 values=p.stdout.split()
+@@ -251,6 +270,7 @@
+             if self.path.startswith(('/v1/projects/','/3/device/')):time.sleep(.020)
+             return super().reply(status,data)
+     try:
++        emit('host-load',host_observer.sample())
+         peer=c3_mock.C3Mock(out/'peer');peer.server.RequestHandlerClass=Delayed;peer.__enter__()
+         cmd=[str(a.binary.resolve()),'--db-url',url,'--http-addr','127.0.0.1:0','--mock-endpoint',peer.endpoint,
+             '--mock-token-service-endpoint',peer.endpoint,'--shared-token-env','C2_MOCK_SHARED_TOKEN',
+@@ -383,7 +403,9 @@
+         p.add_argument('--'+name,type=pathlib.Path,required=True)
+     p.add_argument('--source-commit',required=True);p.add_argument('--engine',choices=('pg','mysql'),required=True)
+     p.add_argument('--kernel-sampler',type=pathlib.Path,required=True)
+-    p.add_argument('--authorized-window',required=True,choices=('root-exclusive-c5',),help='Root must explicitly authorize runtime before use')
++    p.add_argument('--environment-identity',type=pathlib.Path,required=True)
++    p.add_argument('--comparison-arm',choices=('baseline-c5','early-claim-fix','final-mysql','final-pg'),required=True)
++    p.add_argument('--authorized-window',required=True,choices=('root-exclusive-c6',),help='Root must explicitly authorize runtime before use')
+     arguments=p.parse_args()
+     try:main(arguments)
+     except BaseException as error:

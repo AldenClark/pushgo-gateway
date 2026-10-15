@@ -1,0 +1,4 @@
+*.patch -whitespace
+env/isolated_db.py -whitespace
+env/fresh2/isolated_db.py -whitespace
+env/fresh3/isolated_db.py -whitespace

@@ -1,0 +1,89 @@
+--- frozen-v4/run_c6_capacity.py
++++ preparation-v6/run_c6_capacity.py
+@@ -108,7 +108,7 @@
+     child=None;pid=None;addr=None;gateway_lines=[];keys=[];channel=None;tokens={};providers={}
+     side_observation_status={'applicable':False}
+     exclusion=set();deadline=None;deadline_ticks=None;enforce_deadline=False;failure=None;final_rows=[];sql_verified=False
+-    reader_thread=None;sampler_thread=None;db_sampler_thread=None;peer=None
++    reader_thread=None;sampler_thread=None;db_sampler_thread=None;peer=None;sql_aggregate_complete_ticks=None
+     secret=hashlib.sha256(b'c5-capacity-synthetic-20261015').hexdigest()[:32]
+     env={k:v for k,v in os.environ.items() if not k.startswith(('PUSHGO_','C4_COMMIT','C5_COMMIT'))
+          and k.lower() not in ('http_proxy','https_proxy','all_proxy','no_proxy','rust_log')}
+@@ -273,13 +273,27 @@
+         op='c5:capacity:'+str(i)
+         return request('/message',{'ttl':int(time.time()*1000)+86400000,'channel_id':channel,
+             'password':secret,'op_id':op,'title':op,'body':'x'*1024},op,offer)
+-    def wait_jobs(expected,label,limit):
++    def wait_jobs(expected,label,limit,freeze_sqlaggregate=False):
++        nonlocal sql_aggregate_complete_ticks,enforce_deadline,post_completion_observation_deadline
+         while True:
+             assert time.monotonic()<limit,('fixed drain deadline exceeded',label)
+             snap=snapshot(label)
+             assert time.monotonic()<limit,('fixed drain deadline exceeded during SQL snapshot',label)
+             assert not any(snap['states'].get(k) for k in ('permanent_failed','expired','cancelled')),('terminal target failure',snap)
+             if snap['target_count']==expected and snap['states']=={'provider_accepted':expected}:
++                if freeze_sqlaggregate:
++                    tick=mach.mach_absolute_time()
++                    assert time.monotonic()<limit,('fixed drain deadline exceeded before SQL aggregate marker',label)
++                    sql_aggregate_complete_ticks=tick
++                    enforce_deadline=False
++                    validation_limit=time.monotonic()+10
++                    post_completion_observation_deadline=validation_limit
++                    try:
++                        mark('SQLaggregate_complete_before_cutoff')
++                        result=snapshot(label+'-verified',True)['dispatch_rows']
++                        assert time.monotonic()<validation_limit,('identity witness validation exceeded10s',label)
++                    finally:post_completion_observation_deadline=None
++                    return result
+                 result=snapshot(label+'-verified',True)['dispatch_rows']
+                 assert time.monotonic()<limit,('fixed drain deadline exceeded during identity witness',label)
+                 return result
+@@ -338,7 +352,7 @@
+                 future.result()
+         finally:
+             pool.shutdown(wait=True,cancel_futures=True)
+-        mark('drain-start');final_rows=wait_jobs(len(rows['offers'])*16,'drain',deadline);sql_verified=True
++        mark('drain-start');final_rows=wait_jobs(len(rows['offers'])*16,'drain',deadline,freeze_sqlaggregate=True);sql_verified=True
+         enforce_deadline=False
+         mark('provider-commit-complete');connection_counts('after-provider-commit')
+         assert all(r['attempt_count']==1 for r in final_rows),'unexpected retry'
+@@ -399,7 +413,7 @@
+             except BaseException as e:
+                 (out/'final-sql-failure.json').write_text(json.dumps({'error':repr(e)})+'\n')
+         # Every offered operation expands across all intended device targets, even if no row exists.
+-        cutoff=min(x for x in (deadline_ticks,failure_ticks) if x is not None) if deadline_ticks or failure_ticks else None
++        cutoff=deadline_ticks if sql_aggregate_complete_ticks is not None else (min(x for x in (deadline_ticks,failure_ticks) if x is not None) if deadline_ticks or failure_ticks else None)
+         accepted_ticks={};event_record=struct.Struct('<QQQ32s32sB7x')
+         if (out/'commits.bin').exists():
+             with (out/'commits.bin').open('rb') as stream:
+@@ -409,9 +423,13 @@
+                     if state in (1,2,3,4):
+                         identity_key=(delivery.decode('ascii'),device.decode('ascii'))
+                         accepted_ticks[identity_key]=min(ticks,accepted_ticks.get(identity_key,ticks))
++        callback_outcomes={}
+         with (out/'expected-targets.jsonl').open('x') as f:
+             for row in expected_target_rows(rows['offers'],keys,final_rows,rows['requests'],accepted_ticks,cutoff):
++                callback_outcomes[row['final_outcome']]=callback_outcomes.get(row['final_outcome'],0)+1
+                 f.write(json.dumps(row)+'\n')
++        if sql_aggregate_complete_ticks is not None and callback_outcomes.get('accepted',0)!=len(rows['offers'])*len(keys):
++            failure=failure or 'in-window successful callback coverage incomplete';first(failure)
+         stop.set()
+         for thread in (sampler_thread,db_sampler_thread,reader_thread):
+             if thread:thread.join(timeout=5)
+@@ -422,14 +440,14 @@
+                 expected_targets=len(rows['offers'])*len(keys),planned_targets=40960,final_sql_verified=sql_verified,
+                 excluded_acknowledged_warmup_ids=sorted(exclusion),workload_passed=failure is None,
+                 measurement_cutoff_mach_ticks=cutoff,absolute_deadline_mach_ticks=deadline_ticks,
+-                first_failure_mach_ticks=failure_ticks)
++                first_failure_mach_ticks=failure_ticks,SQLaggregate_complete_before_cutoff_mach_ticks=sql_aggregate_complete_ticks)
+             (out/'telemetry.json').write_text(json.dumps(telemetry,indent=2)+'\n')
+         clean=bool(gateway_lines and any(re.search(r'^SHUTDOWN .*joined=[1-9][0-9]* panicked=0 aborted=0 http_timed_out=false',line) for line in gateway_lines))
+         if exit_code!=0 or not clean:
+             failure=failure or 'fixture exit/SHUTDOWN not clean';first(failure,exit_code=exit_code)
+         if any(thread and thread.is_alive() for thread in (sampler_thread,db_sampler_thread,reader_thread)):
+             failure=failure or 'observer thread not joined';first(failure)
+-        result={'failure':failure,'side_observation':side_observation_status,'exit_code':exit_code,'offered_messages':len(rows['offers']),
++        result={'failure':failure,'SQLaggregate_complete_before_cutoff_mach_ticks':sql_aggregate_complete_ticks,'callback_outcomes':callback_outcomes,'side_observation':side_observation_status,'exit_code':exit_code,'offered_messages':len(rows['offers']),
+             'planned_messages':2560,'offered_targets':len(rows['offers'])*len(keys),'planned_targets':40960,
+             'producer_final':producer,'final_sql_verified':sql_verified,'clean_shutdown':clean,
+             'admission_queue_wait':quantiles([r['offer_to_http_start_ms'] for r in rows['requests'] if r['offer_to_http_start_ms'] is not None]),

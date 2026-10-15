@@ -1,0 +1,11 @@
+--- final_owned_remove.before-lsof-and.prepared-only.py
++++ final_owned_remove.py
+@@ -51,7 +51,7 @@
+   active['status']='ALL_C6_OWNED_ENVIRONMENTS_REMOVED';active['final_retirement_receipt']=str(P);active['retired_cases']=active.get('retired_cases',[])+[dict(e,status='RETIRED_FINAL_ENVIRONMENT_REMOVED') for e in active.get('cases',[])];active['cases']=[];manifest.write_text(json.dumps(active,indent=2)+'\n')
+   r['remaining_container_inventory']=call(D+['ps','-a','--no-trunc','--format','{{json .}}']).splitlines();r['orbstack_restore']='NOT_ATTEMPTED'
+   if x.root_restore_initial_orbstack_approved:
+-   vm=subprocess.run(['orb','list'],capture_output=True,text=True,timeout=7);proc=subprocess.run(['ps','-axo','pid=,comm='],capture_output=True,text=True,timeout=7);sock=subprocess.run(['lsof','-n','-U',str(pathlib.Path.home()/'.orbstack/run/docker.sock')],capture_output=True,text=True,timeout=7)
++   vm=subprocess.run(['orb','list'],capture_output=True,text=True,timeout=7);proc=subprocess.run(['ps','-axo','pid=,comm='],capture_output=True,text=True,timeout=7);sock=subprocess.run(['lsof','-n','-a','-U',str(pathlib.Path.home()/'.orbstack/run/docker.sock')],capture_output=True,text=True,timeout=7)
+    suspicious=[l for l in proc.stdout.splitlines() if any(w in l.lower() for w in ['cargo','rustc','xcodebuild','gradle','emulator','buildkit','containerd-shim'])];r['restore_guards']={'remaining_containers':r['remaining_container_inventory'],'orb_list':vm.stdout,'build_clients':suspicious,'docker_socket_clients':sock.stdout}
+    # Any unexplained socket client is conservative STOP-RUNNING, never guess ownership.
+    socketlines=[l for l in sock.stdout.splitlines()[1:] if l and not l.startswith('OrbStack')]
