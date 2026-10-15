@@ -162,6 +162,7 @@ struct ClaimReservation {
 impl ClaimReservation {
     fn new(counters: Arc<Counters>, index: usize, amount: usize) -> Self {
         counters.claim_reservations[index].store(amount as u64, Ordering::Relaxed);
+        counters.peak_claim_reservations[index].fetch_max(amount as u64, Ordering::Relaxed);
         Self { counters, index }
     }
 }
@@ -172,34 +173,15 @@ impl Drop for ClaimReservation {
 }
 struct PhaseGuard<'a>(&'a std::sync::atomic::AtomicU64);
 impl<'a> PhaseGuard<'a> {
-    fn new(counter: &'a std::sync::atomic::AtomicU64) -> Self {
-        counter.fetch_add(1, Ordering::Relaxed);
+    fn new(counter: &'a std::sync::atomic::AtomicU64, peak: &std::sync::atomic::AtomicU64) -> Self {
+        let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
+        peak.fetch_max(current, Ordering::Relaxed);
         Self(counter)
     }
 }
 impl Drop for PhaseGuard<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-struct ConcurrencyTarget {
-    value: usize,
-    warm_until: Instant,
-}
-impl ConcurrencyTarget {
-    fn observe(&mut self, owned: usize, ready: usize, cap: usize, demand: bool) {
-        let desired = owned.saturating_add(ready).min(cap);
-        let at = Instant::now();
-        if !demand {
-            self.value = cap;
-        } else if desired == 0 {
-            self.value = 0;
-        } else if desired > self.value {
-            self.value = desired;
-            self.warm_until = at + Duration::from_secs(2);
-        } else if at >= self.warm_until {
-            self.value = desired;
-        }
     }
 }
 impl Drop for AttemptGuard {
@@ -221,10 +203,6 @@ async fn pump(
     let mut attempts: FuturesUnordered<AttemptFuture> = FuturesUnordered::new();
     let mut claim: Option<ClaimFuture> = None;
     let mut reservation = None;
-    let mut target = ConcurrencyTarget {
-        value: 0,
-        warm_until: Instant::now(),
-    };
     let mut next_due = None;
     let mut needs_claim = true;
     let mut retry_first = false;
@@ -247,12 +225,6 @@ async fn pump(
         let free = store.config.provider_budget - attempts.len();
         if claim.is_none() && needs_claim && free > 0 {
             let reserved = free.min(store.config.claim_quantum);
-            let owned = attempts.len();
-            let warm_target = if Instant::now() < target.warm_until {
-                target.value
-            } else {
-                owned
-            };
             reservation = Some(ClaimReservation::new(
                 store.counters.clone(),
                 index,
@@ -260,9 +232,7 @@ async fn pump(
             ));
             let store = store.clone();
             claim = Some(Box::pin(async move {
-                store
-                    .claim_reserved(provider, reserved, retry_first, free, owned, warm_target)
-                    .await
+                store.claim_reserved(provider, reserved, retry_first).await
             }));
             needs_claim = false;
             retry_first = !retry_first;
@@ -283,8 +253,9 @@ async fn pump(
                 if attempts.is_empty() && batch.tickets.is_empty() && !batch.has_more {
                     transport.quiesce(provider);
                 }
-                target.observe(attempts.len(), batch.ready, store.config.provider_budget, store.config.demand_scaling);
-                store.counters.provider_targets[index].store(target.value as u64, Ordering::Relaxed);
+                let active = !attempts.is_empty() || !batch.tickets.is_empty() || batch.next_due.is_some();
+                store.counters.provider_targets[index].store(
+                    if active { store.config.provider_budget as u64 } else { 0 }, Ordering::Relaxed);
                 // Synchronous ownership transfer: no await between releasing
                 // the reservation and adopting its committed grants.
                 drop(reservation.take());
@@ -298,9 +269,8 @@ async fn pump(
                 result.unwrap()?;needs_claim=true;
                 // A pending COMMIT may already own unadopted grants. Its
                 // metadata-phase target must survive unrelated completions.
-                if claim.is_none() {
-                    target.observe(attempts.len(), 0, store.config.provider_budget, store.config.demand_scaling);
-                    store.counters.provider_targets[index].store(target.value as u64, Ordering::Relaxed);
+                if claim.is_none() && attempts.is_empty() && next_due.is_none() {
+                    store.counters.provider_targets[index].store(0, Ordering::Relaxed);
                 }
             }
             _=store.wake[index].notified()=>{needs_claim=true;}
@@ -319,8 +289,12 @@ pub(super) async fn attempt(
         } else {
             "superseded_route"
         };
-        let _receipt = PhaseGuard::new(&store.counters.receipts_owned);
-        return store
+        let _receipt = PhaseGuard::new(
+            &store.counters.receipts_owned,
+            &store.counters.peak_receipts_owned,
+        );
+        let receipt_started = Instant::now();
+        let settled = store
             .settle(
                 &ticket,
                 state,
@@ -330,13 +304,29 @@ pub(super) async fn attempt(
                 None,
             )
             .await;
+        record_duration(
+            receipt_started,
+            &store.counters.receipt_samples,
+            &store.counters.receipt_total_us,
+            &store.counters.receipt_max_us,
+        );
+        return settled;
     }
     let platform = super::store::supported_platform(&ticket.platform)?;
     store
         .counters
         .network_attempts
         .fetch_add(1, Ordering::Relaxed);
-    let network = PhaseGuard::new(&store.counters.network_inflight);
+    let network = PhaseGuard::new(
+        &store.counters.network_inflight,
+        &store.counters.peak_network_inflight,
+    );
+    let network_started = Instant::now();
+    if ticket.attempts == 1 {
+        store.counters.timings.queue.record(Duration::from_millis(
+            now().saturating_sub(ticket.accepted_at).max(0) as u64,
+        ));
+    }
     let result = transport
         .send(
             &ticket.provider,
@@ -349,8 +339,23 @@ pub(super) async fn attempt(
             ticket.expires_at,
         )
         .await;
+    store
+        .counters
+        .timings
+        .network
+        .record(network_started.elapsed());
+    record_duration(
+        network_started,
+        &store.counters.network_samples,
+        &store.counters.network_total_us,
+        &store.counters.network_max_us,
+    );
     drop(network);
-    let _receipt = PhaseGuard::new(&store.counters.receipts_owned);
+    let receipt_started = Instant::now();
+    let _receipt = PhaseGuard::new(
+        &store.counters.receipts_owned,
+        &store.counters.peak_receipts_owned,
+    );
     let at = now();
     let (state, due) = if result.success {
         ("provider_accepted", at)
@@ -369,7 +374,7 @@ pub(super) async fn attempt(
         ("permanent_failed", at)
     };
     let cooldown = (result.status_code == 429).then_some(due);
-    store
+    let settled = store
         .settle(
             &ticket,
             state,
@@ -378,5 +383,37 @@ pub(super) async fn attempt(
             due,
             cooldown,
         )
-        .await
+        .await;
+    record_duration(
+        receipt_started,
+        &store.counters.receipt_samples,
+        &store.counters.receipt_total_us,
+        &store.counters.receipt_max_us,
+    );
+    store
+        .counters
+        .timings
+        .receipt
+        .record(receipt_started.elapsed());
+    if settled.is_ok() && state != "retry_wait" {
+        store
+            .counters
+            .timings
+            .end_to_end
+            .record(Duration::from_millis(
+                now().saturating_sub(ticket.accepted_at).max(0) as u64,
+            ));
+    }
+    settled
+}
+fn record_duration(
+    started: Instant,
+    samples: &std::sync::atomic::AtomicU64,
+    total: &std::sync::atomic::AtomicU64,
+    maximum: &std::sync::atomic::AtomicU64,
+) {
+    let micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+    samples.fetch_add(1, Ordering::Relaxed);
+    total.fetch_add(micros, Ordering::Relaxed);
+    maximum.fetch_max(micros, Ordering::Relaxed);
 }

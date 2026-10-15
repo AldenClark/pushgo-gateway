@@ -48,9 +48,9 @@ fn request(channel: &str, auth: &str, op: &str) -> AcceptRequest {
         channel_id: channel.into(),
         password: auth.into(),
         title: "synthetic title".into(),
-        body: "synthetic body".into(),
-        op_id: op.into(),
-        ttl: None,
+        body: Some("synthetic body".into()),
+        op_id: Some(op.into()),
+        ..AcceptRequest::default()
     }
 }
 
@@ -84,17 +84,14 @@ async fn complete_fanout_fixed_identity_conflict_and_ack_never_replays() {
     assert_eq!(accepted.delivery_id, replay.delivery_id);
     assert_eq!(accepted.message_id, replay.message_id);
     let mut conflict = input.clone();
-    conflict.body.push('!');
+    conflict.body.as_mut().unwrap().push('!');
     assert!(matches!(
         store.accept(conflict).await,
         Err(KernelError::Conflict)
     ));
     let before = store.pull(&device, None).await.unwrap();
     assert_eq!(before["items"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        before["items"][0]["payload"]["delivery_id"],
-        accepted.delivery_id
-    );
+    assert_eq!(before["items"][0]["delivery_id"], accepted.delivery_id);
     assert_eq!(
         store
             .ack(&device, vec![accepted.delivery_id.clone()])
@@ -168,13 +165,14 @@ async fn provider_receipt_and_client_ack_are_independent_in_both_orders() {
                 .unwrap()
                 .is_empty()
         );
-        let row = sqlx::query("SELECT state,acked_at FROM targets WHERE delivery_id=?")
+        let row = sqlx::query("SELECT status,payload_bytes,(SELECT COUNT(*) FROM targets t WHERE t.delivery_id=m.delivery_id) AS targets FROM messages m WHERE delivery_id=?")
             .bind(accepted.delivery_id)
             .fetch_one(&store.pool)
             .await
             .unwrap();
-        assert_eq!(row.get::<String, _>("state"), "provider_accepted");
-        assert!(row.get::<Option<i64>, _>("acked_at").is_some());
+        assert_eq!(row.get::<String, _>("status"), "sent");
+        assert_eq!(row.get::<i64, _>("targets"), 0);
+        assert_eq!(row.get::<i64, _>("payload_bytes"), 0);
     }
     close(store, owner).await;
 }
@@ -414,7 +412,7 @@ async fn stale_route_is_superseded_before_any_network_send() {
         .unwrap();
     assert_eq!(transport.started.load(Ordering::Relaxed), 0);
     assert_eq!(
-        store.status("route-update").await.unwrap()["targets"][0]["state"],
+        store.target_status("route-update").await.unwrap()["targets"][0]["state"],
         json!("superseded_route")
     );
     close(store, owner).await;
@@ -475,11 +473,16 @@ async fn idle_runtime() -> (
     String,
     String,
 ) {
-    let (dir, url, store, owner) = open(Config::default()).await;
+    let config = Config {
+        provider_budget: 8,
+        claim_quantum: 8,
+        ..Config::default()
+    };
+    let (dir, url, store, owner) = open(config.clone()).await;
     let (device, channel, auth) = directory(&store).await;
     close(store, owner).await;
     let transport = Arc::new(ControlledTransport::default());
-    let runtime = DeliveryRuntime::start(&url, Config::default(), transport.clone())
+    let runtime = DeliveryRuntime::start(&url, config, transport.clone())
         .await
         .unwrap();
     until(|| runtime.store.counters.claim_queries.load(Ordering::Relaxed) >= 2).await;
@@ -643,7 +646,7 @@ async fn committed_admission_caller_abort_still_wakes_idle_owner_without_replay(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn demand_reservation_bounds_real_committed_grants_and_shrinks_without_cancellation() {
+async fn reservation_bounds_real_committed_grants_and_owned_work_falls_without_cancellation() {
     let (_dir, _url, runtime, transport, device, channel, auth) = idle_runtime().await;
     let store = runtime.store.clone();
     let first = Arc::new(super::store::CommitBarrier::default());
@@ -669,7 +672,7 @@ async fn demand_reservation_bounds_real_committed_grants_and_shrinks_without_can
     *store.hooks.claim_after_commit.lock().unwrap() = Some(second.clone());
     first.resume.notify_one();
     reached(&second).await;
-    // The library default hard cap is 8. One adopted attempt plus seven
+    // This test configures ceiling8. One adopted attempt plus seven
     // committed, unadopted grants fills it; notifications cannot discard grants.
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM targets WHERE state='running'")
@@ -712,9 +715,12 @@ async fn demand_reservation_bounds_real_committed_grants_and_shrinks_without_can
     }
     until(|| store.counters.receipt_commits.load(Ordering::Relaxed) == 6).await;
     assert_eq!(store.counters.owned_attempts.load(Ordering::Relaxed), 2);
-    tokio::time::sleep(Duration::from_millis(2100)).await;
-    store.notify(); // warm expiry alone does not schedule a scan
-    until(|| store.counters.provider_targets[0].load(Ordering::Relaxed) == 2).await;
+    // Actual work shrinks immediately; the configured logical target stays at
+    // its safety ceiling until all work drains, without any warm-up timer.
+    assert_eq!(
+        store.counters.provider_targets[0].load(Ordering::Relaxed),
+        8
+    );
     assert_eq!(transport.finished.load(Ordering::Relaxed), 6);
     assert_eq!(store.counters.network_inflight.load(Ordering::Relaxed), 2);
     assert_eq!(
@@ -752,6 +758,7 @@ async fn idle_low_demand_and_blocked_receipt_have_distinct_real_ownership() {
                 .claim_reservations
                 .iter()
                 .all(|a| a.load(Ordering::Relaxed) == 0)
+            && store.counters.num_alive.load(Ordering::Relaxed) == 2
     })
     .await;
     let scans = store.counters.claim_queries.load(Ordering::Relaxed);
@@ -764,7 +771,7 @@ async fn idle_low_demand_and_blocked_receipt_have_distinct_real_ownership() {
     until(|| transport.started.load(Ordering::Relaxed) == 1).await;
     assert_eq!(
         store.counters.provider_targets[0].load(Ordering::Relaxed),
-        1
+        store.config.provider_budget as u64
     );
     assert_eq!(store.counters.network_inflight.load(Ordering::Relaxed), 1);
     let gate = store.gate.lock().await;
@@ -862,7 +869,7 @@ async fn durable_retry_wait_releases_position_and_does_not_scan_during_cooldown(
     assert_eq!(store.counters.receipts_owned.load(Ordering::Relaxed), 0);
     assert_eq!(
         store.counters.provider_targets[0].load(Ordering::Relaxed),
-        0
+        store.config.provider_budget as u64
     );
     let scans = store.counters.claim_queries.load(Ordering::Relaxed);
     tokio::time::sleep(Duration::from_millis(40)).await;
@@ -920,7 +927,7 @@ async fn legacy_pull_atomically_acks_only_returned_items() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn demand_grows_to_hard_cap_32_using_bounded_grants() {
+async fn lazy_work_grows_to_configured_ceiling_32_using_bounded_grants() {
     let config = Config {
         provider_budget: 32,
         ..Config::default()
@@ -1076,7 +1083,6 @@ async fn fixed_32_quantum_32_is_lazy_at_idle_and_bounded_at_real_claim_commit() 
     let config = Config {
         provider_budget: 32,
         claim_quantum: 32,
-        demand_scaling: false,
         ..Config::default()
     };
     let (_dir, url, store, owner) = open(config.clone()).await;
@@ -1087,12 +1093,13 @@ async fn fixed_32_quantum_32_is_lazy_at_idle_and_bounded_at_real_claim_commit() 
         .await
         .unwrap();
     let store = runtime.store.clone();
+    until(|| store.counters.num_alive.load(Ordering::Relaxed) == 2).await;
     until(|| {
         store
             .counters
             .provider_targets
             .iter()
-            .all(|a| a.load(Ordering::Relaxed) == 32)
+            .all(|a| a.load(Ordering::Relaxed) == 0)
             && store
                 .counters
                 .claim_reservations
@@ -1158,7 +1165,6 @@ async fn provider_quiesce_waits_for_owned_attempts_and_continuous_backlog_to_dra
     let config = Config {
         provider_budget: 1,
         claim_quantum: 1,
-        demand_scaling: false,
         ..Config::default()
     };
     let (_dir, url, store, owner) = open(config.clone()).await;

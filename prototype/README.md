@@ -1,17 +1,29 @@
-# C 普通消息第一切片原型
+# C：普通消息合同候选
 
-独立 Rust crate，入口仅允许本地合成 SQLite 和 loopback Provider Mock，不接真实凭据或用户数据库。冻结原 C32 在另一个目录；本目录是本轮候选。
+独立单机 SQLite crate，当前可执行入口只连接本地 Provider Mock。保留主线 SQLite、PostgreSQL、MySQL 的产品范围；本候选尚无 PG/MySQL 适配，也没有接通远程 Token Service 或真实 APNs。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。
 
-正文保存一次，收件人/Provider结果/ACK保存在targets；接纳与全部冻结目标一笔事务提交。两个Provider驱动按需持有attempt futures，领取reservation在payload加载前限制数量。Direct/Pull共享稳定字符串payload，包括可信配置base_url、ID、首次时间和绝对expiry。支持legacy/V2 ACK及带路径前缀的路由。
+## 已实现的普通消息边界
 
-本轮执行策略为固定H32/Q32的懒执行，actual0→64→0，目标上限不缩放；无per-attempt Tokio task。FCM/APNs各自按需创建HTTP client，连续积压保留各≤32 idle connection，空claim提交且工作完成后释放，无连接清理timer。库实验默认仍是H8/Q8+demand，fixture显式选fixed32。demand选项仅为可复核消融保留，产品接入前应收敛默认值和模式。
+`POST /message` 接受可选 op_id、body、severity、绝对 TTL、occurred_at、URL、images、ciphertext、tags、metadata，按主线规则规范化；拒绝由 Sender 指定 message_id。省略 op_id 每次生成新操作，显式 op_id 的相同输入保持同一消息、投递身份、正文和首次时间，冲突不修改已接纳结果。省略 TTL 不向客户端补写 TTL；账本默认采用现行低资源配置的 7 天队列保留，显式绝对 TTL 最多到首次接纳后 30 天。
 
-单连接SQLite事务使用WAL+FULL；进程内mutation mutex串行化写入；规范化路径OS文件锁防止重复启动。正常退出停止HTTP、释放attempt/receipt事务、等待保留claim、关闭pool，再释放锁。异常Drop保留锁到进程退出；新owner恢复running行。断电、存储故障及硬链接别名保护未验证。
+正文保存一次，全部有效收件人用一笔 INSERT SELECT 事务冻结。Direct、V2 Pull、直接单条 ACK、V2 批量 ACK 共用稳定身份和可信配置 base_url，支持路径前缀；V2 外层 delivery_id 为准。`GET /send_status/{op_id}` 与 fixture 目标诊断分离。普通客户端所用 ACK 路径不意味着对退役客户端新增兼容承诺。
 
-Root已运行25个原生Rust测试、Clippy all-targets -Dwarnings、Release负载比较，以及原样Apple Shared/GRDB+URLSession和Android5文件/JVM HttpURLConnection两个真实网络oracle。精确范围、原始失败、资源与复杂度见上两级report.md。
+频道密码保存为主线格式的加盐哈希，兼容旧 Argon2 验证，旧算法执行位置有界。共享 Bearer 认证先于 JSON 解析；关闭共享认证时沿用现行密码接口每 IP 每分钟 60、全局每分钟 1200 次限制。错误不返回数据库错误、凭据或请求正文。路由版本随实际变更递增，旧 A→B→A 回执不能删除新订阅；失效令牌只清理匹配原版本的受影响频道订阅。
 
-可在本目录使用缓存依赖复现 cargo test --locked --offline --lib 及 cargo clippy --locked --offline --all-targets -- -D warnings，不写冻结C32目录。
+凭据注入接口遵循现行 FCM/APNs 获取和强制刷新语义；没有新增缓存或内联重新发送。只有合成凭据和 Mock 覆盖，远程凭据服务及生产传输接线仍未验证。
 
-fixture参数：--db-url sqlite://…?mode=rwc --http-addr 127.0.0.1:0 --mock-endpoint http://127.0.0.1:<port> --provider-budget 32 --claim-quantum 32 --concurrency-mode fixed --public-base-url http://127.0.0.1:<port>/gateway。
+## 所有权和资源
 
-完整SenderDTO、安全、正式sender-status、Event/Thing/Watch/WNS、真实通知wakeup及PG/MySQL适配尚未实施。35天保留、10,000 messages、1,000,000 targets、64MiB aggregate payload都是继承的实验配置，ACK不释放容量，不是产品默认或百万规模承诺。任务数量有界不等于全SQL扫描/事务时长/RSS有界；Provider回复及HTTP2输入预算仍需补齐。
+库与 fixture 都以 Config 为默认来源。当前 H32/Q32 是实验默认，可配置安全上限；不是已批准的产品最大值。两个 Provider 驱动按需持有 FuturesUnordered 工作，不预建全部 worker。领取 reservation 在加载正文前占预算；工作持续拥有执行位置直到结果事务提交。退避留在 SQL，不占网络位置；没有动态目标控制器和周期空队列扫描。关闭时先释放 attempt/receipt，再等待已保留的 claim，避免持锁等待环。
+
+输入沿用 32 KiB；128 个连接在创建连接任务前受限，HTTP/2 每连接默认通告 1 个并发 stream，使合规客户端在协议层排队；128 个请求处理位置为发送和控制请求保留独立预算。Provider 回复最多累计 16 KiB，保留状态与 Retry-After，2xx 的诊断正文失败不触发重发。Provider 连接池按安全上限配置，连续积压保留，真正空闲后释放，无额外清理定时器。
+
+未完成冻结消息 10,000、待执行 Provider 目标 1,000,000 沿用主线边界；事务计数避免每次接纳全表 COUNT/SUM。实验聚合正文限额默认关闭。ACK 释放正文和投递队列，进行中工作保留到结果提交；身份、指纹和状态完整保留 30 天。过期正文和身份清理各采用有界 256 条批次，索引不把整段历史加载到内存。
+
+**本轮没有历史数量或字节硬配额。磁盘随 30 天接纳量增长，不能声称存在固定磁盘上限。** 逻辑删除、可复用空闲页、WAL checkpoint 和文件实际大小分别测量。SQLite WAL+FULL、单连接和短时进程内 mutation 锁保留；规范化路径 OS 文件锁阻止多进程误开。没有分布式调度、选主或租约。
+
+## 验证与复现
+
+使用缓存依赖：`cargo test --locked --offline --lib`；`cargo clippy --locked --offline --all-targets -- -D warnings`。历史测量单独显式运行 ignored 的 `measure_compact_history_query_admission_gc_and_disk_space`，环境变量 C2_HISTORY_OUT 必须指向尚不存在的目录。测试覆盖真实 SQL COMMIT 前后、接管前、结果未知、等待提交、ACK 两种顺序、重启、SQLITE_FULL 和有限重复请求；不把 Mock 结果当生产验收。
+
+本轮原始日志、第一次失败、客户端原生测试、三方 Release 比较和源文件/二进制身份记录位于主仓库 `build/quality-results/c-single-ledger-contract-20261015/`。上一轮 C1 及原 C32 目录保持原样。最终报告记录准确提交和对应测试，客户端应用控制器、原生存储、进程重开、系统后台交付分别标明范围。

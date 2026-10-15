@@ -1,5 +1,11 @@
+pub use crate::sender::AcceptRequest;
 use crate::types::{Platform, generate_hex_id_128, normalize_provider_token};
-use serde::{Deserialize, Serialize};
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordVerifier},
+};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{
     Row, SqlitePool,
@@ -29,7 +35,8 @@ pub struct Config {
     pub max_handlers: usize,
     pub provider_budget: usize,
     pub claim_quantum: usize,
-    pub demand_scaling: bool,
+    pub default_ttl_secs: i64,
+    pub dedupe_retention_ms: i64,
     pub public_base_url: String,
 }
 impl Default for Config {
@@ -37,12 +44,13 @@ impl Default for Config {
         Self {
             max_messages: 10_000,
             max_targets: 1_000_000,
-            max_payload_bytes: 64 * 1024 * 1024,
+            max_payload_bytes: i64::MAX,
             max_body_bytes: 32 * 1024,
             max_handlers: 128,
-            provider_budget: 8,
-            claim_quantum: 8,
-            demand_scaling: true,
+            provider_budget: 32,
+            claim_quantum: 32,
+            default_ttl_secs: 7 * 86_400,
+            dedupe_retention_ms: 30 * 86_400_000,
             public_base_url: "http://127.0.0.1:65535".into(),
         }
     }
@@ -55,6 +63,10 @@ pub enum KernelError {
     Invalid(String),
     #[error("operation fingerprint conflict")]
     Conflict,
+    #[error("op_id is already used by a different operation")]
+    ScopeConflict,
+    #[error("send status not found")]
+    NotFound,
     #[error("authority capacity exceeded")]
     Capacity,
     #[error("channel authorization failed")]
@@ -69,6 +81,25 @@ pub enum KernelError {
 pub type Result<T> = std::result::Result<T, KernelError>;
 #[derive(Default)]
 pub struct Counters {
+    pub timings: crate::metrics::Timings,
+    pub peak_claim_reservations: [AtomicU64; 2],
+    pub network_samples: AtomicU64,
+    pub network_total_us: AtomicU64,
+    pub network_max_us: AtomicU64,
+    pub receipt_samples: AtomicU64,
+    pub receipt_total_us: AtomicU64,
+    pub receipt_max_us: AtomicU64,
+    pub peak_network_inflight: AtomicU64,
+    pub peak_receipts_owned: AtomicU64,
+    pub admission_commit_samples: AtomicU64,
+    pub admission_commit_total_us: AtomicU64,
+    pub admission_commit_max_us: AtomicU64,
+    pub receipt_commit_samples: AtomicU64,
+    pub receipt_commit_total_us: AtomicU64,
+    pub receipt_commit_max_us: AtomicU64,
+    pub gate_wait_samples: AtomicU64,
+    pub gate_wait_total_us: AtomicU64,
+    pub gate_wait_max_us: AtomicU64,
     pub sql_operations: AtomicU64,
     pub claim_queries: AtomicU64,
     pub admission_commits: AtomicU64,
@@ -91,7 +122,7 @@ pub struct Counters {
 impl Counters {
     pub fn snapshot(&self) -> Value {
         let get = |a: &AtomicU64| a.load(Ordering::Relaxed);
-        json!({"sql_operations":get(&self.sql_operations),"claim_queries":get(&self.claim_queries),"admission_commits":get(&self.admission_commits),"receipt_commits":get(&self.receipt_commits),"ack_commits":get(&self.ack_commits),"owned_attempts":get(&self.owned_attempts),"peak_owned_attempts":get(&self.peak_owned_attempts),"network_attempts":get(&self.network_attempts),"num_alive":get(&self.num_alive),"db_errors":get(&self.db_errors),"provider_targets":[get(&self.provider_targets[0]),get(&self.provider_targets[1])],"claim_reservations":[get(&self.claim_reservations[0]),get(&self.claim_reservations[1])],"network_inflight":get(&self.network_inflight),"receipts_owned":get(&self.receipts_owned),"provider_owned":[get(&self.provider_owned[0]),get(&self.provider_owned[1])],"provider_claim_queries":[get(&self.provider_claim_queries[0]),get(&self.provider_claim_queries[1])],"http_connections":get(&self.http_connections),"peak_http_connections":get(&self.peak_http_connections)})
+        json!({"network_samples":get(&self.network_samples),"network_total_us":get(&self.network_total_us),"network_max_us":get(&self.network_max_us),"receipt_samples":get(&self.receipt_samples),"receipt_total_us":get(&self.receipt_total_us),"receipt_max_us":get(&self.receipt_max_us),"peak_network_inflight":get(&self.peak_network_inflight),"peak_receipts_owned":get(&self.peak_receipts_owned),"admission_commit_samples":get(&self.admission_commit_samples),"admission_commit_total_us":get(&self.admission_commit_total_us),"admission_commit_max_us":get(&self.admission_commit_max_us),"receipt_commit_samples":get(&self.receipt_commit_samples),"receipt_commit_total_us":get(&self.receipt_commit_total_us),"receipt_commit_max_us":get(&self.receipt_commit_max_us),"gate_wait_samples":get(&self.gate_wait_samples),"gate_wait_total_us":get(&self.gate_wait_total_us),"gate_wait_max_us":get(&self.gate_wait_max_us),"peak_claim_reservations":[get(&self.peak_claim_reservations[0]),get(&self.peak_claim_reservations[1])],"sql_operations":get(&self.sql_operations),"claim_queries":get(&self.claim_queries),"admission_commits":get(&self.admission_commits),"receipt_commits":get(&self.receipt_commits),"ack_commits":get(&self.ack_commits),"owned_attempts":get(&self.owned_attempts),"peak_owned_attempts":get(&self.peak_owned_attempts),"network_attempts":get(&self.network_attempts),"num_alive":get(&self.num_alive),"db_errors":get(&self.db_errors),"provider_targets":[get(&self.provider_targets[0]),get(&self.provider_targets[1])],"claim_reservations":[get(&self.claim_reservations[0]),get(&self.claim_reservations[1])],"network_inflight":get(&self.network_inflight),"receipts_owned":get(&self.receipts_owned),"provider_owned":[get(&self.provider_owned[0]),get(&self.provider_owned[1])],"provider_claim_queries":[get(&self.provider_claim_queries[0]),get(&self.provider_claim_queries[1])],"http_connections":get(&self.http_connections),"peak_http_connections":get(&self.peak_http_connections)})
     }
     pub(super) fn sql(&self, n: u64) {
         self.sql_operations.fetch_add(n, Ordering::Relaxed);
@@ -163,17 +194,6 @@ impl CommitBarrier {
         self.resume.notified().await;
     }
 }
-#[derive(Debug, Deserialize, Clone)]
-pub struct AcceptRequest {
-    pub channel_id: String,
-    pub password: String,
-    pub title: String,
-    #[serde(default)]
-    pub body: String,
-    pub op_id: String,
-    #[serde(default)]
-    pub ttl: Option<u32>,
-}
 #[derive(Debug, Serialize, Clone)]
 pub struct Accepted {
     pub delivery_id: String,
@@ -189,6 +209,7 @@ pub(super) struct Ticket {
     pub platform: String,
     pub provider: String,
     pub token: String,
+    pub route_generation: i64,
     pub attempt_id: i64,
     pub attempts: i64,
     pub payload: Value,
@@ -198,30 +219,40 @@ pub(super) struct Ticket {
 pub(super) struct ClaimBatch {
     pub tickets: Vec<Ticket>,
     pub next_due: Option<i64>,
-    pub ready: usize,
     pub has_more: bool,
 }
 const SCHEMA:&str="
-CREATE TABLE IF NOT EXISTS messages(delivery_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,fingerprint TEXT NOT NULL,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,dedupe_until INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS targets(delivery_id TEXT NOT NULL REFERENCES messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,PRIMARY KEY(delivery_id,device_key));
+CREATE TABLE IF NOT EXISTS messages(delivery_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,fingerprint TEXT NOT NULL,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,dedupe_until INTEGER NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,pending_targets INTEGER NOT NULL DEFAULT 0,provider_accepted_count INTEGER NOT NULL DEFAULT 0,provider_failed_count INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS targets(delivery_id TEXT NOT NULL REFERENCES messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,route_generation INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,PRIMARY KEY(delivery_id,device_key));
 CREATE INDEX IF NOT EXISTS targets_due ON targets(provider,state,next_attempt_at,delivery_id) WHERE acked_at IS NULL;
 CREATE INDEX IF NOT EXISTS targets_device ON targets(device_key,delivery_id) WHERE acked_at IS NULL;
 CREATE INDEX IF NOT EXISTS messages_retention ON messages(dedupe_until);
-CREATE TABLE IF NOT EXISTS devices(device_key TEXT PRIMARY KEY,platform TEXT NOT NULL,provider TEXT,provider_token TEXT);
-CREATE TABLE IF NOT EXISTS channels(channel_id TEXT PRIMARY KEY,channel_name TEXT NOT NULL,password TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS messages_expiry ON messages(expires_at,delivery_id) WHERE payload_bytes>0;
+CREATE TABLE IF NOT EXISTS ledger_usage(singleton INTEGER PRIMARY KEY CHECK(singleton=1),messages INTEGER NOT NULL,targets INTEGER NOT NULL,bytes INTEGER NOT NULL);
+INSERT OR IGNORE INTO ledger_usage VALUES(1,0,0,0);
+CREATE TRIGGER IF NOT EXISTS messages_usage_insert AFTER INSERT ON messages BEGIN UPDATE ledger_usage SET messages=messages+(NEW.pending_targets>0),bytes=bytes+NEW.payload_bytes WHERE singleton=1; END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_update AFTER UPDATE OF payload_bytes,pending_targets ON messages BEGIN UPDATE ledger_usage SET messages=messages+(NEW.pending_targets>0)-(OLD.pending_targets>0),bytes=bytes+NEW.payload_bytes-OLD.payload_bytes WHERE singleton=1; END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_delete AFTER DELETE ON messages BEGIN UPDATE ledger_usage SET messages=messages-(OLD.pending_targets>0),bytes=bytes-OLD.payload_bytes WHERE singleton=1; END;
+CREATE TRIGGER IF NOT EXISTS targets_usage_insert AFTER INSERT ON targets WHEN NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait') BEGIN UPDATE ledger_usage SET targets=targets+1 WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets+1 WHERE delivery_id=NEW.delivery_id; END;
+CREATE TRIGGER IF NOT EXISTS targets_usage_update AFTER UPDATE OF acked_at,state ON targets BEGIN UPDATE ledger_usage SET targets=targets+(NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait'))-(OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait')) WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets+(NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait'))-(OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait')) WHERE delivery_id=NEW.delivery_id; END;
+CREATE TRIGGER IF NOT EXISTS targets_usage_delete AFTER DELETE ON targets WHEN OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait') BEGIN UPDATE ledger_usage SET targets=targets-1 WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets-1 WHERE delivery_id=OLD.delivery_id; END;
+CREATE TABLE IF NOT EXISTS devices(device_key TEXT PRIMARY KEY,platform TEXT NOT NULL,provider TEXT,provider_token TEXT,route_generation INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS channels(channel_id TEXT PRIMARY KEY,channel_name TEXT NOT NULL,password_hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS channel_subscriptions(channel_id TEXT NOT NULL REFERENCES channels(channel_id),device_key TEXT NOT NULL REFERENCES devices(device_key),PRIMARY KEY(channel_id,device_key));
 CREATE TABLE IF NOT EXISTS provider_cooldowns(provider TEXT PRIMARY KEY,next_attempt_at INTEGER NOT NULL);
 ";
 impl DeliveryStore {
     pub(super) async fn open(db_url: &str, mut config: Config) -> Result<(Self, OwnerLock)> {
         if config.provider_budget == 0
-            || config.provider_budget > 32
             || config.claim_quantum == 0
-            || config.claim_quantum > 32
+            || config.claim_quantum > config.provider_budget
             || config.max_handlers == 0
             || config.max_messages <= 0
             || config.max_targets <= 0
             || config.max_payload_bytes <= 0
+            || config.default_ttl_secs <= 0
+            || config.default_ttl_secs > 30 * 86_400
+            || config.dedupe_retention_ms <= 0
         {
             return Err(KernelError::Invalid("positive budgets required".into()));
         }
@@ -316,6 +347,17 @@ impl DeliveryStore {
     }
     async fn initialize(&self) -> Result<()> {
         self.counters.sql(3);
+        let columns = sqlx::query("PRAGMA table_info(channels)")
+            .fetch_all(&self.pool)
+            .await?;
+        if columns
+            .iter()
+            .any(|r| r.get::<String, _>("name") == "password")
+        {
+            return Err(KernelError::Invalid(
+                "C1 fixture database schema is not C2; use a separate synthetic database".into(),
+            ));
+        }
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
         // Recovery is only permitted after acquiring the exclusive OS lock.
         sqlx::query(
@@ -324,7 +366,7 @@ impl DeliveryStore {
         .bind(now())
         .execute(&self.pool)
         .await?;
-        sqlx::query("UPDATE targets SET state='expired' WHERE state IN ('pending','retry_wait') AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=?)").bind(now()).execute(&self.pool).await?;
+        self.maintenance().await?;
         Ok(())
     }
     pub(super) fn notify(&self) {
@@ -335,7 +377,14 @@ impl DeliveryStore {
     pub async fn register(&self, platform: &str) -> Result<String> {
         let platform = supported_platform(platform)?;
         let key = generate_hex_id_128();
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         self.counters.sql(1);
         sqlx::query("INSERT INTO devices(device_key,platform) VALUES(?,?)")
             .bind(&key)
@@ -351,28 +400,42 @@ impl DeliveryStore {
         provider: &str,
         raw: &str,
     ) -> Result<()> {
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         self.counters.sql(2);
-        let existing: Option<String> =
-            sqlx::query_scalar("SELECT platform FROM devices WHERE device_key=?")
+        let existing =
+            sqlx::query("SELECT platform,provider,provider_token,route_generation FROM devices WHERE device_key=?")
                 .bind(device)
                 .fetch_optional(&self.pool)
                 .await?;
         let existing = existing.ok_or_else(|| KernelError::Invalid("unknown device".into()))?;
-        let platform = supported_platform(platform.unwrap_or(&existing))?;
+        let prior_platform: String = existing.get("platform");
+        let platform = supported_platform(platform.unwrap_or(&prior_platform))?;
         let provider = provider.to_ascii_uppercase();
         if provider != platform.provider_name() {
             return Err(KernelError::Invalid("platform/provider mismatch".into()));
         }
         let canonical = normalize_provider_token(raw, platform)
             .map_err(|e| KernelError::Invalid(e.to_string()))?;
-        sqlx::query("UPDATE devices SET platform=?,provider=?,provider_token=? WHERE device_key=?")
-            .bind(platform.name())
-            .bind(provider)
-            .bind(canonical)
-            .bind(device)
-            .execute(&self.pool)
-            .await?;
+        let changed = prior_platform != platform.name()
+            || existing.get::<Option<String>, _>("provider").as_deref() != Some(provider.as_str())
+            || existing
+                .get::<Option<String>, _>("provider_token")
+                .as_deref()
+                != Some(canonical.as_str());
+        if changed {
+            if existing.get::<i64, _>("route_generation") == i64::MAX {
+                return Err(KernelError::Invalid("route generation exhausted".into()));
+            }
+            sqlx::query("UPDATE devices SET platform=?,provider=?,provider_token=?,route_generation=route_generation+1 WHERE device_key=?")
+                .bind(platform.name()).bind(provider).bind(canonical).bind(device).execute(&self.pool).await?;
+        }
         self.notify();
         Ok(())
     }
@@ -383,10 +446,18 @@ impl DeliveryStore {
         channel_name: Option<&str>,
         auth: &str,
     ) -> Result<Value> {
-        if device.is_empty() || auth.is_empty() || auth.len() > 256 {
+        let auth = crate::sender::password(auth)?;
+        if device.is_empty() {
             return Err(KernelError::Invalid("device/channel authorization".into()));
         }
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         self.counters.sql(5);
         let mut tx = self.pool.begin().await?;
         let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE device_key=?")
@@ -396,29 +467,53 @@ impl DeliveryStore {
         if exists == 0 {
             return Err(KernelError::Invalid("unknown device".into()));
         }
-        let (id, name, created) = if let Some(id) = channel_id.filter(|v| !v.is_empty()) {
-            let row = sqlx::query("SELECT channel_name,password FROM channels WHERE channel_id=?")
-                .bind(id)
-                .fetch_optional(&mut *tx)
+        let channel_id = channel_id.map(crate::sender::channel_id).transpose()?;
+        let (id, name, created) = if let Some(id) = channel_id.as_deref() {
+            let row =
+                sqlx::query("SELECT channel_name,password_hash FROM channels WHERE channel_id=?")
+                    .bind(id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or(KernelError::Unauthorized)?;
+            if !verify_password_async(row.get::<String, _>("password_hash"), auth.to_owned())
                 .await?
-                .ok_or(KernelError::Unauthorized)?;
-            if row.get::<String, _>("password") != auth {
+            {
                 return Err(KernelError::Unauthorized);
             }
             (id.to_owned(), row.get::<String, _>("channel_name"), false)
         } else {
             let name = channel_name
-                .filter(|v| !v.is_empty() && v.len() <= 256)
+                .map(str::trim)
+                .filter(|v| {
+                    !v.is_empty() && v.chars().count() <= 128 && !v.chars().any(char::is_control)
+                })
                 .ok_or_else(|| KernelError::Invalid("channel_name".into()))?;
-            let id = generate_hex_id_128();
-            sqlx::query("INSERT INTO channels(channel_id,channel_name,password) VALUES(?,?,?)")
-                .bind(&id)
-                .bind(name)
-                .bind(auth)
-                .execute(&mut *tx)
-                .await?;
+            let id = crate::sender::generate_channel_id();
+            sqlx::query(
+                "INSERT INTO channels(channel_id,channel_name,password_hash) VALUES(?,?,?)",
+            )
+            .bind(&id)
+            .bind(name)
+            .bind(hash_password(auth))
+            .execute(&mut *tx)
+            .await?;
             (id, name.to_owned(), true)
         };
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions WHERE channel_id=?")
+                .bind(&id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let subscribed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM channel_subscriptions WHERE channel_id=? AND device_key=?",
+        )
+        .bind(&id)
+        .bind(device)
+        .fetch_one(&mut *tx)
+        .await?;
+        if count >= 32 && subscribed == 0 {
+            return Err(KernelError::Capacity);
+        }
         sqlx::query(
             "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) VALUES(?,?)",
         )
@@ -430,92 +525,93 @@ impl DeliveryStore {
         Ok(json!({"channel_id":id,"channel_name":name,"created":created,"subscribed":true}))
     }
     pub async fn accept(&self, request: AcceptRequest) -> Result<Accepted> {
-        if request.op_id.trim().is_empty()
-            || request.op_id.len() > 128
-            || request.title.len() + request.body.len() > self.config.max_body_bytes
-        {
-            return Err(KernelError::Invalid("op_id or payload size".into()));
-        }
-        let ttl = request.ttl.unwrap_or(86_400).min(35 * 86_400);
-        if ttl == 0 {
-            return Err(KernelError::Invalid("positive ttl required".into()));
-        }
-        let fingerprint = blake3::hash(&serde_json::to_vec(&json!([
-            request.channel_id,
-            request.title,
-            request.body,
-            ttl
-        ]))?)
-        .to_hex()
-        .to_string();
+        let admission_started = std::time::Instant::now();
+        let request = request.normalize()?;
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         let _wake = AdmissionWake(self.clone());
-        self.counters.sql(4);
         let mut tx = self.pool.begin().await?;
-        let channel_auth: Option<String> =
-            sqlx::query_scalar("SELECT password FROM channels WHERE channel_id=?")
+        let auth: Option<String> =
+            sqlx::query_scalar("SELECT password_hash FROM channels WHERE channel_id=?")
                 .bind(&request.channel_id)
                 .fetch_optional(&mut *tx)
                 .await?;
-        if channel_auth.as_deref() != Some(request.password.as_str()) {
+        let hash = auth.ok_or(KernelError::Unauthorized)?;
+        if !verify_password_async(hash, request.password.clone()).await? {
             return Err(KernelError::Unauthorized);
         }
-        if let Some(row) =
-            sqlx::query("SELECT delivery_id,message_id,fingerprint FROM messages WHERE op_id=?")
-                .bind(&request.op_id)
-                .fetch_optional(&mut *tx)
-                .await?
-        {
-            if row.get::<String, _>("fingerprint") != fingerprint {
-                return Err(KernelError::Conflict);
-            }
-            return Ok(Accepted {
-                delivery_id: row.get("delivery_id"),
-                message_id: row.get("message_id"),
-                op_id: request.op_id,
-                acceptance: "duplicate_completed",
-                dispatch_status: "provider_queued",
-            });
-        }
         let at = now();
-        // ACK identities remain until no frozen/retry/recovery source can live.
-        sqlx::query("DELETE FROM messages WHERE dedupe_until<=? AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running')").bind(at).execute(&mut *tx).await?;
+        // Reclaim expired delivery bodies independently of their identity history.
+        self.maintain_tx(&mut tx, at).await?;
+        if let Some(row)=sqlx::query("SELECT delivery_id,message_id,channel_id,fingerprint FROM messages WHERE op_id=? AND dedupe_until>?").bind(&request.op_id).bind(at).fetch_optional(&mut *tx).await? {
+            if row.get::<String,_>("channel_id")!=request.channel_id {return Err(KernelError::ScopeConflict)}
+            if row.get::<String,_>("fingerprint")!=request.fingerprint {return Err(KernelError::Conflict)}
+            return Ok(Accepted{delivery_id:row.get("delivery_id"),message_id:row.get("message_id"),op_id:request.op_id,acceptance:"duplicate_completed",dispatch_status:"provider_queued"})
+        }
+        // An exact expired identity can be replaced even if bounded GC has backlog.
+        sqlx::query("DELETE FROM messages WHERE op_id=? AND dedupe_until<=? AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running')").bind(&request.op_id).bind(at).execute(&mut *tx).await?;
         let delivery_id = generate_hex_id_128();
         let message_id = generate_hex_id_128();
-        let expires = at + i64::from(ttl) * 1000;
-        // One immutable canonical client payload is shared by direct delivery,
-        // Pull and recovery. Authority comes solely from validated configuration.
-        let payload = serde_json::to_vec(
-            &json!({"op_id":request.op_id,"title":request.title,"body":request.body,
-                "message_id":message_id,"delivery_id":delivery_id,
-                "channel_id":request.channel_id,"base_url":self.config.public_base_url,
-                "sent_at":at.to_string(),"ingested_at":at.to_string(),"occurred_at":at.to_string(),
-                "ttl":expires.div_euclid(1000).to_string(),"entity_type":"message",
-                "entity_id":message_id,"payload_version":"1","schema_version":"1"}),
-        )?;
-        let counts = sqlx::query(
-            "SELECT COUNT(*) AS messages,COALESCE(SUM(payload_bytes),0) AS bytes FROM messages",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        if counts.get::<i64, _>("messages") >= self.config.max_messages
-            || counts.get::<i64, _>("bytes") + payload.len() as i64 > self.config.max_payload_bytes
+        let expires = request
+            .ttl
+            .map(|ttl| ttl.min(at.saturating_add(crate::sender::MAX_TTL_MS)))
+            .unwrap_or(at.saturating_add(self.config.default_ttl_secs * 1000));
+        let mut fields = request.fields;
+        for (key, value) in [
+            ("op_id", request.op_id.clone()),
+            ("message_id", message_id.clone()),
+            ("delivery_id", delivery_id.clone()),
+            ("channel_id", request.channel_id.clone()),
+            ("base_url", self.config.public_base_url.clone()),
+            ("sent_at", at.to_string()),
+            ("ingested_at", at.to_string()),
+            ("occurred_at", request.occurred_at.unwrap_or(at).to_string()),
+            ("entity_type", "message".into()),
+            ("entity_id", message_id.clone()),
+            ("payload_version", "1".into()),
+            ("schema_version", "1".into()),
+        ] {
+            fields.insert(key.into(), value);
+        }
+        if request.ttl.is_some() {
+            fields.insert("ttl".into(), expires.to_string());
+        }
+        let payload = serde_json::to_vec(&fields)?;
+        let usage =
+            sqlx::query("SELECT messages,targets,bytes FROM ledger_usage WHERE singleton=1")
+                .fetch_one(&mut *tx)
+                .await?;
+        let fanout:i64=sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&request.channel_id).fetch_one(&mut *tx).await?;
+        let live = fanout > 0 && expires > at;
+        if live
+            && (usage.get::<i64, _>("messages") >= self.config.max_messages
+                || usage
+                    .get::<i64, _>("bytes")
+                    .saturating_add(payload.len() as i64)
+                    > self.config.max_payload_bytes
+                || usage.get::<i64, _>("targets").saturating_add(fanout) > self.config.max_targets)
         {
             return Err(KernelError::Capacity);
         }
-        self.counters.sql(3);
-        let retained: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM targets")
-            .fetch_one(&mut *tx)
-            .await?;
-        let fanout:i64=sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&request.channel_id).fetch_one(&mut *tx).await?;
-        if retained + fanout > self.config.max_targets {
-            return Err(KernelError::Capacity);
+        let status = if live { "provider_queued" } else { "failed" };
+        sqlx::query("INSERT INTO messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").bind(&delivery_id).bind(&message_id).bind(&request.op_id).bind(&request.channel_id).bind(&request.fingerprint).bind(if live{payload.as_slice()}else{&[]}).bind(if live{payload.len() as i64}else{0}).bind(at).bind(expires).bind(at.saturating_add(self.config.dedupe_retention_ms)).bind(status).bind(at).execute(&mut *tx).await?;
+        if live {
+            sqlx::query("INSERT INTO targets(delivery_id,device_key,platform,provider,provider_token,route_generation,state,next_attempt_at) SELECT ?,d.device_key,d.platform,d.provider,d.provider_token,d.route_generation,'pending',? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&delivery_id).bind(at).bind(&request.channel_id).execute(&mut *tx).await?;
         }
-        let dedupe = at + 35_i64 * 86_400_000;
-        sqlx::query("INSERT INTO messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(&delivery_id).bind(&message_id).bind(&request.op_id).bind(&request.channel_id).bind(fingerprint).bind(&payload).bind(payload.len() as i64).bind(at).bind(expires).bind(dedupe).execute(&mut *tx).await?;
-        self.counters.sql(2);
-        sqlx::query("INSERT INTO targets(delivery_id,device_key,platform,provider,provider_token,state,next_attempt_at) SELECT ?,d.device_key,d.platform,d.provider,d.provider_token,'pending',? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&delivery_id).bind(at).bind(&request.channel_id).execute(&mut *tx).await?;
+        let commit_at = std::time::Instant::now();
         tx.commit().await?;
+        record_duration(
+            &self.counters.admission_commit_samples,
+            &self.counters.admission_commit_total_us,
+            &self.counters.admission_commit_max_us,
+            commit_at.elapsed(),
+        );
         #[cfg(test)]
         {
             let barrier = self.hooks.accept_after_commit.lock().unwrap().take();
@@ -526,6 +622,10 @@ impl DeliveryStore {
         self.counters
             .admission_commits
             .fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .timings
+            .admission
+            .record(admission_started.elapsed());
         self.notify();
         Ok(Accepted {
             delivery_id,
@@ -535,19 +635,73 @@ impl DeliveryStore {
             dispatch_status: "provider_queued",
         })
     }
+    async fn release_acked_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        device: &str,
+        id: &str,
+    ) -> Result<()> {
+        // A completed client ACK is positive delivery evidence, independent of
+        // whether a provider was attempted. Do not count it as provider acceptance.
+        sqlx::query("UPDATE messages SET status='sent',updated_at=? WHERE delivery_id=? AND status='provider_queued' AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND (acked_at IS NULL OR state='running'))").bind(now()).bind(id).execute(&mut **tx).await?;
+        sqlx::query("DELETE FROM targets WHERE delivery_id=? AND device_key=? AND acked_at IS NOT NULL AND state!='running'").bind(id).bind(device).execute(&mut **tx).await?;
+        sqlx::query("UPDATE messages SET payload_blob=X'',payload_bytes=0 WHERE delivery_id=? AND payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL)").bind(id).execute(&mut **tx).await?;
+        Ok(())
+    }
+    /// One bounded retention batch; caller schedules subsequent batches.
+    pub async fn maintenance(&self) -> Result<usize> {
+        let gate_at = std::time::Instant::now();
+        let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
+        let mut tx = self.pool.begin().await?;
+        let removed = self.maintain_tx(&mut tx, now()).await?;
+        tx.commit().await?;
+        Ok(removed)
+    }
+    async fn maintain_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        at: i64,
+    ) -> Result<usize> {
+        // Expiry is a terminal failure only for targets not yet accepted by a
+        // provider. Running attempts retain their unknown outcome until receipt.
+        sqlx::query("UPDATE messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx).await?;
+        sqlx::query("UPDATE targets SET acked_at=?,state=CASE WHEN state IN ('pending','retry_wait') THEN 'expired' ELSE state END WHERE acked_at IS NULL AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).bind(at).execute(&mut **tx).await?;
+        sqlx::query("UPDATE messages SET status=CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=? WHERE status='provider_queued' AND provider_failed_count>0 AND pending_targets=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).bind(at).execute(&mut **tx).await?;
+        sqlx::query("DELETE FROM targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx).await?;
+        sqlx::query("UPDATE messages SET payload_blob=X'',payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND acked_at IS NULL) AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx).await?;
+        let removed=sqlx::query("DELETE FROM messages WHERE delivery_id IN (SELECT delivery_id FROM messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)").bind(at).execute(&mut **tx).await?.rows_affected();
+        Ok(removed as usize)
+    }
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
         self.counters.sql(1);
         let rows=sqlx::query("SELECT m.delivery_id,m.payload_blob FROM messages m JOIN targets t ON t.delivery_id=m.delivery_id WHERE t.device_key=? AND t.acked_at IS NULL AND m.expires_at>? AND (? IS NULL OR m.delivery_id=?) ORDER BY m.accepted_at,m.delivery_id LIMIT 201").bind(device).bind(now()).bind(delivery).bind(delivery).fetch_all(&self.pool).await?;
         let more = rows.len() > 200;
         let mut items = Vec::new();
         for row in rows.into_iter().take(200) {
-            let payload: Value = serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?;
+            let mut payload: Value =
+                serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?;
+            if let Some(object) = payload.as_object_mut() {
+                object.remove("delivery_id");
+            }
             items.push(json!({"delivery_id":row.get::<String,_>("delivery_id"),"payload":payload}));
         }
         Ok(json!({"items":items,"has_more":more}))
     }
     pub async fn pull_legacy(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         let mut tx = self.pool.begin().await?;
         let at = now();
         self.counters.sql(1);
@@ -560,6 +714,7 @@ impl DeliveryStore {
             self.counters.sql(1);
             sqlx::query("UPDATE targets SET acked_at=? WHERE device_key=? AND delivery_id=? AND acked_at IS NULL")
                 .bind(at).bind(device).bind(&id).execute(&mut *tx).await?;
+            self.release_acked_tx(&mut tx, device, &id).await?;
             items.push(json!({"delivery_id":id,"payload":payload}));
         }
         tx.commit().await?;
@@ -577,13 +732,21 @@ impl DeliveryStore {
         if ids.is_empty() || ids.len() > 200 || ids.iter().any(|v| v.is_empty() || v.len() > 128) {
             return Err(KernelError::Invalid("ACK ids".into()));
         }
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         self.counters.sql(ids.len() as u64 + 2);
         let mut tx = self.pool.begin().await?;
         let mut removed = 0;
         let at = now();
         for id in ids {
-            removed+=sqlx::query("UPDATE targets SET acked_at=? WHERE device_key=? AND delivery_id=? AND acked_at IS NULL AND EXISTS(SELECT 1 FROM messages WHERE messages.delivery_id=targets.delivery_id AND expires_at>?)").bind(at).bind(device).bind(id).bind(at).execute(&mut *tx).await?.rows_affected() as usize;
+            removed+=sqlx::query("UPDATE targets SET acked_at=? WHERE device_key=? AND delivery_id=? AND acked_at IS NULL AND EXISTS(SELECT 1 FROM messages WHERE messages.delivery_id=targets.delivery_id AND expires_at>?)").bind(at).bind(device).bind(&id).bind(at).execute(&mut *tx).await?.rows_affected() as usize;
+            self.release_acked_tx(&mut tx, device, &id).await?;
         }
         tx.commit().await?;
         self.counters.ack_commits.fetch_add(1, Ordering::Relaxed);
@@ -597,17 +760,13 @@ impl DeliveryStore {
         limit: usize,
         retry_first: bool,
     ) -> Result<ClaimBatch> {
-        self.claim_reserved(provider, limit, retry_first, limit, 0, 0)
-            .await
+        self.claim_reserved(provider, limit, retry_first).await
     }
     pub(super) async fn claim_reserved(
         &self,
         provider: &str,
         limit: usize,
         retry_first: bool,
-        demand_cap: usize,
-        owned: usize,
-        warm_target: usize,
     ) -> Result<ClaimBatch> {
         #[cfg(test)]
         if provider == "FCM" {
@@ -616,55 +775,38 @@ impl DeliveryStore {
                 probe.notify_one();
             }
         }
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         self.counters.claim_queries.fetch_add(1, Ordering::Relaxed);
         self.counters.provider_claim_queries[usize::from(provider == "APNS")]
             .fetch_add(1, Ordering::Relaxed);
         self.counters.sql(5);
         let at = now();
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE targets SET state='expired' WHERE provider=? AND state IN ('pending','retry_wait') AND delivery_id IN (SELECT delivery_id FROM messages WHERE expires_at<=?)").bind(provider).bind(at).execute(&mut *tx).await?;
+        self.maintain_tx(&mut tx, at).await?;
         let cooldown: Option<i64> =
             sqlx::query_scalar("SELECT next_attempt_at FROM provider_cooldowns WHERE provider=?")
                 .bind(provider)
                 .fetch_optional(&mut *tx)
                 .await?;
         let mut tickets = Vec::new();
-        let mut ready = 0;
         if cooldown.is_none_or(|due| due <= at) {
-            // Probe identifiers only; payloads are loaded solely for reserved
-            // grants. The extra row distinguishes a full batch from backlog.
-            if self.config.demand_scaling {
-                self.counters.sql(1);
-                let due_rows = sqlx::query("SELECT t.delivery_id,t.device_key FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.provider=? AND t.state IN ('pending','retry_wait') AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? ORDER BY t.next_attempt_at,m.accepted_at,t.delivery_id,t.device_key LIMIT ?")
-                    .bind(provider).bind(at).bind(at).bind(demand_cap.saturating_add(1) as i64)
-                    .fetch_all(&mut *tx).await?;
-                ready = due_rows.len();
-            } else {
-                // Fixed mode grants lazily up to the reservation without an
-                // additional demand probe; actual empty selection still stops.
-                ready = limit;
-            }
             let classes = if retry_first {
                 ["retry_wait", "pending"]
             } else {
                 ["pending", "retry_wait"]
             };
-            let desired = owned.saturating_add(ready).min(self.config.provider_budget);
-            let target = if !self.config.demand_scaling {
-                self.config.provider_budget
-            } else if desired == 0 {
-                0
-            } else {
-                desired.max(warm_target).min(self.config.provider_budget)
-            };
-            let index = usize::from(provider == "APNS");
-            self.counters.provider_targets[index].store(target as u64, Ordering::Relaxed);
-            for n in 0..limit.min(ready).min(target.saturating_sub(owned)) {
+            for n in 0..limit {
                 let mut selected = None;
                 for class in [classes[n % 2], classes[(n + 1) % 2]] {
                     self.counters.sql(1);
-                    let row=sqlx::query("SELECT t.*,m.payload_blob,m.accepted_at,m.expires_at FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.provider=? AND t.state=? AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? ORDER BY t.next_attempt_at,m.accepted_at,t.delivery_id LIMIT 1").bind(provider).bind(class).bind(at).bind(at).fetch_optional(&mut *tx).await?;
+                    let row=sqlx::query("SELECT t.*,m.payload_blob,m.accepted_at,m.expires_at FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.provider=? AND t.state=? AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1").bind(provider).bind(class).bind(at).bind(at).fetch_optional(&mut *tx).await?;
                     if row.is_some() {
                         selected = row;
                         break;
@@ -681,6 +823,7 @@ impl DeliveryStore {
                     platform: row.get("platform"),
                     provider: row.get("provider"),
                     token: row.get("provider_token"),
+                    route_generation: row.get("route_generation"),
                     attempt_id: row.get::<i64, _>("attempt_id") + 1,
                     attempts: row.get::<i64, _>("attempts") + 1,
                     payload: serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?,
@@ -700,21 +843,16 @@ impl DeliveryStore {
                 barrier.pause().await;
             }
         }
-        let has_more = if self.config.demand_scaling {
-            ready > tickets.len()
-        } else {
-            next_due.is_some_and(|due| due <= at)
-        };
+        let has_more = next_due.is_some_and(|due| due <= at);
         Ok(ClaimBatch {
             tickets,
             next_due,
-            ready,
             has_more,
         })
     }
     pub(super) async fn authorize_ticket(&self, ticket: &Ticket) -> Result<bool> {
         self.counters.sql(1);
-        let current:i64=sqlx::query_scalar("SELECT COUNT(*) FROM targets t JOIN devices d ON d.device_key=t.device_key JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.state='running' AND t.attempt_id=? AND t.acked_at IS NULL AND m.expires_at>? AND d.platform=t.platform AND d.provider=t.provider AND d.provider_token=t.provider_token").bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).bind(now()).fetch_one(&self.pool).await?;
+        let current:i64=sqlx::query_scalar("SELECT COUNT(*) FROM targets t JOIN devices d ON d.device_key=t.device_key JOIN messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.state='running' AND t.attempt_id=? AND t.acked_at IS NULL AND m.expires_at>? AND d.platform=t.platform AND d.provider=t.provider AND d.provider_token=t.provider_token AND d.route_generation=t.route_generation AND t.route_generation=?").bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).bind(now()).bind(ticket.route_generation).fetch_one(&self.pool).await?;
         Ok(current != 0)
     }
     pub(super) async fn settle(
@@ -726,7 +864,14 @@ impl DeliveryStore {
         next_due: i64,
         cooldown: Option<i64>,
     ) -> Result<()> {
+        let gate_at = std::time::Instant::now();
         let _gate = self.gate.lock().await;
+        record_duration(
+            &self.counters.gate_wait_samples,
+            &self.counters.gate_wait_total_us,
+            &self.counters.gate_wait_max_us,
+            gate_at.elapsed(),
+        );
         self.counters.sql(3 + u64::from(cooldown.is_some()));
         let mut tx = self.pool.begin().await?;
         #[cfg(test)]
@@ -736,19 +881,53 @@ impl DeliveryStore {
                 barrier.pause().await;
             }
         }
-        sqlx::query("UPDATE targets SET state=?,provider_status=?,provider_error=?,receipt_at=?,next_attempt_at=? WHERE delivery_id=? AND device_key=? AND state='running' AND attempt_id=?").bind(state).bind(i64::from(status)).bind(error).bind(now()).bind(next_due).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).execute(&mut *tx).await?;
+        let state = if state == "retry_wait" && ticket.expires_at <= now() {
+            "permanent_failed"
+        } else {
+            state
+        };
+        let changed=sqlx::query("UPDATE targets SET state=?,provider_status=?,provider_error=?,receipt_at=?,next_attempt_at=? WHERE delivery_id=? AND device_key=? AND state='running' AND attempt_id=?").bind(state).bind(i64::from(status)).bind(error).bind(now()).bind(next_due).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).execute(&mut *tx).await?.rows_affected();
         if let Some(due) = cooldown {
             sqlx::query("INSERT INTO provider_cooldowns(provider,next_attempt_at) VALUES(?,?) ON CONFLICT(provider) DO UPDATE SET next_attempt_at=MAX(next_attempt_at,excluded.next_attempt_at)").bind(&ticket.provider).bind(due).execute(&mut *tx).await?;
         }
+        if changed > 0 {
+            // Invalidate only this channel's subscription for the exact frozen
+            // route. A token that changes A -> B -> A is a different generation.
+            if error == "invalid_token" {
+                sqlx::query("DELETE FROM channel_subscriptions WHERE device_key=? AND channel_id=(SELECT channel_id FROM messages WHERE delivery_id=?) AND EXISTS(SELECT 1 FROM devices WHERE device_key=? AND platform=? AND provider=? AND provider_token=? AND route_generation=?)")
+                    .bind(&ticket.device_key).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(&ticket.platform).bind(&ticket.provider).bind(&ticket.token).bind(ticket.route_generation).execute(&mut *tx).await?;
+            }
+            sqlx::query("UPDATE messages SET provider_accepted_count=provider_accepted_count+?,provider_failed_count=provider_failed_count+? WHERE delivery_id=?").bind(i64::from(state=="provider_accepted")).bind(i64::from(matches!(state,"permanent_failed"|"expired"|"cancelled"))).bind(&ticket.delivery_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE messages SET status=CASE WHEN pending_targets>0 OR EXISTS(SELECT 1 FROM targets WHERE targets.delivery_id=messages.delivery_id AND state='running') THEN 'provider_queued' WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=? WHERE delivery_id=?").bind(now()).bind(&ticket.delivery_id).execute(&mut *tx).await?;
+            self.release_acked_tx(&mut tx, &ticket.device_key, &ticket.delivery_id)
+                .await?;
+        }
+        let commit_at = std::time::Instant::now();
         tx.commit().await?;
+        record_duration(
+            &self.counters.receipt_commit_samples,
+            &self.counters.receipt_commit_total_us,
+            &self.counters.receipt_commit_max_us,
+            commit_at.elapsed(),
+        );
+        self.counters
+            .timings
+            .receipt_commit
+            .record(commit_at.elapsed());
         self.counters
             .receipt_commits
             .fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
     pub async fn status(&self, op: &str) -> Result<Value> {
-        self.counters.sql(1);
-        let rows=sqlx::query("SELECT t.state,t.provider_status,t.acked_at,m.delivery_id FROM messages m LEFT JOIN targets t ON t.delivery_id=m.delivery_id WHERE m.op_id=?").bind(op).fetch_all(&self.pool).await?;
+        let op = crate::sender::op_id(op)?;
+        let row=sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until FROM messages WHERE op_id=? AND dedupe_until>?").bind(op).bind(now()).fetch_optional(&self.pool).await?.ok_or(KernelError::NotFound)?;
+        Ok(
+            json!({"op_id":row.get::<String,_>("op_id"),"status":row.get::<String,_>("status"),"model":"message","entity_id":row.get::<String,_>("message_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until")}),
+        )
+    }
+    pub async fn target_status(&self, op: &str) -> Result<Value> {
+        let rows=sqlx::query("SELECT t.state,t.provider_status,t.acked_at,m.delivery_id FROM messages m JOIN targets t ON t.delivery_id=m.delivery_id WHERE m.op_id=?").bind(op).fetch_all(&self.pool).await?;
         Ok(
             json!({"targets":rows.iter().map(|r|json!({"delivery_id":r.get::<String,_>("delivery_id"),"state":r.get::<Option<String>,_>("state"),"provider_status":r.get::<Option<i64>,_>("provider_status"),"acked_at":r.get::<Option<i64>,_>("acked_at")})).collect::<Vec<_>>()}),
         )
@@ -765,4 +944,86 @@ pub(super) fn supported_platform(raw: &str) -> Result<Platform> {
         ));
     }
     Ok(platform)
+}
+
+fn record_duration(samples: &AtomicU64, total: &AtomicU64, max: &AtomicU64, duration: Duration) {
+    let us = duration.as_micros().min(u64::MAX as u128) as u64;
+    samples.fetch_add(1, Ordering::Relaxed);
+    total.fetch_add(us, Ordering::Relaxed);
+    max.fetch_max(us, Ordering::Relaxed);
+}
+
+const BLAKE3_PASSWORD_SCHEME: &str = "pushgo-blake3";
+const BLAKE3_PASSWORD_VERSION: &str = "v=1";
+const BLAKE3_PASSWORD_SALT_BYTES: usize = 16;
+const BLAKE3_PASSWORD_DIGEST_BYTES: usize = blake3::OUT_LEN;
+const BLAKE3_PASSWORD_DOMAIN: &[u8] = b"pushgo.gateway.channel.password.v1";
+
+fn password_digest(salt: &[u8], value: &str) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(BLAKE3_PASSWORD_DOMAIN);
+    h.update(&(salt.len() as u64).to_le_bytes());
+    h.update(salt);
+    h.update(value.as_bytes());
+    *h.finalize().as_bytes()
+}
+fn hash_password(value: &str) -> String {
+    let salt: [u8; BLAKE3_PASSWORD_SALT_BYTES] = rand::random();
+    let digest = password_digest(&salt, value);
+    format!(
+        "${}${}${}${}",
+        BLAKE3_PASSWORD_SCHEME,
+        BLAKE3_PASSWORD_VERSION,
+        URL_SAFE_NO_PAD.encode(salt),
+        URL_SAFE_NO_PAD.encode(digest)
+    )
+}
+fn verify_password(hash: &str, value: &str) -> bool {
+    if hash.starts_with(&format!("${}$", BLAKE3_PASSWORD_SCHEME)) {
+        let parts: Vec<_> = hash.split('$').collect();
+        if parts.len() != 5 || parts[2] != BLAKE3_PASSWORD_VERSION {
+            return false;
+        }
+        let Ok(salt) = URL_SAFE_NO_PAD.decode(parts[3]) else {
+            return false;
+        };
+        let Ok(expected) = URL_SAFE_NO_PAD.decode(parts[4]) else {
+            return false;
+        };
+        if salt.len() != BLAKE3_PASSWORD_SALT_BYTES
+            || expected.len() != BLAKE3_PASSWORD_DIGEST_BYTES
+        {
+            return false;
+        }
+        let actual = password_digest(&salt, value);
+        let mut diff = 0_u8;
+        for (a, b) in actual.iter().zip(expected) {
+            diff |= a ^ b;
+        }
+        diff == 0
+    } else {
+        PasswordHash::new(hash).ok().is_some_and(|parsed| {
+            Argon2::default()
+                .verify_password(value.as_bytes(), &parsed)
+                .is_ok()
+        })
+    }
+}
+
+async fn verify_password_async(hash: String, value: String) -> Result<bool> {
+    if hash.starts_with(&format!("${}$", BLAKE3_PASSWORD_SCHEME)) {
+        return Ok(verify_password(&hash, &value));
+    }
+    static LEGACY_PERMITS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+        std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+    let permit = LEGACY_PERMITS
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Capacity)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify_password(&hash, &value)
+    })
+    .await
+    .map_err(|_| KernelError::Invalid("credential verification failed".into()))
 }

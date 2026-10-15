@@ -1,10 +1,11 @@
 //! Synthetic loopback-only fixture for the independent SQLite authority.
 use clap::Parser;
-use free_delivery_prototype::{BoundedListener, Config, DeliveryRuntime, RealProviders, router};
+use free_delivery_prototype::{
+    Config, DeliveryRuntime, HttpLimits, RealProviders, router_with_auth, serve,
+};
 use std::{
     collections::BTreeMap,
     error::Error,
-    future::IntoFuture,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::Duration,
@@ -24,14 +25,15 @@ struct Cli {
     http_addr: SocketAddr,
     #[arg(long)]
     mock_endpoint: String,
-    #[arg(long, default_value_t = 32)]
-    provider_budget: usize,
-    #[arg(long, default_value = "fixed", value_parser = ["demand", "fixed"])]
-    concurrency_mode: String,
-    #[arg(long, default_value_t = 32)]
-    claim_quantum: usize,
+    #[arg(long)]
+    provider_budget: Option<usize>,
+    #[arg(long)]
+    claim_quantum: Option<usize>,
     #[arg(long)]
     public_base_url: Option<String>,
+    /// Name of an environment variable containing a synthetic shared token.
+    #[arg(long)]
+    shared_token_env: Option<String>,
 }
 #[tokio::main(worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -45,10 +47,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         || provider_addr.port() == 0
         || !cli.http_addr.ip().is_loopback()
         || !cli.db_url.starts_with("sqlite://")
-        || !matches!(cli.provider_budget, 8 | 32)
-        || !matches!(cli.claim_quantum, 8 | 32)
     {
-        return Err("fixture requires loopback HTTP, SQLite and budget 8 or 32".into());
+        return Err("fixture requires loopback HTTP and SQLite".into());
     }
     let counts = Arc::new(Mutex::new(BTreeMap::<String, u64>::new()));
     tracing_subscriber::registry()
@@ -56,24 +56,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .try_init()?;
     let listener = TcpListener::bind(cli.http_addr).await?;
     let address = listener.local_addr()?;
+    let defaults = Config::default();
+    let provider_budget = cli.provider_budget.unwrap_or(defaults.provider_budget);
     let config = Config {
-        provider_budget: cli.provider_budget,
-        claim_quantum: cli.claim_quantum,
-        demand_scaling: cli.concurrency_mode == "demand",
+        provider_budget,
+        claim_quantum: cli
+            .claim_quantum
+            .unwrap_or(defaults.claim_quantum.min(provider_budget)),
         public_base_url: cli
             .public_base_url
             .unwrap_or_else(|| format!("http://{address}")),
         ..Config::default()
     };
-    let transport = Arc::new(RealProviders::loopback(&cli.mock_endpoint)?);
+    let transport = Arc::new(RealProviders::loopback_with_budget(
+        &cli.mock_endpoint,
+        config.provider_budget,
+    )?);
     let mut runtime = DeliveryRuntime::start(&cli.db_url, config, transport.clone()).await?;
     let counters = runtime.store.counters.clone();
     let stat_counts = counts.clone();
     let stat_counters = counters.clone();
+    let configured_budget = runtime.store.config.provider_budget;
+    let configured_quantum = runtime.store.config.claim_quantum;
     let stats = Arc::new(move || {
         let mut data = stat_counters.snapshot();
+        data["timings"] = stat_counters.timings.snapshot();
+        data["configured"] = serde_json::json!({"provider_safety_ceiling":configured_budget,"claim_quantum":configured_quantum,"http_connections":HttpLimits::default().connections,"http2_streams_per_connection":HttpLimits::default().streams_per_connection,"request_body_bytes":32*1024,"provider_response_bytes":16*1024,"history_hard_quota":null});
         data["dbcounts"] = serde_json::to_value(&*stat_counts.lock().unwrap()).unwrap();
         data["transport_errors"] = serde_json::json!(transport.transport_errors());
+        data["provider_response_oversize"] = serde_json::json!(transport.oversized_responses());
+        data["provider_resources"] = transport.resource_snapshot();
+        data["allocator"] = allocator_snapshot();
         data["tasks"] = serde_json::json!(
             tokio::runtime::Handle::current()
                 .metrics()
@@ -81,26 +94,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
         data
     });
-    let app = router(runtime.store.clone(), stats.clone());
-    let (http_stop, mut http_rx) = watch::channel(false);
-    let mut serve = tokio::spawn(
-        axum::serve(
-            BoundedListener::new(
-                listener,
-                runtime.store.config.max_handlers,
-                counters.clone(),
-            ),
-            app,
-        )
-        .with_graceful_shutdown(async move {
-            while !*http_rx.borrow() {
-                if http_rx.changed().await.is_err() {
-                    break;
-                }
-            }
-        })
-        .into_future(),
+    let shared_token = cli
+        .shared_token_env
+        .as_deref()
+        .map(std::env::var)
+        .transpose()?;
+    if shared_token
+        .as_ref()
+        .is_some_and(|v| v.is_empty() || v.len() > 4096)
+    {
+        return Err("invalid shared-token configuration".into());
+    }
+    let app = router_with_auth(
+        runtime.store.clone(),
+        stats.clone(),
+        shared_token.as_deref(),
     );
+    drop(shared_token);
+    let (http_stop, http_rx) = watch::channel(false);
+    let mut serve = tokio::spawn(serve(
+        listener,
+        app,
+        HttpLimits::default(),
+        counters.clone(),
+        http_rx,
+    ));
     let (stat_stop, mut stat_rx) = watch::channel(false);
     let periodic = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -162,6 +180,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
 // Actual SQLx QueryLogger events on completion/drop, not Store API counts or
 // successful transactions. Never retain SQL or bound values in the observer.
 struct QueryCounts(Arc<Mutex<BTreeMap<String, u64>>>);
+// Measurement-only fixture surface. ABI checked against the installed macOS
+// SDK malloc/malloc.h:534-539,614-615. Null zone sums all process malloc zones.
+#[cfg(target_os = "macos")]
+fn allocator_snapshot() -> serde_json::Value {
+    #[repr(C)]
+    #[derive(Default)]
+    struct Statistics {
+        blocks_in_use: u32,
+        size_in_use: usize,
+        max_size_in_use: usize,
+        size_allocated: usize,
+    }
+    unsafe extern "C" {
+        fn malloc_zone_statistics(zone: *mut std::ffi::c_void, statistics: *mut Statistics);
+    }
+    let mut value = Statistics::default();
+    // SAFETY: synchronous system API writes the correctly laid out live output;
+    // the documented null zone selects all allocator zones in this process.
+    unsafe {
+        malloc_zone_statistics(std::ptr::null_mut(), &mut value);
+    }
+    serde_json::json!({"blocks_in_use":value.blocks_in_use,"bytes_in_use":value.size_in_use,"max_bytes_touched":value.max_size_in_use,"bytes_reserved":value.size_allocated,"scope":"process malloc zones; excludes non-malloc VM mappings"})
+}
+#[cfg(not(target_os = "macos"))]
+fn allocator_snapshot() -> serde_json::Value {
+    serde_json::Value::Null
+}
 struct QueryVerb(String);
 impl tracing::field::Visit for QueryVerb {
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {

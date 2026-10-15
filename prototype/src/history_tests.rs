@@ -1,0 +1,343 @@
+//! Fresh-database compact history costs and native SQLite failure receipts.
+use crate::{AcceptRequest, Config, DeliveryStore, KernelError, store::now};
+use serde_json::{Value, json};
+use sqlx::{QueryBuilder, Row, Sqlite};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::Ordering,
+    time::Instant,
+};
+fn input(channel: &str, auth: &str, op: &str) -> AcceptRequest {
+    AcceptRequest {
+        channel_id: channel.into(),
+        password: auth.into(),
+        title: "history synthetic".into(),
+        op_id: Some(op.into()),
+        ..Default::default()
+    }
+}
+async fn setup(
+    path: &Path,
+) -> (
+    DeliveryStore,
+    crate::store::OwnerLock,
+    String,
+    String,
+    String,
+) {
+    let (store, owner) =
+        DeliveryStore::open(&format!("sqlite://{}", path.display()), Config::default())
+            .await
+            .unwrap();
+    let device = store.register("android").await.unwrap();
+    store
+        .route(&device, None, "FCM", "synthetic-history-route")
+        .await
+        .unwrap();
+    let auth = crate::types::generate_hex_id_128();
+    let channel = store
+        .subscribe(&device, None, Some("history"), &auth)
+        .await
+        .unwrap()["channel_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    (store, owner, device, channel, auth)
+}
+#[tokio::test]
+async fn sqlite_full_admission_never_reports_success_or_loses_prior_accepted_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("disk-full.sqlite");
+    let (store, owner, device, channel, auth) = setup(&path).await;
+    let prior_input = input(&channel, &auth, "before-full");
+    let prior = store.accept(prior_input.clone()).await.unwrap();
+    let before = store.pull(&device, Some(&prior.delivery_id)).await.unwrap();
+    let committed = store.counters.admission_commits.load(Ordering::Relaxed);
+    let pages: i64 = sqlx::query_scalar("PRAGMA page_count")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let configured: i64 = sqlx::query_scalar(&format!("PRAGMA max_page_count={}", pages + 1))
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(configured, pages + 1);
+    let mut request = input(&channel, &auth, "must-not-commit-full");
+    request.body = Some("x".repeat(24 * 1024));
+    let code = match store.accept(request).await {
+        Err(KernelError::Database(sqlx::Error::Database(error))) => {
+            error.code().map(|v| v.into_owned())
+        }
+        result => panic!("expected native SQLITE_FULL, got {result:?}"),
+    };
+    assert_eq!(code.as_deref(), Some("13"));
+    assert_eq!(
+        store.counters.admission_commits.load(Ordering::Relaxed),
+        committed
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM messages WHERE op_id='must-not-commit-full'"
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        store.pull(&device, Some(&prior.delivery_id)).await.unwrap(),
+        before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM targets WHERE delivery_id=?")
+            .bind(&prior.delivery_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    store.pool.close().await;
+    owner.release();
+    let (reopened, owner) =
+        DeliveryStore::open(&format!("sqlite://{}", path.display()), Config::default())
+            .await
+            .unwrap();
+    let replay = reopened.accept(prior_input).await.unwrap();
+    assert_eq!(replay.delivery_id, prior.delivery_id);
+    assert_eq!(replay.message_id, prior.message_id);
+    assert_eq!(
+        reopened
+            .pull(&device, Some(&prior.delivery_id))
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM messages WHERE op_id='must-not-commit-full'"
+        )
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap(),
+        0
+    );
+    reopened.pool.close().await;
+    owner.release();
+}
+fn physical(path: &Path) -> Value {
+    let bytes = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    json!({"db_bytes":bytes(path),"wal_bytes":bytes(&PathBuf::from(format!("{}-wal",path.display()))),"shm_bytes":bytes(&PathBuf::from(format!("{}-shm",path.display())))})
+}
+async fn disk(store: &DeliveryStore, path: &Path) -> Value {
+    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let pages: i64 = sqlx::query_scalar("PRAGMA page_count")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let free: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let cache: i64 = sqlx::query_scalar("PRAGMA cache_size")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let targets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM targets")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(payload_bytes),0) FROM messages")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let dbstat = match sqlx::query(
+        "SELECT name,SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY name",
+    )
+    .fetch_all(&store.pool)
+    .await
+    {
+        Ok(rows) => json!(
+            rows.iter()
+                .map(|r| json!({"name":r.get::<String,_>("name"),"bytes":r.get::<i64,_>("bytes")}))
+                .collect::<Vec<_>>()
+        ),
+        Err(error) => json!({"unavailable":error.to_string()}),
+    };
+    json!({"page_size":page_size,"page_count":pages,"freelist_count":free,"allocated_db_bytes":page_size*pages,"used_pages_bytes":page_size*(pages-free),"cache_size_pragma":cache,"identity_rows":rows,"target_rows":targets,"logical_payload_bytes":payload,"physical":physical(path),"dbstat":dbstat})
+}
+fn vmmap(out: &Path, label: &str) -> Value {
+    match std::process::Command::new("/usr/bin/vmmap")
+        .args(["-summary", &std::process::id().to_string()])
+        .output()
+    {
+        Ok(result) => {
+            std::fs::write(out.join(format!("vmmap-{label}.txt")), &result.stdout).unwrap();
+            std::fs::write(
+                out.join(format!("vmmap-{label}.stderr.txt")),
+                &result.stderr,
+            )
+            .unwrap();
+            json!({"success":result.status.success(),"exit_code":result.status.code(),"pid":std::process::id(),"file":format!("vmmap-{label}.txt")})
+        }
+        Err(error) => json!({"unavailable":error.to_string()}),
+    }
+}
+fn timing(samples: &mut [u64]) -> Value {
+    samples.sort_unstable();
+    json!({"n":samples.len(),"p50_us":samples[samples.len()/2],"p95_us":samples[(samples.len()*95/100).min(samples.len()-1)],"max_us":samples[samples.len()-1],"total_us":samples.iter().sum::<u64>()})
+}
+#[tokio::test]
+#[ignore = "fresh 1m-row history/disk experiment; run explicitly with C2_HISTORY_OUT"]
+async fn measure_compact_history_query_admission_gc_and_disk_space() {
+    let out = PathBuf::from(
+        std::env::var("C2_HISTORY_OUT").expect("new C2_HISTORY_OUT directory required"),
+    );
+    std::fs::create_dir(&out).expect("refuse to reuse existing experiment directory");
+    let path = out.join("history.sqlite");
+    let (store, owner, device, channel, auth) = setup(&path).await;
+    let cold = disk(&store, &path).await;
+    let cold_vmmap = vmmap(&out, "cold");
+    let fingerprint = input(&channel, &auth, "seed")
+        .normalize()
+        .unwrap()
+        .fingerprint;
+    let at = now();
+    let mut seeded = 0_u64;
+    let mut stages = Vec::new();
+    for count in [10_000_u64, 100_000, 1_000_000] {
+        let start = Instant::now();
+        while seeded < count {
+            let end = (seeded + 500).min(count);
+            let mut insert = QueryBuilder::<Sqlite>::new(
+                "INSERT INTO messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at,pending_targets,provider_accepted_count,provider_failed_count) ",
+            );
+            insert.push_values(seeded..end, |mut row, n| {
+                row.push_bind(format!("aaaa{n:028x}"))
+                    .push_bind(format!("bbbb{n:028x}"))
+                    .push_bind(format!("history-{n:024x}"))
+                    .push_bind(&channel)
+                    .push_bind(&fingerprint)
+                    .push_bind(Vec::<u8>::new())
+                    .push_bind(0_i64)
+                    .push_bind(at)
+                    .push_bind(at)
+                    .push_bind(at + 30 * 86_400_000_i64)
+                    .push_bind("sent")
+                    .push_bind(at)
+                    .push_bind(0_i64)
+                    .push_bind(1_i64)
+                    .push_bind(0_i64);
+            });
+            insert.build().execute(&store.pool).await.unwrap();
+            seeded = end;
+        }
+        let seed_ms = start.elapsed().as_millis();
+        let mut status_us = Vec::new();
+        let mut duplicate_us = Vec::new();
+        let mut admission_us = Vec::new();
+        for n in 0..50_u64 {
+            let op = format!("history-{:024x}", n * (count / 50));
+            let start = Instant::now();
+            let status = store.status(&op).await.unwrap();
+            status_us.push(start.elapsed().as_micros() as u64);
+            assert_eq!(status["status"], "sent");
+            let start = Instant::now();
+            let replay = store.accept(input(&channel, &auth, &op)).await.unwrap();
+            duplicate_us.push(start.elapsed().as_micros() as u64);
+            assert_eq!(replay.acceptance, "duplicate_completed");
+            let start = Instant::now();
+            let fresh = store
+                .accept(input(&channel, &auth, &format!("new-{count}-{n}")))
+                .await
+                .unwrap();
+            admission_us.push(start.elapsed().as_micros() as u64);
+            store.ack(&device, vec![fresh.delivery_id]).await.unwrap();
+        }
+        let live = disk(&store, &path).await;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        stages.push(json!({"seeded_identity_rows":count,"seed_delta_ms":seed_ms,"status":timing(&mut status_us),"duplicate":timing(&mut duplicate_us),"new_admission":timing(&mut admission_us),"disk_before_checkpoint":live,"disk_after_truncate_checkpoint":disk(&store,&path).await,"vmmap":vmmap(&out,&format!("history-{count}"))}));
+    }
+    // Expire only a fixed sample. All other identities retain their full30d.
+    sqlx::query("UPDATE messages SET dedupe_until=? WHERE delivery_id>=? AND delivery_id<?")
+        .bind(now() - 1)
+        .bind("aaaa0000000000000000000000000000")
+        .bind(format!("aaaa{:028x}", 10_000_u64))
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let before_gc = disk(&store, &path).await;
+    let mut gc_us = Vec::new();
+    let mut deleted = 0;
+    for _ in 0..40 {
+        let start = Instant::now();
+        let chunk = store.maintenance().await.unwrap();
+        gc_us.push(start.elapsed().as_micros() as u64);
+        assert!(chunk <= 256);
+        deleted += chunk;
+    }
+    assert_eq!(deleted, 10_000);
+    let after_gc = disk(&store, &path).await;
+    let falloff = vmmap(&out, "after-gc");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    // Separate synthetic storage-layout probe: one active business message,
+    //10k frozen recipients. It is not a 10k-device network throughput claim.
+    let fanout_path = out.join("active-fanout.sqlite");
+    let (fanout_store, fanout_owner, _, fanout_channel, fanout_auth) = setup(&fanout_path).await;
+    let fanout_cold = disk(&fanout_store, &fanout_path).await;
+    let accepted = fanout_store
+        .accept(input(&fanout_channel, &fanout_auth, "fanout-layout"))
+        .await
+        .unwrap();
+    for batch in (1_u64..10_000).step_by(500) {
+        let mut insert = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO targets(delivery_id,device_key,platform,provider,provider_token,state,next_attempt_at) ",
+        );
+        insert.push_values(batch..(batch + 500).min(10_000), |mut row, n| {
+            row.push_bind(&accepted.delivery_id)
+                .push_bind(format!("dddd{n:028x}"))
+                .push_bind("android")
+                .push_bind("FCM")
+                .push_bind(format!("synthetic-{:0153x}", n))
+                .push_bind("pending")
+                .push_bind(now());
+        });
+        insert.build().execute(&fanout_store.pool).await.unwrap();
+    }
+    sqlx::query("UPDATE messages SET pending_targets=10000 WHERE delivery_id=?")
+        .bind(&accepted.delivery_id)
+        .execute(&fanout_store.pool)
+        .await
+        .unwrap();
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&fanout_store.pool)
+        .await
+        .unwrap();
+    let active_fanout = json!({"recipient_rows":10000,"synthetic_provider_token_bytes":163,"cold":fanout_cold,"active":disk(&fanout_store,&fanout_path).await,"note":"direct SQL seed measures target/index storage layout only"});
+    fanout_store.pool.close().await;
+    fanout_owner.release();
+    let result = json!({"pid":std::process::id(),"cold":cold,"cold_vmmap":cold_vmmap,"stages":stages,"active_fanout":active_fanout,"gc":{"expired_sample":10000,"batches":40,"max_deletes_per_batch":256,"maintenance":timing(&mut gc_us),"before":before_gc,"after_logical_delete":after_gc,"after_truncate_checkpoint":disk(&store,&path).await,"falloff_vmmap":falloff},"notes":["Identity history has no quantity or byte quota; disk grows with accepted message rate for30d.","ACKed identity0payload0targets; active fanout is separate.","Freelist stays allocated; WALcheckpoint does not shrink DB; noVACUUM.","vmmap samples own process malloc/heap; RSS alone is not a leak oracle."]});
+    std::fs::write(
+        out.join("history-results.json"),
+        serde_json::to_vec_pretty(&result).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "HISTORY_RESULT {}",
+        out.join("history-results.json").display()
+    );
+    store.pool.close().await;
+    owner.release();
+}

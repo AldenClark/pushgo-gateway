@@ -46,7 +46,7 @@ async fn accept(
     auth: &str,
     op: &str,
 ) -> Value {
-    post(client, base, "/message", json!({"channel_id":channel,"password":auth,"op_id":op,"title":"wire","body":"canonical body"})).await["data"].clone()
+    post(client, base, "/message", json!({"channel_id":channel,"password":auth,"op_id":op,"title":"wire","body":"canonical body","ttl":crate::store::now()+60_000})).await["data"].clone()
 }
 #[tokio::test]
 async fn ordinary_router_supports_prefixed_legacy_and_v2_clients() {
@@ -94,7 +94,7 @@ async fn ordinary_router_supports_prefixed_legacy_and_v2_clients() {
     assert!(payload.values().all(Value::is_string));
     assert_eq!(payload["base_url"], base);
     assert!(payload["sent_at"].as_str().unwrap().parse::<i64>().unwrap() > 1_000_000_000_000);
-    assert!(payload["ttl"].as_str().unwrap().parse::<i64>().unwrap() > 1_000_000_000);
+    assert!(payload["ttl"].as_str().unwrap().parse::<i64>().unwrap() > 1_000_000_000_000);
     assert_eq!(
         post(
             &client,
@@ -155,7 +155,6 @@ async fn ordinary_router_supports_prefixed_legacy_and_v2_clients() {
     for body in [
         json!({"device_key":" ","delivery_id":"id"}),
         json!({"device_key":device,"delivery_id":" "}),
-        json!({"device_key":device,"delivery_id":"id","redirect":"https://bad.invalid"}),
     ] {
         let response = client
             .post(format!("{base}/messages/ack"))
@@ -165,6 +164,17 @@ async fn ordinary_router_supports_prefixed_legacy_and_v2_clients() {
             .unwrap();
         assert!(response.status().is_client_error());
     }
+    let unknown = client
+        .post(format!("{base}/messages/ack"))
+        .json(&json!({"device_key":device,"delivery_id":"id","redirect":"https://bad.invalid"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(unknown.status().is_success());
+    assert_eq!(
+        unknown.json::<Value>().await.unwrap()["data"]["removed"],
+        false
+    );
     let response = client.post(format!("{base}/v2/messages/ack")).json(&json!({"device_key":device,"delivery_ids":(0..201).map(|v| format!("id-{v}")).collect::<Vec<_>>()})).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
     let response = client
@@ -183,6 +193,67 @@ async fn ordinary_router_supports_prefixed_legacy_and_v2_clients() {
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    store.pool.close().await;
+    owner.release();
+}
+
+#[tokio::test]
+async fn sender_router_preserves_full_fields_and_generates_distinct_omitted_op_ids() {
+    let (_dir, store, owner, server, base) = fixture().await;
+    let client = reqwest::Client::new();
+    let device = store.register("android").await.unwrap();
+    store
+        .route(&device, None, "FCM", "synthetic-full-fields")
+        .await
+        .unwrap();
+    let auth = crate::types::generate_hex_id_128();
+    let channel = store
+        .subscribe(&device, None, Some("full fields"), &auth)
+        .await
+        .unwrap()["channel_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let occurred_at = crate::store::now() - 1000;
+    let expiry = crate::store::now() + 60_000;
+    let input = json!({"channel_id":channel,"password":auth,"title":"full",
+        "ttl":expiry.to_string(),"occurred_at":occurred_at,"severity":"HIGH",
+        "url":"https://fixture.invalid/message","images":["https://fixture.invalid/image"],
+        "ciphertext":"synthetic-ciphertext","tags":["one","two"],
+        "metadata":{"tenant":"synthetic","count":2,"enabled":true}});
+    let first = post(&client, &base, "/message", input.clone()).await["data"].clone();
+    let second = post(&client, &base, "/message", input).await["data"].clone();
+    assert_ne!(first["op_id"], second["op_id"]);
+    assert_ne!(first["delivery_id"], second["delivery_id"]);
+    let pull = post(
+        &client,
+        &base,
+        "/v2/messages/pull",
+        json!({"device_key":device,"delivery_id":first["delivery_id"]}),
+    )
+    .await;
+    let payload = &pull["data"]["items"][0]["payload"];
+    assert_eq!(payload["op_id"], first["op_id"]);
+    assert_eq!(payload["ttl"], expiry.to_string());
+    assert_eq!(payload["occurred_at"], occurred_at.to_string());
+    assert_eq!(payload["severity"], "high");
+    assert_eq!(payload["url"], "https://fixture.invalid/message");
+    assert_eq!(payload["ciphertext"], "synthetic-ciphertext");
+    assert!(payload.get("body").is_none());
+    assert_eq!(
+        serde_json::from_str::<Value>(payload["images"].as_str().unwrap()).unwrap(),
+        json!(["https://fixture.invalid/image"])
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(payload["tags"].as_str().unwrap()).unwrap(),
+        json!(["one", "two"])
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(payload["metadata"].as_str().unwrap()).unwrap(),
+        json!({"tenant":"synthetic","count":2,"enabled":true})
+    );
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
     store.pool.close().await;

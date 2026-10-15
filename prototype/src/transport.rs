@@ -4,6 +4,7 @@
 //! use a bounded wakeup projection; their Pull copy already lives in the ledger.
 use crate::{
     ProviderTransport,
+    credentials::{CredentialProvider, FixtureCredentials},
     store::{KernelError, now},
     types::Platform,
 };
@@ -28,6 +29,8 @@ pub enum FailureKind {
     InvalidToken,
     PayloadTooLarge,
     Unauthorized,
+    ProviderAccessFailed,
+    CredentialsExpired,
     Rejected,
 }
 impl FailureKind {
@@ -39,6 +42,8 @@ impl FailureKind {
             Self::InvalidToken => "invalid_token",
             Self::PayloadTooLarge => "payload_too_large",
             Self::Unauthorized => "unauthorized",
+            Self::ProviderAccessFailed => "provider_access_failed",
+            Self::CredentialsExpired => "credentials_expired",
             Self::Rejected => "rejected",
         }
     }
@@ -71,7 +76,9 @@ impl DispatchResult {
         matches!(
             self.failure_kind,
             Some(
-                FailureKind::Transport
+                FailureKind::ProviderAccessFailed
+                    | FailureKind::CredentialsExpired
+                    | FailureKind::Transport
                     | FailureKind::RateLimited
                     | FailureKind::TemporarilyUnavailable
             )
@@ -85,15 +92,50 @@ pub struct RealProviders {
     clients: [Mutex<Option<reqwest::Client>>; 2],
     endpoint: Arc<str>,
     transport_errors: AtomicUsize,
+    oversized_responses: AtomicUsize,
+    idle_budget: usize,
+    credentials: Arc<dyn CredentialProvider>,
+    apns_topic: Arc<str>,
 }
 impl RealProviders {
     pub fn loopback(endpoint: &str) -> Result<Self, KernelError> {
+        Self::loopback_with_budget(endpoint, crate::Config::default().provider_budget)
+    }
+    pub fn loopback_with_budget(endpoint: &str, idle_budget: usize) -> Result<Self, KernelError> {
+        Self::loopback_with_credentials(
+            endpoint,
+            idle_budget,
+            Arc::new(FixtureCredentials),
+            Arc::from("io.ethan.pushgo"),
+        )
+    }
+    pub fn loopback_with_credentials(
+        endpoint: &str,
+        idle_budget: usize,
+        credentials: Arc<dyn CredentialProvider>,
+        apns_topic: Arc<str>,
+    ) -> Result<Self, KernelError> {
+        if apns_topic.is_empty()
+            || apns_topic.len() > 255
+            || !apns_topic
+                .bytes()
+                .all(|v| v.is_ascii_alphanumeric() || b".-".contains(&v))
+        {
+            return Err(KernelError::Invalid("invalid APNs topic".into()));
+        }
+        if idle_budget == 0 {
+            return Err(KernelError::Invalid(
+                "positive provider connection budget required".into(),
+            ));
+        }
         let url = reqwest::Url::parse(endpoint)
             .map_err(|_| KernelError::Invalid("provider endpoint".into()))?;
         let ip = url
             .host_str()
             .and_then(|value| value.trim_matches(['[', ']']).parse::<IpAddr>().ok());
         if url.scheme() != "http"
+            || !url.username().is_empty()
+            || url.password().is_some()
             || !ip.is_some_and(|ip| ip.is_loopback())
             || url.port().is_none_or(|port| port == 0)
             || url.path() != "/"
@@ -108,6 +150,10 @@ impl RealProviders {
             clients: [Mutex::new(None), Mutex::new(None)],
             endpoint: Arc::from(endpoint.trim_end_matches('/')),
             transport_errors: AtomicUsize::new(0),
+            oversized_responses: AtomicUsize::new(0),
+            idle_budget,
+            credentials,
+            apns_topic,
         })
     }
     fn client(&self, provider: &str) -> Result<reqwest::Client, reqwest::Error> {
@@ -120,7 +166,7 @@ impl RealProviders {
         // TCP churn. Its pump releases this owner on proven quiescence instead
         // of adding an idle-pool timer. Each HTTP future owns its own clone.
         let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(32)
+            .pool_max_idle_per_host(self.idle_budget)
             .pool_idle_timeout(None)
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(15))
@@ -131,6 +177,17 @@ impl RealProviders {
     }
     pub fn transport_errors(&self) -> usize {
         self.transport_errors.load(Ordering::Relaxed)
+    }
+    pub fn oversized_responses(&self) -> usize {
+        self.oversized_responses.load(Ordering::Relaxed)
+    }
+    pub fn resource_snapshot(&self) -> Value {
+        let owners: Vec<bool> = self
+            .clients
+            .iter()
+            .map(|slot| slot.lock().unwrap().is_some())
+            .collect();
+        json!({"provider_client_owners":owners,"idle_connections_per_provider_limit":self.idle_budget})
     }
     fn record_transport_error(&self, provider: &str, phase: &str, error: &reqwest::Error) {
         let count = self.transport_errors.fetch_add(1, Ordering::Relaxed) + 1;
@@ -186,15 +243,21 @@ impl RealProviders {
         data.insert("delivery_id".into(), delivery.into());
         data.insert("provider_device_key".into(), device.into());
         data.insert("sent_at".into(), accepted.to_string());
-        data.insert("ttl".into(), expiry.div_euclid(1000).to_string());
+        // Canonical optional TTL is absolute milliseconds. Provider envelope
+        // TTL/expiration below uses its own required units without changing data.
         let fcm = provider == "FCM" && platform == Platform::Android;
         let apns = provider == "APNS" && matches!(platform, Platform::Ios | Platform::Macos);
         if !fcm && !apns {
             return DispatchResult::failure(0, FailureKind::Rejected, None);
         }
+        let fcm_priority = if data.get("severity").is_some_and(|v| v == "low") {
+            "NORMAL"
+        } else {
+            "HIGH"
+        };
         let encode = |data: &BTreeMap<String, String>| {
             let value = if fcm {
-                json!({"message":{"token":token,"data":data,"android":{"priority":"HIGH","ttl":format!("{}s",(expiry.saturating_sub(now())/1000).clamp(0, 28 * 86_400))}}})
+                json!({"message":{"token":token,"data":data,"android":{"priority":fcm_priority,"ttl":format!("{}s",(expiry.saturating_sub(now())/1000).clamp(0, 28 * 86_400))}}})
             } else {
                 apns_body(data)
             };
@@ -219,15 +282,31 @@ impl RealProviders {
                 return DispatchResult::failure(0, FailureKind::Transport, None);
             }
         };
+        let (access_token, project_id) = if fcm {
+            match self.credentials.fcm(false).await {
+                Ok(value) => (value.access_token, Some(value.project_id)),
+                Err(_) => {
+                    return DispatchResult::failure(0, FailureKind::ProviderAccessFailed, None);
+                }
+            }
+        } else {
+            match self.credentials.apns(false).await {
+                Ok(value) => (value.access_token, None),
+                Err(_) => {
+                    return DispatchResult::failure(0, FailureKind::ProviderAccessFailed, None);
+                }
+            }
+        };
         let request = if fcm {
             client.post(format!(
-                "{}/v1/projects/fixture-project/messages:send",
-                self.endpoint
+                "{}/v1/projects/{}/messages:send",
+                self.endpoint,
+                project_id.as_deref().unwrap()
             ))
         } else {
             client
                 .post(format!("{}/3/device/{}", self.endpoint, token))
-                .header("apns-topic", "io.ethan.pushgo")
+                .header("apns-topic", self.apns_topic.as_ref())
                 .header("apns-push-type", "alert")
                 .header("apns-priority", "10")
                 .header("apns-expiration", expiry.div_euclid(1000).to_string())
@@ -238,7 +317,7 @@ impl RealProviders {
         // are unnecessary while the network response/receipt is pending.
         drop(data);
         drop(payload);
-        let response = match request.bearer_auth("fixture-local-only").send().await {
+        let mut response = match request.bearer_auth(access_token.as_ref()).send().await {
             Ok(response) => response,
             Err(error) => {
                 self.record_transport_error(provider, "send", &error);
@@ -252,17 +331,57 @@ impl RealProviders {
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|value| value.to_str().ok()),
         );
-        let body = match response.bytes().await {
-            Ok(body) => body,
-            Err(error) => {
-                self.record_transport_error(provider, "body", &error);
-                return DispatchResult::failure(status, FailureKind::Transport, None);
+        // Provider JSON is diagnostic input, never business payload. Bound the
+        // accumulated bytes even when the peer omits/lies about Content-Length.
+        // Dropping an oversized body closes/resets that response; it cannot turn
+        // an already accepted 2xx into a retry and duplicate the notification.
+        const MAX_PROVIDER_RESPONSE_BYTES: usize = 16 * 1024;
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) if chunk.len() <= MAX_PROVIDER_RESPONSE_BYTES - body.len() => {
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(Some(_)) => {
+                    self.oversized_responses.fetch_add(1, Ordering::Relaxed);
+                    body.clear();
+                    break;
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    self.record_transport_error(provider, "body", &error);
+                    if (200..300).contains(&status) {
+                        return DispatchResult::success(status);
+                    }
+                    return self
+                        .classify_and_refresh(provider, status, &body, retry)
+                        .await;
+                }
             }
-        };
+        }
         if (200..300).contains(&status) {
             return DispatchResult::success(status);
         }
-        classify(provider, status, &body, retry)
+        self.classify_and_refresh(provider, status, &body, retry)
+            .await
+    }
+    async fn classify_and_refresh(
+        &self,
+        provider: &str,
+        status: u16,
+        body: &[u8],
+        retry: Option<i64>,
+    ) -> DispatchResult {
+        let result = classify(provider, status, body, retry);
+        if result.failure_kind == Some(FailureKind::CredentialsExpired) {
+            // Prepare the shared cache for the next durable attempt; never resend inline.
+            if provider == "FCM" {
+                let _ = self.credentials.fcm(true).await;
+            } else {
+                let _ = self.credentials.apns(true).await;
+            }
+        }
+        result
     }
 }
 impl ProviderTransport for RealProviders {
@@ -303,7 +422,13 @@ fn apns_body(data: &BTreeMap<String, String>) -> Value {
     }
     let mut aps = json!({"alert":alert,"mutable-content":1});
     if data.get("provider_mode").map(String::as_str) != Some("wakeup") {
-        aps["interruption-level"] = Value::String("active".into());
+        let level = match data.get("severity").map(String::as_str) {
+            Some("critical") => "critical",
+            Some("high") => "time-sensitive",
+            Some("low") => "passive",
+            _ => "active",
+        };
+        aps["interruption-level"] = Value::String(level.into());
     }
     body.insert("aps".into(), aps);
     Value::Object(body)
@@ -354,6 +479,50 @@ fn parse_retry_after(raw: Option<&str>) -> Option<i64> {
 fn classify(provider: &str, status: u16, body: &[u8], retry: Option<i64>) -> DispatchResult {
     let json: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let reason = json.get("reason").and_then(Value::as_str).unwrap_or("");
+    if provider == "FCM" {
+        let error = json.get("error").filter(|v| v.is_object());
+        let text = error
+            .and_then(|v| v.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| {
+                if error.is_none() {
+                    String::from_utf8_lossy(body).to_ascii_lowercase()
+                } else {
+                    String::new()
+                }
+            });
+        let invalid = error
+            .and_then(|v| v.get("status"))
+            .and_then(Value::as_str)
+            .is_some_and(|v| v.eq_ignore_ascii_case("NOT_FOUND"))
+            || error
+                .and_then(|v| v.get("details"))
+                .and_then(Value::as_array)
+                .is_some_and(|details| {
+                    details.iter().any(|d| {
+                        d.get("errorCode")
+                            .and_then(Value::as_str)
+                            .is_some_and(|v| v.eq_ignore_ascii_case("UNREGISTERED"))
+                    })
+                })
+            || text.contains("unregistered")
+            || text.contains("not registered")
+            || text.contains("invalid registration token")
+            || (text.contains("registration token") && text.contains("invalid"));
+        if invalid {
+            return DispatchResult::failure(status, FailureKind::InvalidToken, retry);
+        }
+        if status == 400
+            && error
+                .and_then(|v| v.get("status"))
+                .and_then(Value::as_str)
+                .is_some_and(|v| v.eq_ignore_ascii_case("INVALID_ARGUMENT"))
+            && text.contains("message too big")
+        {
+            return DispatchResult::failure(status, FailureKind::PayloadTooLarge, retry);
+        }
+    }
     if status == 429 {
         return DispatchResult::failure(
             status,
@@ -369,8 +538,8 @@ fn classify(provider: &str, status: u16, body: &[u8], retry: Option<i64>) -> Dis
             Some(retry.unwrap_or(0).max(floor)),
         );
     }
-    if provider == "APNS" && reason == "ExpiredProviderToken" {
-        return DispatchResult::failure(status, FailureKind::TemporarilyUnavailable, retry);
+    if provider == "APNS" && matches!(status, 401 | 403) && reason == "ExpiredProviderToken" {
+        return DispatchResult::failure(status, FailureKind::CredentialsExpired, retry);
     }
     let invalid = if provider == "APNS" {
         status == 410
@@ -379,20 +548,14 @@ fn classify(provider: &str, status: u16, body: &[u8], retry: Option<i64>) -> Dis
                 "BadDeviceToken" | "DeviceTokenNotForTopic" | "Unregistered"
             )
     } else {
-        status == 404
-            || json
-                .pointer("/error/details")
-                .and_then(Value::as_array)
-                .is_some_and(|details| {
-                    details.iter().any(|detail| {
-                        detail.get("errorCode").and_then(Value::as_str) == Some("UNREGISTERED")
-                    })
-                })
+        false
     };
     let kind = if invalid {
         FailureKind::InvalidToken
     } else if status == 413 {
         FailureKind::PayloadTooLarge
+    } else if provider == "FCM" && matches!(status, 401 | 403) {
+        FailureKind::CredentialsExpired
     } else if matches!(status, 401 | 403) {
         FailureKind::Unauthorized
     } else {
@@ -403,6 +566,27 @@ fn classify(provider: &str, status: u16, body: &[u8], retry: Option<i64>) -> Dis
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fcm_invalid_token_requires_provider_evidence_and_payload_errors_do_not_retire_routes() {
+        assert_eq!(
+            classify("FCM", 404, b"", None).failure_kind,
+            Some(FailureKind::Rejected)
+        );
+        assert_eq!(
+            classify("FCM", 404, br#"{"error":{"status":"NOT_FOUND"}}"#, None).failure_kind,
+            Some(FailureKind::InvalidToken)
+        );
+        assert_eq!(
+            classify(
+                "FCM",
+                400,
+                br#"{"error":{"status":"INVALID_ARGUMENT","message":"Message too big"}}"#,
+                None
+            )
+            .failure_kind,
+            Some(FailureKind::PayloadTooLarge)
+        );
+    }
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn provider_pool_reuses_connections_and_quiesce_preserves_held_request() {
         use axum::extract::ConnectInfo;
@@ -549,6 +733,7 @@ mod tests {
         let wire = rx.await.unwrap();
         assert_eq!(wire["message"]["android"]["ttl"], "2419200s");
         assert_eq!(wire["message"]["data"]["delivery_id"], "delivery-one");
+        assert!(wire["message"]["data"].get("ttl").is_none());
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
     }
@@ -588,7 +773,7 @@ mod tests {
             let expiry = accepted + 3_600_000;
             // Quotes cost twice as many JSON bytes as raw UTF-8 characters.
             let response = provider.request(provider_name, platform, "synthetic-apns",
-                json!({"title":"wire","body":"\"".repeat(3000),"message_id":"frozen-message","base_url":"https://fixture.invalid/Prefix","delivery_id":"spoofed","provider_device_key":"spoofed","sent_at":"0","ttl":"0"}),
+                json!({"title":"wire","body":"\"".repeat(3000),"message_id":"frozen-message","base_url":"https://fixture.invalid/Prefix","delivery_id":"spoofed","provider_device_key":"spoofed","sent_at":"0","ttl":expiry.to_string()}),
                 "frozen-delivery", "frozen-device", accepted, expiry).await;
             assert!(response.success);
             let bytes = rx.await.unwrap();
@@ -605,12 +790,161 @@ mod tests {
             assert_eq!(data["delivery_id"], "frozen-delivery");
             assert_eq!(data["provider_device_key"], "frozen-device");
             assert_eq!(data["sent_at"], accepted.to_string());
-            assert_eq!(data["ttl"], expiry.div_euclid(1000).to_string());
+            assert_eq!(data["ttl"], expiry.to_string());
             assert_eq!(data["base_url"], "https://fixture.invalid/Prefix");
             server.abort();
             assert!(server.await.unwrap_err().is_cancelled());
         }
     }
+    #[tokio::test]
+    async fn oversized_provider_responses_preserve_status_and_retry_headers() {
+        for (status, success, failure, retry) in [
+            (200, true, None, None),
+            (429, false, Some(FailureKind::RateLimited), Some(120_000)),
+            (
+                503,
+                false,
+                Some(FailureKind::TemporarilyUnavailable),
+                Some(120_000),
+            ),
+            (404, false, Some(FailureKind::Rejected), Some(120_000)),
+        ] {
+            let app = axum::Router::new().fallback(move || async move {
+                axum::http::Response::builder()
+                    .status(status)
+                    .header("retry-after", "120")
+                    .body(axum::body::Body::from(vec![b'x'; 64 * 1024]))
+                    .unwrap()
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let provider = RealProviders::loopback(&endpoint).unwrap();
+            let accepted = now();
+            let result = provider
+                .request(
+                    "FCM",
+                    Platform::Android,
+                    "synthetic-token",
+                    json!({"base_url":"https://fixture.invalid","body":"small"}),
+                    "delivery",
+                    "device",
+                    accepted,
+                    accepted + 60_000,
+                )
+                .await;
+            assert_eq!(result.status_code, status);
+            assert_eq!(result.success, success);
+            assert_eq!(result.failure_kind, failure);
+            assert_eq!(result.retry_after_millis, retry);
+            assert_eq!(provider.oversized_responses(), 1);
+            assert_eq!(provider.transport_errors(), 0);
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+        }
+    }
+
+    #[tokio::test]
+    async fn truncated_provider_response_preserves_received_status_and_retry_headers() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (status, success, failure, retry) in [
+            (200, true, None, None),
+            (429, false, Some(FailureKind::RateLimited), Some(120_000)),
+            (
+                503,
+                false,
+                Some(FailureKind::TemporarilyUnavailable),
+                Some(120_000),
+            ),
+            (404, false, Some(FailureKind::Rejected), Some(120_000)),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = vec![0; 8192];
+                let mut read = 0;
+                loop {
+                    let n = socket.read(&mut bytes[read..]).await.unwrap();
+                    assert!(n > 0);
+                    read += n;
+                    if bytes[..read].windows(4).any(|v| v == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: 100\r\nRetry-After: 120\r\nConnection: close\r\n\r\nx"
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+            });
+            let provider = RealProviders::loopback(&endpoint).unwrap();
+            let accepted = now();
+            let result = provider
+                .request(
+                    "FCM",
+                    Platform::Android,
+                    "synthetic-token",
+                    json!({"base_url":"https://fixture.invalid","body":"small"}),
+                    "delivery",
+                    "device",
+                    accepted,
+                    accepted + 60_000,
+                )
+                .await;
+            server.await.unwrap();
+            assert_eq!(result.status_code, status);
+            assert_eq!(result.success, success);
+            assert_eq!(result.failure_kind, failure);
+            assert_eq!(result.retry_after_millis, retry);
+            assert_eq!(provider.transport_errors(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_provider_severity_keeps_mainline_priority_and_interruption() {
+        for (severity, fcm_priority, interruption) in [
+            ("critical", "HIGH", "critical"),
+            ("high", "HIGH", "time-sensitive"),
+            ("normal", "HIGH", "active"),
+            ("low", "NORMAL", "passive"),
+        ] {
+            let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+            let app = axum::Router::new().fallback(axum::routing::post(
+                move |axum::Json(body): axum::Json<Value>| {
+                    let tx = tx.clone();
+                    async move {
+                        tx.send(body).await.unwrap();
+                        axum::Json(json!({}))
+                    }
+                },
+            ));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let provider = RealProviders::loopback(&endpoint).unwrap();
+            for (name, platform) in [("FCM", Platform::Android), ("APNS", Platform::Ios)] {
+                let accepted = now();
+                assert!(provider.request(name, platform, "synthetic-token",
+                    json!({"base_url":"https://fixture.invalid","title":"severity","severity":severity}),
+                    "delivery", "device", accepted, accepted + 60_000).await.success);
+                let wire = rx.recv().await.unwrap();
+                if name == "FCM" {
+                    assert_eq!(wire["message"]["android"]["priority"], fcm_priority);
+                } else {
+                    assert_eq!(wire["aps"]["interruption-level"], interruption);
+                }
+            }
+            let wakeup = apns_body(&wakeup_data(&BTreeMap::from([(
+                "severity".into(),
+                severity.into(),
+            )])));
+            assert!(wakeup["aps"].get("interruption-level").is_none());
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+        }
+    }
+
     #[test]
     fn provider_delay_floors_and_terminal_token_failure() {
         assert_eq!(
