@@ -64,7 +64,7 @@ Apple 是 host native controllers/GRDB 测试，不是 iOS/Watch OS 后台交付
 
 因此只修改此 JOIN，不扩池、不批量 receipt、不拆接纳事务。两个 devices 索引建议未混入：实际 load cleanup 仅 49.5ms，coalesce 在该窗口没有调用。非空退休集合的匹配/排序，以及大 coalescing SQL 仍是随数据量变化的工作量；有界返回/内存不是恒定数据库工作量。
 
-以下 old JOIN/new JOIN 均含完整 C3 控制/凭据/客户端合同，**只是 C 内部热点的因果对照，不是主线/C32/C 新排名**。各次输入 10 秒，128/256 消息每秒分别是 1280/2560 条业务消息、20,480/40,960 个实际目标。全部成功接纳、最终全部目标 receipt 持久化，wire 身份/Pull/ACK/停机检查均通过。producer peak 为尚未 HTTP 完成的输入数；DB at input end 为持久目标积压。完整表见本机 `capacity-matched-primary8-table.md/json`。
+以下 old JOIN/new JOIN 均含完整 C3 控制/凭据/客户端合同，**只是 C 内部热点的因果对照，不是主线/C32/C 新排名**。各次输入 10 秒，128/256 消息每秒分别是 1280/2560 条业务消息、20,480/40,960 个实际目标。全部成功接纳、最终全部目标 receipt 持久化，wire 身份/Pull/ACK/停机检查均通过。producer peak = submitted − started，是已提交但 HTTP 尚未开始的消息数，**不包含** started − finished 的活跃 HTTP；DB at input end 为持久目标积压。完整表见本机 `capacity-matched-primary8-table.md/json`。
 
 | source/rate | firstSQL r1/r2 s | target/s incl drain r1/r2 | producer peak r1/r2 | DB at inputend r1/r2 |
 |---|---:|---:|---:|---:|

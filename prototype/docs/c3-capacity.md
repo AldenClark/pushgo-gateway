@@ -11,6 +11,8 @@
 | candidate128 | 10.376/10.380 | 1973.88/1972.95 | 1/1 | 426/312 |
 | candidate256 | 23.863/23.363 | 1716.46/1753.20 | 562/480 | 17180/18754 |
 
+producer peak = submitted − started，表示已提交但 HTTP 尚未开始的消息数；活跃 HTTP 为 started − finished，二者分开统计。
+
 128/256 是消息/秒，每条16个真实目标、输入10秒。H32为每provider上限、Q32、Remote Token Service、合成认证、相同20ms Provider适配延迟。完成平均率含排空，不是持续吞吐。旧匹配候选256两例的独占gate hold占窗口73.83%/77.35%，完整network duration积分对应平均47.66/47.02个网络槽（全局64）；不能把不同轴峰值相加，也不能将跨调用累计wait当墙钟。
 
 | writerfix 后续场景 | 源码 | 消息/目标 | firstSQL s | 结果 |
