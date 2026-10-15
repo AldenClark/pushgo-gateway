@@ -20,7 +20,7 @@
 | 保留与容量 | 35 天全部保留，ACK 不释放容量 | 按本轮用户明确选择保留完整 30 天身份/指纹/状态；Provider 终态释放未完成 manifest/Provider job 预算，ACK 释放保留正文和队列；running ACK 保留到 receipt。没有历史数量/字节硬配额，不提前淘汰身份。`provider_receipt_releases_pending_capacity_and_ack_releases_bytes_preserving_history`、`bounded_expiry_skips_compact_history_and_maintenance_keeps_unexpired_identity` |
 | 原子接纳与写失败 | 只有部分事务行为证据 | 单笔事务冻结正文与全部有效收件人；容量拒绝不创建身份/部分目标；只有 COMMIT 成功才返回成功和计数。真实 SQLite FULL、延迟外键 COMMIT 失败、重开保留既有消息分别验证。`atomic_target_cap_and_payload_cap_survive_concurrent_admission`、`sqlite_full_admission_never_reports_success_or_loses_prior_accepted_work`、`deferred_sqlite_commit_failure_never_reports_success_and_preserves_prior_work` |
 
-`legacy` 是已有代码/测试的命名。这里保留受支持客户端实际使用的直接 ACK 和协议路径，不向已退役客户端或旧 Gateway 扩大兼容承诺。Private 注册的完整私有发送/迁移链路、Event、Thing、Watch、WNS 不在本候选的发送范围；带 thing_id 明确拒绝，不能悄悄按普通消息成功。
+`legacy` 是已有代码/测试的命名。这里保留受支持客户端实际使用的直接 ACK 和协议路径，不向已退役客户端或旧 Gateway 扩大兼容承诺。C6 增加可选的普通 Private 发送、路由迁移及持久确认链路，见 [Private 合同映射](c6-private.md)。合法 HTTP 大请求封装后可能超出现有客户端帧上限，这一行为边界尚未批准新增拒收，不能声称所有合法输入已完整接入。Event、Thing、Watch、WNS 不在本候选的发送范围；带 thing_id 明确拒绝，不能悄悄按普通消息成功。
 
 ## 资源所有权
 
@@ -30,7 +30,7 @@ Config 是库和 fixture 默认值的唯一来源。H 是每 Provider 的可配�
 
 Provider 回复最多累计 16 KiB，按块读取；溢出/截断保留 HTTP 状态及 Retry-After；已收到 2xx 不因诊断正文坏掉而重发。请求体 32 KiB、连接 128、每连接通告 HTTP/2 stream 1 和窗口 65,535。HTTP 保留原 128 个总接纳许可；控制响应另用 16 个工作许可有界等待，等待时已持有总许可且尚未解析正文。许可一直跟随响应 Body 到 EOF/drop，不能因 handler 返回而提前释放。没有新增 16/112 并发拒收。合法尺寸不因 HTTP/2 设置变小，合规连接按协议排队。这些连接/执行数仍是实验运行配置，不是新批准的产品最大值。
 
-单频道既有最多 32 个订阅者；fanout 在 SQL INSERT SELECT 中一次冻结，不在内存展开整个历史。未完成 manifest 10,000 与 pending Provider jobs 1,000,000 沿用主线所有者，已完成但尚未 ACK 的 Pull 正文不属于这两个计数。事务 trigger 维护计数，不为接纳执行全表 COUNT/SUM。索引覆盖领取、设备有序 Pull、到期正文、身份期限、退休设备与其订阅；精确 Pull 走主键，不排序整个设备积压。
+单频道既有最多 32 个订阅者；fanout 在 SQL INSERT SELECT 中一次冻结，不在内存展开整个历史。未完成 manifest 10,000 与 pending Provider jobs 1,000,000 沿用主线所有者，已完成但尚未 ACK 的 Pull 正文不属于这两个计数。SQLite/PG 的事务 trigger、MySQL 的同事务显式增量维护计数，不为接纳执行全表 COUNT/SUM。索引覆盖领取、设备有序 Pull、到期正文、身份期限、退休设备与其订阅；精确 Pull 走主键，不排序整个设备积压。
 
 正文清理每批最多 256 个消息，身份每批最多 256；退休设备每批最多 256 个目标、256 个订阅。查询返回和内存批次有界不意味着总数据库工作恒定：例如大量过期候选过滤、现有历史与 B-tree 高度仍会影响工作量，必须结合测量说明。维护不拆分已接纳 fanout，也不提前删除有效幂等身份。
 

@@ -1,6 +1,6 @@
 # C：普通消息合同候选
 
-独立单机普通消息 crate，已实现 SQLite 与 PostgreSQL 原生存储；可执行 fixture 只连接本地 Provider Mock。PG 在真实 PostgreSQL16.14 的全新隔离测试库验证，使用 tmpfs，不代表旧库迁移或断电验收。保留 MySQL 产品范围，但尚未实现新 C 的 MySQL 适配。复用既有 Remote 凭据 owner/Token Service；真实 APNs 未验证。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。
+独立单机普通消息 crate，已实现 SQLite、PostgreSQL、MySQL 原生存储，以及可选的普通 Private 数据面。Provider fixture 仅连接本地 Mock；Private 使用现有 wire profile 和真实候选账本。PG16.14 / MySQL8.4.11 使用全新隔离测试库，早期功能用tmpfs，最终MySQL相关功能重验及容量对照用专属磁盘卷；均不代表旧库迁移或断电验收。复用既有 Remote 凭据 owner/Token Service；真实 APNs 未验证。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。C6 Private 的合法 HTTP 大请求与 wire 帧上限冲突尚待行为决策，不能据小消息通过声称完整接入。当前交付入口为 [C6结果](docs/c6-results.md)、[Private合同](docs/c6-private.md)与[容量证据](docs/c6-capacity.md)；下文C3/C4/C5收据保留各自历史版本含义。
 
 ## 已实现的普通消息边界
 
@@ -28,10 +28,10 @@
 
 在 prototype 目录可用缓存依赖运行 `cargo test --release --locked --offline --lib`。C3 最终写事务修复的原生 82 项通过；两个 ignored 历史测量在同一 schema 的冻结 `10e59ec` 显式各跑一次通过，不计为新二进制的执行结果。C2 的 Clippy 收据保留；C3 不冒用它声称新依赖接线已完成 strict Clippy。
 
-C3 的 Apple 未改生产 controllers/GRDB 和 Android 未改生产 repository/Room/AndroidKeystore 均直接连接本地候选，包含独立进程恢复；wakeup 由捕获的真实候选 payload 进入生产处理路径。真实系统 APNs/FCM 调度、物理 Watch 后台、PG/MySQL 实库仍未运行。
+C3 的 Apple 未改生产 controllers/GRDB 和 Android 未改生产 repository/Room/AndroidKeystore 均直接连接本地候选，包含独立进程恢复；wakeup 由捕获的真实候选 payload 进入生产处理路径。真实系统 APNs/FCM 调度、物理 Watch 后台未运行；后续 PG/MySQL 实库普通消息证据分别见 C4/C5 报告。
 
 C3 证据在主仓库 `build/quality-results/c-client-loop-gate-20261015/`，源/二进制/工具链对应关系和首个失败均保留；旧 C32/C2 对照产物不替换。最终交付见 [c3-results.md](docs/c3-results.md)，先前报告 [c2-results.md](docs/c2-results.md) 保留历史含义。验证源码在 `validation/c3/`，不含二进制、数据库、日志或凭据。
 
 SQLite 写事务显式 `BEGIN IMMEDIATE`，沿用 3 秒 busy timeout。预算内写锁释放可继续；超时仍失败关闭并依赖持久化身份和独占 owner 重启恢复，不承诺任意长阻塞在线重试。没有增加重试队列或放宽接纳成功条件。
 
-C4最终实现、客户端闭环、数据库与资源边界、保留失败及产物身份见 [C4结果](docs/c4-results.md)、[PG实现](docs/c4-postgres.md)、[有限容量复核](docs/c4-capacity.md)。普通fixture为冻结8d458bbf；复用target当前可能是83ab543e测量构建，不要混用。后续MySQL须等待本轮审查；没有自动合并、推送或部署。
+C4历史实现、客户端闭环、数据库与资源边界、保留失败及产物身份见 [C4结果](docs/c4-results.md)、[PG实现](docs/c4-postgres.md)、[有限容量复核](docs/c4-capacity.md)。当时普通fixture为冻结8d458bbf、测量构建为83ab543e，均非当前产物。C5 已完成 MySQL 普通消息原生适配与三库客户端闭环，见 [C5结果](docs/c5-results.md)；其原190秒容量失败保留。C6的源码、冻结二进制、功能及容量结果按 [C6结果](docs/c6-results.md) 的精确身份使用，不能以可变target替代。没有自动合并、推送或部署。
