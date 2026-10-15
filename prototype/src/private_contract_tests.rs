@@ -895,9 +895,10 @@ async fn large_http_body_migration_replay(f: &mut Fixture) {
         let pulled = f.store.pull(&subject.device, Some(id)).await.unwrap();
         assert_eq!(pulled["items"].as_array().unwrap().len(), 1);
         let provider_payload = pulled["items"][0]["payload"].clone();
+        let expected_body = expected["body"].as_str().unwrap().trim();
         assert_eq!(
-            provider_payload["body"],
-            expected["body"].as_str().unwrap().trim()
+            provider_payload.get("body").and_then(Value::as_str),
+            (!expected_body.is_empty()).then_some(expected_body)
         );
         assert!(f.payload_bytes(id).await > 0);
         let duplicate = submit(&f.store, &raw).await;
@@ -922,7 +923,11 @@ async fn large_http_body_migration_replay(f: &mut Fixture) {
         assert_eq!(canonical["message_id"], accepted["message_id"]);
         assert_eq!(
             first.expires_at,
-            canonical["ttl"].as_str().unwrap().parse::<i64>().unwrap()
+            first.accepted_at + f.store.config.default_ttl_secs * 1000
+        );
+        assert!(
+            canonical.get("ttl").is_none(),
+            "omitted input TTL stays omitted on wire; absolute expiry remains in ledger"
         );
         for (key, value) in provider_payload.as_object().unwrap() {
             assert_eq!(&canonical[key], value, "migration changed {kind} {key}");
@@ -932,8 +937,8 @@ async fn large_http_body_migration_replay(f: &mut Fixture) {
         let decoded: pushgo_warp_profile::PrivatePayloadEnvelope =
             postcard::from_bytes(&payload).unwrap();
         assert_eq!(
-            decoded.data["body"],
-            expected["body"].as_str().unwrap().trim()
+            decoded.data.get("body").map(String::as_str),
+            (!expected_body.is_empty()).then_some(expected_body)
         );
         if let Some(metadata) = expected.get("metadata") {
             assert_eq!(

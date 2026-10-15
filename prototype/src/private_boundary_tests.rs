@@ -187,9 +187,10 @@ async fn admitted_size_at(kind: &str, input_bytes: usize) {
     let frame = actual_deliver_frame(&ticket.delivery_id, &payload);
     let decoded: pushgo_warp_profile::PrivatePayloadEnvelope =
         postcard::from_bytes(&payload).unwrap();
+    let expected_body = expected["body"].as_str().unwrap().trim();
     assert_eq!(
-        decoded.data["body"],
-        expected["body"].as_str().unwrap().trim()
+        decoded.data.get("body").map(String::as_str),
+        (!expected_body.is_empty()).then_some(expected_body)
     );
     if let Some(metadata) = expected.get("metadata") {
         assert_eq!(
