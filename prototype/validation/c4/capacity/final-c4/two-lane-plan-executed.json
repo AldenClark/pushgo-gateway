@@ -1,0 +1,60 @@
+{
+  "status": "AUTHORIZED_EXACT_FINAL_COMMIT_EXECUTING",
+  "source_commit": "d925b97fe30068b66aefb66e33284831df6d8e4f",
+  "source_identity_gate": "root explicitly granted QUIET; exacttracked archive and staticobservercheckpassed",
+  "claim": "two finalC4 SQLite regression lanes; do not relabel19cc ABBA as final facade/health source",
+  "cases": [
+    {
+      "label": "c4-final-offer256-r1",
+      "repeat": 1,
+      "scenario": "sustained",
+      "messages_per_second": 256,
+      "seconds": 10,
+      "messages": 2560,
+      "targets_per_message": 16,
+      "targets": 40960
+    },
+    {
+      "label": "c4-final-offer256-r2",
+      "repeat": 2,
+      "scenario": "sustained",
+      "messages_per_second": 256,
+      "seconds": 10,
+      "messages": 2560,
+      "targets_per_message": 16,
+      "targets": 40960
+    }
+  ],
+  "fixed": {
+    "rustc": "1.97.1",
+    "profile": "release opt3/fatLTO/cgu1/panicabort",
+    "tokio_workers": 4,
+    "H_per_provider": 32,
+    "Q": 32,
+    "provider_delay_ms": 20,
+    "http_callers": 8,
+    "body_bytes": 1024,
+    "settle_timeout_seconds": 180,
+    "ttl": "absolute24h logicalcontract",
+    "fresh_database_per_lane": true,
+    "credential_owner": "remote syntheticTokenService"
+  },
+  "target_dir": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/workspace-final/prototype/target",
+  "target_policy": "sole existing target; sequentialbuild; no newtarget or fulltargetcopy",
+  "observer": "reuse exactfeature-gated modules/codec; after successfulSQLite receiptCOMMIT await changed>0 effectivestate beforepooldrop",
+  "harness": "reuse successfulABBA runner/mock/resource/reducers; exclude fourlegacy tokenjoined fields; recompute completeMock distribution",
+  "comparison": "report finalC4 separately; oldABBA4 immutable; facade/health/backend/dependencies changed, no singlevariable causalclaim",
+  "failure_policy": "first genuine product/build/startup/oracle/telemetry/deadline failureSTOP; preserve firstreceipt; no retry or deadlineextension",
+  "denominators": "perlane2560messages/40960targets; success/admissionfailed/providerfailed/timeout/unfinished/dropped retained",
+  "no_extra_matrix": [
+    "noPGperformance",
+    "noCURRENT/C32ranking",
+    "noH64",
+    "noextrarates",
+    "noextrahealthlane"
+  ],
+  "runs_started": 0,
+  "builds_started": 0,
+  "root_product_edits": 0,
+  "product_implementation_commit": "f8ed62f94ce44e285414f1a0f6894878763f4dbe"
+}

@@ -1,6 +1,6 @@
 # C：普通消息合同候选
 
-独立单机 SQLite crate，当前可执行入口只连接本地 Provider Mock。保留主线 SQLite、PostgreSQL、MySQL 的产品范围；本候选尚无 PG/MySQL 适配，已复用现有 Remote 凭据 owner/Token Service 接口，本轮仅对本地 Mock 端点实测，真实 APNs 未验证。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。
+独立单机普通消息 crate，已实现 SQLite 与 PostgreSQL 原生存储；可执行 fixture 只连接本地 Provider Mock。PG 在真实 PostgreSQL16.14 的全新隔离测试库验证，使用 tmpfs，不代表旧库迁移或断电验收。保留 MySQL 产品范围，但尚未实现新 C 的 MySQL 适配。复用既有 Remote 凭据 owner/Token Service；真实 APNs 未验证。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。
 
 ## 已实现的普通消息边界
 
@@ -33,3 +33,5 @@ C3 的 Apple 未改生产 controllers/GRDB 和 Android 未改生产 repository/R
 C3 证据在主仓库 `build/quality-results/c-client-loop-gate-20261015/`，源/二进制/工具链对应关系和首个失败均保留；旧 C32/C2 对照产物不替换。最终交付见 [c3-results.md](docs/c3-results.md)，先前报告 [c2-results.md](docs/c2-results.md) 保留历史含义。验证源码在 `validation/c3/`，不含二进制、数据库、日志或凭据。
 
 SQLite 写事务显式 `BEGIN IMMEDIATE`，沿用 3 秒 busy timeout。预算内写锁释放可继续；超时仍失败关闭并依赖持久化身份和独占 owner 重启恢复，不承诺任意长阻塞在线重试。没有增加重试队列或放宽接纳成功条件。
+
+C4最终实现、客户端闭环、数据库与资源边界、保留失败及产物身份见 [C4结果](docs/c4-results.md)、[PG实现](docs/c4-postgres.md)、[有限容量复核](docs/c4-capacity.md)。普通fixture为冻结8d458bbf；复用target当前可能是83ab543e测量构建，不要混用。后续MySQL须等待本轮审查；没有自动合并、推送或部署。

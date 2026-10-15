@@ -1,6 +1,6 @@
 # 普通消息合同与验证边界
 
-比较基线为 Gateway `dfb6b7c2`，原 C 切片已保存为 `283acf5`。这里描述本候选的普通 FCM/APNs 消息；不是主线替换或发布承诺。最终测试结果、二进制身份和容量数据见 `c3-results.md`（C2 历史另存 `c2-results.md`）。PostgreSQL/MySQL 仍在产品范围，C 当前仅实现 SQLite。
+比较基线为 Gateway `dfb6b7c2`，原 C 切片已保存为 `283acf5`。这里描述本候选的普通 FCM/APNs 消息；不是主线替换或发布承诺。最终测试结果、二进制身份和容量数据见 [C4结果](c4-results.md)（C3/C2历史保留）。新C已实现SQLite与PostgreSQL普通消息；PG完成全新隔离库的共享合同与故障验证，旧库迁移未运行。MySQL仍在产品范围但未实现，不能以主线支持替代。
 
 正文 TTL 与身份历史保留期分别规定。本轮用户明确选择完整 30 天身份/指纹/状态历史；C2 采用这一合同，同时省略 TTL 时沿用 Small 的 7 天正文/投递期限。不能把它表述为“主线全部 profile 的现行去重窗口都是 30 天”：`src/runtime_config.rs:191,213` 的 Small 分别为 TTL 7 天、维护去重 7 天，`:283,305` 的 Public 分别为 30 天、30 天。`app.rs:481,491,506-507` 将 profile 值传给配置和维护；正数 7 天不会被默认值归一成 30 天。无 private runtime 时 Sender 状态期限另回退到默认 30 天（`submit_runtime.rs:29-34`），也不改变维护去重窗口。
 
@@ -46,4 +46,4 @@ C3 Apple 也已加入真实控制面、Direct 单 ACK、候选捕获 wakeup 与 
 
 SQLite 写事务显式保留 writer（BEGIN IMMEDIATE）；3 秒以内短锁可恢复，超过预算仍可能失败关闭。未持久化成功不返回接纳成功；已接纳 running 身份留待独占 owner 重启恢复，不自动重放未知 COMMIT。
 
-下一阶段先将这些普通消息不变量映射为 PostgreSQL/MySQL 的事务、计数、索引、锁与升级/回退测试；三库相同 oracle 通过后再接其他消息类型。真实 Token Service、APNs 和物理后台集中验证另列，不能由短 Mock 容量结果推定。
+C4已完成PG普通消息新库适配，见 [PG边界](c4-postgres.md)。下一阶段经审查后将这些不变量映射为MySQL事务、计数、索引与单实例保护；PG/MySQL旧库升级/回退仍单列后续验收；三库相同 oracle 通过后再接其他消息类型。真实 Token Service、APNs 和物理后台集中验证另列，不能由短 Mock 容量结果推定。

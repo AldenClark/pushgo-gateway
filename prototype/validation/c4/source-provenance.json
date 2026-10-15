@@ -1,0 +1,173 @@
+{
+  "note": "Exact-byte original experiment sources; relocated copies have NOT RUN; no binaries/DB/logs/credentials/native production sources",
+  "files": [
+    {
+      "packaged": "fault/external_writer_fault.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/fault/external_writer_fault.py",
+      "sha256": "9f341b726129a363211b1381e4d8cdabc80f826af0440c2182f9e602554c38c4",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "fault/external_pg_process_fault.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/fault/external_pg_process_fault.py",
+      "sha256": "9f0096fe0d491cd4d04fab87b17010c8efe6f419fd53201a84866b0197b0157d",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "pg-env/isolated_pg.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/pg-env/isolated_pg.py",
+      "sha256": "b8261f8d08ddc2559b9c71bb863ced236f8f1fd31b9c0361537830cb53e4af0d",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/observer_library.rs",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/observer_fixture.rs",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/reduce_commits.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/reduce_commits.py",
+      "sha256": "b2e1a7be81e762e0aa465f28cfcb7425924f35057869b60638e682bb36d258b0",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/summarize_abba.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/summarize_abba.py",
+      "sha256": "6d3aa3f8c69c9b0aad1d09de05d836145dd4227dbe1818eb12032e74fb7af79b",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/run_profile_capacity.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/run_profile_capacity.py",
+      "sha256": "47aa39a2cde9ad9e0bfbc2a86e61fabbe0ea4f6085b5c9c1c223f863763ce6f0",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/resource_monitor.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/resource_monitor.py",
+      "sha256": "b019060657a25c18d282da9ccd433cb7f2f110df1ee90782472d24031999554e",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/common.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/common.py",
+      "sha256": "afcdade74a552af14c4748abcca430096a76a3477e2b2205b238715f83a54b7e",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/c3_mock.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/reduce_profile_capacity.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/reduce_profile_capacity.py",
+      "sha256": "83432df2df2ff1fca3be7497d576c85b897aaeafeab3cfdaa14964ab72d258ac",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/analyse_c2.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/analyse_c2.py",
+      "sha256": "4c7dd1145d79118b8b17f5cf608f7ce6b50a21e4ed1e96b435fb8d4a982db333",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/analyse_c1_base.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/harness/analyse_c1_base.py",
+      "sha256": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/10e-observer.patch",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/10e-observer.patch",
+      "sha256": "42d3bd95c307b45e7c8d7694a2a4c4c52af5a2a1482e8b7e0f5a3a535317d02d",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/19cc-observer.patch",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/19cc-observer.patch",
+      "sha256": "950dc1cc795c99d841e7ee05aa1f6f67f4b9240b40f1ecd60f59f320ebfe5157",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/c3_pid_rusage.c",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/workspace-final/prototype/validation/c3/harness/c3_pid_rusage.c",
+      "sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "packaged_location_executed": false,
+      "original_experiment_input": true
+    },
+    {
+      "packaged": "capacity/final-c4/observer.patch",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/final-c4/observer.patch",
+      "sha256": "acc17cfb502c072e4b139b395def3235077d4a440cde27057ff794ca833a6e99",
+      "original_experiment_input": true,
+      "packaged_location_executed": false
+    },
+    {
+      "packaged": "capacity/final-c4/execute_final.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/final-c4/execute_final.py",
+      "sha256": "a01377d92d2fd301f7a6b2ad9c54dd5fee1c5e97cfec0d47719edc0f93c5f2f9",
+      "original_experiment_input": true,
+      "packaged_location_executed": false
+    },
+    {
+      "packaged": "capacity/final-c4/summarize_final.py",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/final-c4/summarize_final.py",
+      "sha256": "21ee947535e17bb8dbff60424afae8a69d54bbc400adf6184ac105e376d10d32",
+      "original_experiment_input": true,
+      "packaged_location_executed": false
+    },
+    {
+      "packaged": "capacity/final-c4/source-identity.json",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/final-c4/source-identity.json",
+      "sha256": "5c1f9ae982e33c61ffc5df71c8f44c8c91b184e5f4af0c9b8f23d1a8193ba0de",
+      "original_experiment_input": true,
+      "packaged_location_executed": false
+    },
+    {
+      "packaged": "capacity/final-c4/two-lane-plan-executed.json",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/final-c4/two-lane-plan-executed.json",
+      "sha256": "b9bb734a94a4ba620ff462a8836478bb6e271d3a7a9e76027051c42dee52b916",
+      "original_experiment_input": true,
+      "packaged_location_executed": false
+    },
+    {
+      "packaged": "capacity/final-c4/build.json",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/final-c4/build.json",
+      "sha256": "71c1b69f5a1588b07fd0ae7fdd094ea367cd0459ecee626414f4b3505609b4a8",
+      "original_experiment_input": true,
+      "packaged_location_executed": false
+    },
+    {
+      "packaged": "capacity/final-c4/final-handoff-manifest.json",
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/capacity/final-c4/final-handoff-manifest.json",
+      "sha256": "e3981b528784b816e61f4d24862d3e363ce8abaea8c6d2b44e78c4cf0582ce92",
+      "original_experiment_input": true,
+      "packaged_location_executed": false
+    }
+  ]
+}

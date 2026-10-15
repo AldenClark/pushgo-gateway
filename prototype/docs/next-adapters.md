@@ -1,6 +1,8 @@
-# 下一阶段：普通消息的 PG / MySQL 适配
+# 后续：MySQL 与数据库迁移（附 C3 原计划）
 
-本文件是下一阶段执行计划，不是本轮实现或验收结果。当前隔离 crate 的 `store.rs` 使用 `SqlitePool`、SQLite DDL、触发器及本机文件 owner；原型自己的 SQLx storage 仍只有 SQLite；主仓库凭据 owner 的 path dependency 会编译其他依赖，不等于已有 PG / MySQL storage 适配。主线 Gateway 支持三库不能证明这个 crate 已具备三库事务、迁移或故障恢复能力。本轮没有新增数据库适配器或启动实库服务，不连接真实 Provider。
+C4已完成PG普通消息实现与全新隔离实库验证，实际边界和身份以 [C4结果](c4-results.md) / [PG实现](c4-postgres.md) 为准。审查后下一阶段是MySQL，不自动启动；旧PG/MySQL迁移、回滚、物理持久性和部署验收仍未运行。下文保留C3阶段原设计计划，不能把计划当成C4已验证的全部能力。
+
+**C3历史上下文：** 本文件当时是下一阶段执行计划，不是实现或验收结果。当前隔离 crate 的 `store.rs` 使用 `SqlitePool`、SQLite DDL、触发器及本机文件 owner；原型自己的 SQLx storage 仍只有 SQLite；主仓库凭据 owner 的 path dependency 会编译其他依赖，不等于已有 PG / MySQL storage 适配。主线 Gateway 支持三库不能证明这个 crate 已具备三库事务、迁移或故障恢复能力。本轮没有新增数据库适配器或启动实库服务，不连接真实 Provider。
 
 容量证据提示共享 mutation gate/结果提交前排队先于提高 H 获益。C3 已对现有 SQLite 各路径分开 profile，并以同工具链/完整合同的一行 SQL 对照证明空 retirement marker 下的 target 扫描热点；仅固定 join 顺序，未扩池、批量提交或拆接纳事务。SQLx SQL 时间包含 trigger；未证明 trigger 独占时间。优化后高负载 gate 仍占明显比例，继续适配不应预设批量提交为答案。不因 H 数值可变而恢复旧控制器，也不把本轮短 Mock 完成量当部署容量。
 
