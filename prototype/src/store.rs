@@ -18,7 +18,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -58,6 +58,8 @@ impl Default for Config {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
+    #[error("authority is unavailable until exclusive-owner restart")]
+    Unavailable,
     #[error("database: {0}")]
     Database(#[from] sqlx::Error),
     #[error("invalid input: {0}")]
@@ -86,6 +88,43 @@ pub enum KernelError {
     Json(#[from] serde_json::Error),
 }
 pub type Result<T> = std::result::Result<T, KernelError>;
+/// One-way process-local admission fence, shared by every store/router clone.
+pub(super) struct Health {
+    failed: AtomicBool,
+    failure: tokio::sync::watch::Sender<Option<String>>,
+}
+impl Default for Health {
+    fn default() -> Self {
+        let (failure, _) = tokio::sync::watch::channel(None);
+        Self {
+            failed: AtomicBool::new(false),
+            failure,
+        }
+    }
+}
+impl Health {
+    pub(super) fn ensure(&self) -> Result<()> {
+        if self.failed.load(Ordering::Acquire) {
+            Err(KernelError::Unavailable)
+        } else {
+            Ok(())
+        }
+    }
+    pub(super) fn fail(&self, reason: &str) {
+        self.failure.send_if_modified(|cause| {
+            if cause.is_some() {
+                return false;
+            }
+            self.failed.store(true, Ordering::Release);
+            *cause = Some(reason.chars().take(4096).collect());
+            true
+        });
+    }
+    pub(super) fn subscribe(&self) -> tokio::sync::watch::Receiver<Option<String>> {
+        self.failure.subscribe()
+    }
+}
+
 #[derive(Default)]
 pub struct Counters {
     pub profile: crate::profiling::Profile,
@@ -140,7 +179,7 @@ impl Counters {
 // cancelled caller. Only explicit pool close followed by release unlocks.
 pub(super) struct OwnerLock(Option<File>);
 impl OwnerLock {
-    fn acquire(path: PathBuf) -> Result<Self> {
+    pub(super) fn acquire(path: PathBuf) -> Result<Self> {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
@@ -172,6 +211,7 @@ impl Drop for AdmissionWake {
 #[derive(Clone)]
 pub struct DeliveryStore {
     pub(super) pool: SqlitePool,
+    pub(super) health: Arc<Health>,
     pub(super) gate: Arc<Mutex<()>>,
     pub config: Config,
     pub counters: Arc<Counters>,
@@ -188,6 +228,7 @@ pub(super) struct TestHooks {
     pub accept_after_commit: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
     pub receipt_with_gate: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
     pub claim_before_gate: std::sync::Mutex<Option<Arc<Notify>>>,
+    pub control_before_write: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
 }
 #[cfg(test)]
 #[derive(Default)]
@@ -364,6 +405,7 @@ impl DeliveryStore {
         };
         let store = Self {
             pool,
+            health: Arc::default(),
             gate: Arc::new(Mutex::new(())),
             config,
             counters: Arc::new(Counters::default()),
@@ -433,6 +475,7 @@ impl DeliveryStore {
                 .execute(&mut *tx)
                 .await?;
         }
+        self.health.ensure()?;
         tx.commit().await?;
         self.maintenance().await?;
         Ok(())
@@ -456,6 +499,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         let at = now();
         let mut profile_connection = self
@@ -518,6 +562,7 @@ impl DeliveryStore {
         };
         let row=self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("SELECT device_key,platform,provider,provider_token,route_generation,route_revision FROM devices WHERE device_key=? AND retired_at IS NULL").bind(&key).fetch_one(&mut *tx)).await?;
         let result = registration_response(&row, true, Some(reason))?;
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Control, Phase::Commit, tx.commit())
@@ -568,6 +613,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Control, Phase::PoolAcquire, self.pool.acquire()).await?; self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("SELECT platform,provider,provider_token,route_generation,route_revision FROM devices WHERE device_key=? AND retired_at IS NULL").bind(device).fetch_optional(&mut *profile_read_connection)).await }?.ok_or_else(||control_error(400,"device_key_not_found","device_key not found"))?;
         let prior_platform: String = row.get("platform");
@@ -646,6 +692,7 @@ impl DeliveryStore {
             self.coalesce_owners_tx(&mut tx, device, platform.name(), token)
                 .await?;
         }
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Control, Phase::Commit, tx.commit())
@@ -696,6 +743,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         let route = self.active_route(device).await?;
         if route["channel_type"] != channel_type.trim().to_ascii_lowercase() {
@@ -728,6 +776,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         let mut profile_connection = self
             .counters
@@ -756,6 +805,7 @@ impl DeliveryStore {
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("INSERT INTO retired_provider_tokens(platform,provider_token,control_epoch) SELECT ?,?,control_epoch FROM ledger_usage WHERE singleton=1 ON CONFLICT(platform,provider_token) DO UPDATE SET control_epoch=excluded.control_epoch").bind(platform.name()).bind(&token).execute(&mut *tx)).await?;
         self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE devices SET provider=NULL,provider_token=NULL,route_generation=route_generation+1,route_revision=route_revision+1 WHERE platform=? AND provider_token=? AND retired_at IS NULL").bind(platform.name()).bind(&token).execute(&mut *tx)).await?;
         self.retire_token_targets_tx(&mut tx).await?;
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Control, Phase::Commit, tx.commit())
@@ -799,6 +849,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         self.subscribe_under_gate(device, channel_id, channel_name, auth)
             .await
@@ -956,6 +1007,7 @@ impl DeliveryStore {
         .bind(device)
         .execute(&mut *tx)
         ).await?;
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Control, Phase::Commit, tx.commit())
@@ -968,6 +1020,13 @@ impl DeliveryStore {
             .ok_or_else(|| control_error(400, "device_key_not_found", "device_key not found"))?;
         Ok(registration_response(&row, false, None)?["route"].clone())
     }
+    #[cfg(test)]
+    async fn pause_control_before_write(&self) {
+        let barrier = self.hooks.control_before_write.lock().unwrap().clone();
+        if let Some(barrier) = barrier {
+            barrier.pause().await;
+        }
+    }
     pub async fn unsubscribe(&self, device: &str, channel: &str) -> Result<Value> {
         let device = device.trim();
         let channel = crate::sender::channel_id(channel)
@@ -977,15 +1036,29 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         self.active_route(device).await?;
+        #[cfg(test)]
+        self.pause_control_before_write().await;
         let removed = {
             let mut profile_read_connection = self
                 .counters
                 .profile
                 .phase(Path::Control, Phase::PoolAcquire, self.pool.acquire())
                 .await?;
-            self.counters
+            let mut tx = self
+                .counters
+                .profile
+                .phase(
+                    Path::Control,
+                    Phase::Begin,
+                    profile_read_connection.begin_with("BEGIN IMMEDIATE"),
+                )
+                .await?;
+            self.health.ensure()?;
+            let removed = self
+                .counters
                 .profile
                 .sql(
                     Path::Control,
@@ -995,10 +1068,16 @@ impl DeliveryStore {
                     )
                     .bind(device)
                     .bind(&channel)
-                    .execute(&mut *profile_read_connection),
+                    .execute(&mut *tx),
                 )
-                .await
-        }?
+                .await?;
+            self.health.ensure()?;
+            self.counters
+                .profile
+                .phase(Path::Control, Phase::Commit, tx.commit())
+                .await?;
+            removed
+        }
         .rows_affected()
             > 0;
         // Subscription changes affect future fanout only. Accepted delivery,
@@ -1006,6 +1085,7 @@ impl DeliveryStore {
         Ok(json!({"channel_id":channel,"removed":removed}))
     }
     pub async fn channel_info(&self, channel: &str) -> Result<Value> {
+        self.health.ensure()?;
         let channel = crate::sender::channel_id(channel)
             .map_err(|error| control_error(400, "invalid_channel_id", &error.to_string()))?;
         let name: Option<String> = {
@@ -1049,6 +1129,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         let hash: String = {
             let mut profile_read_connection = self
@@ -1084,12 +1165,24 @@ impl DeliveryStore {
                 "channel exists but password mismatch",
             ));
         }
+        #[cfg(test)]
+        self.pause_control_before_write().await;
         {
             let mut profile_read_connection = self
                 .counters
                 .profile
                 .phase(Path::Control, Phase::PoolAcquire, self.pool.acquire())
                 .await?;
+            let mut tx = self
+                .counters
+                .profile
+                .phase(
+                    Path::Control,
+                    Phase::Begin,
+                    profile_read_connection.begin_with("BEGIN IMMEDIATE"),
+                )
+                .await?;
+            self.health.ensure()?;
             self.counters
                 .profile
                 .sql(
@@ -1098,10 +1191,15 @@ impl DeliveryStore {
                     sqlx::query("UPDATE channels SET channel_name=? WHERE channel_id=?")
                         .bind(name)
                         .bind(&channel)
-                        .execute(&mut *profile_read_connection),
+                        .execute(&mut *tx),
                 )
-                .await
-        }?;
+                .await?;
+            self.health.ensure()?;
+            self.counters
+                .profile
+                .phase(Path::Control, Phase::Commit, tx.commit())
+                .await?;
+        }
         Ok(json!({"channel_id":channel,"channel_name":name}))
     }
     pub async fn sync_channels(&self, device: &str, items: Vec<(String, String)>) -> Result<Value> {
@@ -1118,6 +1216,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Control, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Control, Phase::GateHold);
         let route = self.active_route(device).await?;
         let mut results = Vec::with_capacity(items.len());
@@ -1182,21 +1281,38 @@ impl DeliveryStore {
                 }
                 separated.push_unseparated(")");
             }
+            #[cfg(test)]
+            self.pause_control_before_write().await;
             {
                 let mut profile_read_connection = self
                     .counters
                     .profile
                     .phase(Path::Control, Phase::PoolAcquire, self.pool.acquire())
                     .await?;
+                let mut tx = self
+                    .counters
+                    .profile
+                    .phase(
+                        Path::Control,
+                        Phase::Begin,
+                        profile_read_connection.begin_with("BEGIN IMMEDIATE"),
+                    )
+                    .await?;
+                self.health.ensure()?;
                 self.counters
                     .profile
                     .sql(
                         Path::Control,
                         Statement::Control,
-                        query.build().execute(&mut *profile_read_connection),
+                        query.build().execute(&mut *tx),
                     )
-                    .await
-            }?;
+                    .await?;
+                self.health.ensure()?;
+                self.counters
+                    .profile
+                    .phase(Path::Control, Phase::Commit, tx.commit())
+                    .await?;
+            }
         }
         Ok(
             json!({"device_key":device,"route":route,"total":total,"success":success,"failed":total-success,"channels":results}),
@@ -1214,6 +1330,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Accept, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Accept, Phase::GateHold);
         record_duration(
             &self.counters.gate_wait_samples,
@@ -1327,6 +1444,7 @@ impl DeliveryStore {
             self.counters.profile.sql(Path::Fanout, Statement::FanoutInsert, sqlx::query("INSERT INTO targets(delivery_id,device_key,platform,provider,provider_token,route_generation,accepted_at,state,next_attempt_at) SELECT ?,d.device_key,d.platform,d.provider,d.provider_token,d.route_generation,?,'pending',? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE s.channel_id=? AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS') AND d.provider_token IS NOT NULL").bind(&delivery_id).bind(at).bind(at).bind(&request.channel_id).execute(&mut *tx)).await?;
         }
         let commit_at = std::time::Instant::now();
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Accept, Phase::Commit, tx.commit())
@@ -1383,6 +1501,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Maintenance, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self
             .counters
             .profile
@@ -1408,6 +1527,7 @@ impl DeliveryStore {
             )
             .await?;
         let removed = self.maintain_tx(&mut tx, now()).await?;
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Maintenance, Phase::Commit, tx.commit())
@@ -1447,6 +1567,7 @@ impl DeliveryStore {
         Ok(removed as usize)
     }
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
+        self.health.ensure()?;
         self.counters.sql(1);
         let rows = if let Some(id) = delivery {
             {
@@ -1508,6 +1629,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Ack, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Ack, Phase::GateHold);
         record_duration(
             &self.counters.gate_wait_samples,
@@ -1569,6 +1691,7 @@ impl DeliveryStore {
                 .await?;
             items.push(json!({"delivery_id":id,"payload":payload}));
         }
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Ack, Phase::Commit, tx.commit())
@@ -1594,6 +1717,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Ack, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Ack, Phase::GateHold);
         record_duration(
             &self.counters.gate_wait_samples,
@@ -1623,6 +1747,7 @@ impl DeliveryStore {
             self.release_acked_tx(&mut tx, device, &id, Path::Ack)
                 .await?;
         }
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Ack, Phase::Commit, tx.commit())
@@ -1660,6 +1785,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Claim, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Claim, Phase::GateHold);
         record_duration(
             &self.counters.gate_wait_samples,
@@ -1746,6 +1872,7 @@ impl DeliveryStore {
         } else {
             due.map(|due| due.max(cooldown.unwrap_or(0)))
         };
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Claim, Phase::Commit, tx.commit())
@@ -1768,6 +1895,7 @@ impl DeliveryStore {
         })
     }
     pub(super) async fn authorize_ticket(&self, ticket: &Ticket) -> Result<bool> {
+        self.health.ensure()?;
         self.counters.sql(1);
         let current: i64 = {
             let mut profile_read_connection = self
@@ -1794,6 +1922,7 @@ impl DeliveryStore {
             .profile
             .phase(Path::Receipt, Phase::GateWait, self.gate.lock())
             .await;
+        self.health.ensure()?;
         let _gate_hold = self.counters.profile.timer(Path::Receipt, Phase::GateHold);
         record_duration(
             &self.counters.gate_wait_samples,
@@ -1850,6 +1979,7 @@ impl DeliveryStore {
             .await?;
         }
         let commit_at = std::time::Instant::now();
+        self.health.ensure()?;
         self.counters
             .profile
             .phase(Path::Receipt, Phase::Commit, tx.commit())
@@ -1871,6 +2001,7 @@ impl DeliveryStore {
         Ok(())
     }
     pub async fn status(&self, op: &str) -> Result<Value> {
+        self.health.ensure()?;
         let op = crate::sender::op_id(op)?;
         let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.pool.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until FROM messages WHERE op_id=? AND dedupe_until>?").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
         Ok(
@@ -1878,6 +2009,7 @@ impl DeliveryStore {
         )
     }
     pub async fn target_status(&self, op: &str) -> Result<Value> {
+        self.health.ensure()?;
         let rows = {
             let mut profile_read_connection = self
                 .counters
@@ -1904,7 +2036,12 @@ pub(super) fn supported_platform(raw: &str) -> Result<Platform> {
     Ok(platform)
 }
 
-fn record_duration(samples: &AtomicU64, total: &AtomicU64, max: &AtomicU64, duration: Duration) {
+pub(super) fn record_duration(
+    samples: &AtomicU64,
+    total: &AtomicU64,
+    max: &AtomicU64,
+    duration: Duration,
+) {
     let us = duration.as_micros().min(u64::MAX as u128) as u64;
     samples.fetch_add(1, Ordering::Relaxed);
     total.fetch_add(us, Ordering::Relaxed);
@@ -1925,7 +2062,7 @@ fn password_digest(salt: &[u8], value: &str) -> [u8; 32] {
     h.update(value.as_bytes());
     *h.finalize().as_bytes()
 }
-fn hash_password(value: &str) -> String {
+pub(super) fn hash_password(value: &str) -> String {
     let salt: [u8; BLAKE3_PASSWORD_SALT_BYTES] = rand::random();
     let digest = password_digest(&salt, value);
     format!(
@@ -1968,7 +2105,7 @@ fn verify_password(hash: &str, value: &str) -> bool {
     }
 }
 
-async fn verify_password_async(hash: String, value: String) -> Result<bool> {
+pub(super) async fn verify_password_async(hash: String, value: String) -> Result<bool> {
     if hash.starts_with(&format!("${}$", BLAKE3_PASSWORD_SCHEME)) {
         return Ok(verify_password(&hash, &value));
     }
@@ -2003,13 +2140,13 @@ fn registration_response(
     Ok(result)
 }
 
-fn control_error(status: u16, code: &'static str, message: &str) -> KernelError {
+pub(super) fn control_error(status: u16, code: &'static str, message: &str) -> KernelError {
     KernelError::Control {
         status,
         code,
         message: message.into(),
     }
 }
-fn sync_failure(channel: &str, status: u16, code: &str, message: &str) -> Value {
+pub(super) fn sync_failure(channel: &str, status: u16, code: &str, message: &str) -> Value {
     json!({"channel_id":channel,"subscribed":false,"created":false,"error":message,"error_code":code,"problem":{"code":code,"category":if status==403 {"conflict"} else if status==404 {"not_found"} else {"validation"},"status":status,"detail":message,"retryable":false}})
 }
