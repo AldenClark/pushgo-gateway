@@ -1,6 +1,6 @@
 //! Actual serialized ordinary HTTP/canonical/Private frame size oracles.
 //! The shared fixed transport frame budget includes type/flags, excluding the stream prefix.
-use crate::{Config, OrdinaryStore};
+use crate::{Config, MESSAGE_SUBMISSION_BODY_BYTES, OrdinaryStore};
 use axum::{
     body::{Body, to_bytes},
     http::Request,
@@ -56,19 +56,38 @@ pub(super) fn actual_deliver_frame(id: &str, payload: &[u8]) -> Vec<u8> {
 
 /// Serialize the actual legal request instead of deriving per-field wire limits.
 pub(super) fn legal_http_input(channel: &str, password: &str, kind: &str) -> Vec<u8> {
+    legal_http_input_at_size(channel, password, kind, MESSAGE_SUBMISSION_BODY_BYTES)
+}
+
+pub(super) fn legal_http_input_at_size(
+    channel: &str,
+    password: &str,
+    kind: &str,
+    input_bytes: usize,
+) -> Vec<u8> {
     let mut request = json!({"channel_id":channel,"password":password,"title":"x","body":"","op_id":"private-wire-boundary"});
-    if kind == "numeric-metadata" {
+    if matches!(
+        kind,
+        "numeric-metadata" | "negative-metadata" | "float-metadata"
+    ) {
         request["metadata"] = json!(null);
         let base = serde_json::to_string(&request).unwrap();
         let mut entries = Vec::new();
         loop {
-            let entry = format!("\"{:x}\":1e15", entries.len());
+            let literal = match kind {
+                "negative-metadata" => "-1e15",
+                "float-metadata" => {
+                    ["1e15", "-1e15", "1e-6", "-0.0", "1.2345678901234567e12"][entries.len() % 5]
+                }
+                _ => "1e15",
+            };
+            let entry = format!("\"{:x}\":{literal}", entries.len());
             entries.push(entry);
             let candidate = base.replace(
                 "\"metadata\":null",
                 &format!("\"metadata\":{{{}}}", entries.join(",")),
             );
-            if candidate.len() > 32768 {
+            if candidate.len() > input_bytes {
                 entries.pop();
                 break;
             }
@@ -77,38 +96,43 @@ pub(super) fn legal_http_input(channel: &str, password: &str, kind: &str) -> Vec
             "\"metadata\":null",
             &format!("\"metadata\":{{{}}}", entries.join(",")),
         );
-        let padding = "x".repeat(32768 - raw.len());
+        let padding = "x".repeat(input_bytes - raw.len());
         let raw = raw.replace("\"body\":\"\"", &format!("\"body\":\"{padding}\""));
-        assert_eq!(raw.len(), 32768);
+        assert_eq!(raw.len(), input_bytes);
         return raw.into_bytes();
     }
     let pattern = match kind {
         "text" => "x",
         "chinese" => "中文",
+        "unicode" => "🙂𝄞é中",
         "escape" => "\"\\\n\t",
         _ => panic!("unknown boundary fixture"),
     };
     let mut repeats = 0;
     loop {
         request["body"] = json!(pattern.repeat(repeats + 128));
-        if serde_json::to_vec(&request).unwrap().len() > 32768 {
+        if serde_json::to_vec(&request).unwrap().len() > input_bytes {
             break;
         }
         repeats += 128;
     }
     request["body"] = json!(pattern.repeat(repeats));
-    let remainder = 32768 - serde_json::to_vec(&request).unwrap().len();
+    let remainder = input_bytes - serde_json::to_vec(&request).unwrap().len();
     request["body"] = json!(format!(
         "{}{}",
         pattern.repeat(repeats),
         "x".repeat(remainder)
     ));
     let raw = serde_json::to_vec(&request).unwrap();
-    assert_eq!(raw.len(), 32768);
+    assert_eq!(raw.len(), input_bytes);
     raw
 }
 
 async fn admitted_size(kind: &str) {
+    admitted_size_at(kind, MESSAGE_SUBMISSION_BODY_BYTES).await;
+}
+
+async fn admitted_size_at(kind: &str, input_bytes: usize) {
     let dir = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.private.enabled = true;
@@ -127,7 +151,7 @@ async fn admitted_size(kind: &str) {
         .as_str()
         .unwrap()
         .to_owned();
-    let input = legal_http_input(&channel, &password, kind);
+    let input = legal_http_input_at_size(&channel, &password, kind, input_bytes);
     let input_hash = blake3::hash(&input).to_hex().to_string();
     let expected: serde_json::Value = serde_json::from_slice(&input).unwrap();
     let app = crate::router(store.clone(), Arc::new(|| json!({})));
@@ -174,14 +198,14 @@ async fn admitted_size(kind: &str) {
         );
     }
     println!(
-        "C7_LEGAL_HTTP_FRAME {}",
-        json!({"case":kind,"input_blake3":input_hash,"http_bytes":32768,"canonical_bytes":ticket.payload.len(),"complete_frame_bytes":frame.len(),"fixed_frame_limit":MAX_FRAME_BYTES,"accepted_delivery_id":ticket.delivery_id,"canonical_message_id":decoded.data["message_id"]})
+        "C8_LEGAL_HTTP_FRAME {}",
+        json!({"case":kind,"input_blake3":input_hash,"http_bytes":input_bytes,"canonical_bytes":ticket.payload.len(),"complete_frame_bytes":frame.len(),"fixed_frame_limit":MAX_FRAME_BYTES,"accepted_delivery_id":ticket.delivery_id,"canonical_message_id":decoded.data["message_id"]})
     );
     let mqtt_packet =
         crate::private_mqtt::encoded_delivery_packet_for_test(&ticket.delivery_id, &payload).await;
     println!(
-        "C7_LEGAL_HTTP_MQTT {}",
-        json!({"case":kind,"input_blake3":input_hash,"http_bytes":32768,"complete_mqtt_packet_bytes":mqtt_packet.len(),"shared_frame_limit":MAX_FRAME_BYTES})
+        "C8_LEGAL_HTTP_MQTT {}",
+        json!({"case":kind,"input_blake3":input_hash,"http_bytes":input_bytes,"complete_mqtt_packet_bytes":mqtt_packet.len(),"shared_frame_limit":MAX_FRAME_BYTES})
     );
     assert!(
         mqtt_packet.len() <= MAX_FRAME_BYTES,
@@ -219,9 +243,29 @@ async fn legal_http_numeric_metadata_measures_complete_private_frame() {
     admitted_size("numeric-metadata").await;
 }
 
+#[tokio::test]
+async fn legal_http_unicode_fits_complete_private_frame() {
+    admitted_size("unicode").await;
+}
+
+#[tokio::test]
+async fn legal_http_negative_metadata_fits_complete_private_frame() {
+    admitted_size("negative-metadata").await;
+}
+
+#[tokio::test]
+async fn legal_http_float_metadata_fits_complete_private_frame() {
+    admitted_size("float-metadata").await;
+}
+
+#[tokio::test]
+async fn former_32k_legal_http_request_remains_deliverable() {
+    admitted_size_at("text", 32 * 1024).await;
+}
+
 #[test]
 fn ordinary_text_chinese_escape_complete_frame_at_and_above_shared_fixed_limit() {
-    for pattern in ["x", "中文", "\"\\\n\t"] {
+    for pattern in ["x", "中文", "🙂𝄞é中", "\"\\\n\t"] {
         let frame_for = |body: &str| {
             let canonical = serde_json::to_vec(
                 &json!({"entity_type":"message","title":"boundary","body":body}),

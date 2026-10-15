@@ -1045,7 +1045,7 @@ async fn real_ws_replacement_coexists_with_tcp_and_revoked_stream_cannot_consume
     f.close().await;
 }
 
-/// The former32768HTTP/33057DELIVER counterexample must now travel intact,
+/// The former32768HTTP/33057DELIVER case is expanded to the approved48KiB HTTP boundary and must travel intact,
 /// commit ACK, and preserve the second accepted body's first identity across
 /// authority restart and Private->Provider route exit. No wakeup or chunking.
 #[tokio::test]
@@ -1061,7 +1061,7 @@ async fn real_tcp_full_http_boundary_ack_restart_and_route_preserve_canonical_id
             .unwrap()
             .replace("private-wire-boundary", op)
             .into_bytes();
-        assert_eq!(input.len(), 32768);
+        assert_eq!(input.len(), crate::MESSAGE_SUBMISSION_BODY_BYTES);
         let response = crate::router(f.store.clone(), Arc::new(|| serde_json::json!({})))
             .oneshot(
                 Request::builder()
@@ -1089,11 +1089,11 @@ async fn real_tcp_full_http_boundary_ack_restart_and_route_preserve_canonical_id
     let frame = PushgoWireProfile::new()
         .encode_server_deliver(&delivered)
         .unwrap();
-    assert_eq!(
-        frame.len(),
-        33057,
-        "retain exact original legal-input counterexample"
+    println!(
+        "C8_TCP_BOUNDARY {}",
+        serde_json::json!({"http_bytes":crate::MESSAGE_SUBMISSION_BODY_BYTES,"complete_frame_bytes":frame.len(),"delivery_id":delivered.id})
     );
+    assert!(frame.len() > crate::MESSAGE_SUBMISSION_BODY_BYTES);
     assert!(frame.len() > 32770 && frame.len() <= warp_link::warp_link_core::MAX_FRAME_BYTES);
     let original: PrivatePayloadEnvelope = postcard::from_bytes(&delivered.payload).unwrap();
     assert_eq!(

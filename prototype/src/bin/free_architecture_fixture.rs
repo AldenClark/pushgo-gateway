@@ -228,7 +228,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let stats = Arc::new(move || {
         let mut data = stat_counters.snapshot();
         data["timings"] = stat_counters.timings.snapshot();
-        data["configured"] = serde_json::json!({"provider_safety_ceiling":configured_budget,"claim_quantum":configured_quantum,"http_connections":HttpLimits::default().connections,"http2_streams_per_connection":HttpLimits::default().streams_per_connection,"request_body_bytes":32*1024,"provider_response_bytes":16*1024,"history_hard_quota":null});
+        data["configured"] = serde_json::json!({"provider_safety_ceiling":configured_budget,"claim_quantum":configured_quantum,"http_connections":HttpLimits::default().connections,"http2_streams_per_connection":HttpLimits::default().streams_per_connection,"message_request_body_bytes":free_delivery_prototype::MESSAGE_SUBMISSION_BODY_BYTES,"control_request_body_bytes":free_delivery_prototype::Config::default().max_body_bytes,"provider_response_bytes":16*1024,"history_hard_quota":null});
         data["dbcounts"] = serde_json::to_value(&*stat_counts.lock().unwrap()).unwrap();
         data["transport_errors"] = serde_json::json!(transport.transport_errors());
         data["provider_response_oversize"] = serde_json::json!(transport.oversized_responses());
