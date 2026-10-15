@@ -1,5 +1,5 @@
 use super::store::{AcceptRequest, KernelError};
-use crate::ordinary_store::OrdinaryStore;
+use crate::{ordinary_store::OrdinaryStore, private_http::PrivateHttp};
 use axum::{
     Json, Router,
     body::{Body, HttpBody},
@@ -24,6 +24,7 @@ type Stats = Arc<dyn Fn() -> Value + Send + Sync>;
 struct HttpState {
     store: OrdinaryStore,
     stats: Stats,
+    private: Option<PrivateHttp>,
 }
 #[derive(Clone)]
 struct Admission {
@@ -43,6 +44,15 @@ pub fn router_with_auth(
     stats: Stats,
     shared_token: Option<&str>,
 ) -> Router {
+    router_with_private(store, stats, shared_token, None)
+}
+/// Full ordinary HTTP router with optional joined Private discovery/upgrade owner.
+pub fn router_with_private(
+    store: impl Into<OrdinaryStore>,
+    stats: Stats,
+    shared_token: Option<&str>,
+    private: Option<PrivateHttp>,
+) -> Router {
     let store = store.into();
     let total = store.config.max_handlers;
     let reserve = (total / 8).max(1).min(total);
@@ -54,7 +64,8 @@ pub fn router_with_auth(
         health: store.health.clone(),
     };
     let limit = store.config.max_body_bytes;
-    let app = Router::new()
+    let mut app = Router::new()
+        .route("/gateway/profile", get(gateway_profile))
         .route("/device/register", post(register))
         .route("/channel/device", post(route))
         .route("/channel/subscribe", post(subscribe))
@@ -71,13 +82,18 @@ pub fn router_with_auth(
         .route("/v2/messages/pull", post(pull))
         .route("/v2/messages/ack", post(ack))
         .route("/__fixture/stats", get(statistics))
-        .route("/__fixture/status", post(status))
+        .route("/__fixture/status", post(status));
+    if private.as_ref().is_some_and(PrivateHttp::wss_enabled) {
+        app = app.route("/private/ws", get(private_ws));
+    }
+    let app = app
         .fallback(route_not_found)
         .layer(DefaultBodyLimit::max(limit))
         .layer(middleware::from_fn_with_state(admission, bound_handlers))
         .with_state(HttpState {
             store: store.clone(),
             stats,
+            private,
         });
     if store.config.public_base_url.is_empty() {
         return app;
@@ -89,6 +105,24 @@ pub fn router_with_auth(
         app
     } else {
         Router::new().nest(prefix, app).fallback(route_not_found)
+    }
+}
+async fn gateway_profile(State(state): State<HttpState>) -> Json<Value> {
+    let data = state
+        .private
+        .as_ref()
+        .map(PrivateHttp::profile)
+        .unwrap_or_else(crate::private_http::disabled_profile);
+    Json(json!({"success":true,"data":data}))
+}
+async fn private_ws(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+    State(state): State<HttpState>,
+) -> Response {
+    match state.private {
+        Some(private) => private.upgrade(ws, &headers),
+        None => KernelError::Unavailable.into_response(),
     }
 }
 async fn bound_handlers(
@@ -662,3 +696,7 @@ mod tests {
         assert!(window.per_ip.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "private_http_tests.rs"]
+mod private_tests;

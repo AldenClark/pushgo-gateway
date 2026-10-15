@@ -60,7 +60,7 @@ pub async fn serve(
                     let mut builder = Builder::new(TokioExecutor::new());
                     builder.http2().max_concurrent_streams(limits.streams_per_connection)
                         .initial_stream_window_size(65_535).initial_connection_window_size(65_535);
-                    let connection = builder.serve_connection(TokioIo::new(stream), TowerToHyperService::new(connection_app));
+                    let connection = builder.serve_connection_with_upgrades(TokioIo::new(stream), TowerToHyperService::new(connection_app));
                     tokio::pin!(connection);
                     tokio::select! {
                         _ = &mut connection => {}
