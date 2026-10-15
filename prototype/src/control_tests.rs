@@ -49,6 +49,41 @@ async fn close(store: DeliveryStore, owner: OwnerLock) {
 }
 
 #[tokio::test]
+async fn idle_token_retirement_probes_markers_before_retained_targets() {
+    let (_dir, store, owner, _key, _channel, _password) = fixture().await;
+    let details = sqlx::query(&format!(
+        "EXPLAIN QUERY PLAN {}",
+        crate::store::RETIRE_TOKEN_TARGETS_SQL
+    ))
+    .fetch_all(&store.pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| row.get::<String, _>("detail"))
+    .collect::<Vec<_>>();
+    assert!(
+        details.iter().any(|detail| detail.contains("SCAN r")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("SEARCH t USING INDEX targets_token_retirement")),
+        "{details:?}"
+    );
+    assert!(
+        !details.iter().any(|detail| detail.contains("SCAN t")),
+        "{details:?}"
+    );
+    let rows = sqlx::query(crate::store::RETIRE_TOKEN_TARGETS_SQL)
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+    close(store, owner).await;
+}
+
+#[tokio::test]
 async fn partial_sync_keeps_omissions_full_sync_and_unsubscribe_preserve_accepted_pull() {
     let (_dir, store, owner, key, channel, password) = fixture().await;
     let other = store
