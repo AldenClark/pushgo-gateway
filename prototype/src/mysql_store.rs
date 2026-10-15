@@ -63,10 +63,6 @@ pub(super) const CLAIM_ONE_SQL: &str = "SELECT STRAIGHT_JOIN t.*,m.payload_blob,
 // range needs only its first matching row; residual mode/ACK filters still apply.
 pub(super) const NEXT_DUE_SQL: &str = "SELECT MIN(next_attempt_at) FROM ((SELECT next_attempt_at FROM targets FORCE INDEX(targets_due) WHERE provider=? AND delivery_mode='provider' AND state='pending' AND acked_at IS NULL ORDER BY next_attempt_at,delivery_id,device_key LIMIT 1) UNION ALL (SELECT next_attempt_at FROM targets FORCE INDEX(targets_due) WHERE provider=? AND delivery_mode='provider' AND state='retry_wait' AND acked_at IS NULL ORDER BY next_attempt_at,delivery_id,device_key LIMIT 1)) AS first_due";
 
-// Numeric-only read shared with the native plan oracle. The outer primary-key
-// lookup bounds the correlated count to this message's frozen fanout.
-pub(super) const RECONCILE_READ_SQL: &str = "SELECT m.pending_targets,m.usage_payload_bytes,m.payload_bytes,(SELECT COUNT(*) FROM targets t WHERE t.delivery_id=m.delivery_id AND t.acked_at IS NULL AND (t.delivery_mode='private' OR t.state IN ('pending','running','retry_wait'))) AS pending FROM messages m WHERE m.delivery_id=?";
-
 impl MySqlDeliveryStore {
     pub(super) async fn acquire(&self) -> Result<MySqlGuard<'_>> {
         let mut guard = self.connection.lock().await;
@@ -96,21 +92,20 @@ impl MySqlDeliveryStore {
     }
     /// All callers hold ledger_usage FOR UPDATE. This reads exactly one
     /// immutable accepted fanout (at most 32), never the retained ledger.
-    /// Profiling callers record this three-SQL bundle as one Usage sample;
+    /// Profiling callers record this four-SQL bundle as one Usage sample;
     /// sample count is a helper invocation count, not a SQL statement count.
     pub(super) async fn reconcile_message_tx(
         tx: &mut Transaction<'_, MySql>,
         id: &str,
     ) -> Result<()> {
-        let row = sqlx::query(RECONCILE_READ_SQL)
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?;
+        let row = sqlx::query("SELECT pending_targets,usage_payload_bytes,payload_bytes FROM messages WHERE delivery_id=?")
+            .bind(id).fetch_optional(&mut **tx).await?;
         let Some(row) = row else { return Ok(()) };
         let old: i64 = row.get("pending_targets");
         let old_bytes: i64 = row.get("usage_payload_bytes");
         let bytes: i64 = row.get("payload_bytes");
-        let pending: i64 = row.get("pending");
+        let pending:i64=sqlx::query_scalar("SELECT COUNT(*) FROM targets WHERE delivery_id=? AND acked_at IS NULL AND (delivery_mode='private' OR state IN ('pending','running','retry_wait'))")
+            .bind(id).fetch_one(&mut **tx).await?;
         sqlx::query("UPDATE ledger_usage SET messages=messages+?,targets=targets+?,bytes=bytes+? WHERE singleton=1")
             .bind(i64::from(pending>0)-i64::from(old>0)).bind(pending-old).bind(bytes-old_bytes).execute(&mut **tx).await?;
         sqlx::query(
