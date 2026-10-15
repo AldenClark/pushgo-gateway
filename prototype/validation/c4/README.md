@@ -51,3 +51,8 @@ has NOT RUN from this relocated bundle. This bundle deliberately does not claim
 portable orchestration; the Rust shared contract tests are the native executable
 oracles. artifact-identities.json separates normal, PG test, SQLite test and
 measurement identities.
+
+The three exact unified .patch inputs contain single-space empty context lines.
+Git's all-file whitespace checker reports them; stripping them would change the
+preserved patch bytes. Product and ordinary source whitespace are checked with
+these patch data inputs excluded. This is not a blanket clean-whitespace claim.

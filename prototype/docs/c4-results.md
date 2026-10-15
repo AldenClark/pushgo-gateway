@@ -64,7 +64,7 @@ PG 不是主线数据库层的开关。它是新 C 的固定 `pushgo_c` schema�
 | 真实PG aggregate | `f8ed62f`测试二进制 `773b95596c33578b067c01030bfdd283b80d437e6da2702d61faa7c69c1576af`：显式执行ignored aggregate，1通过，覆盖七个全新case DB；`tests-pg-final-verified.log`含实际原生EXPLAIN。后续d925仅SQLite测试同步，不改PG路径。 |
 | PG H32 背压 | 40条消息/40目标，32个真实Transport future持有；独立SQLsession锁ledger row，网络结束后owned/receipts仍32且COMMIT0，100ms内不领取剩余8；解锁后40回执提交、ACK并正常join两pumps。 |
 | Provider/容量/写失败 | 默认86覆盖截断/超限保留状态与retry header、真实Token Service所有者Mock、SQLite FULL与deferred COMMIT失败、调用方取消、receipt/claim互等停机恢复；PG新增deferred FK提交回滚和会话终止后拒收。不是实际OS ENOSPC或断电测试。 |
-| 格式与静态检查 | Rustfmt及diff whitespace通过；`cargo +1.97.1 clippy --release --offline --locked --all-targets --no-deps` exit0；保留3个既有WNS依赖dead-code和2个test-only claim wrapper dead-code警告，不声称-D warnings。 |
+| 格式与静态检查 | Rustfmt及产品/普通源码diff whitespace通过；三份原样unified patch的空context行含单空格，被全量diff检查提示，保留补丁字节/hash，不视为源码尾空白通过；`cargo +1.97.1 clippy --release --offline --locked --all-targets --no-deps` exit0；保留3个既有WNS依赖dead-code和2个test-only claim wrapper dead-code警告，不声称-D warnings。 |
 | 未运行 | 默认ignored中PG已另行真实执行；其余2项历史规模实跑本轮未重复，保留既有实测。原生客户端完整旅程使用SQLite，未把Apple/Android整套再跑在PG后端上；PG覆盖共享生产HTTP/真实存储/Runtime/进程故障。PG长期容量/物理磁盘/旧库迁移、真实Provider/物理设备/OS后台及部署均未运行。 |
 
 最终所有权与原始失败收据另列保存：`tests-final-verified.log`曾85通过/1个短写锁测试通用三秒条件超时；隔离诊断通过，但该旧收据未记录具体await，**不能追认其准确失败阶段**。源码可见计数快照可能落在已开始的claim之后，而notify不会替换pending future。d925先持gate排完旧关键区再拿外部锁，随后快照/释放gate，且断言held claim不会因再notify增加计数；所有等待仍为原三秒，增加阶段与计数诊断。修后完整86及定向通过，不删旧失败或改生产超时。
