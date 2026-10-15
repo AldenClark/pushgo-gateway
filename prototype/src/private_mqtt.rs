@@ -181,6 +181,13 @@ async fn publish<W: AsyncWrite + Unpin>(
     });
     let mut bytes = BytesMut::new();
     publish.write(&mut bytes).map_err(error)?;
+    #[cfg(test)]
+    println!(
+        "C7_MQTT_COMPLETE_PACKET delivery={} packet_bytes={} shared_limit={}",
+        message.id,
+        bytes.len(),
+        MAX_PACKET
+    );
     if bytes.len() > MAX_PACKET {
         return Err(error("MQTT delivery frame bound exceeded"));
     }
@@ -594,4 +601,18 @@ mod tests {
         let mut next = u16::MAX;
         assert_eq!(packet_id(&mut next, &inflight).unwrap(), 2);
     }
+}
+
+/// Test-only access to the unchanged production publish encoder/write path.
+#[cfg(test)]
+pub(crate) async fn encoded_delivery_packet_for_test(delivery: &str, payload: &[u8]) -> Vec<u8> {
+    let (mut writer, mut receiver) = tokio::io::duplex(MAX_PACKET);
+    let mut next = 0;
+    let mut inflight = BTreeMap::new();
+    publish(&mut writer,OutboundMsg {seq:Some(1),id:delivery.into(),payload:bytes::Bytes::copy_from_slice(payload)},&mut next,&mut inflight,MAX_INFLIGHT)
+        .await.expect("actual production MQTT publish must fit shared frame limit; preceding diagnostic preserves complete encoded size");
+    drop(writer);
+    let mut packet = Vec::new();
+    receiver.read_to_end(&mut packet).await.unwrap();
+    packet
 }

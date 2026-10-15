@@ -1119,6 +1119,19 @@ struct PgSandbox {
 }
 impl PgSandbox {
     fn guarded() -> Self {
+        if std::env::var_os("C7_TEST_URL_FILE").is_some() {
+            let raw = crate::private_contract_tests::assigned_c7_native_url(
+                "C7_TEST_URL_FILE",
+                "C7_NATIVE_DISPOSABLE",
+                false,
+                true,
+            );
+            return Self {
+                base: reqwest::Url::parse(&raw)
+                    .unwrap_or_else(|_| panic!("invalid assigned C7 native URL")),
+                created: std::sync::Mutex::new(Vec::new()),
+            };
+        }
         assert_eq!(
             std::env::var("C4_PG_DISPOSABLE").ok().as_deref(),
             Some("YES_NEW_SYNTHETIC"),
@@ -1195,6 +1208,9 @@ impl PgSandbox {
 #[ignore = "requires explicit disposable loopback PostgreSQL C4_PG_TEST_URL and C4_PG_DISPOSABLE=YES_NEW_SYNTHETIC"]
 async fn postgres_shared_ordinary_contract_and_native_failures() {
     let sandbox = PgSandbox::guarded();
+    if std::env::var_os("C7_TEST_URL_FILE").is_some() {
+        crate::private_contract_tests::assert_empty_native_url(sandbox.base.as_str(), false).await;
+    }
     let result = AssertUnwindSafe(async {
         run_oracles(|config| sandbox.fixture(config)).await;
         let mut f = sandbox.fixture(Config::default()).await;

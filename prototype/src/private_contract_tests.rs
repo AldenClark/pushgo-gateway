@@ -1,5 +1,5 @@
 //! One durable Private ledger contract across SQLite, PostgreSQL and MySQL.
-//! Native wrappers require an environment-owner assigned NEW EMPTY C6 database;
+//! Native wrappers require an environment-owner assigned NEW EMPTY C6/C7 database;
 //! they never create/drop a database or replay an external request. Trigger fault
 //! prerequisites are explicit. All direct SQL is observation or synthetic fault/
 //! clock control; all acceptance, claims, ACKs and ownership changes use the facade.
@@ -838,7 +838,153 @@ async fn sqlite_shared_private_ledger_contract() {
     );
     run(Fixture::open(url, Some(dir)).await).await;
 }
+/// Explicit C7 test-only namespace. Historical C6 receipt/path rules below are
+/// unchanged. Ordinary factories retain their explicitly captured legacy base
+/// names and existing per-invocation child CREATE/DROP behavior.
+pub(crate) fn assigned_c7_native_url(
+    key: &str,
+    disposable: &str,
+    mysql: bool,
+    factory: bool,
+) -> String {
+    assert_eq!(
+        std::env::var(disposable).ok().as_deref(),
+        Some("YES_NEW_SYNTHETIC"),
+        "explicit C7 disposable prerequisite required"
+    );
+    let file = PathBuf::from(std::env::var(key).expect("explicit C7 assigned URL file required"))
+        .canonicalize()
+        .unwrap();
+    let scope = PathBuf::from(
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env",
+    )
+    .canonicalize()
+    .unwrap();
+    assert_eq!(
+        file.parent(),
+        Some(scope.as_path()),
+        "only the real C7 env root is supported"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "C7 URL file requires0600"
+        );
+    }
+    let raw = std::fs::read_to_string(&file).unwrap();
+    let url =
+        reqwest::Url::parse(raw.trim()).unwrap_or_else(|_| panic!("invalid synthetic C7 URL"));
+    assert!(if mysql {
+        url.scheme() == "mysql"
+    } else {
+        matches!(url.scheme(), "postgres" | "postgresql")
+    });
+    assert!(url.host_str().is_some_and(|host| {
+        host == "localhost"
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    }));
+    assert!(url.query().is_none() && url.fragment().is_none());
+    let db = url.path().trim_start_matches('/');
+    assert!(
+        db.starts_with(if factory {
+            "c5_synthetic_"
+        } else {
+            "c7_synthetic_"
+        }) && db
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    );
+    let owned: Value = serde_json::from_slice(
+        &std::fs::read(scope.join(if mysql {
+            "mysql-owned.json"
+        } else {
+            "pg-owned.json"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let case = &owned["cases"][db];
+    assert_eq!(
+        case["url_file"].as_str(),
+        file.to_str(),
+        "exact C7 captured case required"
+    );
+    if factory {
+        assert_eq!(case["native_factory"], true);
+        assert_eq!(case["legacy_fixture_name"], true);
+    } else {
+        assert_ne!(case["native_factory"], true);
+    }
+    let hex = |value: &str, length: usize| {
+        value.len() == length
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    };
+    assert!(
+        hex(owned["id"].as_str().unwrap(), 64) && hex(owned["owner"].as_str().unwrap(), 32),
+        "valid captured C7 owner identity required"
+    );
+    let endpoint = format!(
+        "{}:{}",
+        url.host_str().unwrap(),
+        url.port().expect("captured explicit port required")
+    );
+    assert_eq!(owned["endpoint"].as_str(), Some(endpoint.as_str()));
+    let role = case["role"]
+        .as_str()
+        .unwrap_or_else(|| owned["user"].as_str().unwrap());
+    assert_eq!(
+        url.username(),
+        role,
+        "URL role must match exact captured case role"
+    );
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(scope.join("active-case-manifest.json")).unwrap())
+            .unwrap();
+    let backend = if mysql { "mysql" } else { "postgres" };
+    let matches = manifest["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["database"] == db && entry["backend"] == backend)
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "one exact C7 allocation receipt required");
+    let entry = matches[0];
+    assert_eq!(entry["container_id"], owned["id"]);
+    assert_eq!(entry["owner_uuid"], owned["owner"]);
+    assert_eq!(entry["url_file"].as_str(), file.to_str());
+    assert_eq!(entry["role"].as_str(), Some(role));
+    assert_eq!(entry["environment_namespace"], "C7/isolated");
+    assert_eq!(entry["label"], case["label"]);
+    assert_eq!(
+        entry["environment_helper"].as_str(),
+        scope.join("isolated_db.py").to_str()
+    );
+    assert_eq!(
+        entry["captured_state"].as_str(),
+        scope
+            .join(if mysql {
+                "mysql-owned.json"
+            } else {
+                "pg-owned.json"
+            })
+            .to_str()
+    );
+    assert_eq!(entry["native_factory"].as_bool().unwrap_or(false), factory);
+    raw.trim().into()
+}
 fn assigned_native_url(key: &str, mysql: bool) -> String {
+    let c7_key = key.replacen("C6_", "C7_", 1);
+    if std::env::var_os(&c7_key).is_some() {
+        return assigned_c7_native_url(&c7_key, "C7_PRIVATE_DISPOSABLE", mysql, false);
+    }
     assert_eq!(
         std::env::var("C6_PRIVATE_DISPOSABLE").ok().as_deref(),
         Some("YES_NEW_SYNTHETIC"),
@@ -915,8 +1061,7 @@ fn assigned_native_url(key: &str, mysql: bool) -> String {
     );
     raw.trim().into()
 }
-async fn new_native_fixture(key: &str, mysql: bool) -> Fixture {
-    let url = assigned_native_url(key, mysql);
+pub(crate) async fn assert_empty_native_url(url: &str, mysql: bool) {
     let tables: i64 = if mysql {
         let mut c = MySqlConnection::connect(&url)
             .await
@@ -941,15 +1086,19 @@ async fn new_native_fixture(key: &str, mysql: bool) -> Fixture {
         tables, 0,
         "NEW EMPTY assigned case required; never reset previous failed evidence"
     );
+}
+async fn new_native_fixture(key: &str, mysql: bool) -> Fixture {
+    let url = assigned_native_url(key, mysql);
+    assert_empty_native_url(&url, mysql).await;
     Fixture::open(url, None).await
 }
 #[tokio::test]
-#[ignore = "requires C6_PRIVATE_PG_URL_FILE owned NEW EMPTY case, C6_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC, schema/function/trigger privileges"]
+#[ignore = "requires C6_PRIVATE_PG_URL_FILE/C6_PRIVATE_DISPOSABLE or C7_PRIVATE_PG_URL_FILE/C7_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC owned NEW EMPTY case, schema/function/trigger privileges"]
 async fn postgres_shared_private_ledger_contract() {
     run(new_native_fixture("C6_PRIVATE_PG_URL_FILE", false).await).await;
 }
 #[tokio::test]
-#[ignore = "requires C6_PRIVATE_MYSQL_URL_FILE owned NEW EMPTY case, C6_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC, CREATE TRIGGER and recorded trust-function prerequisite"]
+#[ignore = "requires C6_PRIVATE_MYSQL_URL_FILE/C6_PRIVATE_DISPOSABLE or C7_PRIVATE_MYSQL_URL_FILE/C7_PRIVATE_DISPOSABLE=YES_NEW_SYNTHETIC owned NEW EMPTY case, CREATE TRIGGER and recorded trust-function prerequisite"]
 async fn mysql_shared_private_ledger_contract() {
     run(new_native_fixture("C6_PRIVATE_MYSQL_URL_FILE", true).await).await;
 }

@@ -177,6 +177,16 @@ async fn admitted_size(kind: &str) {
         "C7_LEGAL_HTTP_FRAME {}",
         json!({"case":kind,"input_blake3":input_hash,"http_bytes":32768,"canonical_bytes":ticket.payload.len(),"complete_frame_bytes":frame.len(),"fixed_frame_limit":MAX_FRAME_BYTES,"accepted_delivery_id":ticket.delivery_id,"canonical_message_id":decoded.data["message_id"]})
     );
+    let mqtt_packet =
+        crate::private_mqtt::encoded_delivery_packet_for_test(&ticket.delivery_id, &payload).await;
+    println!(
+        "C7_LEGAL_HTTP_MQTT {}",
+        json!({"case":kind,"input_blake3":input_hash,"http_bytes":32768,"complete_mqtt_packet_bytes":mqtt_packet.len(),"shared_frame_limit":MAX_FRAME_BYTES})
+    );
+    assert!(
+        mqtt_packet.len() <= MAX_FRAME_BYTES,
+        "actual production MQTT packet exceeds shared fixed frame limit"
+    );
     // No rejection or payload rewrite is introduced. If a real legal sample
     // exceeds the shared fixed budget this preserves its exact generator/hash/bytes.
     store
