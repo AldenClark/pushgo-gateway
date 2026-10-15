@@ -41,3 +41,6 @@ mod control_wire_tests;
 
 #[cfg(test)]
 mod backend_contract_tests;
+
+#[cfg(test)]
+mod mysql_plan_probe;

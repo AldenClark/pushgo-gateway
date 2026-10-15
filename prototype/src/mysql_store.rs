@@ -54,7 +54,10 @@ pub(super) const RETIRE_TOKEN_TARGETS_SQL: &str = "SELECT t.delivery_id,t.device
 
 pub(super) const EXPIRY_BATCH_SQL: &str = "SELECT delivery_id FROM messages WHERE has_payload=1 AND expires_at<=? ORDER BY expires_at,delivery_id LIMIT 256 FOR UPDATE";
 pub(super) const RECOVERY_BATCH_SQL: &str = "SELECT DISTINCT delivery_id FROM targets WHERE state='running' AND delivery_id>? ORDER BY delivery_id LIMIT 256";
-pub(super) const CLAIM_ONE_SQL: &str = "SELECT t.*,m.payload_blob,m.expires_at FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE d.retired_at IS NULL AND t.provider=? AND t.state=? AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1";
+// Preserve the due-index order and stop after the first eligible target. Without
+// both native directives MySQL can scan historical targets through another join
+// order and materialize/sort the entire pending class despite LIMIT 1.
+pub(super) const CLAIM_ONE_SQL: &str = "SELECT STRAIGHT_JOIN t.*,m.payload_blob,m.expires_at FROM targets t FORCE INDEX(targets_due) JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE d.retired_at IS NULL AND t.provider=? AND t.state=? AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1";
 
 impl MySqlDeliveryStore {
     pub(super) async fn acquire(&self) -> Result<MySqlGuard<'_>> {
