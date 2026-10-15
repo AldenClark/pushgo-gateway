@@ -819,7 +819,214 @@ async fn migration_reserves_shared_live_budget(f: &mut Fixture) {
     f.counters().await;
     f.reopen(original).await;
 }
+/// Each backend runs the same full HTTP submission and durable replay oracle.
+/// Reopening is an authority/database restart inside this test process, not an
+/// operating-system client restart or a real TLS/MQTT network exchange.
+async fn large_http_body_migration_replay(f: &mut Fixture) {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
+    use warp_link::warp_link_core::MAX_FRAME_BYTES;
+
+    async fn submit(store: &OrdinaryStore, raw: &[u8]) -> Value {
+        let app = crate::router(store.clone(), Arc::new(|| json!({})));
+        let base = reqwest::Url::parse(&store.config.public_base_url).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("{}/message", base.path().trim_end_matches('/')))
+                    .header("content-type", "application/json")
+                    .body(Body::from(raw.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let result: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        result["data"].clone()
+    }
+
+    for (index, kind) in [
+        "text",
+        "chinese",
+        "escape",
+        "numeric-metadata",
+        "negative-metadata",
+        "float-metadata",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let subject = f.subject().await;
+        f.store
+            .route(
+                &subject.device,
+                None,
+                "FCM",
+                &crate::types::generate_hex_id_128(),
+            )
+            .await
+            .unwrap();
+        let raw = crate::private_boundary_tests::legal_http_input(
+            &subject.channel,
+            &subject.password,
+            kind,
+        );
+        // Distinct operations in one aggregate, preserving the exact input size
+        // and the generator's raw numeric spellings before JSON normalization.
+        let raw = String::from_utf8(raw)
+            .unwrap()
+            .replace(
+                "private-wire-boundary",
+                &format!("private-wire-boundar{index}"),
+            )
+            .into_bytes();
+        assert_eq!(raw.len(), crate::MESSAGE_SUBMISSION_BODY_BYTES);
+        let expected: Value = serde_json::from_slice(&raw).unwrap();
+        let accepted = submit(&f.store, &raw).await;
+        let id = accepted["delivery_id"].as_str().unwrap();
+        let op = accepted["op_id"].as_str().unwrap();
+        let status = f.store.status(op).await.unwrap();
+        let pulled = f.store.pull(&subject.device, Some(id)).await.unwrap();
+        assert_eq!(pulled["items"].as_array().unwrap().len(), 1);
+        let provider_payload = pulled["items"][0]["payload"].clone();
+        assert_eq!(
+            provider_payload["body"],
+            expected["body"].as_str().unwrap().trim()
+        );
+        assert!(f.payload_bytes(id).await > 0);
+        let duplicate = submit(&f.store, &raw).await;
+        for key in ["op_id", "message_id", "delivery_id"] {
+            assert_eq!(duplicate[key], accepted[key]);
+        }
+
+        // No HTTP ACK: migration must retain this accepted Provider body and
+        // frozen identity while transferring only its current consumption mode.
+        f.store
+            .update_route(&subject.device, None, "PRIVATE", None)
+            .await
+            .unwrap();
+        f.http_cannot_consume(&subject, id).await;
+        let first = f.claim(&subject, "large48-first").await.pop().unwrap();
+        assert_eq!(first.delivery_id, id);
+        assert_eq!(first.receipt_owner, subject.device);
+        assert_eq!(first.pull_owner, subject.device);
+        assert_eq!(first.accepted_at, status["accepted_at"].as_i64().unwrap());
+        let canonical = body(&first);
+        assert_eq!(canonical["delivery_id"], accepted["delivery_id"]);
+        assert_eq!(canonical["message_id"], accepted["message_id"]);
+        assert_eq!(
+            first.expires_at,
+            canonical["ttl"].as_str().unwrap().parse::<i64>().unwrap()
+        );
+        for (key, value) in provider_payload.as_object().unwrap() {
+            assert_eq!(&canonical[key], value, "migration changed {kind} {key}");
+        }
+        let payload = crate::private_runtime::encode_payload(&first.payload).unwrap();
+        let frame = crate::private_boundary_tests::actual_deliver_frame(id, &payload);
+        let decoded: pushgo_warp_profile::PrivatePayloadEnvelope =
+            postcard::from_bytes(&payload).unwrap();
+        assert_eq!(
+            decoded.data["body"],
+            expected["body"].as_str().unwrap().trim()
+        );
+        if let Some(metadata) = expected.get("metadata") {
+            assert_eq!(
+                serde_json::from_str::<Value>(&decoded.data["metadata"]).unwrap(),
+                *metadata
+            );
+        }
+        assert_eq!(
+            decoded.data["message_id"],
+            accepted["message_id"].as_str().unwrap()
+        );
+        println!(
+            "C8_SHARED_LARGE_FRAME {}",
+            json!({"case":kind,"http_bytes":raw.len(),"input_blake3":blake3::hash(&raw).to_hex().to_string(),"canonical_bytes":first.payload.len(),"complete_frame_bytes":frame.len(),"fixed_frame_limit":MAX_FRAME_BYTES})
+        );
+        assert!(frame.len() <= MAX_FRAME_BYTES);
+        let mqtt = crate::private_mqtt::encoded_delivery_packet_for_test(id, &payload).await;
+        println!(
+            "C8_SHARED_LARGE_MQTT case={kind} packet_bytes={} fixed_frame_limit={MAX_FRAME_BYTES}",
+            mqtt.len()
+        );
+        assert!(mqtt.len() <= MAX_FRAME_BYTES);
+        assert_eq!(
+            f.store
+                .private_release(&first.group_id, std::slice::from_ref(&first.claim_token))
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(!f.store.private_authorize(&first).await.unwrap());
+        let abandoned = f
+            .claim(&subject, "large48-before-reopen")
+            .await
+            .pop()
+            .unwrap();
+        assert_eq!(abandoned.payload, first.payload);
+        f.reopen(f.store.config.clone()).await;
+        assert!(!f.store.private_authorize(&abandoned).await.unwrap());
+        let replay = f
+            .claim(&subject, "large48-after-reopen")
+            .await
+            .pop()
+            .unwrap();
+        assert_eq!(replay.payload, first.payload);
+        assert_eq!(
+            (replay.accepted_at, replay.expires_at),
+            (first.accepted_at, first.expires_at)
+        );
+        assert_eq!(
+            (
+                &replay.delivery_id,
+                &replay.receipt_owner,
+                &replay.pull_owner
+            ),
+            (&first.delivery_id, &first.receipt_owner, &first.pull_owner)
+        );
+        let after = f.store.status(op).await.unwrap();
+        for key in ["accepted_at", "entity_id", "expires_at"] {
+            assert_eq!(after[key], status[key]);
+        }
+        assert!(
+            f.store
+                .private_ack(&f.route(&subject).await, &replay)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !f.store
+                .private_ack(&f.route(&subject).await, &replay)
+                .await
+                .unwrap()
+        );
+        assert_eq!(f.pending(&subject).await, 0);
+        assert_eq!(f.payload_bytes(id).await, 0);
+        let duplicate = submit(&f.store, &raw).await;
+        for key in ["op_id", "message_id", "delivery_id"] {
+            assert_eq!(duplicate[key], accepted[key]);
+        }
+        assert!(f.claim(&subject, "large48-after-ack").await.is_empty());
+        assert!(
+            f.scalar(&format!(
+                "SELECT dedupe_until FROM messages WHERE delivery_id={}",
+                lit(id)
+            ))
+            .await
+                > now() + 29 * DAY
+        );
+        f.counters().await;
+    }
+}
+
 async fn run(mut f: Fixture) {
+    large_http_body_migration_replay(&mut f).await;
     migration_reserves_shared_live_budget(&mut f).await;
     frozen_identity_capability_capacity(&mut f).await;
     disconnect_rollback_restart(&mut f).await;
