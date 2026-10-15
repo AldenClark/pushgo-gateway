@@ -81,6 +81,8 @@ async fn mysql_shared_ordinary_contract_and_native_failures() {
     let sandbox = MySqlSandbox::guarded();
     let result = AssertUnwindSafe(async {
         run_oracles(|config| sandbox.fixture(config)).await;
+        let f = sandbox.fixture(Config::default()).await;
+        mysql_due_index_repair_recovery(f).await;
         let mut f = sandbox.fixture(Config::default()).await;
         mysql_transaction_failures(&mut f).await;
         mysql_native_plans(&f).await;
@@ -101,6 +103,166 @@ async fn mysql_shared_ordinary_contract_and_native_failures() {
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
+}
+
+async fn mysql_due_index_repair_recovery(mut f: Fixture) {
+    f.store
+        .retire_provider_token("android", "synthetic-index-epoch-unused")
+        .await
+        .unwrap();
+    let mut request = f.request("mysql-index-repair-identity");
+    request.ttl = Some(now() + 300_000);
+    let accepted = f.store.accept(request.clone()).await.unwrap();
+    let old_ticket = f
+        .store
+        .claim_reserved("FCM", 1, false)
+        .await
+        .unwrap()
+        .tickets
+        .pop()
+        .unwrap();
+    let first_ttl = old_ticket.expires_at;
+    let first_epoch = f
+        .scalar("SELECT control_epoch FROM ledger_usage WHERE singleton=1")
+        .await;
+    assert!(first_epoch > 0);
+    let first_target_epoch = f.scalar("SELECT control_epoch FROM targets").await;
+    assert_eq!(first_epoch, first_target_epoch);
+    assert!(f.store.authorize_ticket(&old_ticket).await.unwrap());
+    f.close().await;
+    let mut admin = MySqlConnection::connect(&f.url).await.unwrap();
+
+    // An unknown signature fails closed before running-job recovery. It must
+    // not be guessed into a known index or erase an accepted capability.
+    sqlx::raw_sql("ALTER TABLE targets DROP INDEX targets_due, ADD INDEX targets_due(provider,state,next_attempt_at)").execute(&mut admin).await.unwrap();
+    let failed = OrdinaryStore::open(&f.url, f.store.config.clone()).await;
+    assert!(
+        matches!(failed,Err(KernelError::Invalid(ref message)) if message=="unsupported MySQL targets_due definition")
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM targets WHERE state='running'")
+            .fetch_one(&mut admin)
+            .await
+            .unwrap(),
+        1
+    );
+
+    sqlx::raw_sql("ALTER TABLE targets DROP INDEX targets_due, ADD INDEX targets_due(provider,state,next_attempt_at,delivery_id)").execute(&mut admin).await.unwrap();
+    // A real metadata reader blocks startup DDL. No READY handle or
+    // recovery writes may escape this failed open, and no retry is hidden.
+    sqlx::raw_sql("BEGIN; SELECT delivery_id FROM targets LIMIT 1")
+        .execute(&mut admin)
+        .await
+        .unwrap();
+    let failed = tokio::time::timeout(
+        Duration::from_secs(5),
+        OrdinaryStore::open(&f.url, f.store.config.clone()),
+    )
+    .await
+    .expect("metadata lock timeout must remain bounded");
+    assert!(
+        matches!(&failed,Err(KernelError::Database(error)) if mysql_code(error).as_deref()==Some("1205")),
+        "index repair must preserve native metadata-lock failure"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM targets WHERE state='running'")
+            .fetch_one(&mut admin)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM messages WHERE op_id='mysql-index-repair-identity'"
+        )
+        .fetch_one(&mut admin)
+        .await
+        .unwrap(),
+        1
+    );
+    sqlx::raw_sql("ROLLBACK").execute(&mut admin).await.unwrap();
+
+    let (store, owner) = OrdinaryStore::open(&f.url, f.store.config.clone())
+        .await
+        .unwrap();
+    f.store = store;
+    f.owner = Some(owner);
+    let signature:Vec<String>=sqlx::query_scalar("SELECT CAST(COLUMN_NAME AS CHAR CHARACTER SET utf8mb4) FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='targets' AND INDEX_NAME='targets_due' ORDER BY SEQ_IN_INDEX LIMIT 6").fetch_all(&mut admin).await.unwrap();
+    assert_eq!(
+        signature,
+        [
+            "provider",
+            "state",
+            "next_attempt_at",
+            "delivery_id",
+            "device_key"
+        ]
+    );
+    let replay = f.store.accept(request).await.unwrap();
+    assert_eq!(
+        (
+            replay.delivery_id.as_str(),
+            replay.message_id.as_str(),
+            replay.op_id.as_str()
+        ),
+        (
+            accepted.delivery_id.as_str(),
+            accepted.message_id.as_str(),
+            accepted.op_id.as_str()
+        )
+    );
+    assert_eq!(replay.acceptance, "duplicate_completed");
+    assert_eq!(
+        f.scalar("SELECT control_epoch FROM ledger_usage WHERE singleton=1")
+            .await,
+        first_epoch
+    );
+    assert_eq!(
+        f.scalar("SELECT control_epoch FROM targets").await,
+        first_target_epoch
+    );
+    assert_eq!(
+        f.scalar("SELECT expires_at FROM messages WHERE op_id='mysql-index-repair-identity'")
+            .await,
+        first_ttl
+    );
+    assert!(!f.store.authorize_ticket(&old_ticket).await.unwrap());
+    assert_eq!(
+        items(
+            &f.store
+                .pull(&f.device, Some(&accepted.delivery_id))
+                .await
+                .unwrap()
+        ),
+        1
+    );
+    let ticket = f
+        .store
+        .claim_reserved("FCM", 1, true)
+        .await
+        .unwrap()
+        .tickets
+        .pop()
+        .unwrap();
+    assert_eq!(ticket.delivery_id, accepted.delivery_id);
+    assert_eq!(ticket.expires_at, first_ttl);
+    assert_eq!(ticket.route_generation, old_ticket.route_generation);
+    assert!(ticket.attempt_id > old_ticket.attempt_id);
+    assert!(f.store.authorize_ticket(&ticket).await.unwrap());
+    f.store
+        .settle(&ticket, "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.store
+            .ack(&f.device, vec![accepted.delivery_id])
+            .await
+            .unwrap(),
+        1
+    );
+    f.usage().await;
+    f.close().await;
+    admin.close().await.ok();
 }
 
 fn mysql_code(error: &sqlx::Error) -> Option<String> {

@@ -277,11 +277,60 @@ impl MySqlDeliveryStore {
             let _ = connection.close().await;
         }
     }
+    /// A same-version access-path repair, after both owner locks and before
+    /// any recovery/business transaction. CREATE TABLE IF NOT EXISTS cannot
+    /// update an accepted C5 dataset's existing four-column index.
+    async fn ensure_due_index(connection: &mut MySqlConnection) -> Result<()> {
+        let rows = sqlx::query("SELECT CAST(SEQ_IN_INDEX AS SIGNED) AS seq,COLUMN_NAME,CAST(SUB_PART AS SIGNED) AS sub_part,COLLATION,CAST(NON_UNIQUE AS SIGNED) AS non_unique,INDEX_TYPE,IS_VISIBLE,EXPRESSION FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='targets' AND INDEX_NAME='targets_due' ORDER BY SEQ_IN_INDEX LIMIT 6")
+            .fetch_all(&mut *connection).await?;
+        let expected = [
+            "provider",
+            "state",
+            "next_attempt_at",
+            "delivery_id",
+            "device_key",
+        ];
+        let mut known = matches!(rows.len(), 4 | 5);
+        for (index, row) in rows.iter().enumerate() {
+            // Native metadata text can carry BINARY_FLAG. The unchecked text
+            // getter still performs UTF8 Decode, as for the ordinary rows.
+            known &= row.try_get::<i64, _>("seq")? == index as i64 + 1
+                && row
+                    .try_get_unchecked::<Option<String>, _>("COLUMN_NAME")?
+                    .as_deref()
+                    == expected.get(index).copied()
+                && row.try_get::<Option<i64>, _>("sub_part")?.is_none()
+                && row
+                    .try_get_unchecked::<Option<String>, _>("COLLATION")?
+                    .as_deref()
+                    == Some("A")
+                && row.try_get::<i64, _>("non_unique")? == 1
+                && row.try_get_unchecked::<String, _>("INDEX_TYPE")? == "BTREE"
+                && row.try_get_unchecked::<String, _>("IS_VISIBLE")? == "YES"
+                && row
+                    .try_get_unchecked::<Option<String>, _>("EXPRESSION")?
+                    .is_none();
+        }
+        if !known {
+            return Err(KernelError::Invalid(
+                "unsupported MySQL targets_due definition".into(),
+            ));
+        }
+        if rows.len() == 4 {
+            // One atomic native DDL, outside any application transaction. On
+            // timeout/error open() closes the pinned session and never returns
+            // a READY store; accepted identity and running work remain intact.
+            sqlx::query("ALTER TABLE targets DROP INDEX targets_due, ADD INDEX targets_due(provider,state,next_attempt_at,delivery_id,device_key)")
+                .execute(&mut *connection).await?;
+        }
+        Ok(())
+    }
     async fn initialize(&self) -> Result<()> {
         let mut connection = self.acquire().await?;
         sqlx::raw_sql(include_str!("mysql_schema.sql"))
             .execute(&mut *connection)
             .await?;
+        Self::ensure_due_index(&mut connection).await?;
         let mut tx = connection.begin().await?;
         Self::lock_usage(&mut tx).await?;
         // Recover in one startup transaction, but hold only one bounded batch
