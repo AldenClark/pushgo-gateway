@@ -88,6 +88,11 @@ async fn mysql_shared_ordinary_contract_and_native_failures() {
         mysql_native_plans(&f).await;
         mysql_owner_session_loss(&mut f).await;
         f.close().await;
+        for acked_running in [true, false] {
+            let mut f = sandbox.fixture(Config::default()).await;
+            mysql_late_reconcile_rollback(&mut f, acked_running).await;
+            f.close().await;
+        }
         let f = sandbox.fixture(Config::default()).await;
         tokio::time::timeout(Duration::from_secs(15), mysql_runtime_backpressure(f))
             .await
@@ -103,6 +108,158 @@ async fn mysql_shared_ordinary_contract_and_native_failures() {
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
+}
+
+// Observe committed data through a physically independent native connection,
+// rather than returning the transaction owner's own provisional values.
+async fn late_reconcile_snapshot(c: &mut MySqlConnection) -> Value {
+    let raw = sqlx::query("SELECT JSON_OBJECT('delivery_id',m.delivery_id,'message_id',m.message_id,'op_id',m.op_id,'accepted_at',m.accepted_at,'expires_at',m.expires_at,'dedupe_until',m.dedupe_until,'fingerprint',m.fingerprint,'payload_hex',HEX(m.payload_blob),'payload_bytes',m.payload_bytes,'usage_payload_bytes',m.usage_payload_bytes,'pending_targets',m.pending_targets,'status',m.status,'updated_at',m.updated_at,'provider_accepted_count',m.provider_accepted_count,'provider_failed_count',m.provider_failed_count,'provider_target_count',m.provider_target_count,'private_enqueued_count',m.private_enqueued_count,'device_key',t.device_key,'pull_owner',t.pull_owner,'owner_generation',t.owner_generation,'control_epoch',t.control_epoch,'route_generation',t.route_generation,'state',t.state,'attempt_id',t.attempt_id,'attempts',t.attempts,'acked_at',t.acked_at,'provider_status',t.provider_status,'provider_error',t.provider_error,'receipt_at',t.receipt_at,'next_attempt_at',t.next_attempt_at,'usage_messages',u.messages,'usage_targets',u.targets,'usage_bytes',u.bytes,'private_pending',u.private_pending) FROM messages m LEFT JOIN targets t ON t.delivery_id=m.delivery_id CROSS JOIN ledger_usage u WHERE m.op_id='c6-late-reconcile' AND u.singleton=1")
+        .fetch_one(c).await.unwrap().get_unchecked::<String,_>(0);
+    serde_json::from_str(&raw).unwrap()
+}
+
+async fn mysql_late_reconcile_rollback(f: &mut Fixture, acked_running: bool) {
+    let mut request = f.request("c6-late-reconcile");
+    request.ttl = Some(now() + 300_000);
+    let accepted = f.store.accept(request.clone()).await.unwrap();
+    let ticket = f
+        .store
+        .claim_reserved("FCM", 1, false)
+        .await
+        .unwrap()
+        .tickets
+        .pop()
+        .unwrap();
+    assert_eq!(ticket.delivery_id, accepted.delivery_id);
+    if acked_running {
+        assert_eq!(
+            f.store
+                .ack(&f.device, vec![accepted.delivery_id.clone()])
+                .await
+                .unwrap(),
+            1
+        );
+    }
+    let mut observer = MySqlConnection::connect(&f.url).await.unwrap();
+    sqlx::raw_sql("SET SESSION MAX_EXECUTION_TIME=2000; SET SESSION innodb_lock_wait_timeout=3; SET SESSION lock_wait_timeout=3").execute(&mut observer).await.unwrap();
+    let before = late_reconcile_snapshot(&mut observer).await;
+    assert_eq!(before["state"], "running");
+    assert_eq!(before["provider_accepted_count"], 0);
+    if acked_running {
+        // Real ACK already released the last body's bytes; only its owned
+        // frozen running receipt survives. Do not invent a >0 ->0 byte change.
+        assert!(!before["acked_at"].is_null());
+        assert_eq!(before["payload_bytes"], 0);
+        assert_eq!(before["usage_bytes"], 0);
+    } else {
+        assert!(before["acked_at"].is_null());
+        assert!(before["payload_bytes"].as_i64().unwrap() > 0);
+        assert_eq!(before["usage_targets"], 1);
+    }
+    let predicate = if acked_running {
+        // Absence of this frozen row proves release DELETE has already run.
+        "NEW.bytes=0 AND NOT EXISTS(SELECT 1 FROM targets t JOIN messages m ON m.delivery_id=t.delivery_id WHERE m.op_id='c6-late-reconcile')"
+    } else {
+        "OLD.targets>0 AND NEW.targets=0"
+    };
+    let trigger = format!(
+        "CREATE TRIGGER c6_late_reconcile BEFORE UPDATE ON ledger_usage FOR EACH ROW BEGIN IF ({predicate}) AND EXISTS(SELECT 1 FROM messages WHERE op_id='c6-late-reconcile' AND provider_accepted_count=1) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='synthetic late receipt reconcile'; END IF; END"
+    );
+    sqlx::raw_sql(&trigger)
+        .execute(&mut observer)
+        .await
+        .unwrap();
+    let error = f
+        .store
+        .settle(&ticket, "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap_err();
+    match error {
+        KernelError::Database(error) => {
+            assert_eq!(mysql_code(&error).as_deref(), Some("1644"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("synthetic late receipt reconcile")
+            );
+        }
+        other => panic!("expected native late-reconcile fault, got {other}"),
+    }
+    // Drain SQLx's queued whole-transaction rollback before external DDL; this
+    // is not a retry of settle and cannot fabricate a Provider result.
+    {
+        let mysql = f.store.mysql_store().unwrap();
+        drop(mysql.acquire().await.unwrap());
+    }
+    assert_eq!(
+        late_reconcile_snapshot(&mut observer).await,
+        before,
+        "native late fault must roll back target DELETE/state, body, Sender counts/status, frozen history and all usage"
+    );
+    sqlx::raw_sql("DROP TRIGGER c6_late_reconcile")
+        .execute(&mut observer)
+        .await
+        .unwrap();
+    // Replay only the already-known database receipt, never the external send.
+    f.store
+        .settle(&ticket, "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap();
+    f.store
+        .settle(&ticket, "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap();
+    let after = late_reconcile_snapshot(&mut observer).await;
+    for key in [
+        "delivery_id",
+        "message_id",
+        "op_id",
+        "accepted_at",
+        "expires_at",
+        "dedupe_until",
+        "fingerprint",
+        "provider_target_count",
+        "private_enqueued_count",
+    ] {
+        assert_eq!(after[key], before[key], "first acceptance {key}");
+    }
+    assert_eq!(
+        after["provider_accepted_count"], 1,
+        "same frozen receipt is counted once"
+    );
+    assert_eq!(after["provider_failed_count"], 0);
+    assert_eq!(after["usage_messages"], 0);
+    assert_eq!(after["usage_targets"], 0);
+    assert_eq!(after["private_pending"], 0);
+    assert_eq!(after["status"], "sent");
+    if acked_running {
+        assert!(after["device_key"].is_null());
+        assert_eq!(after["usage_bytes"], 0);
+    } else {
+        assert_eq!(after["state"], "provider_accepted");
+        assert!(after["acked_at"].is_null());
+        assert_eq!(after["payload_hex"], before["payload_hex"]);
+        assert_eq!(after["usage_bytes"], before["usage_bytes"]);
+        assert_eq!(
+            f.store
+                .ack(&f.device, vec![accepted.delivery_id.clone()])
+                .await
+                .unwrap(),
+            1
+        );
+    }
+    let replay = f.store.accept(request).await.unwrap();
+    assert_eq!(replay.delivery_id, accepted.delivery_id);
+    assert_eq!(replay.message_id, accepted.message_id);
+    let final_state = late_reconcile_snapshot(&mut observer).await;
+    assert_eq!(final_state["usage_bytes"], 0);
+    assert_eq!(final_state["provider_accepted_count"], 1);
+    assert!(final_state["device_key"].is_null());
+    f.usage().await;
+    observer.close().await.unwrap();
+    println!(
+        "MySQL late reconcile rollback: acked_running={acked_running}, native1644, full independent snapshot restored, same-ticket SQL replay counted once"
+    );
 }
 
 async fn mysql_due_index_repair_recovery(mut f: Fixture) {
@@ -506,7 +663,7 @@ async fn wait_for_native_row_wait<T: std::fmt::Debug>(
     owner_connection_id: u64,
     task: &mut tokio::task::JoinHandle<T>,
 ) {
-    // performance_schema is disabled in the bounded synthetic server. InnoDB
+    // This oracle does not depend on performance_schema instrumentation. InnoDB
     // still exposes its native lock waiter through INNODB_TRX with PROCESS.
     // Bind the exact pinned owner: another session's wait is not our oracle.
     // MySQL 8.4.11 trx0i_s.cc refreshes only after >100ms without reads;

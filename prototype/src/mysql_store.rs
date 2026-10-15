@@ -577,14 +577,8 @@ impl MySqlDeliveryStore {
         profile_path: Path,
     ) -> Result<()> {
         let _ = device;
-        self.counters
-            .profile
-            .sql(
-                profile_path,
-                Statement::Usage,
-                Self::reconcile_message_tx(tx, id),
-            )
-            .await?;
+        // Status reads Provider facts, not pending/usage counters.
+        // Reconcile once after release mutations, inside this same transaction.
         self.counters
             .profile
             .sql(
@@ -1102,22 +1096,6 @@ impl MySqlDeliveryStore {
                     .bind(&ticket.device_key).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(&ticket.platform).bind(&ticket.provider).bind(&ticket.token).bind(ticket.route_generation).execute(&mut *tx)).await?;
             }
             self.counters.profile.sql(Path::Receipt, Statement::ReceiptCounts, sqlx::query("UPDATE messages SET provider_accepted_count=provider_accepted_count+?,provider_failed_count=provider_failed_count+? WHERE delivery_id=?").bind(i64::from(state=="provider_accepted")).bind(i64::from(matches!(state,"permanent_failed"|"expired"|"cancelled"))).bind(&ticket.delivery_id).execute(&mut *tx)).await?;
-            self.counters
-                .profile
-                .sql(
-                    Path::Receipt,
-                    Statement::Usage,
-                    Self::reconcile_message_tx(&mut tx, &ticket.delivery_id),
-                )
-                .await?;
-            self.counters
-                .profile
-                .sql(
-                    Path::Receipt,
-                    Statement::ReceiptStatus,
-                    Self::refresh_status_tx(&mut tx, &ticket.delivery_id, now()),
-                )
-                .await?;
             self.release_acked_tx(
                 &mut tx,
                 &ticket.device_key,
