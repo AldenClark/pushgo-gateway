@@ -59,6 +59,10 @@ pub(super) const RECOVERY_BATCH_SQL: &str = "SELECT DISTINCT delivery_id FROM ta
 // order and materialize/sort the entire pending class despite LIMIT 1.
 pub(super) const CLAIM_ONE_SQL: &str = "SELECT STRAIGHT_JOIN t.*,m.payload_blob,m.expires_at FROM targets t FORCE INDEX(targets_due) JOIN messages m ON m.delivery_id=t.delivery_id JOIN devices d ON d.device_key=t.pull_owner WHERE d.retired_at IS NULL AND t.delivery_mode='provider' AND t.provider=? AND t.state=? AND t.acked_at IS NULL AND t.next_attempt_at<=? AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) ORDER BY t.next_attempt_at,t.delivery_id,t.device_key LIMIT 1";
 
+// MIN over both state ranges scans the pending backlog on MySQL. Each ordered
+// range needs only its first matching row; residual mode/ACK filters still apply.
+pub(super) const NEXT_DUE_SQL: &str = "SELECT MIN(next_attempt_at) FROM ((SELECT next_attempt_at FROM targets FORCE INDEX(targets_due) WHERE provider=? AND delivery_mode='provider' AND state='pending' AND acked_at IS NULL ORDER BY next_attempt_at,delivery_id,device_key LIMIT 1) UNION ALL (SELECT next_attempt_at FROM targets FORCE INDEX(targets_due) WHERE provider=? AND delivery_mode='provider' AND state='retry_wait' AND acked_at IS NULL ORDER BY next_attempt_at,delivery_id,device_key LIMIT 1)) AS first_due";
+
 impl MySqlDeliveryStore {
     pub(super) async fn acquire(&self) -> Result<MySqlGuard<'_>> {
         let mut guard = self.connection.lock().await;
@@ -1010,7 +1014,18 @@ impl MySqlDeliveryStore {
                 drop(_compute);
             }
         }
-        let due:Option<i64>=self.counters.profile.sql(Path::Claim, Statement::ClaimNextDue, sqlx::query_scalar("SELECT MIN(next_attempt_at) FROM targets WHERE provider=? AND delivery_mode='provider' AND state IN ('pending','retry_wait') AND acked_at IS NULL").bind(provider).fetch_one(&mut *tx)).await?;
+        let due: Option<i64> = self
+            .counters
+            .profile
+            .sql(
+                Path::Claim,
+                Statement::ClaimNextDue,
+                sqlx::query_scalar(NEXT_DUE_SQL)
+                    .bind(provider)
+                    .bind(provider)
+                    .fetch_one(&mut *tx),
+            )
+            .await?;
         let retiring:bool=self.counters.profile.sql(Path::Claim, Statement::ClaimRetiring, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices d WHERE d.retired_at IS NOT NULL AND d.coalesced_to IS NULL AND (EXISTS(SELECT 1 FROM targets t WHERE t.pull_owner=d.device_key AND t.acked_at IS NULL) OR EXISTS(SELECT 1 FROM channel_subscriptions s WHERE s.device_key=d.device_key)))").fetch_one(&mut *tx)).await?;
         let next_due = if retiring {
             Some(at)

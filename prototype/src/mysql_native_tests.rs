@@ -2,6 +2,9 @@
 use super::*;
 use sqlx::{MySqlConnection, Row};
 
+#[path = "mysql_next_due_tests.rs"]
+mod mysql_next_due_tests;
+
 struct MySqlSandbox {
     base: reqwest::Url,
     created: std::sync::Mutex<Vec<String>>,
@@ -93,6 +96,8 @@ async fn mysql_shared_ordinary_contract_and_native_failures() {
             mysql_late_reconcile_rollback(&mut f, acked_running).await;
             f.close().await;
         }
+        let f = sandbox.fixture(Config::default()).await;
+        mysql_next_due_tests::run(f).await;
         let f = sandbox.fixture(Config::default()).await;
         tokio::time::timeout(Duration::from_secs(15), mysql_runtime_backpressure(f))
             .await
