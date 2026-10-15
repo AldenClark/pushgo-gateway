@@ -1,0 +1,1055 @@
+{
+  "utc": "2026-10-15T18:55:43.157029+00:00",
+  "status": "SOURCE_ONLY_ARCHIVE_COPIED_FROM_EXACT_ORIGINAL_BYTES",
+  "source_file_count": 58,
+  "source_bytes": 679617,
+  "files": [
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/README.md",
+      "bytes": 4240,
+      "sha256": "b83453f1fab380d4bdd02cc3db27c7013f24b73de34eace1171ae308d968e7f6",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "owner measurement instructions and scope",
+      "execution_qualification": "Original frozen parameter/proposal bytes; no workload authority or regeneration",
+      "archive_relative_path": "capacity/README.md",
+      "candidate_relative_path": "prototype/validation/c9/capacity/README.md"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/build_transient_observer.py",
+      "bytes": 10892,
+      "sha256": "3e4b45fa2927bd1bfbecaac1c35c3675e8943f85149a388faa3ca1d8110abfd6",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "after-observer builder/generator source",
+      "execution_qualification": "Template/source preparation; actual final observer build/run identity requires root receipt",
+      "archive_relative_path": "capacity/after-observer-preparation/build_transient_observer.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/after-observer-preparation/build_transient_observer.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/observer_fixture.rs",
+      "bytes": 3810,
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "after-observer builder/generator source",
+      "execution_qualification": "Template/source preparation; actual final observer build/run identity requires root receipt",
+      "archive_relative_path": "capacity/after-observer-preparation/harness/observer_fixture.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/after-observer-preparation/harness/observer_fixture.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/observer_library.rs",
+      "bytes": 471,
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "after-observer builder/generator source",
+      "execution_qualification": "Template/source preparation; actual final observer build/run identity requires root receipt",
+      "archive_relative_path": "capacity/after-observer-preparation/harness/observer_library.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/after-observer-preparation/harness/observer_library.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/prepare_observer.py",
+      "bytes": 5153,
+      "sha256": "b9f5c1c1ce3e8e8d5e90f105c5d1ce8a6eef541caab5ba018bb994aff235eabb",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "after-observer builder/generator source",
+      "execution_qualification": "Template/source preparation; actual final observer build/run identity requires root receipt",
+      "archive_relative_path": "capacity/after-observer-preparation/harness/prepare_observer.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/after-observer-preparation/harness/prepare_observer.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/source_provenance.py",
+      "bytes": 2101,
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "after-observer builder/generator source",
+      "execution_qualification": "Template/source preparation; actual final observer build/run identity requires root receipt",
+      "archive_relative_path": "capacity/after-observer-preparation/harness/source_provenance.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/after-observer-preparation/harness/source_provenance.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.first-source.py",
+      "bytes": 12436,
+      "sha256": "4531f1a572593b44d88433b196e10f4651b48173ace02d40ea4a98a5dc3edfc6",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "historical first offline reducer source with original encoding defect",
+      "execution_qualification": "Historical failed source; preserve exact bytes/no formatting",
+      "archive_relative_path": "capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.first-source.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.first-source.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.py",
+      "bytes": 12460,
+      "sha256": "be82c3e7e71d6fffd2a4c6b402c013a89601d0520ea40dbccc064f34298f911c",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "SQLite idle offline reducer source",
+      "execution_qualification": "Final reducer owner-confirmed executed once; first-source is historicalfailed source, not finalsuccess",
+      "archive_relative_path": "capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-final-stable-source-archive-list.json",
+      "bytes": 15207,
+      "sha256": "2fa0c27be345ce284275e062c56cd3c2fcdab0587e0337b71e359f18acc4e40a",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "final pure owner source-only index",
+      "execution_qualification": "Lists original baseline/rejected A source identities; no URL/state/workload permission",
+      "archive_relative_path": "capacity/c9-final-stable-source-archive-list.json",
+      "candidate_relative_path": "prototype/validation/c9/capacity/c9-final-stable-source-archive-list.json"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-frozen-input-plan-v2.json",
+      "bytes": 8518,
+      "sha256": "74a6d6308c6c8a0432a3ac74b165642b2593a3164bff7f2772feb6c0f9f07876",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "actual v2 pure input/provenance plan",
+      "execution_qualification": "Original frozen parameter/proposal bytes; no workload authority or regeneration",
+      "archive_relative_path": "capacity/c9-frozen-input-plan-v2.json",
+      "candidate_relative_path": "prototype/validation/c9/capacity/c9-frozen-input-plan-v2.json"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-frozen-input-plan.json",
+      "bytes": 8062,
+      "sha256": "7620892383f20029fc08b5f33c805137d0c37c6bed2f5372949995969173ea6c",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v1 NEVER_EXECUTED_PROPOSAL pure input plan",
+      "execution_qualification": "Original frozen parameter/proposal bytes; no workload authority or regeneration",
+      "archive_relative_path": "capacity/c9-frozen-input-plan.json",
+      "candidate_relative_path": "prototype/validation/c9/capacity/c9-frozen-input-plan.json"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-stable-source-archive-list.json",
+      "bytes": 7363,
+      "sha256": "5d55c0e5615edd6941efd674b4439d13a7bbf2385feef1cbcd1b3e233e0b85cb",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "original owner stable-source reference",
+      "execution_qualification": "Original frozen parameter/proposal bytes; no workload authority or regeneration",
+      "archive_relative_path": "capacity/c9-stable-source-archive-list.json",
+      "candidate_relative_path": "prototype/validation/c9/capacity/c9-stable-source-archive-list.json"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-v2-provision-plan-amendment.json",
+      "bytes": 729,
+      "sha256": "23d77c13ccaccd9147cd0ced79ecaaee7177460c383b2a3972a15594b467b64b",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "pre-load input amendment explanation",
+      "execution_qualification": "Original frozen parameter/proposal bytes; no workload authority or regeneration",
+      "archive_relative_path": "capacity/c9-v2-provision-plan-amendment.json",
+      "candidate_relative_path": "prototype/validation/c9/capacity/c9-v2-provision-plan-amendment.json"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9_input_plan.py",
+      "bytes": 2071,
+      "sha256": "f32327bfe45caf8ba2aff8fe93bc232e40741d3622ded2283e3dec24d06f2626",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v1 NEVER_EXECUTED_PROPOSAL input source",
+      "execution_qualification": "Original frozen parameter/proposal bytes; no workload authority or regeneration",
+      "archive_relative_path": "capacity/c9_input_plan.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/c9_input_plan.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/compare_c9_trial.py",
+      "bytes": 6434,
+      "sha256": "e2882e01076e80cde3902e5e22c37a258bb5ce474201ab630b693589cc233adc",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "final offline baseline/rejected-trial comparison reducer",
+      "execution_qualification": "Owner-confirmed offline reducer source; not live runtime and not final-retained performance measurement",
+      "archive_relative_path": "capacity/compare_c9_trial.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/compare_c9_trial.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c3_mock.py",
+      "bytes": 13638,
+      "sha256": "dc3e9b0cf76f0f12c467dfe0169b60f6af0ce553ac67c30cd9dcbd783767e93e",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/c3_mock.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/c3_mock.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c8-to-c9-driver.patch",
+      "bytes": 42172,
+      "sha256": "ac2abc0577e4309d586eb8d90c2036223ed732596f59d8e8406b2423706e56a0",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v2 harness/static check/helper source",
+      "execution_qualification": "Pure-check/helper source only; no new execution by audit",
+      "archive_relative_path": "capacity/harness-v2/c8-to-c9-driver.patch",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/c8-to-c9-driver.patch"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c9_input_plan.py",
+      "bytes": 2072,
+      "sha256": "ed2891439f461ecc740adc770cbc4ca0df334b7dcd8c2c8187d78da7a63efc82",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/c9_input_plan.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/c9_input_plan.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/db_os_observer.py",
+      "bytes": 4187,
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/db_os_observer.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/db_os_observer.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/db_statement_observer.py",
+      "bytes": 5400,
+      "sha256": "d4bb8f0eb0527b4fec24e09d3f9bb7cfe85f173449b3fb31d2a4da248753ae72",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v2 harness/static check/helper source",
+      "execution_qualification": "Pure-check/helper source only; no new execution by audit",
+      "archive_relative_path": "capacity/harness-v2/db_statement_observer.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/db_statement_observer.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/host_observer.py",
+      "bytes": 1335,
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/host_observer.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/host_observer.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_fixture.rs",
+      "bytes": 3810,
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/observer_fixture.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/observer_fixture.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_library.rs",
+      "bytes": 471,
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/observer_library.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/observer_library.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/prepared_completion_observer.py",
+      "bytes": 3565,
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/prepared_completion_observer.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/prepared_completion_observer.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/reduce_c9_cycles.py",
+      "bytes": 3191,
+      "sha256": "a8790fc353b547fab445908dffab5820b14d3a0e6581101beaaa435cdc2ac557",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/reduce_c9_cycles.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/reduce_c9_cycles.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/reduce_commits.py",
+      "bytes": 6534,
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/reduce_commits.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/reduce_commits.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/run_c9_mysql_cycles.py",
+      "bytes": 45791,
+      "sha256": "9f9dd7c68d50b60b589a58362e650a6df8593c44d826435db58345e2defd6ded",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/run_c9_mysql_cycles.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/run_c9_mysql_cycles.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/source_provenance.py",
+      "bytes": 2101,
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/source_provenance.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/source_provenance.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/static_c9_harness_checks.py",
+      "bytes": 4462,
+      "sha256": "cb14d8698f54da6ebfbd201f2fff7c76336277f286748e363c39fe151a997944",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v2 harness/static check/helper source",
+      "execution_qualification": "Pure-check/helper source only; no new execution by audit",
+      "archive_relative_path": "capacity/harness-v2/static_c9_harness_checks.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/static_c9_harness_checks.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/static_sampler_clock_checks.py",
+      "bytes": 2296,
+      "sha256": "19d51b282c4b47d58811d5139454e875ab05a72e235e8f2215cc8e61c7d187f6",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v2 harness/static check/helper source",
+      "execution_qualification": "Pure-check/helper source only; no new execution by audit",
+      "archive_relative_path": "capacity/harness-v2/static_sampler_clock_checks.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/static_sampler_clock_checks.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/summarize_profile_window.py",
+      "bytes": 5440,
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/harness-v2/summarize_profile_window.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/summarize_profile_window.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/summarize_resources_final.py",
+      "bytes": 5813,
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v2 harness/static check/helper source",
+      "execution_qualification": "Pure-check/helper source only; no new execution by audit",
+      "archive_relative_path": "capacity/harness-v2/summarize_resources_final.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness-v2/summarize_resources_final.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness/run_c9_mysql_cycles.py",
+      "bytes": 44481,
+      "sha256": "7d792c9817b64e5d71b4979b40261dc6fe9bec2e30db5e5682617560125b6c24",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v1 NEVER_EXECUTED_PROPOSAL harness",
+      "execution_qualification": "Draft never executed; distinct from v2 input",
+      "archive_relative_path": "capacity/harness/run_c9_mysql_cycles.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/harness/run_c9_mysql_cycles.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/pre-runtime-revisions/run_c9_mysql_cycles.pre-sampler-fix.py",
+      "bytes": 45821,
+      "sha256": "601966bebfaeaa2bfe99b529e79ea1e1470e2d717a6af67ac10d53d2395b1436",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "preserved pre-runtime sampler defect source",
+      "execution_qualification": "Historical negative-control source; not product/runtime failure",
+      "archive_relative_path": "capacity/pre-runtime-revisions/run_c9_mysql_cycles.pre-sampler-fix.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/pre-runtime-revisions/run_c9_mysql_cycles.pre-sampler-fix.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/observer.patch",
+      "bytes": 7724,
+      "sha256": "4f4da321e52635634aa0502c5bdeefcd68bb9e3a3ef4fb31c6c6d764710590b4",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "actual candidate1b9836a observer instrumentation patch",
+      "execution_qualification": "Prepared after-source; no runtime acceptance inferred",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/observer.patch",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/observer.patch"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/Cargo.toml",
+      "bytes": 2059,
+      "sha256": "9f8f6eb9184bafc072571c7063871447ca499db4e1c01aeb3c814227a25ba45f",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/Cargo.toml",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/Cargo.toml"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/free_architecture_fixture.rs",
+      "bytes": 19883,
+      "sha256": "ad79276e38d4af3ee92eedaa7b3487c4f34cd49e6b23b1e695137a194355ee85",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/src/bin/free_architecture_fixture.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/free_architecture_fixture.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/support/commit_observer_fixture.rs",
+      "bytes": 3810,
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/src/bin/support/commit_observer_fixture.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/support/commit_observer_fixture.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/commit_observer.rs",
+      "bytes": 471,
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/src/commit_observer.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/src/commit_observer.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/lib.rs",
+      "bytes": 1462,
+      "sha256": "45d204c635a9ace166446fd6227048c28ab74906478b03ecf58078d56f6407de",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/src/lib.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/src/lib.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/mysql_store.rs",
+      "bytes": 63966,
+      "sha256": "9fd71ce3a10b9f4bc5618591f8dfbf5b413583c0024325a7cc9bcef3b747696d",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/src/mysql_store.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/src/mysql_store.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/pg_store.rs",
+      "bytes": 53331,
+      "sha256": "d28fbf0c574257de8a5650b9c98eae84fccb07b39aa662231188a828e3fb974b",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/src/pg_store.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/src/pg_store.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/store.rs",
+      "bytes": 112304,
+      "sha256": "06e2b5621001c38725b7df153289b5914b9d0e7ad4e73e6a4df968e1da1bcdb5",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact candidate1b9836a observer overlay source",
+      "execution_qualification": "Instrumentation source only, not production override or new runtime evidence",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/overlay/prototype/src/store.rs",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/overlay/prototype/src/store.rs"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/preparation.json",
+      "bytes": 2444,
+      "sha256": "4e5d168b99d0af19f2ebc60531f9dafa94c2f055e5ee06e2e836dae30b70a0ad",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "exact Git-based overlay source preparation provenance",
+      "execution_qualification": "Original SOURCE_ONLY_NOT_BUILT_NOT_RUN status is point-in-time, not latest build outcome",
+      "archive_relative_path": "capacity/prepared-after-1b9836a/preparation.json",
+      "candidate_relative_path": "prototype/validation/c9/capacity/prepared-after-1b9836a/preparation.json"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/run_sqlite_cold_idle.py",
+      "bytes": 6465,
+      "sha256": "ea63d2d673c295e403faaba00dea2754412479c879a66d34ee823cd255f0f29f",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/run_sqlite_cold_idle.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/run_sqlite_cold_idle.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/static_c9_plan_checks.py",
+      "bytes": 2186,
+      "sha256": "48db3d809a91acb85900858fbcab4033545eb2d1c427a7a7680465682ba3f57b",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/static_c9_plan_checks.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/static_c9_plan_checks.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_baseline.py",
+      "bytes": 8282,
+      "sha256": "e88bf1b290a66eb015047d39298a7f608027bf52ac594c96e47eb0bb064800ea",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/summarize_c9_baseline.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/summarize_c9_baseline.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_candidate_profile.py",
+      "bytes": 1223,
+      "sha256": "89013d5e38bfec8fbc3af9fd3f5afdbfaa431cad10097e061152158bf7e07dce",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "offline profile reducer explicitly distinguishing baseline4SQL and rejected A3SQL",
+      "execution_qualification": "Owner-confirmed offline reducer source; not live runtime and not final-retained performance measurement",
+      "archive_relative_path": "capacity/summarize_c9_candidate_profile.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/summarize_c9_candidate_profile.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_metadata.py",
+      "bytes": 2284,
+      "sha256": "f4ebf1b4489dd3f2cacfdf6f4958fef8655f6c524b69199ac295ef955103351e",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/summarize_c9_metadata.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/summarize_c9_metadata.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_profile.py",
+      "bytes": 2359,
+      "sha256": "bb29a58c2212f5ded12f7af8eea18bd13dc75182fa144cafc8d0c2e14d331a0f",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "stable owner-listed measurement/helper source",
+      "execution_qualification": "Owner-confirmed actual baseline source set; execution of every individual helper not inferred",
+      "archive_relative_path": "capacity/summarize_c9_profile.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/summarize_c9_profile.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_stage_gauges.py",
+      "bytes": 4940,
+      "sha256": "0628c2c4a1399caaa805d3d7f1813277d31f060a28547b0cf0f00a3dc191d945",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "offline stage gauge/activity reducer source",
+      "execution_qualification": "Owner-confirmed new offline-only reducer used for baseline stage gauges; no runtime or input regeneration by audit",
+      "archive_relative_path": "capacity/summarize_c9_stage_gauges.py",
+      "candidate_relative_path": "prototype/validation/c9/capacity/summarize_c9_stage_gauges.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/v1-never-executed-status.json",
+      "bytes": 306,
+      "sha256": "1ab7d598c2faa5848dc439a9d2cd7f1c84c6a7b3168e3e940129330ba7cbb4d5",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "v1 proposal-only explanation",
+      "execution_qualification": "Original frozen parameter/proposal bytes; no workload authority or regeneration",
+      "archive_relative_path": "capacity/v1-never-executed-status.json",
+      "candidate_relative_path": "prototype/validation/c9/capacity/v1-never-executed-status.json"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/env/after_contract_preflight.py",
+      "bytes": 5286,
+      "sha256": "31d1af962e710148ef07468a2d6414d74586f32013e39910b421df5bb3f486b4",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "read-only final contract/after identity and budget preflight source",
+      "execution_qualification": "Environment owner confirmed actual use/preparation; this audit only reads/parses/hashes source and does not execute helper. Exact observation invocation remains bound to original owner/capacity receipts.",
+      "archive_relative_path": "env/after_contract_preflight.py",
+      "candidate_relative_path": "prototype/validation/c9/env/after_contract_preflight.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/env/budget_snapshot.py",
+      "bytes": 4221,
+      "sha256": "db8222953d9442b7307e95a78268ce1b48cd97dba484363abbf03bf00faa1dec",
+      "original_mode": "0o600",
+      "encoding": "UTF-8",
+      "role": "OS-first disk/headroom guard source",
+      "execution_qualification": "Environment owner confirmed actual use/preparation; this audit only reads/parses/hashes source and does not execute helper. Exact observation invocation remains bound to original owner/capacity receipts.",
+      "archive_relative_path": "env/budget_snapshot.py",
+      "candidate_relative_path": "prototype/validation/c9/env/budget_snapshot.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/env/isolated_db.py",
+      "bytes": 13514,
+      "sha256": "ef8a9046041db6fd0d3a69942e32ee6c51490a1c6bdda68b686292bac7521f12",
+      "original_mode": "0o600",
+      "encoding": "UTF-8",
+      "role": "minimal pure owned-environment identity/lease/SQL guard helper source; dependency of3selected observers",
+      "execution_qualification": "Environment owner confirmed actual use/preparation; this audit only reads/parses/hashes source and does not execute helper. Exact observation invocation remains bound to original owner/capacity receipts.",
+      "archive_relative_path": "env/isolated_db.py",
+      "candidate_relative_path": "prototype/validation/c9/env/isolated_db.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/env/read_metadata_snapshot.py",
+      "bytes": 5863,
+      "sha256": "3359369d524d8a542a82d603af4c9942f532b908a229012bae821bb9827a7279",
+      "original_mode": "0o600",
+      "encoding": "UTF-8",
+      "role": "bounded SQL resource metadata and RSS boundary observer source",
+      "execution_qualification": "Environment owner confirmed actual use/preparation; this audit only reads/parses/hashes source and does not execute helper. Exact observation invocation remains bound to original owner/capacity receipts.",
+      "archive_relative_path": "env/read_metadata_snapshot.py",
+      "candidate_relative_path": "prototype/validation/c9/env/read_metadata_snapshot.py"
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/env/provision_final_rollback_contract.py",
+      "archive_relative_path": "env/provision_final_rollback_contract.py",
+      "candidate_relative_path": "prototype/validation/c9/env/provision_final_rollback_contract.py",
+      "bytes": 6666,
+      "sha256": "6946c06e4b6f8c7dd58b221bb30394e757112ce2d1e83ff5dee02e2ee6018ef9",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "actual final retained-runtime Private contract fresh allocation/empty factory guard source",
+      "execution_qualification": "Environment owner confirmed actual final use; source copying only. Requires existing explicit owner authority, exact owned identifiers and resource checks; no independent authorization or new invocation.",
+      "dependency_check": "Local helper only isolated_db.py, already archived; AST parsed without import/execution; focused literal checks have no flags."
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/env/final_restore_paused.py",
+      "archive_relative_path": "env/final_restore_paused.py",
+      "candidate_relative_path": "prototype/validation/c9/env/final_restore_paused.py",
+      "bytes": 6041,
+      "sha256": "f11fffcb53e0e64da563ec71d88b45390c53cd97ba2ab6a0e38cd80a02e702ea",
+      "original_mode": "0o644",
+      "encoding": "UTF-8",
+      "role": "actual final read-only quiet verification and exact owned-engine paused restoration source",
+      "execution_qualification": "Environment owner confirmed actual final use; source copying only. Requires existing explicit owner authority, exact owned identifiers and resource checks; no independent authorization or new invocation.",
+      "dependency_check": "Local helper only isolated_db.py, already archived; AST parsed without import/execution; focused literal checks have no flags."
+    }
+  ],
+  "owner_stable22_index_sha256": "5d55c0e5615edd6941efd674b4439d13a7bbf2385feef1cbcd1b3e233e0b85cb",
+  "owner_final41_index_sha256": "2fa0c27be345ce284275e062c56cd3c2fcdab0587e0337b71e359f18acc4e40a",
+  "owner_final41_byte_verification": [
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/build_transient_observer.py",
+      "sha256": "3e4b45fa2927bd1bfbecaac1c35c3675e8943f85149a388faa3ca1d8110abfd6",
+      "bytes": 10892,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/prepare_observer.py",
+      "sha256": "b9f5c1c1ce3e8e8d5e90f105c5d1ce8a6eef541caab5ba018bb994aff235eabb",
+      "bytes": 5153,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c3_mock.py",
+      "sha256": "dc3e9b0cf76f0f12c467dfe0169b60f6af0ce553ac67c30cd9dcbd783767e93e",
+      "bytes": 13638,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c9_input_plan.py",
+      "sha256": "ed2891439f461ecc740adc770cbc4ca0df334b7dcd8c2c8187d78da7a63efc82",
+      "bytes": 2072,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "bytes": 1335,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "bytes": 3565,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/reduce_c9_cycles.py",
+      "sha256": "a8790fc353b547fab445908dffab5820b14d3a0e6581101beaaa435cdc2ac557",
+      "bytes": 3191,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/run_c9_mysql_cycles.py",
+      "sha256": "9f9dd7c68d50b60b589a58362e650a6df8593c44d826435db58345e2defd6ded",
+      "bytes": 45791,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/run_sqlite_cold_idle.py",
+      "sha256": "ea63d2d673c295e403faaba00dea2754412479c879a66d34ee823cd255f0f29f",
+      "bytes": 6465,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/static_c9_plan_checks.py",
+      "sha256": "48db3d809a91acb85900858fbcab4033545eb2d1c427a7a7680465682ba3f57b",
+      "bytes": 2186,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_baseline.py",
+      "sha256": "e88bf1b290a66eb015047d39298a7f608027bf52ac594c96e47eb0bb064800ea",
+      "bytes": 8282,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_metadata.py",
+      "sha256": "f4ebf1b4489dd3f2cacfdf6f4958fef8655f6c524b69199ac295ef955103351e",
+      "bytes": 2284,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_profile.py",
+      "sha256": "bb29a58c2212f5ded12f7af8eea18bd13dc75182fa144cafc8d0c2e14d331a0f",
+      "bytes": 2359,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/executed-run_sqlite_cold_idle.py",
+      "sha256": "ea63d2d673c295e403faaba00dea2754412479c879a66d34ee823cd255f0f29f",
+      "bytes": 6465,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.first-source.py",
+      "sha256": "4531f1a572593b44d88433b196e10f4651b48173ace02d40ea4a98a5dc3edfc6",
+      "bytes": 12436,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.py",
+      "sha256": "be82c3e7e71d6fffd2a4c6b402c013a89601d0520ea40dbccc064f34298f911c",
+      "bytes": 12460,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-frozen-input-plan-v2.json",
+      "sha256": "74a6d6308c6c8a0432a3ac74b165642b2593a3164bff7f2772feb6c0f9f07876",
+      "bytes": 8518,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-frozen-input-plan.json",
+      "sha256": "7620892383f20029fc08b5f33c805137d0c37c6bed2f5372949995969173ea6c",
+      "bytes": 8062,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-v2-provision-plan-amendment.json",
+      "sha256": "23d77c13ccaccd9147cd0ced79ecaaee7177460c383b2a3972a15594b467b64b",
+      "bytes": 729,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/compare_c9_trial.py",
+      "sha256": "e2882e01076e80cde3902e5e22c37a258bb5ce474201ab630b693589cc233adc",
+      "bytes": 6434,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/observer.patch",
+      "sha256": "4f4da321e52635634aa0502c5bdeefcd68bb9e3a3ef4fb31c6c6d764710590b4",
+      "bytes": 7724,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/Cargo.toml",
+      "sha256": "9f8f6eb9184bafc072571c7063871447ca499db4e1c01aeb3c814227a25ba45f",
+      "bytes": 2059,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/free_architecture_fixture.rs",
+      "sha256": "ad79276e38d4af3ee92eedaa7b3487c4f34cd49e6b23b1e695137a194355ee85",
+      "bytes": 19883,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/support/commit_observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/commit_observer.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/lib.rs",
+      "sha256": "45d204c635a9ace166446fd6227048c28ab74906478b03ecf58078d56f6407de",
+      "bytes": 1462,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/mysql_store.rs",
+      "sha256": "9fd71ce3a10b9f4bc5618591f8dfbf5b413583c0024325a7cc9bcef3b747696d",
+      "bytes": 63966,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/pg_store.rs",
+      "sha256": "d28fbf0c574257de8a5650b9c98eae84fccb07b39aa662231188a828e3fb974b",
+      "bytes": 53331,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/store.rs",
+      "sha256": "06e2b5621001c38725b7df153289b5914b9d0e7ad4e73e6a4df968e1da1bcdb5",
+      "bytes": 112304,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_candidate_profile.py",
+      "sha256": "89013d5e38bfec8fbc3af9fd3f5afdbfaa431cad10097e061152158bf7e07dce",
+      "bytes": 1223,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_stage_gauges.py",
+      "sha256": "0628c2c4a1399caaa805d3d7f1813277d31f060a28547b0cf0f00a3dc191d945",
+      "bytes": 4940,
+      "matches_owner_list": true
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/v1-never-executed-status.json",
+      "sha256": "1ab7d598c2faa5848dc439a9d2cd7f1c84c6a7b3168e3e940129330ba7cbb4d5",
+      "bytes": 306,
+      "matches_owner_list": true
+    }
+  ],
+  "executed_snapshot_aliases": [
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-prepared_completion_observer.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "bytes": 3565,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-host_observer.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "bytes": 1335,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-c3_mock.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c3_mock.py",
+      "sha256": "dc3e9b0cf76f0f12c467dfe0169b60f6af0ce553ac67c30cd9dcbd783767e93e",
+      "bytes": 13638,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-source_provenance.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-observer_fixture.rs",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-observer_library.rs",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-reduce_commits.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-db_os_observer.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-c9_input_plan.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c9_input_plan.py",
+      "sha256": "ed2891439f461ecc740adc770cbc4ca0df334b7dcd8c2c8187d78da7a63efc82",
+      "bytes": 2072,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/executed-run_c9_mysql_cycles.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/run_c9_mysql_cycles.py",
+      "sha256": "9f9dd7c68d50b60b589a58362e650a6df8593c44d826435db58345e2defd6ded",
+      "bytes": 45791,
+      "same_bytes": true
+    },
+    {
+      "original_executed_snapshot": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/executed-run_sqlite_cold_idle.py",
+      "canonical_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/run_sqlite_cold_idle.py",
+      "sha256": "ea63d2d673c295e403faaba00dea2754412479c879a66d34ee823cd255f0f29f",
+      "bytes": 6465,
+      "same_bytes": true
+    }
+  ],
+  "excluded_evidence_hash_references_only": [
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/pre-runtime-revisions/sampler-starvation-first-failure.json",
+      "sha256": "360bc5ab05602075ceca93c314346ae7351b0e887a3bcb2cef35b73b7da12547",
+      "bytes": 710,
+      "excluded_reason": "output first-failure diagnostic, not source/input",
+      "archive_copy_proposed": false
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/reduction-first-error.json",
+      "sha256": "a159e23649c06f01a5b10222f4ea6c73305f1afdad3524ae89fb6eedd8494694",
+      "bytes": 367,
+      "excluded_reason": "output encoding diagnostic, not source/input",
+      "archive_copy_proposed": false
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-mysql-v2/plan.json",
+      "sha256": "3c6b61662844a407bede5d13907fa28f1661bbd19c04e7c954faa8e32a28107c",
+      "bytes": 5890,
+      "excluded_reason": "case-bound execution/storage state; exclude from source archive",
+      "archive_copy_proposed": false
+    },
+    {
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-handoff.json",
+      "sha256": "7deb1c57e89ec6265acb9293749a5e2e9453525dc5ab4b3a95add63de8583771",
+      "bytes": 4168,
+      "excluded_reason": "result/handoff output, not executable input",
+      "archive_copy_proposed": false
+    }
+  ],
+  "runtime_disposition": {
+    "rejected_trial_commit": "1b9836a3a1c98d0c6a8e7a7559ea9676c0027c9a",
+    "revert_retained_commit": "07634d20357f506f167ca4026ce0cd9337dfaa9e",
+    "retained_normal_sha256": "b771b79a93b24025a037ca61c7056ea5a743ba52627a417dbee7f90d9d9efe44",
+    "byte_identical_to_be3": true,
+    "trial_observer_identity_prefix": "07da",
+    "trial_status": "REJECTED_TRIAL",
+    "performance_qualification": "Baseline runtime retained; A profile not final runtime performance."
+  },
+  "static_copy_checks": {
+    "local_literal_and_json_key_flags": [],
+    "python_AST_parse_only": true,
+    "original_trailing_whitespace": [
+      {
+        "relative_path": "capacity/after-observer-preparation/build_transient_observer.py",
+        "original_trailing_whitespace_lines": [
+          47
+        ]
+      },
+      {
+        "relative_path": "capacity/harness-v2/c8-to-c9-driver.patch",
+        "original_trailing_whitespace_lines": [
+          7,
+          22
+        ]
+      },
+      {
+        "relative_path": "capacity/prepared-after-1b9836a/observer.patch",
+        "original_trailing_whitespace_lines": [
+          10
+        ]
+      },
+      {
+        "relative_path": "env/isolated_db.py",
+        "original_trailing_whitespace_lines": [
+          94
+        ]
+      }
+    ]
+  },
+  "scope": "Exact source/pureinput/README only. No credentials/URLfile/state/lease/rawlogs/DB/bin or actual case execution configuration. Experimental overlays are outside compilation; original sources unchanged.",
+  "final_environment_source_addition": {
+    "count": 2,
+    "original_source_only": true,
+    "prior_source_map_sha256": "a4c46a1e4dec7b1dff724b23bf8625ea415a2d5900655fe164df07978e9e1eb4",
+    "all_original56_source_files_unchanged": true,
+    "execution_authority": "Requires existing explicit authorized environment owner only. Archive source does not allocate/restore/pause/query anything by being copied."
+  }
+}

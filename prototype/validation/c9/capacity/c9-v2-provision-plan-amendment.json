@@ -1,0 +1,14 @@
+{
+  "status": "SOURCE_PLAN_AMENDMENT_BEFORE_MYSQL_LOAD",
+  "v1_plan_status": "NEVER_EXECUTED_PROPOSAL",
+  "v1_provision_plan_targets": 23904,
+  "v2_frozen_plan": "c9-frozen-input-plan-v2.json",
+  "v2_plan_sha256": "74a6d6308c6c8a0432a3ac74b165642b2593a3164bff7f2772feb6c0f9f07876",
+  "v2_formal_targets": 36704,
+  "v2_messages_per_small_cycle": 1145,
+  "v2_targets_per_small_cycle": 18320,
+  "new_case_allocation_unchanged": true,
+  "provision_time_receipt_original_not_rewritten": true,
+  "budget_growth_bytes": 3221225472,
+  "environment_owner_qualification": "3GiBconservativeestimate reasonablefromprior40960targetlane,butnotguarantee; freshcurrentbefore/postguardrequired; noSQL/environmentprobeperformedforthisamendment"
+}

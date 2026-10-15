@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Offline C9 exact callback/stage rates and separately scoped resources."""
+import collections,hashlib,json,math,pathlib,statistics,struct,sys
+RECORD=struct.Struct('<QQQ32s32sB7x')
+def rows(p):
+ with p.open() as f:
+  for l in f:
+   if l.startswith('{'):yield json.loads(l)
+def quantile(v):
+ v=sorted(v)
+ return {'n':len(v),**{f'p{q}':v[max(0,math.ceil(len(v)*q/100)-1)] if v else None for q in (50,95,99)}}
+def summarize(run):
+ offers=list(rows(run/'offers.jsonl'));expected=list(rows(run/'expected-targets.jsonl'));phases=list(rows(run/'phases.jsonl'));meta=json.loads((run/'telemetry.json').read_text());scale=meta['mach_numer']/meta['mach_denom']/1e6
+ by_id={(r['delivery_id'],r['device_key']):r for r in expected};commits=[]
+ with (run/'commits.bin').open('rb') as f:
+  while b:=f.read(RECORD.size):
+   tick,attempt,seq,d,k,state=RECORD.unpack(b);r=by_id.get((d.decode(),k.decode()))
+   if r:commits.append({**r,'tick':tick,'state':state,'latency_ms':(tick-r['offer_mach_ticks'])*scale})
+ requests=[r for r in rows(run/'requests.jsonl') if r['path']=='/message' and r['label']!='c5:capacity:-1'];http={r['label']:r for r in requests};producers=list(rows(run/'producer.jsonl'));snapshots=list(rows(run/'snapshots.jsonl'));rss=list(rows(run/'rss.jsonl'));harness=list(rows(run/'harness.jsonl'));own=[x for x in harness if x['kind']=='harness_own_process'];db=list(rows(run/'db-process.jsonl'));stats=[x for x in rows(run/'gateway.log') if x.get('kind')=='stats']
+ offsets=[r['unix_ns']/1e6-r['elapsed']*1000 for r in db if 'unix_ns'in r];offset=statistics.median(offsets)
+ for s in stats:s['_elapsed']=(s['unix_ms']-offset)/1000
+ cycle={};rates=[]
+ for label in ('cycle0','cycle1','large'):
+  o=[x for x in offers if x['cycle']==label];c=[x for x in commits if x['cycle']==label];start=min(x['offer_mach_ticks'] for x in o);cutoff=o[0]['absolute_deadline_mach_ticks'];end=max(x['tick'] for x in c);ids={x['op_id'] for x in o}
+  cycle[label]={'offered_messages':len(o),'offered_targets':len(o)*16,'callback_targets':len(c),'in_window_accepted':sum(x['state']==1 and x['tick']<=cutoff for x in c),'late':sum(x['tick']>cutoff for x in c),'offer_to_target_commit_ms':quantile([x['latency_ms'] for x in c]),'last_commit_from_first_offer_seconds':(end-start)*scale/1000,'cutoff_slack_seconds':(cutoff-end)*scale/1000,'last_HTTP_response_from_first_offer_seconds':(max(http[x]['http_end_mach_ticks'] for x in ids)-start)*scale/1000,'offer_lag_ms':quantile([x['offer_lag_ms'] for x in o]),'HTTP_client_method_thread_CPU_seconds_lowerbound':sum(http[x].get('http_worker_thread_CPU_ns',0) for x in ids)/1e9,'stages':{}}
+  for stage in dict.fromkeys(x['stage'] for x in o):
+   so=[x for x in o if x['stage']==stage];si={x['op_id'] for x in so};sc=[x for x in c if x['op_id'] in si]
+   cycle[label]['stages'][stage]={'offered_messages':len(so),'targets':len(sc),'offer_to_COMMIT_ms':quantile([x['latency_ms'] for x in sc]),'drain_from_last_offer_seconds':(max(x['tick'] for x in sc)-max(x['offer_mach_ticks'] for x in so))*scale/1000,'offer_lag_ms':quantile([x['offer_lag_ms'] for x in so])}
+  stop=math.ceil((end-start)*scale/1000)+1;ob=collections.Counter(int((x['offer_mach_ticks']-start)*scale/1000) for x in o);ab=collections.Counter(int((http[x]['http_end_mach_ticks']-start)*scale/1000) for x in ids);cb=collections.Counter(int((x['tick']-start)*scale/1000) for x in c if x['tick']<=cutoff);backlog=0
+  for second in range(stop):
+   backlog+=ob[second]*16-cb[second]
+   rates.append({'cycle':label,'second_from_first_offer':second,'offered_messages':ob[second],'HTTP_responses_accepted':ab[second],'target_COMMIT':cb[second],'offered_minus_COMMIT_backlog_end':backlog,'rolling5_offered_msg_s':sum(ob[t] for t in range(max(0,second-4),second+1))/min(5,second+1),'rolling5_HTTP_accepted_msg_s':sum(ab[t] for t in range(max(0,second-4),second+1))/min(5,second+1),'rolling5_target_COMMIT_s':sum(cb[t] for t in range(max(0,second-4),second+1))/min(5,second+1)})
+ resources={}
+ for i,a in enumerate(phases):
+  if not a['label'].endswith('idle-start'):continue
+  b=next(x for x in phases[i+1:] if x['label']==a['label'].replace('start','end'));lo,hi=a['elapsed'],b['elapsed'];rr=[x for x in rss if lo<=x['elapsed']<=hi];hh=[x for x in own if lo<=x['elapsed']<=hi];dd=[x for x in db if lo<=x['elapsed']<=hi and x.get('observation_status')=='AVAILABLE'];ss=[x for x in stats if lo<=x['_elapsed']<=hi];am=a['kernel']['metrics'];bm=b['kernel']['metrics'];duration=hi-lo;cpu=(bm['userCPU_ns']+bm['systemCPU_ns']-am['userCPU_ns']-am['systemCPU_ns'])/1e9
+  resources[a['label']]={'duration_seconds':duration,'Gateway_CPU_seconds':cpu,'Gateway_onecore_CPU_percent':cpu/duration*100,'Gateway_RSS_first_last_peak_bytes':[am['RSSbytes'],bm['RSSbytes'],max([x['proc_rss_bytes'] for x in rr]+[am['RSSbytes'],bm['RSSbytes']])],'Gateway_interrupt_wakes_delta':bm['interrupt_wakes']-am['interrupt_wakes'],'Gateway_pkgIdle_wakes_delta':bm['pkgIdle_wakes']-am['pkgIdle_wakes'],'allocator_first':ss[0].get('allocator') if ss else None,'allocator_last':ss[-1].get('allocator') if ss else None,'tasks_last':ss[-1].get('tasks') if ss else None,'provider_client_owners_last':ss[-1]['provider_resources']['provider_client_owners'] if ss else None,'network_inflight_last':ss[-1]['network_inflight'] if ss else None,'harness_CPU_seconds_observed':sum(hh[-1][k]-hh[0][k] for k in ('userCPU_seconds','systemCPU_seconds')) if len(hh)>1 else None,'harness_RSS_peak_bytes':max(x['rss_bytes'] for x in hh) if hh else None,'DB_main_RSS_first_last_peak_bytes':[dd[0]['native_pid1']['rss_bytes'],dd[-1]['native_pid1']['rss_bytes'],max(x['native_pid1']['rss_bytes'] for x in dd)] if dd else None,'DB_process_coarse_CPU_seconds_delta':sum(x['cpu_seconds_coarse'] for x in dd[-1]['engine_processes'])-sum(x['cpu_seconds_coarse'] for x in dd[0]['engine_processes']) if dd else None}
+ fullcpu=(phases[-1]['kernel']['metrics']['userCPU_ns']+phases[-1]['kernel']['metrics']['systemCPU_ns']-phases[0]['kernel']['metrics']['userCPU_ns']-phases[0]['kernel']['metrics']['systemCPU_ns'])/1e9
+ return {'scope':'offline original immutable receipts; exact Mach callback identity/stage mapping; resources are separate scopes, not additive RSS','cycles':cycle,'idle_resources':resources,'producer':{'peak_queued_offers_excluding_inflight':max(x['queued'] for x in producers),'peak_inflight':max(x['inflight'] for x in producers),'oldest_queued_offer_age_ms_peak':max(x['oldest_queued_offer_age_ms'] or 0 for x in producers)},'resource_totals':{'Gateway_CPU_seconds_observed':fullcpu,'Gateway_RSS_peak_bytes':max(x['proc_rss_bytes'] for x in rss),'harness_CPU_seconds_observed':sum(own[-1][k]-own[0][k] for k in ('userCPU_seconds','systemCPU_seconds')),'harness_RSS_peak_bytes':max(x['rss_bytes'] for x in own),'HTTP_client_method_thread_CPU_seconds_lowerbound':sum(x.get('http_worker_thread_CPU_ns',0) for x in requests)/1e9,'docker_observer_calls':sum(x['kind']=='docker_observer_call' for x in harness),'docker_observer_wall_seconds_sum':sum(x.get('elapsed_seconds',0) for x in harness if x['kind']=='docker_observer_call'),'DB_main_RSS_peak_bytes':max(x['native_pid1']['rss_bytes'] for x in db if x.get('observation_status')=='AVAILABLE')},'limitations':['Idle STATS selection uses median captured DB observer wall-minus-elapsed offset, not exact Mach boundaries. Exact callbacks use only Mach.','Gateway/DB/harness RSS different scopes; malloc excludes other VM; no heap-object or long-term leak proof.','Harness OS CPU/RSS combines producer and Mock threads. HTTP thread CPU lowerbound is included in total; do not add. Observer child CPU unavailable.','Database process RSS is whole existing isolated server/cache, not one case/connection. Coarse TIME resolution one second.','Fixture 1Hz stdout is included. External root vmmap cold/postcycle0/postcycle1 idle diagnostics included and disclosed separately.','rolling5 finite30s16msg/s observation not production steady-state or SLA.']},rates
+if __name__=='__main__':
+ run=pathlib.Path(sys.argv[1]);out=run/'baseline-offline-summary.json';assert not out.exists();summary,rates=summarize(run);out.write_text(json.dumps(summary,indent=2)+'\n');p=run/'rates-1s-rolling5.jsonl';assert not p.exists();p.write_text(''.join(json.dumps(r)+'\n' for r in rates));print(out)
