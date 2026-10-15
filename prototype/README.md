@@ -1,6 +1,6 @@
 # C：普通消息合同候选
 
-独立单机普通消息 crate，已实现 SQLite、PostgreSQL、MySQL 原生存储，以及可选的普通 Private 数据面。Provider fixture 仅连接本地 Mock；Private 使用现有 wire profile 和真实候选账本。PG16.14 / MySQL8.4.11 使用全新隔离测试库，早期功能用tmpfs，最终MySQL相关功能重验及容量对照用专属磁盘卷；均不代表旧库迁移或断电验收。复用既有 Remote 凭据 owner/Token Service；真实 APNs 未验证。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。C6 Private 的合法 HTTP 大请求与 wire 帧上限冲突尚待行为决策，不能据小消息通过声称完整接入。当前交付入口为 [C6结果](docs/c6-results.md)、[Private合同](docs/c6-private.md)与[容量证据](docs/c6-capacity.md)；下文C3/C4/C5收据保留各自历史版本含义。
+独立单机普通消息 crate，已实现 SQLite、PostgreSQL、MySQL 原生存储，以及可选的普通 Private 数据面。Provider fixture 仅连接本地 Mock；Private 使用现有 wire profile 和真实候选账本。PG16.14 / MySQL8.4.11 使用全新隔离测试库，早期功能用tmpfs，最终MySQL相关功能重验及容量对照用专属磁盘卷；均不代表旧库迁移或断电验收。复用既有 Remote 凭据 owner/Token Service；真实 APNs 未验证。Event、Thing、Watch、WNS 不在本轮范围。带 thing_id 的输入明确拒绝。C6 Private 的合法大请求超帧仍未解决，用户未授权新增拒收；[保留合法输入范围的评估](docs/c6-private-size-options.md)仅是建议，不据小消息通过声称完整接入。当前交付入口为 [C6结果](docs/c6-results.md)、[Private合同](docs/c6-private.md)与[容量证据](docs/c6-capacity.md)；下文C3/C4/C5收据保留各自历史版本含义。
 
 ## 已实现的普通消息边界
 

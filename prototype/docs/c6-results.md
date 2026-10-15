@@ -1,6 +1,6 @@
 # C6：MySQL 容量与普通 Private 候选
 
-普通 Private 已实现三库账本、真实服务端入口及 Android 持久化恢复闭环；**尚不能认定全部合法普通输入已完整接入**。合法 32768 字节 HTTP 请求可封装成 33057 字节 Private 帧，超过既有客户端 32770 字节上限。新增原子拒收需要产品决定，本轮未擅自收紧输入或扩大客户端协议。MySQL 容量结论、完整分母与保留失败见 [容量报告](c6-capacity.md)，Private 协议映射和预算见 [Private 合同](c6-private.md)。本候选未合并、推送或部署。
+普通 Private 已实现三库账本、真实服务端入口及 Android 持久化恢复闭环；**尚不能认定全部合法普通输入已完整接入**。合法 32768 字节 HTTP 请求可封装成 33057 字节 Private 帧，超过既有客户端 32770 字节上限。用户随后明确未授权新增拒收，要求先评估保留合法范围的 Pull 与完整帧路线；[补充评估](c6-private-size-options.md)推荐首先实现授权的 exact Pull 和持久化后 stream ACK，当前仅完成评估，没有关闭交付缺口或扩大客户端协议。MySQL 容量结论、完整分母与保留失败见 [容量报告](c6-capacity.md)，Private 协议映射和预算见 [Private 合同](c6-private.md)。本候选未合并、推送或部署。
 
 原始证据根是本机 `gateway/build/quality-results/c6-private-capacity-20261015/`。报告引用原位置执行收据；源码搬迁副本不是新增执行证据。
 
@@ -87,7 +87,9 @@ JNI 测试构建只额外信任明确的 synthetic CA，PKIX/hostname/ALPN/leaf 
 
 ## 评审决策
 
-先决定 Private 超帧合同：是否允许仅对含 Private 收件人的超帧新发送原子拒收，并在 Provider→Private 时整笔拒绝不兼容历史正文、保留原身份/正文/Pull 能力；或者继续保留此接入缺口。当前没有采用新拒收，也没有截断内容。随后优先补纯网络丢ACK的真实客户端恢复与实际受支持传输组合专项，针对PG维护SQL只做有边界的计划诊断；不直接减频维护、拆事务或批量提交。未解决普通Private合同和恢复缺口前，不建议进入 Event/Thing/Watch/WNS。真实Provider/物理后台/旧库迁移和断电仍按用户要求留最终统一验收。
+用户后续明确不授权新增合法请求拒收，也不接受把大消息缺口算作完成。因此先完成[保留合法范围的补充评估](c6-private-size-options.md)，不再把拒收当默认下一步。推荐正向能力协商的 Private 小提示→授权 exact V2 Pull→生产 Store→原 stream ACK；完整 HTTP ACK outbox 另需扩展强能力，完整 DELIVER 则需按最坏序列化上界同步 Warp/客户端及字节预算。现 Private 客户端不具备透明 wakeup 分流，两路都不能自动解决未升级旧客户端；本次不决定退役范围，仍保持缺口为未完成。此补充仅源码评估，运行源码及既有收据不变。
+
+实际实现和评审兼容范围后，优先补合法大输入与已有正文恢复、纯网络丢ACK及实际受支持传输组合专项。针对PG维护SQL只做有边界的计划诊断；不直接减频维护、拆事务或批量提交。未解决普通Private合同和恢复缺口前，不建议进入 Event/Thing/Watch/WNS。真实Provider/物理后台/旧库迁移和断电仍按用户要求留最终统一验收。
 
 验证源码副本见`validation/c6/README.md`及逐文件manifest，原位置执行与搬迁位置NOT RUN严格区分。源包记录env专属role grant/alias/test-guard projection当时inline执行未保留独立源码的provenance gap，不制造“已执行”重建脚本。当前runtime仍9fc，normal/tests/observer SHA见前表；后续文档与验证源码归档提交不改变运行代码。
 

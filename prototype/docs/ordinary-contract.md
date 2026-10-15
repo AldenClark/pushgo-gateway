@@ -20,7 +20,7 @@
 | 保留与容量 | 35 天全部保留，ACK 不释放容量 | 按本轮用户明确选择保留完整 30 天身份/指纹/状态；Provider 终态释放未完成 manifest/Provider job 预算，ACK 释放保留正文和队列；running ACK 保留到 receipt。没有历史数量/字节硬配额，不提前淘汰身份。`provider_receipt_releases_pending_capacity_and_ack_releases_bytes_preserving_history`、`bounded_expiry_skips_compact_history_and_maintenance_keeps_unexpired_identity` |
 | 原子接纳与写失败 | 只有部分事务行为证据 | 单笔事务冻结正文与全部有效收件人；容量拒绝不创建身份/部分目标；只有 COMMIT 成功才返回成功和计数。真实 SQLite FULL、延迟外键 COMMIT 失败、重开保留既有消息分别验证。`atomic_target_cap_and_payload_cap_survive_concurrent_admission`、`sqlite_full_admission_never_reports_success_or_loses_prior_accepted_work`、`deferred_sqlite_commit_failure_never_reports_success_and_preserves_prior_work` |
 
-`legacy` 是已有代码/测试的命名。这里保留受支持客户端实际使用的直接 ACK 和协议路径，不向已退役客户端或旧 Gateway 扩大兼容承诺。C6 增加可选的普通 Private 发送、路由迁移及持久确认链路，见 [Private 合同映射](c6-private.md)。合法 HTTP 大请求封装后可能超出现有客户端帧上限，这一行为边界尚未批准新增拒收，不能声称所有合法输入已完整接入。Event、Thing、Watch、WNS 不在本候选的发送范围；带 thing_id 明确拒绝，不能悄悄按普通消息成功。
+`legacy` 是已有代码/测试的命名。这里保留受支持客户端实际使用的直接 ACK 和协议路径，不向已退役客户端或旧 Gateway 扩大兼容承诺。C6 增加可选的普通 Private 发送、路由迁移及持久确认链路，见 [Private 合同映射](c6-private.md)。合法 HTTP 大请求封装后可能超出现有客户端帧上限；用户明确未授权新增拒收，要求[先评估保留输入范围的方案](c6-private-size-options.md)，当前未改变该运行路径，不能声称所有合法输入已完整接入。Event、Thing、Watch、WNS 不在本候选的发送范围；带 thing_id 明确拒绝，不能悄悄按普通消息成功。
 
 ## 资源所有权
 
