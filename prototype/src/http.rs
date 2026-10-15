@@ -1,4 +1,5 @@
-use super::store::{AcceptRequest, DeliveryStore, KernelError};
+use super::store::{AcceptRequest, KernelError};
+use crate::ordinary_store::OrdinaryStore;
 use axum::{
     Json, Router,
     body::{Body, HttpBody},
@@ -21,7 +22,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 type Stats = Arc<dyn Fn() -> Value + Send + Sync>;
 #[derive(Clone)]
 struct HttpState {
-    store: DeliveryStore,
+    store: OrdinaryStore,
     stats: Stats,
 }
 #[derive(Clone)]
@@ -30,13 +31,19 @@ struct Admission {
     control: Arc<Semaphore>,
     auth_hash: Option<[u8; 32]>,
     password_window: Arc<Mutex<PasswordWindow>>,
+    health: Arc<crate::store::Health>,
 }
-pub fn router(store: DeliveryStore, stats: Stats) -> Router {
+pub fn router(store: impl Into<OrdinaryStore>, stats: Stats) -> Router {
     router_with_auth(store, stats, None)
 }
 /// Same shared-token/public-password policy as the ordinary Gateway router.
 /// The supplied token is hashed immediately and never retained in diagnostics.
-pub fn router_with_auth(store: DeliveryStore, stats: Stats, shared_token: Option<&str>) -> Router {
+pub fn router_with_auth(
+    store: impl Into<OrdinaryStore>,
+    stats: Stats,
+    shared_token: Option<&str>,
+) -> Router {
+    let store = store.into();
     let total = store.config.max_handlers;
     let reserve = (total / 8).max(1).min(total);
     let admission = Admission {
@@ -44,6 +51,7 @@ pub fn router_with_auth(store: DeliveryStore, stats: Stats, shared_token: Option
         control: Arc::new(Semaphore::new(reserve)),
         auth_hash: shared_token.map(|v| *blake3::hash(v.as_bytes()).as_bytes()),
         password_window: Arc::default(),
+        health: store.health.clone(),
     };
     let limit = store.config.max_body_bytes;
     let app = Router::new()
@@ -88,6 +96,9 @@ async fn bound_handlers(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
+    if let Err(error) = state.health.ensure() {
+        return error.into_response();
+    }
     let path = request.uri().path();
     let ingress = path.ends_with("/message");
     if let Some(expected) = state.auth_hash {
@@ -571,6 +582,7 @@ async fn route_not_found() -> (StatusCode, Json<Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DeliveryStore;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 

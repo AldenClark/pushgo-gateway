@@ -13,6 +13,7 @@ fn app_with_budget(total: usize) -> (Router, Arc<Semaphore>, Arc<Semaphore>) {
         requests: requests.clone(),
         control: control.clone(),
         auth_hash: None,
+        health: Arc::default(),
         password_window: Arc::default(),
     };
     let app = Router::new()

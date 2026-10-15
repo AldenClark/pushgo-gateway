@@ -1,6 +1,5 @@
-use super::store::{
-    ClaimBatch, Config, Counters, DeliveryStore, KernelError, OwnerLock, Result, Ticket, now,
-};
+use super::store::{ClaimBatch, Config, Counters, KernelError, OwnerLock, Result, Ticket, now};
+use crate::ordinary_store::OrdinaryStore;
 use crate::{
     transport::{BoxFuture, DispatchResult},
     types::Platform,
@@ -40,7 +39,7 @@ pub struct ShutdownReport {
     pub failed: usize,
 }
 pub struct DeliveryRuntime {
-    pub store: DeliveryStore,
+    pub store: OrdinaryStore,
     owner: Option<OwnerLock>,
     stop: watch::Sender<bool>,
     failure: watch::Receiver<Option<String>>,
@@ -52,16 +51,16 @@ impl DeliveryRuntime {
         config: Config,
         transport: Arc<dyn ProviderTransport>,
     ) -> Result<Self> {
-        let (store, owner) = DeliveryStore::open(db_url, config).await?;
+        let (store, owner) = OrdinaryStore::open(db_url, config).await?;
         let (stop, stop_rx) = watch::channel(false);
-        let (failure_tx, failure) = watch::channel(None);
+        let failure = store.health.subscribe();
         let mut tasks = Vec::new();
         for (index, provider) in ["FCM", "APNS"].into_iter().enumerate() {
             let driver_store = store.clone();
             let transport = transport.clone();
             let stop_rx = stop_rx.clone();
             let stop_tx = stop.clone();
-            let failure_tx = failure_tx.clone();
+            let health = store.health.clone();
             tasks.push(tokio::spawn(async move {
                 let counters = driver_store.counters.clone();
                 let _alive = AliveGuard::new(counters.clone());
@@ -75,7 +74,7 @@ impl DeliveryRuntime {
                 };
                 if let Err(error) = &result {
                     counters.db_errors.fetch_add(1, Ordering::Relaxed);
-                    failure_tx.send_replace(Some(error.to_string()));
+                    health.fail(&error.to_string());
                     stop_tx.send_replace(true);
                 }
                 result
@@ -120,7 +119,7 @@ impl DeliveryRuntime {
                 Err(_) => report.panicked += 1,
             }
         }
-        self.store.pool.close().await;
+        self.store.close().await;
         if let Some(owner) = self.owner.take() {
             owner.release();
         }
@@ -129,6 +128,9 @@ impl DeliveryRuntime {
 }
 impl Drop for DeliveryRuntime {
     fn drop(&mut self) {
+        self.store
+            .health
+            .fail("delivery owner dropped; exclusive-owner restart required");
         self.stop.send_replace(true);
     }
 }
@@ -194,7 +196,7 @@ type ClaimFuture = Pin<Box<dyn Future<Output = Result<ClaimBatch>> + Send>>;
 type AttemptFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
 async fn pump(
-    store: DeliveryStore,
+    store: OrdinaryStore,
     transport: Arc<dyn ProviderTransport>,
     index: usize,
     provider: &'static str,
@@ -206,6 +208,7 @@ async fn pump(
     let mut next_due = None;
     let mut needs_claim = true;
     let mut retry_first = false;
+    let mut health = store.health.subscribe();
     loop {
         if *stop.borrow() {
             // Receipt futures can hold the mutation gate and SQL transaction.
@@ -241,6 +244,7 @@ async fn pump(
             next_due.map(|due: i64| Duration::from_millis(due.saturating_sub(now()).max(1) as u64));
         tokio::select! {
             biased;
+            _=health.changed()=>{store.health.ensure()?;}
             changed=stop.changed()=>{if changed.is_err(){return Err(KernelError::Invalid("stop owner disappeared".into()));}}
             outcome=async {claim.as_mut().unwrap().await},if claim.is_some()=>{
                 // Keep the future outside select: ordinary wake/receipt never
@@ -279,10 +283,11 @@ async fn pump(
     }
 }
 pub(super) async fn attempt(
-    store: DeliveryStore,
+    store: impl Into<OrdinaryStore>,
     transport: Arc<dyn ProviderTransport>,
     mut ticket: Ticket,
 ) -> Result<()> {
+    let store = store.into();
     if !store.authorize_ticket(&ticket).await? {
         let state = if ticket.expires_at <= now() {
             "expired"

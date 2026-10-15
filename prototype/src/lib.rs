@@ -4,6 +4,9 @@ pub mod credentials;
 mod http;
 mod ingress;
 pub mod metrics;
+mod ordinary_store;
+mod pg_control;
+mod pg_store;
 pub mod profiling;
 mod runtime;
 mod sender;
@@ -13,6 +16,7 @@ pub mod transport;
 pub mod types;
 pub use http::{router, router_with_auth};
 pub use ingress::BoundedListener;
+pub use ordinary_store::OrdinaryStore;
 pub use runtime::{DeliveryRuntime, ProviderTransport, ShutdownReport};
 pub use server::{HttpLimits, serve};
 pub use store::{AcceptRequest, Accepted, Config, Counters, DeliveryStore, KernelError};
@@ -32,3 +36,6 @@ mod wire_tests;
 mod control_tests;
 #[cfg(test)]
 mod control_wire_tests;
+
+#[cfg(test)]
+mod backend_contract_tests;

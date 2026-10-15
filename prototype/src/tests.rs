@@ -425,7 +425,7 @@ async fn blocked_claim_keeps_polling_network_and_shutdown_preserves_running() {
     let runtime = DeliveryRuntime::start(&url, Config::default(), transport.clone())
         .await
         .unwrap();
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     let (_device, channel, auth) = directory(&store).await;
     store
         .accept(request(&channel, &auth, "inflight"))
@@ -486,7 +486,8 @@ async fn idle_runtime() -> (
         .await
         .unwrap();
     until(|| runtime.store.counters.claim_queries.load(Ordering::Relaxed) >= 2).await;
-    let idle_gate = runtime.store.gate.lock().await;
+    let sqlite = runtime.store.sqlite_store().unwrap();
+    let idle_gate = sqlite.gate.lock().await;
     drop(idle_gate);
     (dir, url, runtime, transport, device, channel, auth)
 }
@@ -507,7 +508,7 @@ async fn external_writer(url: &str) -> sqlx::SqliteConnection {
 async fn sqlite_writer_contention_within_budget_keeps_claims_and_receipts_alive() {
     use sqlx::Connection;
     let (_dir, url, runtime, transport, device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     let accepted = store
         .accept(request(&channel, &auth, "short-writer-lock"))
         .await
@@ -542,7 +543,7 @@ async fn sqlite_writer_contention_within_budget_keeps_claims_and_receipts_alive(
 async fn sqlite_writer_timeout_fails_closed_and_recovers_accepted_identity() {
     use sqlx::Connection;
     let (_dir, url, mut runtime, transport, _device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     let accepted = store
         .accept(request(&channel, &auth, "long-writer-lock"))
         .await
@@ -585,6 +586,134 @@ async fn sqlite_writer_timeout_fails_closed_and_recovers_accepted_identity() {
     assert_eq!(transport.started.load(Ordering::Relaxed), 1);
     close(reopened, owner).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_owner_fences_cloned_and_already_waiting_admission_without_wait_failure() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use sqlx::Connection;
+    use tower::ServiceExt;
+    let (_dir, url, runtime, transport, _device, channel, auth) = idle_runtime().await;
+    let store = runtime.store.sqlite_store().unwrap();
+    let app = crate::router(runtime.store.clone(), Arc::new(|| json!({})));
+    let prior = store
+        .accept(request(&channel, &auth, "health-prior"))
+        .await
+        .unwrap();
+    until(|| transport.started.load(Ordering::Relaxed) == 1).await;
+    let mut blocker = external_writer(&url).await;
+    let lock = blocker.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let claims = store.counters.claim_queries.load(Ordering::Relaxed);
+    store.notify();
+    until(|| store.counters.claim_queries.load(Ordering::Relaxed) > claims).await;
+    let waiting_store = store.clone();
+    let input = request(&channel, &auth, "health-waiting");
+    let waiting = tokio::spawn(async move { waiting_store.accept(input).await });
+    transport.release.notify_one();
+    // Deliberately never call runtime.wait_failure(): public clones must fence
+    // even when an embedding process fails to supervise its owner drivers.
+    tokio::time::timeout(Duration::from_secs(6), async {
+        while store.counters.db_errors.load(Ordering::Relaxed) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    lock.rollback().await.unwrap();
+    blocker.close().await.unwrap();
+    assert!(matches!(
+        waiting.await.unwrap(),
+        Err(KernelError::Unavailable)
+    ));
+    assert!(matches!(
+        store.accept(request(&channel, &auth, "health-after")).await,
+        Err(KernelError::Unavailable)
+    ));
+    let response = app.oneshot(Request::builder().method("POST").uri("/message")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&json!({"channel_id":channel,"password":auth,"title":"health","op_id":"health-http"})).unwrap())).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+    assert_eq!(body["error_code"], "internal_error");
+    assert_eq!(body["message"], "temporarily unavailable");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "failed owner accepted fresh work");
+    let report = runtime.shutdown().await;
+    assert!(report.failed > 0);
+    let (reopened, owner) = DeliveryStore::open(&url, Config::default()).await.unwrap();
+    let ticket = reopened
+        .claim("FCM", 1, true)
+        .await
+        .unwrap()
+        .tickets
+        .remove(0);
+    assert_eq!(ticket.delivery_id, prior.delivery_id);
+    close(reopened, owner).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropped_runtime_cannot_leave_a_healthy_admission_clone() {
+    let (_dir, _url, runtime, _transport, _device, channel, auth) = idle_runtime().await;
+    let clone = runtime.store.clone();
+    drop(runtime);
+    assert!(matches!(
+        clone
+            .accept(request(&channel, &auth, "dropped-owner"))
+            .await,
+        Err(KernelError::Unavailable)
+    ));
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropped_owner_rolls_back_control_mutations_paused_after_validation() {
+    for action in ["rename", "unsubscribe", "sync_omission"] {
+        let (_dir, _url, runtime, _transport, device, channel, auth) = idle_runtime().await;
+        let store = runtime.store.sqlite_store().unwrap();
+        let barrier = Arc::new(super::store::CommitBarrier::default());
+        *store.hooks.control_before_write.lock().unwrap() = Some(barrier.clone());
+        let task_store = store.clone();
+        let task_channel = channel.clone();
+        let task = tokio::spawn(async move {
+            match action {
+                "rename" => {
+                    task_store
+                        .rename_channel(&task_channel, "must not persist", &auth)
+                        .await
+                }
+                "unsubscribe" => task_store.unsubscribe(&device, &task_channel).await,
+                _ => task_store.sync_channels(&device, vec![]).await,
+            }
+        });
+        reached(&barrier).await;
+        drop(runtime);
+        barrier.resume.notify_one();
+        assert!(
+            matches!(task.await.unwrap(), Err(KernelError::Unavailable)),
+            "{action}"
+        );
+        let name: String =
+            sqlx::query_scalar("SELECT channel_name FROM channels WHERE channel_id=?")
+                .bind(&channel)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        let subscriptions: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM channel_subscriptions WHERE channel_id=?")
+                .bind(&channel)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(name, "synthetic channel", "{action}");
+        assert_eq!(subscriptions, 1, "{action}");
+        store.pool.close().await;
+    }
+}
+
 async fn reached(barrier: &super::store::CommitBarrier) {
     tokio::time::timeout(Duration::from_secs(3), barrier.reached.notified())
         .await
@@ -593,7 +722,7 @@ async fn reached(barrier: &super::store::CommitBarrier) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn postcommit_claim_is_adopted_across_wakes_while_network_and_receipt_progress() {
     let (_dir, url, runtime, transport, _device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     store
         .accept(request(&channel, &auth, "preexisting-network"))
         .await
@@ -646,7 +775,7 @@ async fn postcommit_claim_is_adopted_across_wakes_while_network_and_receipt_prog
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_at_postcommit_preadopt_keeps_lock_then_recovers_same_identity() {
     let (_dir, url, runtime, transport, _device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     let barrier = Arc::new(super::store::CommitBarrier::default());
     *store.hooks.claim_after_commit.lock().unwrap() = Some(barrier.clone());
     let accepted = store
@@ -697,7 +826,7 @@ async fn shutdown_at_postcommit_preadopt_keeps_lock_then_recovers_same_identity(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn committed_admission_caller_abort_still_wakes_idle_owner_without_replay() {
     let (_dir, url, runtime, transport, device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     let barrier = Arc::new(super::store::CommitBarrier::default());
     *store.hooks.accept_after_commit.lock().unwrap() = Some(barrier.clone());
     let input = request(&channel, &auth, "caller-gone-after-commit");
@@ -743,7 +872,7 @@ async fn committed_admission_caller_abort_still_wakes_idle_owner_without_replay(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reservation_bounds_real_committed_grants_and_owned_work_falls_without_cancellation() {
     let (_dir, _url, runtime, transport, device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     let first = Arc::new(super::store::CommitBarrier::default());
     *store.hooks.claim_after_commit.lock().unwrap() = Some(first.clone());
     let mut ids = vec![
@@ -841,7 +970,7 @@ async fn reservation_bounds_real_committed_grants_and_owned_work_falls_without_c
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_low_demand_and_blocked_receipt_have_distinct_real_ownership() {
     let (_dir, _url, runtime, transport, _device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     until(|| {
         store
             .counters
@@ -934,7 +1063,7 @@ async fn durable_retry_wait_releases_position_and_does_not_scan_during_cooldown(
     let runtime = DeliveryRuntime::start(&url, Config::default(), Arc::new(RetryTransport))
         .await
         .unwrap();
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     until(|| {
         store.counters.receipt_commits.load(Ordering::Relaxed) == 1
             && store.counters.owned_attempts.load(Ordering::Relaxed) == 0
@@ -1040,7 +1169,7 @@ async fn lazy_work_grows_to_configured_ceiling_32_using_bounded_grants() {
     let runtime = DeliveryRuntime::start(&url, config, transport.clone())
         .await
         .unwrap();
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     until(|| transport.started.load(Ordering::Relaxed) == 32).await;
     assert_eq!(
         store.counters.provider_targets[0].load(Ordering::Relaxed),
@@ -1118,7 +1247,7 @@ async fn public_base_url_preserves_prefix_and_rejects_untrusted_origins() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_cancels_receipt_holding_gate_before_awaiting_pending_claim() {
     let (_dir, url, runtime, transport, _device, channel, auth) = idle_runtime().await;
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     let accepted = store
         .accept(request(&channel, &auth, "shutdown-receipt-gate"))
         .await
@@ -1187,7 +1316,7 @@ async fn fixed_32_quantum_32_is_lazy_at_idle_and_bounded_at_real_claim_commit() 
     let runtime = DeliveryRuntime::start(&url, config, transport.clone())
         .await
         .unwrap();
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     until(|| store.counters.num_alive.load(Ordering::Relaxed) == 2).await;
     until(|| {
         store
@@ -1269,7 +1398,7 @@ async fn provider_quiesce_waits_for_owned_attempts_and_continuous_backlog_to_dra
     let runtime = DeliveryRuntime::start(&url, config, transport.clone())
         .await
         .unwrap();
-    let store = runtime.store.clone();
+    let store = runtime.store.sqlite_store().unwrap();
     until(|| transport.fcm_quiesced.load(Ordering::Relaxed) >= 1).await;
     let initial = transport.fcm_quiesced.load(Ordering::Relaxed);
     store

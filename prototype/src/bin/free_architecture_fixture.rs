@@ -1,4 +1,4 @@
-//! Synthetic loopback-only fixture for the independent SQLite authority.
+//! Synthetic loopback-only fixture for the ordinary SQLite/PostgreSQL authority.
 use clap::Parser;
 use free_delivery_prototype::{
     Config, DeliveryRuntime, HttpLimits, RealProviders,
@@ -48,12 +48,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .strip_prefix("http://")
         .ok_or("loopback http mock required")?;
     let provider_addr: SocketAddr = authority.parse()?;
+    let db_backend = if cli.db_url.starts_with("sqlite://") {
+        "sqlite"
+    } else {
+        let database = reqwest::Url::parse(&cli.db_url)?;
+        if !matches!(database.scheme(), "postgres" | "postgresql")
+            || !database.host_str().is_some_and(|h| {
+                h == "localhost"
+                    || h.parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })
+            || !database.path().trim_start_matches('/').starts_with("c4_")
+        {
+            return Err(
+                "fixture PostgreSQL requires an explicit loopback c4_ synthetic database".into(),
+            );
+        }
+        "postgres"
+    };
     if !provider_addr.ip().is_loopback()
         || provider_addr.port() == 0
         || !cli.http_addr.ip().is_loopback()
-        || !cli.db_url.starts_with("sqlite://")
     {
-        return Err("fixture requires loopback HTTP and SQLite".into());
+        return Err("fixture requires loopback HTTP".into());
     }
     let counts = Arc::new(Mutex::new(BTreeMap::<String, u64>::new()));
     tracing_subscriber::registry()
@@ -139,11 +156,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     println!(
-        "READY pid={} http_addr={} profile=free private=false mcp=false provider={} db_url={} tasks={}",
+        "READY pid={} http_addr={} profile=free private=false mcp=false provider={} db_backend={} tasks={}",
         std::process::id(),
         address,
         cli.mock_endpoint,
-        cli.db_url,
+        db_backend,
         tokio::runtime::Handle::current()
             .metrics()
             .num_alive_tasks()
