@@ -1,6 +1,6 @@
 # C：普通消息合同候选
 
-独立单机普通消息 crate，已实现 SQLite、PostgreSQL、MySQL 原生存储及普通 Private 数据面。C7 使用配套升级的完整 DELIVER 固定 128KiB 上限，HTTP 输入仍为32KiB；旧 Private 客户端可能在 WELCOME 阶段拒连。三库共享合同、Warp 和可行客户端构建/组件测试已通过；最终客户端 TLS/持久化/ACK/进程重启闭环未完成，最终容量回归因磁盘保护 NOT RUN，不能用旧收据替代。当前交付入口为 [C7结果](docs/c7-results.md)与[固定限制和升级要求](docs/c7-private-frames.md)。[C6结果](docs/c6-results.md)、[容量](docs/c6-capacity.md)和原尺寸方案评估保持历史含义；本轮用户选择已取代旧Pull/协商建议。Provider仅本地Mock，PG/MySQL为新隔离库，不代表旧库迁移或断电验收。Event、Thing、Watch、WNS不在范围，真实APNs未验证。下文C3/C4/C5收据也保留各自历史版本含义。
+独立单机普通消息 crate，已实现 SQLite、PostgreSQL、MySQL 原生存储及普通 Private 数据面。C8 将消息提交整 JSON 上限调整为48KiB，其他控制接口默认仍为32KiB；Private 完整 DELIVER 固定128KiB，配套客户端必须升级，旧客户端可能在 WELCOME 阶段拒连。三库共享合同、Android 真实 JNI/Room/Keystore 和 Windows macOS host 生产 Rust/SQLite 的 TCP TLS 闭环通过；Windows OS/GUI 和客户端 QUIC/WSS 未运行。原40,960目标有限容量回归两库通过，MySQL窗口余量约7.15秒，不代表持续容量。Android路径扫描有一项测试系统失败。当前交付入口为 [C8结果](docs/c8-results.md)、[有限容量解释](docs/c8-capacity.md)及[验证源码](validation/c8/README.md)。C3至C7报告、原始失败和冻结产物保持各自历史含义；C7容量未运行不能改称通过。Provider仅本地Mock，PG/MySQL为获准隔离新库，不代表旧库迁移或断电验收。Event、Thing、Watch、WNS不在范围，真实APNs未验证。
 
 ## 已实现的普通消息边界
 
@@ -18,7 +18,7 @@
 
 库与 fixture 都以 Config 为默认来源。当前 H32/Q32 是实验默认，可配置安全上限；不是已批准的产品最大值。两个 Provider 驱动按需持有 FuturesUnordered 工作，不预建全部 worker。领取 reservation 在加载正文前占预算；工作持续拥有执行位置直到结果事务提交。退避留在 SQL，不占网络位置；没有动态目标控制器和周期空队列扫描。关闭时先释放 attempt/receipt，再等待已保留的 claim，避免持锁等待环。
 
-输入沿用 32 KiB；128 个连接在创建连接任务前受限，HTTP/2 每连接默认通告 1 个并发 stream，使合规客户端在协议层排队。保留原 128 个请求总接纳许可；控制响应另用 16 个工作许可有界等待，等待时已持总许可且尚未解析 JSON，没有新增 16/112 并发拒收。许可随响应 Body 到 EOF、错误或 drop 释放。Provider 回复最多累计 16 KiB，保留状态与 Retry-After，2xx 的诊断正文失败不触发重发。Provider 连接池按安全上限配置，连续积压保留，真正空闲后释放，无额外清理定时器。
+`POST /message` 整个请求 JSON 限48KiB，其他控制接口默认32KiB；128 个连接在创建连接任务前受限，HTTP/2 每连接默认通告 1 个并发 stream，使合规客户端在协议层排队。保留原 128 个请求总接纳许可；控制响应另用 16 个工作许可有界等待，等待时已持总许可且尚未解析 JSON，没有新增 16/112 并发拒收。许可随响应 Body 到 EOF、错误或 drop 释放。Provider 回复最多累计 16 KiB，保留状态与 Retry-After，2xx 的诊断正文失败不触发重发。Provider 连接池按安全上限配置，连续积压保留，真正空闲后释放，无额外清理定时器。
 
 未完成冻结消息 10,000、待执行 Provider 目标 1,000,000 沿用主线边界；事务计数避免每次接纳全表 COUNT/SUM。实验聚合正文限额默认关闭。ACK 释放正文和投递队列，进行中工作保留到结果提交；身份、指纹和状态完整保留 30 天。过期正文和身份清理各采用有界 256 条批次，索引不把整段历史加载到内存。
 
