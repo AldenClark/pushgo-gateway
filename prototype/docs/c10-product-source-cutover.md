@@ -53,7 +53,7 @@ Retained or replaced deliberately:
 
 - `prototype/src/lib.rs`: re-exports the product ordinary module; no second implementation.
 - `prototype/src/bin/free_architecture_fixture.rs`: forwards normal Gateway arguments to an explicit product binary; Unix uses process replacement.
-- `prototype/Cargo.toml`: only the normal Gateway path dependency remains. The existing lockfile is preserved for the root build owner to refresh with the final dependency graph.
+- `prototype/Cargo.toml`: only the normal Gateway path dependency remains. `prototype/Cargo.lock` was refreshed for that dependency graph; the final offline check verifies this wrapper against the product implementation.
 - `prototype/validation/**` and existing `prototype/docs/**`: original reports, failure records, manifests, reference scripts and receipts are preserved. They are historical and do not certify the product path.
 - All build outputs, database files, logs and evidence outside the removed tracked source list are preserved.
 
