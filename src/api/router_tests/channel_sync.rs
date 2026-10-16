@@ -47,7 +47,11 @@ async fn register_and_channel_sync_report_actual_route_without_reverting_it() {
             request["provider_token"] = json!(provider_material);
         }
         let (status, switched) = post_json(app.clone(), "/channel/device", request).await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "route switch to {channel_type}: {switched:?}"
+        );
         let revision = response_data(&switched)["route_revision"].as_i64().unwrap();
         let expected = json!({"channel_type": channel_type, "route_revision": revision,
             "provider_token_present": channel_type == "fcm"});
@@ -140,6 +144,57 @@ async fn register_and_channel_sync_report_actual_route_without_reverting_it() {
             channel_type
         );
     }
+}
+
+#[tokio::test]
+async fn route_switch_uses_canonical_activity_timestamp_without_waiting_for_the_clock() {
+    let state = build_private_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (status, registered) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform": "android"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let device_key = response_string_field(&registered, "device_key");
+    let activity_at = chrono::Utc::now().timestamp_millis() + 60_000;
+    state
+        .store
+        .touch_device_activity(derive_private_device_id(device_key), activity_at)
+        .await
+        .unwrap();
+    assert!(state.device_registry.get(device_key).unwrap().updated_at < activity_at);
+    let token = format!("canonical-route-token-{}", rand::random::<u64>());
+    let (status, switched) = post_json(
+        app,
+        "/channel/device",
+        json!({
+            "device_key": device_key,
+            "platform": "android",
+            "channel_type": "fcm",
+            "provider_token": token,
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "canonical route switch: {switched:?}"
+    );
+    let route = state
+        .store
+        .active_device_route_snapshot(device_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(route.channel_type, "fcm");
+    assert_eq!(route.provider_token.as_deref(), Some(token.as_str()));
+    assert!(route.updated_at.unwrap() > activity_at);
+    let projected = state.device_registry.get(device_key).unwrap();
+    assert_eq!(projected.updated_at, route.updated_at.unwrap());
+    assert_eq!(projected.provider_token.as_deref(), Some(token.as_str()));
+    assert!(response_data(&switched).get("updated_at").is_none());
 }
 
 fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
@@ -1684,6 +1739,92 @@ async fn watch_alert_all_models_freeze_deadlines_and_preserve_phone_ttl() {
             .set_watch_alert_window_minutes(&watch_key, 60)
             .await
             .unwrap();
+        if path == "/message" {
+            // Ordinary targets now live only in C. Exercise its committed
+            // grants and the actual product Provider projection, rather than
+            // expecting an ordinary copy in the retained feature outbox.
+            let ordinary = state.store.ordinary_handle().unwrap();
+            let batch = ordinary.claim_reserved("APNS", 2, false).await.unwrap();
+            assert_eq!(batch.tickets.len(), 2);
+            let observed = Arc::new(crate::ordinary::transport::tests::ExistingClients::default());
+            let providers = crate::ordinary::transport::ProductProviders::new(
+                observed.clone(),
+                observed.clone(),
+                observed.clone(),
+            );
+            let mut saw_watch = false;
+            let mut saw_phone = false;
+            for ticket in batch.tickets {
+                assert!(
+                    ordinary.authorize_ticket(&ticket).await.unwrap(),
+                    "changing the Watch reminder setting must not retire an accepted route"
+                );
+                let platform = match ticket.platform.as_str() {
+                    "watchos" => crate::ordinary::types::Platform::Watchos,
+                    "ios" => crate::ordinary::types::Platform::Ios,
+                    other => panic!("unexpected ordinary Apple target {other}"),
+                };
+                let result = crate::ordinary::ProviderTransport::send(
+                    &providers,
+                    "APNS",
+                    platform,
+                    &ticket.token,
+                    ticket.payload.clone(),
+                    &ticket.delivery_id,
+                    &ticket.device_key,
+                    ticket.accepted_at,
+                    ticket.expires_at,
+                    ticket.watch_alert_deadline,
+                )
+                .await;
+                assert!(result.success);
+                let calls = observed.0.lock().unwrap();
+                let data = &calls.last().unwrap().1;
+                let expirations = observed.1.lock().unwrap();
+                let expiration = *expirations.last().unwrap();
+                if platform == crate::ordinary::types::Platform::Watchos {
+                    saw_watch = true;
+                    let deadline = ticket.accepted_at + minutes * 60_000;
+                    assert_eq!(ticket.watch_alert_deadline, Some(deadline));
+                    assert_eq!(data["watch_alert_deadline_at"], deadline.to_string());
+                    assert_eq!(data["sent_at"], ticket.accepted_at.to_string());
+                    assert_eq!(expiration, Some(deadline / 1_000));
+                    assert_eq!(data["watch_light_kind"], "message");
+                } else {
+                    saw_phone = true;
+                    assert!(ticket.watch_alert_deadline.is_none());
+                    assert!(data.get("watch_alert_deadline_at").is_none());
+                    assert_eq!(
+                        expiration,
+                        request["ttl"].as_i64().map(|expiry| expiry / 1_000)
+                    );
+                }
+                assert_ne!(ticket.accepted_at, 1_700_000_000_000);
+                drop(expirations);
+                drop(calls);
+                ordinary
+                    .settle(
+                        &ticket,
+                        "provider_accepted",
+                        200,
+                        "none",
+                        chrono::Utc::now().timestamp_millis(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert!(saw_watch && saw_phone);
+            assert_eq!(
+                state
+                    .store
+                    .count_pending_provider_dispatch_jobs("APNS")
+                    .await
+                    .unwrap(),
+                0
+            );
+            continue;
+        }
         let mut observed_watch = false;
         let mut observed_phone = false;
         for _ in 0..2 {
@@ -1750,24 +1891,51 @@ async fn watch_alert_all_models_freeze_deadlines_and_preserve_phone_ttl() {
 
 #[tokio::test]
 async fn watch_alert_existing_v12_database_adds_setting_without_changing_route() {
-    let (state, _, db_url) = build_test_state_with_receivers_and_db_url().await;
-    let app = super::super::build_router(state.clone(), "<html>docs</html>");
-    let (_, registered) = post_json(app, "/device/register", json!({"platform":"watchos"})).await;
-    let key = response_string_field(&registered, "device_key").to_string();
-    let before = state
-        .store
+    // Build the pre-C v12 shape before ordinary initialization. An existing
+    // product C view correctly depends on this column and must not be removed
+    // merely to manufacture a legacy migration fixture.
+    let directory = tempfile::tempdir().unwrap();
+    let db_url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("legacy-v12.db").display()
+    );
+    let legacy = Storage::new(Some(&db_url)).await.unwrap();
+    let key = "watch-alert-existing-v12-device";
+    legacy
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: key.into(),
+            platform: Platform::WATCHOS.name().into(),
+            channel_type: "private".into(),
+            provider_token: None,
+            updated_at: chrono::Utc::now().timestamp_millis(),
+        })
+        .await
+        .unwrap();
+    let before = legacy
         .active_device_route_snapshot(&key)
         .await
         .unwrap()
         .unwrap();
     let pool = sqlx::SqlitePool::connect(&db_url).await.unwrap();
+    let ordinary_views: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='ordinary_device_routes'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ordinary_views, 0);
     sqlx::query("ALTER TABLE devices DROP COLUMN watch_alert_window_minutes")
         .execute(&pool)
         .await
         .unwrap();
     sqlx::query("DELETE FROM pushgo_schema_migrations WHERE migration_id = '20261013_001_watch_alert_window'").execute(&pool).await.unwrap();
     pool.close().await;
+    legacy.close_ordinary_storage().await.unwrap();
     let reopened = Storage::new(Some(&db_url)).await.unwrap();
+    reopened
+        .initialize_ordinary(crate::ordinary::Config::default(), Arc::default())
+        .await
+        .unwrap();
     assert_eq!(reopened.watch_alert_window_minutes(&key).await.unwrap(), 30);
     assert_eq!(
         reopened
@@ -1781,6 +1949,7 @@ async fn watch_alert_existing_v12_database_adds_setting_without_changing_route()
         .set_watch_alert_window_minutes(&key, 15)
         .await
         .unwrap();
+    reopened.close_ordinary_storage().await.unwrap();
     let reopened_again = Storage::new(Some(&db_url)).await.unwrap();
     assert_eq!(
         reopened_again
@@ -1789,4 +1958,5 @@ async fn watch_alert_existing_v12_database_adds_setting_without_changing_route()
             .unwrap(),
         15
     );
+    reopened_again.close_ordinary_storage().await.unwrap();
 }

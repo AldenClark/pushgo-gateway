@@ -103,6 +103,14 @@ async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let ordinary = state.store.ordinary_handle().unwrap();
+    assert_eq!(
+        ordinary
+            .private_pending_count(Some(device_key))
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(
         state
             .store
@@ -110,7 +118,8 @@ async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
             .await
             .expect("outbox should list")
             .len(),
-        1
+        0,
+        "ordinary MQTT work must not also be written to the retained-model outbox"
     );
 
     for (path, payload) in [
@@ -180,8 +189,50 @@ async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
         .expect("outbox should list after non-message dispatches");
     assert_eq!(
         outbox.len(),
-        5,
-        "each MQTT receiver delivery must remain durable until PUBACK"
+        3,
+        "Event/Thing deliveries remain in their retained-model MQTT outbox"
+    );
+    assert_eq!(
+        ordinary
+            .private_pending_count(Some(device_key))
+            .await
+            .unwrap(),
+        2
+    );
+    let route = ordinary.private_route(device_key).await.unwrap();
+    let tickets = ordinary
+        .private_claim(&route, "router-offline-mqtt", 16)
+        .await
+        .unwrap();
+    assert_eq!(
+        tickets.len(),
+        2,
+        "both ordinary messages remain durable without a receiver"
+    );
+    let payloads = tickets
+        .iter()
+        .map(|ticket| serde_json::from_slice::<Value>(&ticket.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        payloads
+            .iter()
+            .all(|payload| payload["entity_type"] == "message")
+    );
+    assert!(
+        payloads
+            .iter()
+            .any(|payload| payload["thing_id"] == "thing-1")
+    );
+    for ticket in tickets {
+        assert!(ordinary.private_authorize(&ticket).await.unwrap());
+    }
+    assert_eq!(
+        ordinary
+            .private_pending_count(Some(device_key))
+            .await
+            .unwrap(),
+        2,
+        "claiming for a receiver does not substitute for its durable ACK"
     );
 }
 

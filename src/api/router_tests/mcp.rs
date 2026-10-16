@@ -172,7 +172,7 @@ async fn mcp_oauth_s256_authorize_and_send_success() {
         Platform::ANDROID,
     )
     .await;
-    let app = super::super::build_router(state, "<html>docs</html>");
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
     let access_token = oauth_access_token(
         app.clone(),
         channel_id.as_str(),
@@ -221,6 +221,25 @@ async fn mcp_oauth_s256_authorize_and_send_success() {
     assert!(
         structured.get("auth_mode").is_none(),
         "mcp send response should not include auth_mode"
+    );
+    let op_id = structured["op_id"].as_str().unwrap();
+    let ordinary_status = state
+        .store
+        .ordinary_handle()
+        .expect("router startup initializes the product ordinary authority")
+        .status(op_id)
+        .await
+        .expect("MCP success must follow a committed ordinary identity");
+    assert_eq!(ordinary_status["entity_id"], structured["message_id"]);
+    assert_eq!(ordinary_status["status"], "provider_queued");
+    assert!(
+        state
+            .store
+            .load_sender_submit_status(op_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "ordinary MCP acceptance must not also write the retired sender-status ledger"
     );
 }
 

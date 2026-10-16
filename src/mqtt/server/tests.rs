@@ -6,6 +6,7 @@ use mqttbytes::v5::{
     ConnectProperties, LastWill, PubAck, PubAckReason, Publish, PublishProperties, SubscribeFilter,
     SubscribeProperties, UnsubscribeProperties, WillProperties,
 };
+use sqlx::{Connection, SqliteConnection};
 use tempfile::{TempDir, tempdir};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -20,7 +21,7 @@ use crate::{
     dispatch::DispatchChannels,
     mqtt::{MqttConfig, MqttPublishDedupe},
     private::{PrivateConfig, PrivateState},
-    routing::{DeviceRegistry, DeviceRouteRecord},
+    routing::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord},
     runtime_config::GatewayRuntimeProfile,
     runtime_counters::RuntimeCounterCollector,
     services::{ChannelCommandSource, MessageSendCommand, send_message},
@@ -43,11 +44,27 @@ impl MqttFlowTestContext {
         let store = Storage::new(Some(db_url.as_str()))
             .await
             .expect("storage should initialize");
+        // Bind the same Storage-owned authority used by normal startup. The
+        // MQTT listener never owns another ledger, database pool or dispatcher.
+        let private_config = test_private_config();
+        let mut ordinary = crate::ordinary::Config {
+            max_messages: i64::MAX,
+            max_targets: i64::MAX,
+            default_ttl_secs: private_config.default_ttl_secs,
+            ..crate::ordinary::Config::default()
+        };
+        ordinary.private.enabled = true;
+        ordinary.private.max_pending_per_device = private_config.max_pending_per_device;
+        ordinary.private.max_pending = private_config.global_max_pending;
+        store
+            .initialize_ordinary(ordinary, Arc::default())
+            .await
+            .expect("normal ordinary authority should initialize");
         let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
         let registry = Arc::new(DeviceRegistry::new());
         let private = Arc::new(PrivateState::new(
             store.clone(),
-            test_private_config(),
+            private_config,
             Arc::clone(&registry),
             Arc::clone(&runtime_counters),
         ));
@@ -143,6 +160,82 @@ impl MqttFlowTestContext {
         .channel_id
     }
 
+    async fn inspect_ordinary(&self) -> SqliteConnection {
+        // A short-lived read-only oracle, not another pool or runtime owner.
+        SqliteConnection::connect(&format!(
+            "sqlite://{}?mode=ro",
+            self._dir.path().join("gateway-mqtt-flow.sqlite").display()
+        ))
+        .await
+        .expect("ordinary ledger should be inspectable")
+    }
+
+    async fn ordinary_identity_count(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_messages")
+            .fetch_one(&mut self.inspect_ordinary().await)
+            .await
+            .expect("ordinary identities should count")
+    }
+
+    async fn ordinary_pending(&self, device_key: &str) -> i64 {
+        self.state
+            .store
+            .ordinary_handle()
+            .expect("ordinary authority should be attached")
+            .private_pending_count(Some(device_key))
+            .await
+            .expect("ordinary pending should count")
+    }
+
+    async fn assert_no_legacy_ordinary_outbox(&self, device_key: &str) {
+        assert!(
+            self.state
+                .store
+                .list_private_outbox(derive_private_device_id(device_key), 128)
+                .await
+                .expect("legacy outbox should list")
+                .is_empty(),
+            "ordinary MQTT messages must not also enter the legacy outbox"
+        );
+    }
+
+    async fn assert_ordinary_delivery_pending(
+        &self,
+        device_key: &str,
+        delivery_id: &str,
+    ) -> String {
+        let (message_id, payload_bytes, pending): (String, i64, i64) = sqlx::query_as(
+            "SELECT m.message_id,m.payload_bytes,(SELECT COUNT(*) FROM ordinary_targets t WHERE t.delivery_id=m.delivery_id AND t.pull_owner=? AND t.delivery_mode='private' AND t.acked_at IS NULL) FROM ordinary_messages m WHERE m.delivery_id=?",
+        )
+        .bind(device_key)
+        .bind(delivery_id)
+        .fetch_one(&mut self.inspect_ordinary().await)
+        .await
+        .expect("durable ordinary delivery should exist");
+        assert!(
+            payload_bytes > 0,
+            "unacknowledged ordinary body must remain"
+        );
+        assert_eq!(pending, 1, "one durable target must await receiver PUBACK");
+        self.assert_no_legacy_ordinary_outbox(device_key).await;
+        message_id
+    }
+
+    async fn assert_ordinary_delivery_acked(&self, delivery_id: &str, message_id: &str) {
+        wait_until(Duration::from_secs(2), || async {
+            let (retained_id, payload_bytes, pending): (String, i64, i64) = sqlx::query_as(
+                "SELECT m.message_id,m.payload_bytes,(SELECT COUNT(*) FROM ordinary_targets t WHERE t.delivery_id=m.delivery_id) FROM ordinary_messages m WHERE m.delivery_id=?",
+            )
+            .bind(delivery_id)
+            .fetch_one(&mut self.inspect_ordinary().await)
+            .await
+            .expect("PUBACK must retain the ordinary identity");
+            assert_eq!(retained_id, message_id, "PUBACK must preserve message identity");
+            payload_bytes == 0 && pending == 0
+        })
+        .await;
+    }
+
     async fn shutdown(mut self) {
         self.private.begin_shutdown();
         let server = self.server.take().expect("MQTT listener task should exist");
@@ -150,6 +243,13 @@ impl MqttFlowTestContext {
             .await
             .expect("MQTT listener should stop within the shutdown deadline")
             .expect("MQTT listener task should not panic");
+        let report = self.private.shutdown_runtime(Duration::from_secs(2)).await;
+        assert_eq!(
+            report.failed, 0,
+            "Private shutdown should release its C claims"
+        );
+        assert_eq!(report.panicked, 0);
+        assert_eq!(report.aborted, 0);
     }
 }
 
@@ -487,13 +587,8 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         "metadata": {"source": "mqtt-flow-test"}
     });
     let device_id = derive_private_device_id(device_key);
-    let outbox_before_publish = ctx
-        .state
-        .store
-        .list_private_outbox(device_id, 16)
-        .await
-        .expect("outbox should list")
-        .len();
+    let pending_before_publish = ctx.ordinary_pending(device_key).await;
+    let identities_before_publish = ctx.ordinary_identity_count().await;
     let mut inbound = Publish::new(
         MqttMessageTopic::format(channel_id.as_str()),
         QoS::AtLeastOnce,
@@ -522,15 +617,15 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         packet => panic!("expected PUBACK, got {packet:?}"),
     }
     assert_eq!(
-        ctx.state
-            .store
-            .list_private_outbox(device_id, 16)
-            .await
-            .expect("outbox should list")
-            .len(),
-        outbox_before_publish + 1,
-        "accepted MQTT downlink should be durable until the receiver sends PUBACK"
+        ctx.ordinary_pending(device_key).await,
+        pending_before_publish + 1,
+        "accepted MQTT downlink must remain in the one C ledger until receiver PUBACK"
     );
+    assert_eq!(
+        ctx.ordinary_identity_count().await,
+        identities_before_publish + 1
+    );
+    ctx.assert_no_legacy_ordinary_outbox(device_key).await;
     write_client_packet(
         &mut stream,
         ClientPacket::Disconnect(Disconnect {
@@ -645,15 +740,9 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         .and_then(|v| v.as_str())
         .expect("delivery_id should exist")
         .to_string();
-    assert!(
-        ctx.state
-            .store
-            .load_private_outbox_entry(device_id, delivery_id.as_str())
-            .await
-            .expect("outbox should load")
-            .is_some(),
-        "MQTT QoS1 downlink must remain in the durable outbox until PUBACK"
-    );
+    let message_id = ctx
+        .assert_ordinary_delivery_pending(device_key, &delivery_id)
+        .await;
 
     write_client_packet(
         &mut stream,
@@ -667,24 +756,9 @@ async fn mqtt_flow_covers_connect_subscribe_publish_receive_ack_unsubscribe_disc
         write_client_packet(&mut stream, ClientPacket::PubAck(PubAck::new(extra.pkid))).await;
         acknowledged_downlinks = acknowledged_downlinks.saturating_add(1);
     }
-    let terminal = ctx
-        .state
-        .store
-        .load_private_outbox_entry(device_id, delivery_id.as_str())
-        .await
-        .expect("outbox should load")
-        .expect("PUBACK should retain a replay-suppression tombstone");
-    assert_eq!(terminal.status, crate::storage::OUTBOX_STATUS_ACKED);
-    let active = ctx
-        .state
-        .store
-        .list_private_outbox(device_id, 128)
-        .await
-        .expect("active outbox should load");
-    assert!(
-        active.iter().all(|entry| entry.delivery_id != delivery_id),
-        "the PUBACK tombstone must not remain in the active outbox"
-    );
+    ctx.assert_ordinary_delivery_acked(&delivery_id, &message_id)
+        .await;
+    ctx.assert_no_legacy_ordinary_outbox(device_key).await;
 
     let mut unsubscribe = Unsubscribe::new(MqttMessageTopic::format(channel_id.as_str()));
     unsubscribe.pkid = 9;
@@ -1449,14 +1523,8 @@ async fn mqtt_will_durably_queues_thing_scoped_message_for_reconnect() {
     let channel_password = "mqtt-will-thing-pass";
     ctx.restore_private_route(owner_key).await;
     let channel_id = ctx.create_channel(owner_key, channel_password).await;
-    let device_id = derive_private_device_id(owner_key);
-    let outbox_before = ctx
-        .state
-        .store
-        .list_private_outbox(device_id, 16)
-        .await
-        .expect("outbox should list")
-        .len();
+    let pending_before = ctx.ordinary_pending(owner_key).await;
+    let identities_before = ctx.ordinary_identity_count().await;
 
     let mut will_owner = TcpStream::connect(ctx.addr)
         .await
@@ -1489,18 +1557,22 @@ async fn mqtt_will_durably_queues_thing_scoped_message_for_reconnect() {
         async move { private.metrics.snapshot().mqtt_will_sent == 1 }
     })
     .await;
-    let outbox_after = ctx
-        .state
-        .store
-        .list_private_outbox(device_id, 16)
-        .await
-        .expect("outbox should list")
-        .len();
     assert_eq!(
-        outbox_after,
-        outbox_before + 1,
+        ctx.ordinary_pending(owner_key).await,
+        pending_before + 1,
         "thing-scoped MQTT will delivery must remain durable until PUBACK"
     );
+    assert_eq!(ctx.ordinary_identity_count().await, identities_before + 1);
+    let retained: (Option<String>, Vec<u8>) = sqlx::query_as(
+        "SELECT thing_id,payload_blob FROM ordinary_messages ORDER BY accepted_at DESC,delivery_id DESC LIMIT 1",
+    )
+    .fetch_one(&mut ctx.inspect_ordinary().await)
+    .await
+    .expect("ordinary will should persist in C");
+    assert_eq!(retained.0.as_deref(), Some("thing_1"));
+    let payload: serde_json::Value = serde_json::from_slice(&retained.1).unwrap();
+    assert_eq!(payload["occurred_at"].as_str(), Some("1700000000000"));
+    ctx.assert_no_legacy_ordinary_outbox(owner_key).await;
 }
 
 #[tokio::test]
@@ -2151,15 +2223,9 @@ async fn mqtt_negative_puback_retains_durable_outbox_for_redelivery() {
         .and_then(serde_json::Value::as_str)
         .expect("delivery id should be present")
         .to_string();
-    let device_id = derive_private_device_id(&device_key);
-    assert!(
-        ctx.state
-            .store
-            .load_private_outbox_entry(device_id, delivery_id.as_str())
-            .await
-            .expect("outbox should load")
-            .is_some()
-    );
+    let message_id = ctx
+        .assert_ordinary_delivery_pending(&device_key, &delivery_id)
+        .await;
 
     let ack_non_ok_before = ctx.private.metrics.snapshot().frames_ack_non_ok;
     let mut rejected = PubAck::new(publish.pkid);
@@ -2171,14 +2237,11 @@ async fn mqtt_negative_puback_retains_durable_outbox_for_redelivery() {
     })
     .await;
 
-    assert!(
-        ctx.state
-            .store
-            .load_private_outbox_entry(device_id, delivery_id.as_str())
-            .await
-            .expect("outbox should load after rejected PUBACK")
-            .is_some(),
-        "negative PUBACK must not delete the durable delivery"
+    assert_eq!(
+        ctx.assert_ordinary_delivery_pending(&device_key, &delivery_id)
+            .await,
+        message_id,
+        "negative PUBACK must retain the same durable ordinary delivery"
     );
 }
 
