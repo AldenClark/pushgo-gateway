@@ -30,6 +30,8 @@ pub mod ingress;
 mod product_pg_tests;
 #[cfg(test)]
 mod product_sqlite_tests;
+#[cfg(test)]
+mod product_maintenance_tests;
 pub mod server;
 #[cfg(test)]
 mod widget_provider_tests;

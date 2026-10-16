@@ -11,6 +11,21 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 impl DatabaseDriver {
+    #[cfg(feature = "qa")]
+    pub(crate) fn resource_pool_snapshot(&self) -> serde_json::Value {
+        match self {
+            Self::Sqlite(db) => db.resource_pool_snapshot(),
+            Self::Postgres(db) => {
+                let pool = db.ordinary_pool();
+                serde_json::json!({"backend": "postgres", "pools": [{"name": "product", "size": pool.size(), "idle": pool.num_idle()}], "scope": "pool atomics only; dedicated owner connection is outside this pool"})
+            }
+            Self::MySql(db) => {
+                let pool = db.ordinary_pool();
+                serde_json::json!({"backend": "mysql", "pools": [{"name": "product", "size": pool.size(), "idle": pool.num_idle()}], "scope": "pool atomics only; pinned data session is counted busy; dedicated owner connection is outside this pool"})
+            }
+        }
+    }
+
     pub(crate) async fn initialize_ordinary(
         &self,
         config: Config,

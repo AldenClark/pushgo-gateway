@@ -14,6 +14,16 @@ pub(crate) struct ProviderBudgets {
 }
 
 impl ProviderBudgets {
+    #[cfg(feature = "qa")]
+    pub(crate) fn resource_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "order": ["FCM", "APNS", "WNS"],
+            "limits": self.limits,
+            "available": [self.fcm.available_permits(), self.apns.available_permits(), self.wns.available_permits()],
+            "scope": "one shared product budget; ordinary claims, network and receipt waits plus retained business users"
+        })
+    }
+
     pub(crate) fn new(apns: usize, fcm: usize, wns: usize) -> Self {
         assert!(
             [apns, fcm, wns]

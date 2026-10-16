@@ -243,6 +243,100 @@ mod tests {
     // A normal Storage test, with a real new SQLite core/sidecar and shared
     // mutation gate. No fixture ledger or second application server is used.
     #[tokio::test]
+    async fn product_widget_projection_limits_a_turn_and_continues_257_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("widget-bounded-product.db").display()
+        );
+        let health = Arc::new(Health::default());
+        let owner = ProductOwner::acquire(Some(&url), health.clone())
+            .await
+            .unwrap();
+        let storage = Storage::new_with_config(StorageInitConfig {
+            db_url: Some(url),
+            managed_upgrade: false,
+            ..StorageInitConfig::default()
+        })
+        .await
+        .unwrap();
+        let mut config = Config::default();
+        config.private.enabled = false;
+        let ordinary = storage.initialize_ordinary(config, health).await.unwrap();
+        let fixture_auth = crate::util::generate_hex_id_128();
+        let channel = storage
+            .upsert_private_channel(None, Some("bounded Widget projection"), &fixture_auth)
+            .await
+            .unwrap()
+            .channel_id;
+        let device_key = "widget-bounded-owner";
+        storage
+            .upsert_device_route(&DeviceRouteRecordRow {
+                device_key: device_key.into(),
+                platform: "ios".into(),
+                channel_type: "private".into(),
+                provider_token: None,
+                updated_at: now(),
+            })
+            .await
+            .unwrap();
+        storage
+            .private_subscribe_channel(channel, PrivateDeviceId::derive(device_key).into())
+            .await
+            .unwrap();
+        for index in 0..257 {
+            let token = format!("{index:064x}");
+            let widget = WidgetPushSubscriptionRecord {
+                device_key: device_key.into(),
+                platform: "ios".into(),
+                token: token.clone(),
+                widget_kind: "io.ethan.pushgo.widgets.unread".into(),
+                family: "systemSmall".into(),
+                schema_version: 1,
+                created_at: now(),
+                updated_at: now(),
+            };
+            storage
+                .upsert_widget_push_subscriptions(
+                    device_key,
+                    Platform::IOS,
+                    &token,
+                    &[widget],
+                    1,
+                    now(),
+                )
+                .await
+                .unwrap();
+        }
+        ordinary
+            .accept(AcceptRequest {
+                channel_id: crate::value::ChannelId::from(channel).to_string(),
+                authorized_channel: Some(channel),
+                op_id: Some("widget-bounded-257".into()),
+                title: "bounded Widget projection".into(),
+                ..AcceptRequest::default()
+            })
+            .await
+            .unwrap();
+        let (dispatch, _receivers) = DispatchChannels::new();
+        for expected in [128, 256, 257] {
+            project_pending(&storage, &dispatch, 1).await.unwrap();
+            assert_eq!(
+                storage
+                    .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                    .await
+                    .unwrap(),
+                expected,
+                "one turn must project at most one 128-target page and retain progress"
+            );
+        }
+        assert!(ordinary.next_widget_refresh().await.unwrap().is_none());
+        ordinary.health.ensure().unwrap();
+        storage.close_ordinary_storage().await.unwrap();
+        owner.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn product_widget_projection_recovers_a_terminal_enqueue_without_reviving_it() {
         let directory = tempfile::tempdir().unwrap();
         let url = format!(

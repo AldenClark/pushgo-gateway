@@ -207,6 +207,11 @@ pub struct Args {
     #[arg(long = "qa-provider-fixture-dir")]
     pub qa_provider_fixture_dir: Option<std::path::PathBuf>,
 
+    /// QA builds only: fixed-budget, five-second resource observations.
+    #[cfg(feature = "qa")]
+    #[arg(long = "qa-resource-observation-dir")]
+    pub qa_resource_observation_dir: Option<std::path::PathBuf>,
+
     /// HTTP bind address.
     #[arg(
         env = "PUSHGO_HTTP_ADDR",

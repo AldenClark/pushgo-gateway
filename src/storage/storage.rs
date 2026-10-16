@@ -139,6 +139,11 @@ impl Storage {
         self.cache.memory_snapshot()
     }
 
+    #[cfg(feature = "qa")]
+    pub(crate) fn resource_pool_snapshot(&self) -> serde_json::Value {
+        self.db.resource_pool_snapshot()
+    }
+
     #[cfg(test)]
     pub(crate) fn reset_channel_password_kdf_runs(&self) {
         self.channel_password_gate.reset_kdf_runs();

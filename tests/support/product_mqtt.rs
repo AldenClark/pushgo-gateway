@@ -83,4 +83,26 @@ impl ProductMqttClient {
             "expired ordinary message must not start a new MQTT PUBLISH"
         );
     }
+
+    /// Sending PUBACK alone is not evidence of durable ledger convergence.
+    #[allow(dead_code)]
+    pub async fn acknowledge(&mut self, packet_id: u16) {
+        let mut encoded = BytesMut::new();
+        v5::PubAck::new(packet_id)
+            .write(&mut encoded)
+            .expect("MQTT PUBACK should encode");
+        self.stream
+            .write_all(&encoded)
+            .await
+            .expect("MQTT PUBACK should send");
+    }
+
+    /// Keep the actual product connection alive during long idle observations.
+    #[allow(dead_code)]
+    pub async fn ping(&mut self) {
+        self.stream
+            .write_all(&[0xc0, 0x00])
+            .await
+            .expect("MQTT PINGREQ should send");
+    }
 }

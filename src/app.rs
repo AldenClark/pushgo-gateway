@@ -72,6 +72,10 @@ pub struct AppShutdown {
     submission_recovery: SubmissionRecoveryWorker,
     dispatch_workers: DispatchWorkerTasks,
     runtime_counters: Arc<RuntimeCounterCollector>,
+    #[cfg(feature = "qa")]
+    qa_provider_budgets: Arc<crate::dispatch::ProviderBudgets>,
+    #[cfg(feature = "qa")]
+    qa_resource_observation: Option<crate::qa::ResourceObservation>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -83,6 +87,28 @@ pub struct AppShutdownReport {
 }
 
 impl AppShutdown {
+    #[cfg(feature = "qa")]
+    pub fn start_qa_resource_observation(
+        &mut self,
+        directory: &std::path::Path,
+        allocator: fn() -> serde_json::Value,
+    ) -> std::io::Result<()> {
+        if self.qa_resource_observation.is_some() {
+            return Err(std::io::Error::other(
+                "QA resource observer already started",
+            ));
+        }
+        self.qa_resource_observation = Some(crate::qa::ResourceObservation::start(
+            directory,
+            self.store.clone(),
+            self.private.clone(),
+            self.ordinary_counters(),
+            self.qa_provider_budgets.clone(),
+            allocator,
+        )?);
+        Ok(())
+    }
+
     pub fn ordinary_counters(&self) -> Arc<crate::ordinary::Counters> {
         self.ordinary.store.counters.clone()
     }
@@ -110,6 +136,10 @@ impl AppShutdown {
             submission_recovery,
             dispatch_workers,
             runtime_counters,
+            #[cfg(feature = "qa")]
+                qa_provider_budgets: _,
+            #[cfg(feature = "qa")]
+            qa_resource_observation,
         } = self;
         let mut report = AppShutdownReport::default();
         ordinary.stop_requester().send_replace(true);
@@ -162,6 +192,24 @@ impl AppShutdown {
         report.joined = report.joined.saturating_add(counter_report.joined);
         report.panicked = report.panicked.saturating_add(counter_report.panicked);
         report.aborted = report.aborted.saturating_add(counter_report.aborted);
+
+        // The optional QA owner observes drained work before pools/owner are
+        // released. No observer or sampling task exists without the QA flag.
+        #[cfg(feature = "qa")]
+        if let Some(observation) = qa_resource_observation {
+            match observation.shutdown_until(deadline).await {
+                Ok(()) => report.joined += 1,
+                Err(error) => {
+                    report.failed += 1;
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::ERROR,
+                        event = "qa.resource_observer_failed",
+                        error = %(error.to_string())
+                    );
+                }
+            }
+        }
 
         // HTTP has drained before this phase. Keep the owner until every
         // session, external attempt and durable receipt has finished. On an
@@ -727,6 +775,8 @@ pub async fn build_app(
     )
     .await?;
 
+    #[cfg(feature = "qa")]
+    let qa_provider_budgets = provider_budgets.clone();
     let dispatch_workers = DispatchWorkerDeps {
         budgets: provider_budgets,
         apns: Arc::clone(&apns),
@@ -778,6 +828,10 @@ pub async fn build_app(
             submission_recovery,
             dispatch_workers,
             runtime_counters,
+            #[cfg(feature = "qa")]
+            qa_provider_budgets,
+            #[cfg(feature = "qa")]
+            qa_resource_observation: None,
         },
     })
 }

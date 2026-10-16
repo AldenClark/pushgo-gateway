@@ -33,6 +33,41 @@ const APNS_SANDBOX_ENDPOINT: &str = "https://api.sandbox.push.apple.com";
 const FCM_SEND_BASE_URL: &str = "https://fcm.googleapis.com";
 const APP_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
 
+// Measurement-only ABI from the frozen C9 observer, kept out of the product
+// library (which continues to forbid unsafe code) and every non-QA build.
+#[cfg(all(feature = "qa", target_os = "macos"))]
+fn qa_allocator_snapshot() -> serde_json::Value {
+    #[repr(C)]
+    #[derive(Default)]
+    struct Statistics {
+        blocks_in_use: u32,
+        size_in_use: usize,
+        max_size_in_use: usize,
+        size_allocated: usize,
+    }
+    unsafe extern "C" {
+        fn malloc_zone_statistics(zone: *mut std::ffi::c_void, statistics: *mut Statistics);
+    }
+    let mut value = Statistics::default();
+    // SAFETY: the synchronous system API writes this repr(C) output with the
+    // SDK malloc_statistics_t layout; a null zone sums all process malloc zones.
+    unsafe {
+        malloc_zone_statistics(std::ptr::null_mut(), &mut value);
+    }
+    serde_json::json!({
+        "blocks_in_use": value.blocks_in_use,
+        "bytes_in_use": value.size_in_use,
+        "max_bytes_touched": value.max_size_in_use,
+        "bytes_reserved": value.size_allocated,
+        "scope": "all process malloc zones; excludes non-malloc VM mappings; not RSS or a complete leak detector"
+    })
+}
+
+#[cfg(all(feature = "qa", not(target_os = "macos")))]
+fn qa_allocator_snapshot() -> serde_json::Value {
+    serde_json::Value::Null
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse().normalized();
@@ -78,6 +113,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .await?;
     let AppRuntime { router, shutdown } = runtime;
+    #[cfg(feature = "qa")]
+    let shutdown = {
+        let mut shutdown = shutdown;
+        if let Some(directory) = args.qa_resource_observation_dir.as_deref()
+            && let Err(error) =
+                shutdown.start_qa_resource_observation(directory, qa_allocator_snapshot)
+        {
+            let _ = shutdown.shutdown(APP_SHUTDOWN_GRACE).await;
+            return Err(error.into());
+        }
+        shutdown
+    };
 
     ::tracing::event!(
         target: "gateway.trace_event",
