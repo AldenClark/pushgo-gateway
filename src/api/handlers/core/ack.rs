@@ -50,15 +50,24 @@ pub(crate) async fn messages_ack(
                 "delivery_id_required",
             ));
         }
-        let removed = state
+        let ids = vec![delivery_id.to_owned()];
+        let ordinary = state
             .store
-            .ack_provider_item(
-                derive_private_device_id(&device_key),
-                delivery_id,
-                chrono::Utc::now().timestamp_millis(),
-            )
-            .await?
-            .is_some();
+            .ordinary_handle()
+            .ok_or_else(|| Error::Internal("ordinary authority is not initialized".into()))?;
+        // Existing single-ACK accepted unknown identifiers of any length. A
+        // generated ordinary ID cannot exceed the kernel's parser boundary.
+        let ordinary_removed = if delivery_id.len() <= MAX_DELIVERY_ID_LEN {
+            ordinary.ack(&device_key, ids.clone()).await?
+        } else {
+            0
+        };
+        let retained_removed = if ordinary_removed == ids.len() {
+            0
+        } else {
+            ack_retained_provider_items(&state, &device_key, &ids).await?
+        };
+        let removed = ordinary_removed + retained_removed > 0;
         Ok(crate::api::ok(LegacyAckResponse { removed }))
     }
     .instrument(span)
@@ -91,13 +100,17 @@ async fn ack_provider_items(
     delivery_ids: Vec<String>,
     event: &'static str,
 ) -> HttpResult {
-    let device_id = derive_private_device_id(device_key);
-    let now = chrono::Utc::now().timestamp_millis();
-    let removed_count = state
+    let ordinary = state
         .store
-        .ack_provider_items(device_id, &delivery_ids, now)
-        .await?
-        .len();
+        .ordinary_handle()
+        .ok_or_else(|| Error::Internal("ordinary authority is not initialized".into()))?;
+    let ordinary_removed = ordinary.ack(device_key, delivery_ids.clone()).await?;
+    let retained_removed = if ordinary_removed == delivery_ids.len() {
+        0
+    } else {
+        ack_retained_provider_items(state, device_key, &delivery_ids).await?
+    };
+    let removed_count = ordinary_removed + retained_removed;
     ::tracing::event!(
         target: "gateway.trace_event",
         ::tracing::Level::INFO,
@@ -110,6 +123,44 @@ async fn ack_provider_items(
         requested_count: delivery_ids.len(),
         removed_count,
     }))
+}
+
+async fn ack_retained_provider_items(
+    state: &AppState,
+    device_key: &str,
+    delivery_ids: &[String],
+) -> Result<usize, Error> {
+    let device_id = derive_private_device_id(device_key);
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut retained = Vec::with_capacity(delivery_ids.len());
+    for id in delivery_ids {
+        let Some(candidate) = state
+            .store
+            .peek_provider_candidate(device_id, id, now)
+            .await?
+        else {
+            continue;
+        };
+        let Some(envelope) = crate::private::protocol::PrivatePayloadEnvelope::decode_postcard(
+            candidate.payload.as_ref(),
+        ) else {
+            continue;
+        };
+        if envelope.is_supported_version()
+            && super::pull::is_retained_model(&envelope.data)
+            && envelope.data.get("delivery_id").map(String::as_str) == Some(id.as_str())
+        {
+            retained.push(id.clone());
+        }
+    }
+    if retained.is_empty() {
+        return Ok(0);
+    }
+    Ok(state
+        .store
+        .ack_provider_items(device_id, &retained, now)
+        .await?
+        .len())
 }
 
 fn normalize_delivery_ids(mut delivery_ids: Vec<String>) -> Result<Vec<String>, Error> {

@@ -41,8 +41,18 @@ pub(crate) async fn send_status(
     let fut = async move {
         let op_id = OpId::parse(&op_id)?;
         let op_id_text = op_id.into_inner();
+        let ordinary = state.store.ordinary_handle().ok_or_else(|| {
+            crate::api::Error::Internal("ordinary authority is not initialized".into())
+        })?;
+        match ordinary.status(&op_id_text).await {
+            Ok(record) => return Ok(ok(record)),
+            Err(crate::ordinary::KernelError::NotFound) => {}
+            Err(error) => return Err(error.into()),
+        }
+        // Event / Thing still own their existing status records. An ordinary
+        // record in an unconverted old database is never a fallback authority.
         match state.store.load_sender_submit_status(&op_id_text).await? {
-            Some(record) => {
+            Some(record) if record.model != "message" => {
                 ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::INFO,
@@ -53,7 +63,7 @@ pub(crate) async fn send_status(
                 );
                 Ok(ok(SendStatusResponse::from(record)))
             }
-            None => Ok(err_with_code(
+            _ => Ok(err_with_code(
                 axum::http::StatusCode::NOT_FOUND,
                 "send status not found",
                 "send_status_not_found",

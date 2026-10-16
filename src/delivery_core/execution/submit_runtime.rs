@@ -6,10 +6,12 @@ use crate::{
     delivery_core::{
         error::CoreError,
         execution::request::{
-            DispatchAlert, DispatchEntityPayload, DispatchEventInput, DispatchMessageInput,
-            DispatchRequest, DispatchThingInput,
+            DispatchAlert, DispatchEntityPayload, DispatchEventInput, DispatchRequest,
+            DispatchThingInput,
         },
-        response::DeliverySummary,
+        response::{
+            DeliveryDedupeStatus, DeliveryDispatchStatus, DeliverySummary, EntityRef, SubmitResult,
+        },
         store::{idempotency::IdempotencyStore, sender_status::SenderStatusStore},
         submit::{AuthorizedSubmitChannel, SubmitRuntime},
     },
@@ -50,26 +52,31 @@ impl SubmitRuntime for AppState {
         .map_err(core_error_from_api)
     }
 
-    async fn dispatch_message(
+    async fn accept_ordinary_message(
         &self,
-        input: DispatchMessageInput,
-    ) -> Result<DeliverySummary, CoreError> {
-        let request_fingerprint = input.idempotency_fingerprint();
-        let message_id = input.message_id;
-        dispatch_entity_notification(
-            self,
-            input.authorized_channel.channel_id,
-            DispatchRequest::new(
-                input.op_id.unwrap_or_default(),
-                Some(request_fingerprint),
-                input.occurred_at.unwrap_or_default(),
-                DispatchAlert::new(Some(input.title), input.body, input.severity, input.ttl),
-                DispatchEntityPayload::message(message_id, input.custom_data, input.extra_fields),
-                input.delivery_policy,
-            ),
-        )
-        .await
-        .map_err(core_error_from_api)
+        channel: AuthorizedSubmitChannel,
+        message: crate::domain_model::message::MessageInput,
+        now_millis: i64,
+    ) -> Result<SubmitResult, CoreError> {
+        let thing_id = message
+            .thing_id
+            .as_deref()
+            .map(|raw| {
+                crate::value::EntityId::parse(raw, "thing_id")
+                    .map(crate::value::EntityId::into_inner)
+            })
+            .transpose()?;
+        let ordinary = self.store.ordinary_handle().ok_or_else(|| {
+            CoreError::internal("ordinary authority was not initialized before ingress")
+        })?;
+        let accepted = ordinary
+            .accept_authorized(channel.channel_id, message, now_millis)
+            .await
+            .map_err(CoreError::from)?;
+        crate::ordinary::widget_refresh::project_pending(&self.store, &self.dispatch, 1)
+            .await
+            .map_err(CoreError::from)?;
+        ordinary_submit_result(channel, thing_id, accepted)
     }
 
     async fn dispatch_event(
@@ -112,6 +119,52 @@ impl SubmitRuntime for AppState {
         .await
         .map_err(core_error_from_api)
     }
+}
+
+fn ordinary_submit_result(
+    channel: AuthorizedSubmitChannel,
+    thing_id: Option<String>,
+    accepted: crate::ordinary::Accepted,
+) -> Result<SubmitResult, CoreError> {
+    let dedupe = match accepted.acceptance {
+        "new" => DeliveryDedupeStatus::New,
+        "duplicate_pending" => DeliveryDedupeStatus::DuplicatePending,
+        "duplicate_completed" => DeliveryDedupeStatus::DuplicateCompleted,
+        value => {
+            return Err(CoreError::internal(format!(
+                "unknown ordinary acceptance: {value}"
+            )));
+        }
+    };
+    let dispatch = match accepted.dispatch_status {
+        "not_attempted" => DeliveryDispatchStatus::NotAttempted,
+        "attempted_accepted" => DeliveryDispatchStatus::AttemptedAccepted,
+        "provider_queued" => DeliveryDispatchStatus::ProviderQueued,
+        "attempted_partial_failure" => DeliveryDispatchStatus::AttemptedPartialFailure,
+        value => {
+            return Err(CoreError::internal(format!(
+                "unknown ordinary dispatch status: {value}"
+            )));
+        }
+    };
+    let summary = DeliverySummary::new(
+        channel.channel_id_text,
+        accepted.op_id,
+        accepted.delivery_id,
+        dedupe,
+        dispatch,
+    );
+    Ok(SubmitResult {
+        channel_id: summary.channel_id.clone(),
+        op_id: summary.op_id.clone(),
+        entity: EntityRef::Message {
+            message_id: accepted.message_id,
+            thing_id,
+        },
+        delivery_id: summary.delivery_id.clone(),
+        acceptance: summary.submit_acceptance(),
+        summary,
+    })
 }
 
 pub(crate) fn core_error_to_api_error(value: CoreError) -> Error {
@@ -163,6 +216,7 @@ fn stable_error_code(code: &str) -> Option<&'static str> {
         "channel_not_authorized" => Some("channel_not_authorized"),
         "op_id_not_allowed" => Some("op_id_not_allowed"),
         "op_id_payload_conflict" => Some("op_id_payload_conflict"),
+        "op_id_scope_conflict" => Some("op_id_scope_conflict"),
         _ => None,
     }
 }
@@ -171,6 +225,72 @@ fn stable_error_code(code: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::storage::StoreError;
+
+    fn ordinary_result(acceptance: &'static str, dispatch_status: &'static str) -> SubmitResult {
+        ordinary_submit_result(
+            AuthorizedSubmitChannel {
+                channel_id: [7; 16],
+                channel_id_text: crate::value::ChannelId::from([7; 16]).to_string(),
+            },
+            None,
+            crate::ordinary::Accepted {
+                delivery_id: "accepted-delivery".into(),
+                message_id: "accepted-message".into(),
+                op_id: "accepted-op".into(),
+                acceptance,
+                dispatch_status,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn accepted_without_targets_stays_a_successful_identity_ack_with_failed_dispatch() {
+        let result = ordinary_result("new", "not_attempted");
+        assert_eq!(
+            result.summary.dispatch_status,
+            DeliveryDispatchStatus::NotAttempted
+        );
+        assert_eq!(
+            crate::delivery_core::submit::sender_status_from_dispatch(
+                result.summary.dispatch_status
+            ),
+            crate::storage::SenderSubmitStatusKind::Failed
+        );
+        let wire = serde_json::to_value(
+            crate::api::handlers::send_ack::SendAck::from_submit_result(result).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(wire["op_id"], "accepted-op");
+        assert_eq!(wire["message_id"], "accepted-message");
+        assert!(wire.get("dispatch_status").is_none());
+        assert!(wire.get("status").is_none());
+    }
+
+    #[test]
+    fn completed_replay_keeps_the_committed_summary_instead_of_inventing_queue_work() {
+        let result = ordinary_result("duplicate_completed", "attempted_accepted");
+        assert_eq!(
+            result.acceptance,
+            crate::delivery_core::response::SubmitAcceptance::DuplicateCompleted
+        );
+        assert_eq!(
+            result.summary.dispatch_status,
+            DeliveryDispatchStatus::AttemptedAccepted
+        );
+        assert_eq!(
+            crate::delivery_core::submit::sender_status_from_dispatch(
+                result.summary.dispatch_status
+            ),
+            crate::storage::SenderSubmitStatusKind::Sent
+        );
+        let result = ordinary_result("duplicate_completed", "attempted_partial_failure");
+        assert_eq!(
+            result.summary.dispatch_status,
+            DeliveryDispatchStatus::AttemptedPartialFailure
+        );
+        assert!(result.summary.partial_failure);
+    }
 
     #[test]
     fn password_kdf_overload_survives_the_delivery_core_adapter_round_trip() {
@@ -185,5 +305,41 @@ mod tests {
             CoreError::from(StoreError::PasswordKdfBusy),
             CoreError::TooBusy
         ));
+    }
+
+    #[test]
+    fn ordinary_scope_conflict_survives_the_storage_adapter() {
+        let core = CoreError::from(StoreError::OperationScopeConflict);
+        assert!(
+            matches!(core_error_to_api_error(core), Error::Conflict { code, .. }
+            if code == "op_id_scope_conflict")
+        );
+    }
+
+    #[test]
+    fn native_route_capacity_conflict_keeps_its_http_status_and_code() {
+        use axum::response::IntoResponse;
+        let error = Error::StoreError(StoreError::Ordinary(
+            crate::ordinary::KernelError::Control {
+                status: 409,
+                code: "route_transition_pending_capacity_exceeded",
+                message: "pending deliveries exceed private route capacity".into(),
+            },
+        ));
+        assert_eq!(
+            error.into_response().status(),
+            axum::http::StatusCode::CONFLICT
+        );
+        let core = CoreError::from(StoreError::Ordinary(
+            crate::ordinary::KernelError::Control {
+                status: 409,
+                code: "route_transition_pending_capacity_exceeded",
+                message: "pending deliveries exceed private route capacity".into(),
+            },
+        ));
+        assert!(
+            matches!(core_error_to_api_error(core), Error::Conflict { code, .. }
+            if code == "route_transition_pending_capacity_exceeded")
+        );
     }
 }

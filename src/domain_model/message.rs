@@ -2,16 +2,12 @@ use hashbrown::HashMap;
 use serde_json::{Map as JsonMap, Value};
 
 use crate::{
-    delivery_core::{error::CoreError, payload::EntityKind, store::idempotency::IdempotencyStore},
+    delivery_core::error::CoreError,
     value::{EntityId, MetadataEntries, NormalizedImageUrls, NormalizedTags, OpId, OptionalText},
 };
 
 use super::{
-    common::DomainAction,
-    ids::{ResolvedSemanticId, SemanticScope},
-    projection::{
-        AlertHint, DomainDeliveryPolicy, DomainPayloadProjection, EntityRef, NormalizedEnvelope,
-    },
+    projection::AlertHint,
     spec::{ActionSpec, DomainActionKind, DomainModelKind, EntityIdKind},
 };
 
@@ -41,12 +37,18 @@ pub(crate) struct MessageSend {
     pub(crate) input: MessageInput,
 }
 
+/// Pure ordinary input preparation. Identity allocation belongs to the
+/// ordinary ledger transaction, so preparing a message never writes a second
+/// semantic-id or sender-status record.
 #[derive(Debug, Clone)]
-pub(crate) struct NormalizedMessageCommand {
-    pub(crate) message_id: String,
+pub(crate) struct PreparedMessage {
+    pub(crate) op_id: String,
     pub(crate) thing_id: Option<String>,
+    pub(crate) occurred_at: i64,
     pub(crate) fingerprint_occurred_at: Option<i64>,
-    pub(crate) projection: DomainPayloadProjection,
+    pub(crate) ttl: Option<i64>,
+    pub(crate) fields: std::collections::BTreeMap<String, String>,
+    pub(crate) fingerprint: String,
 }
 
 impl MessageInput {
@@ -84,13 +86,7 @@ impl MessageSend {
         Self { input }
     }
 
-    pub(crate) async fn normalize(
-        self,
-        idempotency: &(dyn IdempotencyStore + Send + Sync),
-        channel_id: [u8; 16],
-        channel_id_text: String,
-        now_millis: i64,
-    ) -> Result<NormalizedEnvelope<NormalizedMessageCommand>, CoreError> {
+    pub(crate) fn prepare(self, now_millis: i64) -> Result<PreparedMessage, CoreError> {
         self.input.validate()?;
         let thing_id = self
             .input
@@ -98,23 +94,14 @@ impl MessageSend {
             .as_deref()
             .map(|raw| EntityId::parse(raw, "thing_id").map(EntityId::into_inner))
             .transpose()?;
-        let fingerprint_occurred_at = self.input.occurred_at;
-        let occurred_at = if thing_id.is_some() {
-            self.input.occurred_at.ok_or_else(|| {
-                ::tracing::event!(
-                    target: "gateway.trace_event",
-                    ::tracing::Level::WARN,
-                    event = "message.route_rejected",
-                    channel_id = %(crate::util::redact_text(channel_id_text.as_str())),
-                    reason = %("occurred_at_required_for_thing_scoped_message")
-                );
-                CoreError::validation_code(
+        let occurred_at = match (&thing_id, self.input.occurred_at) {
+            (Some(_), None) => {
+                return Err(CoreError::validation_code(
                     "occurred_at is required when message is scoped to thing_id",
                     "occurred_at_required_for_thing_scoped_message",
-                )
-            })?
-        } else {
-            self.input.occurred_at.unwrap_or(now_millis)
+                ));
+            }
+            (_, value) => value.unwrap_or(now_millis),
         };
         let op_id = self
             .input
@@ -122,40 +109,50 @@ impl MessageSend {
             .as_deref()
             .map(OpId::parse)
             .transpose()?
-            .unwrap_or_else(|| OpId::generate(now_millis));
-        let message_id = ResolvedSemanticId::resolve_create(
-            idempotency,
-            SemanticScope::semantic_create_key(
-                &channel_id_text,
-                "message",
-                thing_id.as_deref(),
-                &op_id,
-            )
-            .as_str(),
+            .unwrap_or_else(|| OpId::generate(now_millis))
+            .into_inner();
+        let (alert, custom_data, extra_fields) = self.project_content(thing_id.as_deref())?;
+        let mut fields = std::collections::BTreeMap::new();
+        fields.extend(custom_data);
+        fields.extend(extra_fields);
+        fields.insert(
+            "title".into(),
+            alert.title.as_deref().unwrap_or_default().trim().into(),
+        );
+        if let Some(body) = alert.body {
+            fields.insert("body".into(), body);
+        }
+        fields.insert(
+            "severity".into(),
+            crate::value::NotificationSeverity::normalize(alert.severity.clone())
+                .as_str()
+                .into(),
+        );
+        let mut fingerprint_fields = fields.clone();
+        // Preserve the product conflict rule: severity is fingerprinted before
+        // provider normalization; absent occurred_at is not the changing clock.
+        fingerprint_fields.insert("severity".into(), alert.severity.unwrap_or_default());
+        let fingerprint = blake3::hash(
+            &serde_json::to_vec(&(fingerprint_fields, self.input.occurred_at, self.input.ttl))
+                .map_err(|error| CoreError::internal(error.to_string()))?,
         )
-        .await?
-        .semantic_id;
-        let projection = self.project_payload(message_id.clone(), thing_id.clone())?;
-        Ok(NormalizedEnvelope {
-            channel_id,
-            channel_id_text,
-            op_id: op_id.into_inner(),
+        .to_hex()
+        .to_string();
+        Ok(PreparedMessage {
+            op_id,
+            thing_id,
             occurred_at,
-            action: DomainAction::Send,
-            command: NormalizedMessageCommand {
-                message_id,
-                thing_id,
-                fingerprint_occurred_at,
-                projection,
-            },
+            fingerprint_occurred_at: self.input.occurred_at,
+            ttl: self.input.ttl,
+            fields,
+            fingerprint,
         })
     }
 
-    fn project_payload(
+    fn project_content(
         &self,
-        message_id: String,
-        thing_id: Option<String>,
-    ) -> Result<DomainPayloadProjection, CoreError> {
+        thing_id: Option<&str>,
+    ) -> Result<(AlertHint, HashMap<String, String>, HashMap<String, String>), CoreError> {
         let normalized_body = OptionalText::normalize_owned(self.input.body.clone());
         let normalized_url = OptionalText::normalize_owned(self.input.url.clone());
         let normalized_images =
@@ -179,22 +176,17 @@ impl MessageSend {
             custom_data.insert("metadata".to_string(), encoded);
         }
         let mut extra_fields = HashMap::with_capacity(3);
-        extra_fields.insert("message_id".to_string(), message_id.clone());
         if !normalized_tags.is_empty() {
             let encoded = serde_json::to_string(&normalized_tags).map_err(|_| {
                 CoreError::validation_code("tags format is invalid", "tags_format_invalid")
             })?;
             extra_fields.insert("tags".to_string(), encoded);
         }
-        if let Some(thing_id) = thing_id.clone() {
-            extra_fields.insert("thing_id".to_string(), thing_id);
+        if let Some(thing_id) = thing_id {
+            extra_fields.insert("thing_id".to_string(), thing_id.to_owned());
         }
-        Ok(DomainPayloadProjection {
-            entity: EntityRef::Message {
-                message_id,
-                thing_id,
-            },
-            alert: AlertHint {
+        Ok((
+            AlertHint {
                 title: Some(self.input.title.clone()),
                 body: normalized_body,
                 severity: self.input.severity.clone(),
@@ -202,63 +194,21 @@ impl MessageSend {
             },
             custom_data,
             extra_fields,
-            delivery_policy: DomainDeliveryPolicy::for_model_action(
-                EntityKind::Message,
-                DomainAction::Send,
-            ),
-        })
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use serde_json::Map as JsonMap;
-
     use super::*;
-    use crate::storage::{OpDedupeReservation, SemanticIdReservation, StoreResult};
 
-    struct FakeIdempotencyStore;
-
-    #[async_trait]
-    impl IdempotencyStore for FakeIdempotencyStore {
-        async fn reserve_semantic_id(
-            &self,
-            _key: &str,
-            semantic_id: &str,
-            _created_at: i64,
-        ) -> StoreResult<SemanticIdReservation> {
-            Ok(SemanticIdReservation::Existing {
-                semantic_id: semantic_id.to_string(),
-            })
-        }
-
-        async fn reserve_op_pending(
-            &self,
-            _key: &str,
-            _delivery_id: &str,
-            _created_at: i64,
-        ) -> StoreResult<OpDedupeReservation> {
-            unreachable!("message normalization should not reserve op dedupe")
-        }
-
-        async fn mark_op_sent(&self, _key: &str, _delivery_id: &str) -> StoreResult<bool> {
-            unreachable!("message normalization should not mark op dedupe")
-        }
-
-        async fn clear_op_pending(&self, _key: &str, _delivery_id: &str) -> StoreResult<()> {
-            unreachable!("message normalization should not clear op dedupe")
-        }
-    }
-
-    #[tokio::test]
-    async fn message_without_occurred_at_uses_submit_clock() {
-        let normalized = MessageSend::new(MessageInput {
-            op_id: None,
+    fn input() -> MessageInput {
+        MessageInput {
+            op_id: Some("pure-op".into()),
             thing_id: None,
             occurred_at: None,
-            title: "clocked".to_string(),
-            body: None,
+            title: "  title  ".into(),
+            body: Some(" body ".into()),
             severity: None,
             ttl: None,
             url: None,
@@ -266,16 +216,97 @@ mod tests {
             ciphertext: None,
             tags: Vec::new(),
             metadata: JsonMap::new(),
-        })
-        .normalize(
-            &FakeIdempotencyStore,
-            [7; 16],
-            "channel-clock".to_string(),
-            1_725_000_123_456,
-        )
-        .await
-        .expect("message should normalize");
+        }
+    }
 
-        assert_eq!(normalized.occurred_at, 1_725_000_123_456);
+    #[test]
+    fn pure_message_preparation_uses_clock_without_allocating_identity() {
+        let prepared = MessageSend::new(input())
+            .prepare(1_725_000_123_456)
+            .unwrap();
+        assert_eq!(prepared.occurred_at, 1_725_000_123_456);
+        assert_eq!(prepared.fingerprint_occurred_at, None);
+        assert_eq!(
+            prepared.fields.get("title").map(String::as_str),
+            Some("title")
+        );
+        assert_eq!(
+            prepared.fields.get("body").map(String::as_str),
+            Some("body")
+        );
+        assert!(!prepared.fields.contains_key("message_id"));
+        assert!(!prepared.fields.contains_key("delivery_id"));
+    }
+
+    #[test]
+    fn thing_scoped_message_keeps_association_and_requires_occurred_at() {
+        let mut command = input();
+        command.thing_id = Some("thing-ordinary".into());
+        assert!(matches!(
+            MessageSend::new(command.clone()).prepare(10),
+            Err(CoreError::Validation {
+                code: "occurred_at_required_for_thing_scoped_message",
+                ..
+            })
+        ));
+        command.occurred_at = Some(123);
+        let prepared = MessageSend::new(command).prepare(999).unwrap();
+        assert_eq!(prepared.thing_id.as_deref(), Some("thing-ordinary"));
+        assert_eq!(prepared.occurred_at, 123);
+        assert_eq!(
+            prepared.fields.get("thing_id").map(String::as_str),
+            Some("thing-ordinary")
+        );
+    }
+
+    #[test]
+    fn omitted_clock_is_not_part_of_duplicate_fingerprint() {
+        let first = MessageSend::new(input()).prepare(10).unwrap();
+        let retry = MessageSend::new(input()).prepare(999).unwrap();
+        assert_eq!(first.fingerprint, retry.fingerprint);
+        let mut changed = input();
+        changed.thing_id = Some("different-scope".into());
+        changed.occurred_at = Some(10);
+        assert_ne!(
+            first.fingerprint,
+            MessageSend::new(changed).prepare(10).unwrap().fingerprint
+        );
+    }
+
+    #[test]
+    fn pure_preparation_preserves_absolute_ttl_including_elapsed_values() {
+        let now = 1_725_000_000_000;
+        for ttl in [0, -1, now - 1, now + 60_000, i64::MAX] {
+            let mut command = input();
+            command.ttl = Some(ttl);
+            let prepared = MessageSend::new(command).prepare(now).unwrap();
+            assert_eq!(prepared.ttl, Some(ttl));
+            assert!(
+                !prepared.fields.contains_key("ttl"),
+                "the acceptance transaction freezes the final absolute expiry"
+            );
+        }
+        let absent = MessageSend::new(input()).prepare(now).unwrap();
+        let mut zero = input();
+        zero.ttl = Some(0);
+        assert_ne!(
+            absent.fingerprint,
+            MessageSend::new(zero).prepare(now).unwrap().fingerprint
+        );
+    }
+
+    #[test]
+    fn product_and_ordinary_generated_message_ids_share_the_accepted_wire_format() {
+        for id in [
+            crate::util::generate_hex_id_128(),
+            crate::ordinary::types::generate_hex_id_128(),
+        ] {
+            assert_eq!(id.len(), 32);
+            assert!(
+                id.bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            );
+            assert_eq!(EntityId::parse(&id, "message_id").unwrap().into_inner(), id);
+        }
     }
 }
