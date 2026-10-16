@@ -143,7 +143,9 @@ impl ProductLedger {
                 let mut c = MySqlConnection::connect(url)
                     .await
                     .expect("open ordinary MySQL");
-                sqlx::query_as("SELECT message_id,accepted_at,expires_at,dedupe_until,payload_bytes,CAST(OCTET_LENGTH(payload_blob) AS SIGNED),(SELECT CAST(COUNT(*) AS SIGNED) FROM ordinary_targets t WHERE t.delivery_id=m.delivery_id) FROM ordinary_messages m WHERE op_id=?")
+                // Normalize only the observer's text metadata. The native
+                // binary identity comparison and storage stay unchanged.
+                sqlx::query_as("SELECT CAST(message_id AS CHAR CHARACTER SET utf8mb4),accepted_at,expires_at,dedupe_until,payload_bytes,CAST(OCTET_LENGTH(payload_blob) AS SIGNED),(SELECT CAST(COUNT(*) AS SIGNED) FROM ordinary_targets t WHERE t.delivery_id=m.delivery_id) FROM ordinary_messages m WHERE op_id=?")
                     .bind(op_id).fetch_one(&mut c).await.expect("ordinary MySQL identity must exist")
             }
         };

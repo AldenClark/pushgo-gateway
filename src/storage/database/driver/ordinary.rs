@@ -78,7 +78,10 @@ impl DatabaseDriver {
                 .bind(device_id.as_slice()).bind(padded.as_slice()).fetch_all(&db.ordinary_control_read_pool()).await?,
             Self::Postgres(db) => sqlx::query_scalar("SELECT device_key FROM devices WHERE device_id=$1 OR device_id=$2 ORDER BY device_id LIMIT 2")
                 .bind(device_id.as_slice()).bind(padded.as_slice()).fetch_all(&db.ordinary_pool()).await?,
-            Self::MySql(db) => sqlx::query_scalar("SELECT device_key FROM devices WHERE device_id=? OR device_id=? ORDER BY device_id LIMIT 2")
+            // Only result metadata changes: MySQL flags utf8mb4_bin text as
+            // binary, while SQLx checks String against character metadata.
+            // Keep the indexed identity predicates and ambiguity check intact.
+            Self::MySql(db) => sqlx::query_scalar("SELECT CAST(device_key AS CHAR CHARACTER SET utf8mb4) FROM devices WHERE device_id=? OR device_id=? ORDER BY device_id LIMIT 2")
                 .bind(device_id.as_slice()).bind(padded.as_slice()).fetch_all(&db.ordinary_pool()).await?,
         };
         let mut keys = keys.into_iter().flatten();

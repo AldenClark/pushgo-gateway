@@ -1834,6 +1834,15 @@ mod product_contract_tests {
             .private_route(key)
             .await
             .expect("current private owner");
+        assert_eq!(
+            crate::storage::database::DatabaseDriver::MySql(db.clone())
+                .ordinary_private_device_key(PrivateDeviceId::derive(key).into_inner())
+                .await
+                .expect(
+                    "canonical transport identity lookup must decode native binary-collated text"
+                ),
+            Some(key.to_owned())
+        );
         let grant = store
             .private_claim(&current, "c10-session-a", 1)
             .await
