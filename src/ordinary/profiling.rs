@@ -1,8 +1,15 @@
-//! Fixed-cardinality profiling. These wall times include executor/worker queues;
-//! statement time includes SQLite triggers and is never trigger-exclusive time.
+//! Fixed-cardinality profiling for QA/tests. Normal product builds retain only
+//! zero-sized pass-through guards; they do not read clocks or update these
+//! histograms. Observed wall times include executor/worker queues and SQLite
+//! trigger work, never trigger-exclusive time.
+#[cfg(any(test, feature = "qa"))]
 use crate::ordinary::metrics::Histogram;
-use serde_json::{Map, Value, json};
-use std::{future::Future, time::Instant};
+#[cfg(any(test, feature = "qa"))]
+use serde_json::Map;
+use serde_json::{Value, json};
+use std::future::Future;
+#[cfg(any(test, feature = "qa"))]
+use std::time::Instant;
 
 #[derive(Clone, Copy)]
 #[repr(usize)]
@@ -16,6 +23,7 @@ pub enum Path {
     Control,
     Read,
 }
+#[cfg(any(test, feature = "qa"))]
 const PATHS: [&str; 8] = [
     "accept",
     "fanout",
@@ -39,6 +47,7 @@ pub enum Phase {
     Auth,
     Compute,
 }
+#[cfg(any(test, feature = "qa"))]
 const PHASES: [&str; 8] = [
     "gate_wait",
     "gate_hold",
@@ -88,6 +97,7 @@ pub enum Statement {
     Control,
     Read,
 }
+#[cfg(any(test, feature = "qa"))]
 const STATEMENTS: [&str; 33] = [
     "auth",
     "dedupe",
@@ -125,13 +135,17 @@ const STATEMENTS: [&str; 33] = [
 ];
 
 pub struct Profile {
+    #[cfg(any(test, feature = "qa"))]
     phases: [[Histogram; PHASES.len()]; PATHS.len()],
+    #[cfg(any(test, feature = "qa"))]
     statements: [[Histogram; STATEMENTS.len()]; PATHS.len()],
 }
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            #[cfg(any(test, feature = "qa"))]
             phases: std::array::from_fn(|_| std::array::from_fn(|_| Histogram::default())),
+            #[cfg(any(test, feature = "qa"))]
             statements: std::array::from_fn(|_| std::array::from_fn(|_| Histogram::default())),
         }
     }
@@ -139,33 +153,65 @@ impl Default for Profile {
 /// Records on all exits, including errors and cancellation. A cancelled operation
 /// can continue on SQLx's worker; this is caller lifetime, not worker completion.
 pub struct Timer<'a> {
+    #[cfg(any(test, feature = "qa"))]
     histogram: &'a Histogram,
+    #[cfg(any(test, feature = "qa"))]
     started: Instant,
+    #[cfg(not(any(test, feature = "qa")))]
+    lifetime: std::marker::PhantomData<&'a ()>,
 }
 impl Drop for Timer<'_> {
+    #[cfg_attr(not(any(test, feature = "qa")), inline)]
     fn drop(&mut self) {
+        #[cfg(any(test, feature = "qa"))]
         self.histogram.record(self.started.elapsed());
     }
 }
+
+// Keep the normal-build resource promise mechanically checked by every
+// non-QA product compilation, not just by a QA-flavoured unit test.
+#[cfg(not(any(test, feature = "qa")))]
+const _: () = {
+    assert!(std::mem::size_of::<Profile>() == 0);
+    assert!(std::mem::size_of::<Timer<'static>>() == 0);
+};
+
 impl Profile {
+    #[cfg_attr(not(any(test, feature = "qa")), inline)]
     pub fn timer(&self, path: Path, phase: Phase) -> Timer<'_> {
+        #[cfg(not(any(test, feature = "qa")))]
+        let _ = (path, phase);
         Timer {
+            #[cfg(any(test, feature = "qa"))]
             histogram: &self.phases[path as usize][phase as usize],
+            #[cfg(any(test, feature = "qa"))]
             started: Instant::now(),
+            #[cfg(not(any(test, feature = "qa")))]
+            lifetime: std::marker::PhantomData,
         }
     }
+    #[cfg_attr(not(any(test, feature = "qa")), inline)]
     pub async fn phase<F: Future>(&self, path: Path, phase: Phase, future: F) -> F::Output {
+        #[cfg(any(test, feature = "qa"))]
         let _timer = self.timer(path, phase);
+        #[cfg(not(any(test, feature = "qa")))]
+        let _ = (path, phase);
         future.await
     }
+    #[cfg_attr(not(any(test, feature = "qa")), inline)]
     pub async fn sql<F: Future>(&self, path: Path, statement: Statement, future: F) -> F::Output {
+        #[cfg(any(test, feature = "qa"))]
         let _phase = self.timer(path, Phase::StatementInclusive);
+        #[cfg(any(test, feature = "qa"))]
         let _statement = Timer {
             histogram: &self.statements[path as usize][statement as usize],
             started: Instant::now(),
         };
+        #[cfg(not(any(test, feature = "qa")))]
+        let _ = (path, statement);
         future.await
     }
+    #[cfg(any(test, feature = "qa"))]
     pub fn snapshot(&self) -> Value {
         let mut paths = Map::new();
         for (p, name) in PATHS.iter().enumerate() {
@@ -186,5 +232,10 @@ impl Profile {
             );
         }
         json!({"paths": paths, "semantics": "fixed log2 microsecond histograms; unused statement labels omitted from snapshot; samples count observed calls, including error/cancel exits; statement_inclusive includes trigger work and SQLx dispatch/results; pool_acquire is pool queue plus checkout; begin is worker queue plus BEGIN after checkout; commit is worker queue plus COMMIT; gate_hold can contain nested fanout/maintenance timers, never sum nested totals as independent time"})
+    }
+
+    #[cfg(not(any(test, feature = "qa")))]
+    pub fn snapshot(&self) -> Value {
+        json!({"enabled": false, "scope": "per-statement profiling exists only in QA/test builds"})
     }
 }
