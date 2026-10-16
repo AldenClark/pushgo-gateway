@@ -392,7 +392,12 @@ impl WriteBlock {
             }
             ProductLedger::Mysql(url) => {
                 let mut connection = MySqlConnection::connect(url).await.unwrap();
-                sqlx::query("BEGIN").execute(&mut connection).await.unwrap();
+                // Administrative transaction control uses MySQL's text
+                // protocol; BEGIN is not supported by COM_STMT_PREPARE.
+                sqlx::raw_sql("BEGIN")
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
                 sqlx::query(
                     "SELECT singleton FROM ordinary_ledger_usage WHERE singleton=1 FOR UPDATE",
                 )
@@ -421,7 +426,7 @@ impl WriteBlock {
                 connection.close().await.unwrap();
             }
             Self::Mysql(mut connection) => {
-                sqlx::query("ROLLBACK")
+                sqlx::raw_sql("ROLLBACK")
                     .execute(&mut connection)
                     .await
                     .unwrap();
@@ -529,7 +534,7 @@ pub async fn terminate_fixed_owner_session(ledger: &ProductLedger) {
                 .unwrap();
             let owner = owner.expect("fresh synthetic DB must have a fixed MySQL owner");
             assert!(owner > 0);
-            sqlx::query(&format!("KILL CONNECTION {owner}"))
+            sqlx::raw_sql(&format!("KILL CONNECTION {owner}"))
                 .execute(&mut connection)
                 .await
                 .unwrap();
