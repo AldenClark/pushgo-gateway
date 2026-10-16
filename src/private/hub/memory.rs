@@ -30,8 +30,8 @@ impl PrivateHub {
             let presence = entry.value();
             let mut push_sender = |sender: &Sender<protocol::DeliverEnvelope>| {
                 presence_queue_depth = presence_queue_depth.saturating_add(sender.len());
-                presence_queue_capacity = presence_queue_capacity
-                    .saturating_add(sender.capacity().unwrap_or(0));
+                presence_queue_capacity =
+                    presence_queue_capacity.saturating_add(sender.capacity().unwrap_or(0));
             };
             if let Some(active) = presence.quic_active.as_ref() {
                 presence_active_conn_count = presence_active_conn_count.saturating_add(1);
@@ -69,6 +69,12 @@ impl PrivateHub {
             presence_draining_conn_count,
             presence_queue_depth,
             presence_queue_capacity,
+            ordinary_owned_work: self
+                .ordinary
+                .limit
+                .saturating_sub(self.ordinary.slots.available_permits()),
+            ordinary_owned_limit: self.ordinary.limit,
+            ordinary_active_payload_bytes: self.ordinary.payload_bytes.load(Ordering::Relaxed),
         }
     }
 }

@@ -25,6 +25,9 @@ impl WnsService {
     pub fn new(token_provider: Arc<dyn WnsTokenProvider>) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
+            // WNS channels may span arbitrarily many hosts. Retaining a pool
+            // per host would make idle connection ownership grow with history.
+            .pool_max_idle_per_host(0)
             .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
             .timeout(PROVIDER_REQUEST_TIMEOUT)
             .build()
@@ -40,6 +43,19 @@ impl WnsService {
         device_token: &str,
         payload: Arc<WnsPayload>,
     ) -> DispatchResult {
+        self.send_to_device_with_deadline(device_token, payload, None)
+            .await
+    }
+
+    async fn send_to_device_with_deadline(
+        &self,
+        device_token: &str,
+        payload: Arc<WnsPayload>,
+        deadline: Option<i64>,
+    ) -> DispatchResult {
+        if crate::providers::local_deadline_expired(deadline) {
+            return DispatchResult::delivery_expired();
+        }
         let body = match payload.encoded_body() {
             Ok(body) => body,
             Err(err) => return DispatchResult::from_error(0, Error::Internal(err.to_string())),
@@ -58,6 +74,7 @@ impl WnsService {
                 body,
                 priority,
                 ttl_seconds,
+                deadline,
             )
             .await;
         if dispatch.should_refresh_credentials() {
@@ -73,6 +90,7 @@ impl WnsService {
         body: Arc<[u8]>,
         priority: Option<u8>,
         ttl_seconds: Option<u32>,
+        deadline: Option<i64>,
     ) -> DispatchResult {
         let mut request = self
             .client
@@ -86,6 +104,9 @@ impl WnsService {
         }
         if let Some(ttl) = ttl_seconds {
             request = request.header("x-wns-ttl", ttl.to_string());
+        }
+        if crate::providers::local_deadline_expired(deadline) {
+            return DispatchResult::delivery_expired();
         }
         let response = match request.send().await {
             Ok(response) => response,
@@ -103,7 +124,7 @@ impl WnsService {
                     .and_then(|value| value.to_str().ok()),
             ),
         );
-        let body = response.bytes().await.unwrap_or_default();
+        let body = crate::providers::bounded_response_body(response).await;
 
         if !status.is_success() {
             return DispatchResult::upstream(
@@ -145,6 +166,15 @@ impl WnsClient for WnsService {
         payload: Arc<WnsPayload>,
     ) -> BoxFuture<'a, DispatchResult> {
         Box::pin(async move { self.send_to_device(device_token, payload).await })
+    }
+
+    fn send_to_device_before<'a>(
+        &'a self,
+        device_token: &'a str,
+        payload: Arc<WnsPayload>,
+        expires_at: i64,
+    ) -> BoxFuture<'a, DispatchResult> {
+        Box::pin(self.send_to_device_with_deadline(device_token, payload, Some(expires_at)))
     }
 
     fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>> {

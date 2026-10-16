@@ -96,19 +96,41 @@ pub(crate) async fn private_ws(
                 .max(1),
         );
     let upgrade_span = tracing::info_span!("gateway.private.ws.upgrade");
-    ws.protocols([PRIVATE_WS_SUBPROTOCOL])
-        .max_frame_size(crate::private::ws::MAX_WSS_FRAME_BYTES)
-        .max_message_size(crate::private::ws::MAX_WSS_FRAME_BYTES)
-        .on_upgrade(move |socket| async move {
+    let (handoff, socket) = tokio::sync::oneshot::channel();
+    let owned_state = Arc::clone(&private_state);
+    let session = async move {
+        let received = tokio::select! {
+            _ = owned_state.wait_for_shutdown() => return,
+            received = tokio::time::timeout_at(handshake_deadline, socket) => received,
+        };
+        if let Ok(Ok(socket)) = received {
             crate::private::ws::serve_ws_socket(
                 socket,
-                private_state,
+                owned_state,
                 session_permit,
                 handshake_permit,
                 handshake_deadline,
             )
             .instrument(upgrade_span)
             .await;
+        }
+    };
+    if !private_state.spawn_session_task(session) {
+        emit_private_ws_rejected("runtime_shutting_down");
+        return crate::api::err_with_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private runtime is shutting down",
+            "private_runtime_shutting_down",
+        );
+    }
+    ws.protocols([PRIVATE_WS_SUBPROTOCOL])
+        .read_buffer_size(16 * 1024)
+        .max_frame_size(crate::private::ws::MAX_WSS_FRAME_BYTES)
+        .max_message_size(crate::private::ws::MAX_WSS_FRAME_BYTES)
+        .on_upgrade(move |socket| async move {
+            // The callback owns only the one-time handoff. PrivateState owns
+            // and joins the bounded session even after HTTP upgrade completes.
+            let _ = handoff.send(socket);
         })
         .into_response()
 }

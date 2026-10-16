@@ -212,6 +212,8 @@ fn deliver_enqueued_private_realtime(
         crate::private::protocol::DeliverEnvelope {
             delivery_id: execution.delivery_id.to_string(),
             payload: canonical_payload,
+            ordinary: false,
+            ordinary_expires_at: None,
         },
     );
     if !delivered {

@@ -53,18 +53,6 @@ impl PushgoServerApp {
             ));
         }
 
-        let Some(route) = self.state.device_registry.get(device_key) else {
-            self.state.metrics.mark_auth_failure();
-            self.mark_connect_failure(peer.transport);
-            return Err(AuthError::Unauthorized("device_key not found".to_string()));
-        };
-        if route.channel_type != DeviceChannelType::Private {
-            self.state.metrics.mark_auth_failure();
-            self.mark_connect_failure(peer.transport);
-            return Err(AuthError::Unauthorized(
-                "device not on private channel".to_string(),
-            ));
-        }
         if let Err(err) = self.verify_gateway_token(hello.auth_token.as_deref()) {
             self.mark_connect_failure(peer.transport);
             return Err(err);
@@ -75,6 +63,31 @@ impl PushgoServerApp {
                 .map_err(|err| AuthError::Unauthorized(err.to_string()))?;
 
         let device_id = derive_private_device_id(device_key);
+        let ordinary_route_generation = if self.state.hub.store().ordinary_handle().is_some() {
+            Some(
+                self.state
+                    .hub
+                    .store()
+                    .ordinary_private_route(device_id)
+                    .await
+                    .map_err(|error| AuthError::Unauthorized(error.to_string()))?
+                    .route_generation,
+            )
+        } else {
+            let Some(route) = self.state.device_registry.get(device_key) else {
+                self.state.metrics.mark_auth_failure();
+                self.mark_connect_failure(peer.transport);
+                return Err(AuthError::Unauthorized("device_key not found".to_string()));
+            };
+            if route.channel_type != DeviceChannelType::Private {
+                self.state.metrics.mark_auth_failure();
+                self.mark_connect_failure(peer.transport);
+                return Err(AuthError::Unauthorized(
+                    "device not on private channel".to_string(),
+                ));
+            }
+            None
+        };
         if self.state.is_device_revoked(device_id) {
             self.state.metrics.mark_auth_failure();
             self.mark_connect_failure(peer.transport);
@@ -129,6 +142,7 @@ impl PushgoServerApp {
             Arc::new(SessionRuntime {
                 device_id,
                 conn_id,
+                ordinary_route_generation,
                 terminate_requested: AtomicBool::new(false),
                 control: Mutex::new(None),
                 receiver: rx,
@@ -220,6 +234,9 @@ impl PushgoServerApp {
         &self,
         session: &SessionCtx,
     ) -> Result<crate::storage::DeviceId, SessionAuthState> {
+        if self.state.is_shutting_down() {
+            return Err(SessionAuthState::Revoked("server_shutting_down".to_owned()));
+        }
         let Some(runtime) = self.sessions.get(session.session_id.as_str()) else {
             self.state.metrics.mark_auth_revoked();
             return Err(SessionAuthState::Revoked("session_not_found".to_string()));
@@ -236,6 +253,23 @@ impl PushgoServerApp {
             ));
         }
         let device_id = runtime.device_id;
+
+        if runtime.ordinary_route_generation.is_some() {
+            return match self
+                .state
+                .hub
+                .validate_ordinary_session_route(device_id, runtime.ordinary_route_generation)
+                .await
+            {
+                Ok(true) if !self.state.is_device_revoked(device_id) => Ok(device_id),
+                Ok(_) | Err(_) => {
+                    self.state.metrics.mark_auth_revoked();
+                    Err(SessionAuthState::Revoked(
+                        "device_route_retired".to_string(),
+                    ))
+                }
+            };
+        }
 
         if self.state.is_device_revoked(device_id) {
             self.state.metrics.mark_auth_revoked();

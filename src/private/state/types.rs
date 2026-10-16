@@ -16,6 +16,7 @@ pub(crate) struct RegisterConnectionOutcome {
 pub(super) enum TerminalDeliveryDisposition {
     Acked,
     Dropped,
+    Rejected,
 }
 
 impl TerminalDeliveryDisposition {
@@ -23,6 +24,7 @@ impl TerminalDeliveryDisposition {
         match self {
             Self::Acked => "acked",
             Self::Dropped => "dropped",
+            Self::Rejected => "rejected",
         }
     }
 }

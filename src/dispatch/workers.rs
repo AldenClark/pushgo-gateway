@@ -942,6 +942,7 @@ impl DispatchWorkerTasks {
 }
 
 pub(crate) struct DispatchWorkerDeps {
+    pub budgets: Arc<ProviderBudgets>,
     pub apns: Arc<dyn ApnsClient>,
     pub fcm: Arc<dyn FcmClient>,
     pub wns: Arc<dyn WnsClient>,
@@ -963,6 +964,7 @@ impl DispatchWorkerDeps {
             wns: self.wns,
             runtime,
             config: DispatchRuntimeConfig::default(),
+            budgets: self.budgets,
         };
         pool.spawn(receivers)
     }
@@ -974,6 +976,7 @@ struct DispatchWorkerPool {
     wns: Arc<dyn WnsClient>,
     runtime: DispatchWorkerRuntime,
     config: DispatchRuntimeConfig,
+    budgets: Arc<ProviderBudgets>,
 }
 
 impl DispatchWorkerPool {
@@ -981,7 +984,7 @@ impl DispatchWorkerPool {
         // Alert, Live Activity, and Widget lanes retain independent queues and
         // adaptive feedback, while this fair semaphore prevents their combined
         // APNs request concurrency from exceeding the proven alert-lane cap.
-        let apns_global_limit = Arc::new(tokio::sync::Semaphore::new(self.config.apns.maximum));
+        let apns_global_limit = Arc::clone(&self.budgets.apns);
         let mut tasks = Vec::with_capacity(
             self.config.apns.maximum
                 + self.config.live_activity.maximum
@@ -1491,6 +1494,7 @@ impl DispatchWorkerPool {
             let feedback = Arc::clone(&feedback);
             let fcm_rx = fcm_rx.clone();
             let fcm = Arc::clone(&self.fcm);
+            let global_limit = Arc::clone(&self.budgets.fcm);
             let runtime = self.runtime.clone();
             let worker_span = tracing::info_span!(
                 "gateway.dispatch.worker",
@@ -1528,6 +1532,21 @@ impl DispatchWorkerPool {
                             continue;
                         };
                         let mut lease_confirmed_until = claimed.lease.lease_until;
+                        let _provider_global_permit = match run_with_provider_lease_heartbeat(
+                            &runtime,
+                            &claimed.lease,
+                            &mut lease_confirmed_until,
+                            Arc::clone(&global_limit).acquire_owned(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(permit)) => permit,
+                            Ok(Err(_)) => break,
+                            Err(error) => {
+                                emit_provider_lease_lost("FCM", &claimed.lease, error);
+                                continue;
+                            }
+                        };
                         let route_decision = match run_with_provider_lease_heartbeat(
                             &runtime,
                             &claimed.lease,
@@ -1715,6 +1734,7 @@ impl DispatchWorkerPool {
             let feedback = Arc::clone(&feedback);
             let wns_rx = wns_rx.clone();
             let wns = Arc::clone(&self.wns);
+            let global_limit = Arc::clone(&self.budgets.wns);
             let runtime = self.runtime.clone();
             let worker_span = tracing::info_span!(
                 "gateway.dispatch.worker",
@@ -1752,6 +1772,21 @@ impl DispatchWorkerPool {
                             continue;
                         };
                         let mut lease_confirmed_until = claimed.lease.lease_until;
+                        let _provider_global_permit = match run_with_provider_lease_heartbeat(
+                            &runtime,
+                            &claimed.lease,
+                            &mut lease_confirmed_until,
+                            Arc::clone(&global_limit).acquire_owned(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(permit)) => permit,
+                            Ok(Err(_)) => break,
+                            Err(error) => {
+                                emit_provider_lease_lost("WNS", &claimed.lease, error);
+                                continue;
+                            }
+                        };
                         let route_decision = match run_with_provider_lease_heartbeat(
                             &runtime,
                             &claimed.lease,
@@ -2352,6 +2387,7 @@ mod tests {
             GatewayRuntimeProfile::Small,
         );
         let workers = DispatchWorkerDeps {
+            budgets: Arc::new(ProviderBudgets::new(32, 32, 32)),
             apns: Arc::new(UnusedApnsClient),
             fcm: Arc::new(StaticFcmClient {
                 success: true,
@@ -3241,6 +3277,7 @@ mod tests {
             GatewayRuntimeProfile::Small,
         );
         let workers = DispatchWorkerDeps {
+            budgets: Arc::new(ProviderBudgets::new(32, 32, 32)),
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
@@ -3377,6 +3414,7 @@ mod tests {
             GatewayRuntimeProfile::Small,
         );
         let workers = DispatchWorkerDeps {
+            budgets: Arc::new(ProviderBudgets::new(32, 32, 32)),
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
@@ -3477,6 +3515,7 @@ mod tests {
         });
         let (dispatch, receivers) = DispatchChannels::new();
         let workers = DispatchWorkerDeps {
+            budgets: Arc::new(ProviderBudgets::new(32, 32, 32)),
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),
@@ -3592,6 +3631,7 @@ mod tests {
         let (dispatch, receivers) = DispatchChannels::new();
         let runtime_counters = RuntimeCounterCollector::spawn(store.clone());
         let workers = DispatchWorkerDeps {
+            budgets: Arc::new(ProviderBudgets::new(32, 32, 32)),
             apns: Arc::new(UnusedApnsClient),
             fcm: fcm.clone(),
             wns: Arc::new(UnusedWnsClient),

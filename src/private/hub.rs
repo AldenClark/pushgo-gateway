@@ -1,6 +1,7 @@
 use super::*;
 
 include!("hub/types.rs");
+include!("hub/ordinary.rs");
 include!("hub/presence.rs");
 include!("hub/resume.rs");
 include!("hub/outbox.rs");

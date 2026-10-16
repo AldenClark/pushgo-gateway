@@ -17,6 +17,7 @@ use crate::{private::protocol::DeliverEnvelope, storage::DeviceId};
 pub(super) struct SessionRuntime {
     pub device_id: DeviceId,
     pub conn_id: u64,
+    pub ordinary_route_generation: Option<i64>,
     pub terminate_requested: AtomicBool,
     pub control: Mutex<Option<SessionControl>>,
     pub receiver: Receiver<DeliverEnvelope>,

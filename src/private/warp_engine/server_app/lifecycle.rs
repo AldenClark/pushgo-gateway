@@ -12,6 +12,28 @@ impl PushgoServerApp {
             self.state.metrics.mark_ack_non_ok();
             return;
         };
+        if self.state.is_shutting_down()
+            || runtime.is_terminating()
+            || matches!(
+                self.state
+                    .hub
+                    .connection_mode(runtime.device_id, runtime.conn_id),
+                crate::private::ConnectionMode::Stale
+            )
+            || !self
+                .state
+                .hub
+                .validate_ordinary_session_route(
+                    runtime.device_id,
+                    runtime.ordinary_route_generation,
+                )
+                .await
+                .unwrap_or(false)
+        {
+            runtime.request_termination();
+            self.state.metrics.mark_ack_non_ok();
+            return;
+        }
         self.state
             .hub
             .collapse_draining_delivery_window_if_active(runtime.device_id, runtime.conn_id);
@@ -23,7 +45,12 @@ impl PushgoServerApp {
                 };
                 match self
                     .state
-                    .complete_terminal_delivery(runtime.device_id, ack.id.as_str(), Some(seq))
+                    .complete_terminal_delivery_from_session(
+                        runtime.device_id,
+                        ack.id.as_str(),
+                        Some(seq),
+                        runtime.ordinary_route_generation,
+                    )
                     .await
                 {
                     Ok(true) => {
@@ -35,7 +62,12 @@ impl PushgoServerApp {
             AckStatus::InvalidPayload => {
                 let _ = self
                     .state
-                    .complete_terminal_delivery(runtime.device_id, ack.id.as_str(), ack.seq)
+                    .reject_terminal_delivery_from_session(
+                        runtime.device_id,
+                        ack.id.as_str(),
+                        ack.seq,
+                        runtime.ordinary_route_generation,
+                    )
                     .await;
                 self.state.metrics.mark_ack_non_ok();
             }
@@ -51,6 +83,14 @@ impl PushgoServerApp {
             self.state
                 .hub
                 .unregister_connection(runtime.device_id, runtime.conn_id);
+            if let Err(error) = self
+                .state
+                .hub
+                .release_ordinary_if_offline(runtime.device_id)
+                .await
+            {
+                tracing::error!(error = %error, "ordinary Private disconnect release failed");
+            }
         }
         self.state
             .unregister_session_control(session.session_id.as_str());

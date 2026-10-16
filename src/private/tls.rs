@@ -32,6 +32,27 @@ impl ServerTlsIdentity {
         Ok(TlsAcceptor::from(Arc::new(tls)))
     }
 
+    pub(crate) fn into_quic_config(self, alpn: &str) -> Result<quinn::ServerConfig, String> {
+        let mut tls = RustlsServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(self.certs, self.key)
+            .map_err(|error| format!("invalid quic tls cert/key: {error}"))?;
+        tls.alpn_protocols = vec![alpn.as_bytes().to_vec()];
+        let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(tls)
+            .map_err(|error| format!("invalid quic tls config: {error}"))?;
+        let mut config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
+        // Same transport settings as the pinned Warp server. Flow control is
+        // independent of the bounded length-prefixed application frame parser.
+        let mut transport = quinn::TransportConfig::default();
+        transport.max_idle_timeout(Some(
+            quinn::IdleTimeout::try_from(std::time::Duration::from_secs(30))
+                .map_err(|error| format!("invalid quic idle timeout: {error}"))?,
+        ));
+        transport.keep_alive_interval(Some(std::time::Duration::from_secs(15)));
+        config.transport_config(Arc::new(transport));
+        Ok(config)
+    }
+
     fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, String> {
         let certs = CertificateDer::pem_file_iter(path)
             .map_err(|err| format!("{path}: {err}"))?

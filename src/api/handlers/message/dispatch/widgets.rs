@@ -80,23 +80,15 @@ async fn enqueue_widget_push(
     target: WidgetPushSubscriptionRecord,
     requested_kinds: &[&'static str],
 ) -> Result<(), crate::Error> {
-    let job = WidgetPushJob {
-        channel_id: prepared.channel_id,
-        correlation_id: Arc::clone(&prepared.correlation_id),
-        delivery_id: Arc::clone(&prepared.delivery_id_ref),
-        device_key: Arc::from(target.device_key.into_boxed_str()),
-        device_token: Arc::from(target.token.into_boxed_str()),
+    let job = widget_push_job(
+        prepared.channel_id,
+        prepared.entity_type,
+        Arc::clone(&prepared.correlation_id),
+        Arc::clone(&prepared.delivery_id_ref),
         platform,
-        widget_kinds: requested_kinds
-            .iter()
-            .map(|kind| (*kind).to_string())
-            .collect::<Vec<_>>()
-            .into(),
-        collapse_id: Some(Arc::from(format!(
-            "widgets:{}:{}",
-            prepared.entity_type, prepared.channel_id_value
-        ))),
-    };
+        target.device_key,
+        target.token,
+    );
     let durable = crate::dispatch::DurableProviderJob::from_widget(&job);
     let mut record = match durable.to_record(
         "pending",
@@ -134,6 +126,36 @@ async fn enqueue_widget_push(
         .dispatch_channels()
         .try_send_widget_push(job);
     Ok(())
+}
+
+/// Pure projection shared by retained Event/Thing dispatch and ordinary
+/// invalidation. It carries no ordinary body or idempotency authority.
+pub(crate) fn widget_push_job(
+    channel_id: [u8; 16],
+    entity_type: &'static str,
+    correlation_id: Arc<str>,
+    delivery_id: Arc<str>,
+    platform: Platform,
+    device_key: String,
+    token: String,
+) -> WidgetPushJob {
+    WidgetPushJob {
+        channel_id,
+        correlation_id,
+        delivery_id,
+        device_key: Arc::from(device_key.into_boxed_str()),
+        device_token: Arc::from(token.into_boxed_str()),
+        platform,
+        widget_kinds: requested_widget_kinds(entity_type)
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+            .into(),
+        collapse_id: Some(Arc::from(format!(
+            "widgets:{entity_type}:{}",
+            crate::value::ChannelId::from(channel_id)
+        ))),
+    }
 }
 
 fn requested_widget_kinds(entity_type: &str) -> Vec<&'static str> {

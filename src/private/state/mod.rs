@@ -36,6 +36,8 @@ pub struct PrivateState {
     session_admission: Arc<tokio::sync::Semaphore>,
     handshake_admission: Arc<tokio::sync::Semaphore>,
     runtime_tasks: Mutex<Vec<PrivateRuntimeTask>>,
+    session_tasks: Mutex<tokio::task::JoinSet<()>>,
+    session_task_failures: AtomicUsize,
     shutting_down: AtomicBool,
     shutdown_notify: tokio::sync::Notify,
 }
@@ -50,4 +52,5 @@ pub struct PrivateShutdownReport {
     pub joined: usize,
     pub panicked: usize,
     pub aborted: usize,
+    pub failed: usize,
 }

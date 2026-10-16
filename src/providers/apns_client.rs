@@ -27,8 +27,18 @@ pub struct ApnsService {
 
 impl ApnsService {
     pub fn new(token_provider: Arc<dyn ApnsTokenProvider>, endpoint: &str) -> Result<Self, Error> {
+        Self::new_with_connection_budget(token_provider, endpoint, 32)
+    }
+
+    pub fn new_with_connection_budget(
+        token_provider: Arc<dyn ApnsTokenProvider>,
+        endpoint: &str,
+        idle_connections: usize,
+    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent(concat!("pushgo-gateway/", env!("CARGO_PKG_VERSION")))
+            .pool_max_idle_per_host(idle_connections)
+            .pool_idle_timeout(PROVIDER_REQUEST_TIMEOUT)
             .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
             .timeout(PROVIDER_REQUEST_TIMEOUT)
             .build()
@@ -56,6 +66,21 @@ impl ApnsService {
         payload: Arc<ApnsPayload>,
         collapse_id: Option<Arc<str>>,
     ) -> DispatchResult {
+        self.send_to_device_with_deadline(device_token, platform, payload, collapse_id, None)
+            .await
+    }
+
+    async fn send_to_device_with_deadline(
+        &self,
+        device_token: &str,
+        platform: Platform,
+        payload: Arc<ApnsPayload>,
+        collapse_id: Option<Arc<str>>,
+        deadline: Option<i64>,
+    ) -> DispatchResult {
+        if crate::providers::local_deadline_expired(deadline) {
+            return DispatchResult::delivery_expired();
+        }
         let default_topic = match platform {
             Platform::IOS => IOS_TOPIC,
             Platform::MACOS => MACOS_TOPIC,
@@ -96,8 +121,15 @@ impl ApnsService {
             None => default_topic.to_string(),
         };
 
-        self.send_once(device_token, platform, &topic, payload, collapse_id)
-            .await
+        self.send_once(
+            device_token,
+            platform,
+            &topic,
+            payload,
+            collapse_id,
+            deadline,
+        )
+        .await
     }
 
     async fn send_once(
@@ -107,6 +139,7 @@ impl ApnsService {
         topic: &str,
         payload: Arc<ApnsPayload>,
         collapse_id: Option<Arc<str>>,
+        deadline: Option<i64>,
     ) -> DispatchResult {
         let request_uri = format!("{}/3/device/{device_token}", self.endpoint.as_ref());
         let auth_token = match self.current_token().await {
@@ -134,6 +167,11 @@ impl ApnsService {
             request = request.header("apns-expiration", expiration.to_string());
         }
 
+        let request = request.body(body.as_ref().to_vec());
+        if crate::providers::local_deadline_expired(deadline) {
+            return DispatchResult::delivery_expired();
+        }
+
         // Credential acquisition may have crossed the frozen reminder cutoff.
         // Recheck at the network boundary before starting a new Watch alert.
         if platform == Platform::WATCHOS
@@ -142,7 +180,7 @@ impl ApnsService {
         {
             return DispatchResult::watch_alert_expired();
         }
-        let response = match request.body(body.as_ref().to_vec()).send().await {
+        let response = match request.send().await {
             Ok(resp) => resp,
             Err(err) => return DispatchResult::transport(Error::Internal(err.to_string())),
         };
@@ -158,7 +196,7 @@ impl ApnsService {
                     .and_then(|value| value.to_str().ok()),
             ),
         );
-        let response_body = response.bytes().await.unwrap_or_default();
+        let response_body = crate::providers::bounded_response_body(response).await;
         let reason = parse_apns_reason(&response_body);
 
         // Refresh cached credentials for the scheduler's next durable attempt;
@@ -253,6 +291,23 @@ impl ApnsClient for ApnsService {
             self.send_to_device(device_token, platform, payload, collapse_id)
                 .await
         })
+    }
+
+    fn send_to_device_before<'a>(
+        &'a self,
+        device_token: &'a str,
+        platform: Platform,
+        payload: Arc<ApnsPayload>,
+        collapse_id: Option<Arc<str>>,
+        expires_at: i64,
+    ) -> BoxFuture<'a, DispatchResult> {
+        Box::pin(self.send_to_device_with_deadline(
+            device_token,
+            platform,
+            payload,
+            collapse_id,
+            Some(expires_at),
+        ))
     }
 
     fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>> {

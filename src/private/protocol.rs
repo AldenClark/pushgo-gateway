@@ -349,6 +349,21 @@ pub struct ErrorFrame {
 pub struct DeliverEnvelope {
     pub delivery_id: String,
     pub payload: Arc<[u8]>,
+    /// Local source tag. It is never encoded on the wire: ordinary frames must
+    /// still own an authorized ledger capability when a queued copy is sent.
+    pub(crate) ordinary: bool,
+    /// Original ordinary absolute expiry in milliseconds. Local queue metadata
+    /// only; it is not an additional wire field or a renewed TTL on replay.
+    pub(crate) ordinary_expires_at: Option<i64>,
+}
+
+impl DeliverEnvelope {
+    pub(crate) fn ordinary_expired_at(&self, at: i64) -> bool {
+        self.ordinary
+            && self
+                .ordinary_expires_at
+                .is_none_or(|expires_at| crate::ordinary::expiry::is_expired(expires_at, at))
+    }
 }
 
 #[cfg(test)]

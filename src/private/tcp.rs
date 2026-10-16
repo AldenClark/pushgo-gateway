@@ -134,6 +134,7 @@ impl TcpServerRuntime {
                 _ = self.state.wait_for_shutdown() => break,
                 joined = sessions.join_next(), if !sessions.is_empty() => {
                     if let Some(Err(join_error)) = joined {
+                        self.state.record_session_task_failure("Private TCP session task failed");
                         ::tracing::event!(
                             target: "gateway.trace_event",
                             ::tracing::Level::ERROR,
@@ -183,13 +184,14 @@ impl TcpServerRuntime {
                 tls_enabled = self.tls_acceptor.is_some()
             );
             let runtime = self.clone();
-            let shutdown = Arc::clone(&self.state);
             sessions.spawn(
                 async move {
-                    tokio::select! {
-                        _ = shutdown.wait_for_shutdown() => {}
-                        _ = runtime.serve_connection(socket, remote_addr, permit, handshake_permit) => {}
-                    }
+                    // begin_shutdown expires authenticated SessionControls.
+                    // Await their cleanup/ACK commit instead of cancelling the
+                    // owning session future as soon as the listener stops.
+                    runtime
+                        .serve_connection(socket, remote_addr, permit, handshake_permit)
+                        .await;
                 }
                 .instrument(span),
             );
@@ -197,6 +199,8 @@ impl TcpServerRuntime {
 
         while let Some(joined) = sessions.join_next().await {
             if let Err(join_error) = joined {
+                self.state
+                    .record_session_task_failure("Private TCP session task failed");
                 ::tracing::event!(
                     target: "gateway.trace_event",
                     ::tracing::Level::ERROR,

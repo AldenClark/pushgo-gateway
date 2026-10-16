@@ -189,6 +189,218 @@ async fn shutdown_runtime_joins_owned_tasks_and_rejects_late_spawns() {
 }
 
 #[tokio::test]
+async fn shutdown_runtime_joins_upgraded_session_owner_and_closes_registration() {
+    let StateTestContext { _dir, state } = StateTestContext::new().await;
+    let state = Arc::new(state);
+    let session_state = state.clone();
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    assert!(state.spawn_session_task(async move {
+        let _ = started.send(());
+        session_state.wait_for_shutdown().await;
+    }));
+    waiting.await.expect("session owner should start");
+    let report = state.shutdown_runtime(Duration::from_secs(1)).await;
+    assert_eq!(report.joined, 1);
+    assert_eq!(report.aborted, 0);
+    assert_eq!(report.panicked, 0);
+    assert_eq!(report.failed, 0);
+    assert!(state.session_tasks.lock().is_empty());
+    assert!(!state.spawn_session_task(async {}));
+}
+
+#[tokio::test]
+async fn shutdown_runtime_aborts_and_joins_a_session_that_misses_its_deadline() {
+    let StateTestContext { _dir, state } = StateTestContext::new().await;
+    let state = Arc::new(state);
+    let (finished, receive_finished) = tokio::sync::oneshot::channel::<()>();
+    assert!(state.spawn_session_task(async move {
+        let _guard = finished;
+        std::future::pending::<()>().await;
+    }));
+    let report = state.shutdown_runtime(Duration::ZERO).await;
+    assert_eq!(report.joined, 0);
+    assert_eq!(report.aborted, 1);
+    assert!(state.session_tasks.lock().is_empty());
+    assert!(
+        receive_finished.await.is_err(),
+        "aborted session must have been joined and dropped"
+    );
+}
+
+async fn assert_private_panic_fences_without_a_later_connection(session: bool) {
+    let StateTestContext { _dir, state } = StateTestContext::new().await;
+    let state = Arc::new(state);
+    let health = Arc::new(crate::ordinary::store::Health::default());
+    state
+        .hub
+        .store()
+        .initialize_ordinary(crate::ordinary::Config::default(), health.clone())
+        .await
+        .unwrap();
+    let mut failure = health.subscribe();
+    let task = async {
+        panic!("synthetic Private task panic");
+    };
+    if session {
+        assert!(state.spawn_session_task(task));
+    } else {
+        assert!(state.spawn_runtime_task("panic_guard_probe", task));
+    }
+    // No later connection, task registration or shutdown join is allowed to
+    // discover this panic: the task itself must fence the shared C health.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while failure.borrow().is_none() {
+            failure.changed().await.unwrap();
+        }
+        state.wait_for_shutdown().await;
+    })
+    .await
+    .expect("panic guard must fail-stop promptly without another admission");
+    assert!(matches!(
+        health.ensure(),
+        Err(crate::ordinary::KernelError::Unavailable)
+    ));
+    assert!(failure.borrow().as_deref().unwrap().contains("panicked"));
+    assert!(state.is_shutting_down());
+    assert!(!state.spawn_session_task(async {}));
+    assert!(!state.spawn_runtime_task("late_runtime", async {}));
+    let report = state.shutdown_runtime(Duration::from_secs(1)).await;
+    assert!(
+        report.failed > 0,
+        "caught panic must remain visible in shutdown evidence"
+    );
+    state
+        .runtime_counters
+        .shutdown_until(TokioInstant::now() + Duration::from_secs(1))
+        .await;
+    state.hub.store().close_ordinary_storage().await.unwrap();
+}
+
+#[tokio::test]
+async fn private_runtime_panic_guard_fences_without_waiting_for_shutdown_join() {
+    assert_private_panic_fences_without_a_later_connection(false).await;
+}
+
+#[tokio::test]
+async fn private_session_panic_guard_fences_without_a_later_connection() {
+    assert_private_panic_fences_without_a_later_connection(true).await;
+}
+
+#[tokio::test]
+async fn ordinary_expired_queue_cannot_replay_from_live_or_reconnected_hub() {
+    // Real normal Storage/C transactions, with an isolated new SQLite file.
+    // This is a Hub/storage test, not a client or transport-network claim.
+    let ctx = StateTestContext::new().await;
+    let store = ctx.state.hub.store();
+    let mut config = crate::ordinary::Config::default();
+    config.private.enabled = true;
+    let ordinary = store
+        .initialize_ordinary(config, Arc::new(crate::ordinary::store::Health::default()))
+        .await
+        .unwrap();
+    let channel = store
+        .upsert_private_channel(None, Some("queued expiry"), "synthetic-password")
+        .await
+        .unwrap()
+        .channel_id;
+    let key = "expiry-private-device";
+    let device = derive_private_device_id(key);
+    store
+        .upsert_device_route(&crate::storage::DeviceRouteRecordRow {
+            device_key: key.into(),
+            platform: "mqtt".into(),
+            channel_type: "private".into(),
+            provider_token: None,
+            updated_at: chrono::Utc::now().timestamp_millis(),
+        })
+        .await
+        .unwrap();
+    store
+        .private_subscribe_channel(channel, device)
+        .await
+        .unwrap();
+    let request = crate::ordinary::AcceptRequest {
+        channel_id: crate::value::ChannelId::from(channel).to_string(),
+        authorized_channel: Some(channel),
+        op_id: Some("queued-expiry".into()),
+        title: "queued expiry".into(),
+        body: Some("stable body".into()),
+        ttl: Some(chrono::Utc::now().timestamp_millis() + 1_000),
+        ..crate::ordinary::AcceptRequest::default()
+    };
+    let accepted = ordinary.accept(request.clone()).await.unwrap();
+    let route = ordinary.private_route(key).await.unwrap();
+    let envelope = ctx
+        .state
+        .hub
+        .ordinary_outbound(device, Some(route.route_generation))
+        .await
+        .unwrap()
+        .unwrap();
+    let deadline = envelope.ordinary_expires_at.unwrap();
+    let (_, tracked) = ctx.state.hub.track_sent_outbound(device, envelope);
+    let bootstrap = ctx
+        .state
+        .hub
+        .build_bootstrap_queues(device, 1)
+        .await
+        .unwrap();
+    assert_eq!(bootstrap.inflight.len(), 1);
+    let queued = bootstrap.inflight.front().unwrap().1.clone();
+    assert_eq!(queued.delivery_id, accepted.delivery_id);
+    let wait = deadline
+        .saturating_sub(chrono::Utc::now().timestamp_millis())
+        .max(0) as u64
+        + 1;
+    tokio::time::sleep(Duration::from_millis(wait)).await;
+    assert!(queued.ordinary_expired_at(chrono::Utc::now().timestamp_millis()));
+    assert!(
+        !ctx.state
+            .hub
+            .authorize_ordinary_outbound(device, &queued)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !ctx.state
+            .hub
+            .authorize_ordinary_outbound(device, &tracked)
+            .await
+            .unwrap()
+    );
+    assert!(
+        ctx.state
+            .hub
+            .ordinary_outbound(device, Some(route.route_generation))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ctx.state
+            .hub
+            .build_bootstrap_queues(device, 1)
+            .await
+            .unwrap()
+            .inflight
+            .is_empty()
+    );
+    assert_eq!(
+        ctx.state.hub.memory_snapshot().ordinary_owned_work,
+        0,
+        "expired work budget releases only after native release COMMIT"
+    );
+    let replay = ordinary.accept(request).await.unwrap();
+    assert_eq!(replay.delivery_id, accepted.delivery_id);
+    assert_eq!(replay.message_id, accepted.message_id);
+    ctx.state
+        .runtime_counters
+        .shutdown_until(TokioInstant::now() + Duration::from_secs(1))
+        .await;
+    store.close_ordinary_storage().await.unwrap();
+}
+
+#[tokio::test]
 async fn full_connection_queue_never_blocks_other_private_delivery_work() {
     let ctx = StateTestContext::new().await;
     let device_id = derive_private_device_id("bounded-delivery-device");
@@ -196,6 +408,8 @@ async fn full_connection_queue_never_blocks_other_private_delivery_work() {
     let envelope = crate::private::protocol::DeliverEnvelope {
         delivery_id: "bounded-delivery".to_string(),
         payload: Arc::from([1u8]),
+        ordinary: false,
+        ordinary_expires_at: None,
     };
     tx.try_send(envelope.clone())
         .expect("test queue should accept its first delivery");
@@ -255,6 +469,8 @@ async fn cold_cache_conflicting_replay_uses_durable_canonical_payload_everywhere
         crate::private::protocol::DeliverEnvelope {
             delivery_id: delivery_id.to_string(),
             payload: Arc::clone(&outcome.canonical_payload),
+            ordinary: false,
+            ordinary_expires_at: None,
         },
     ));
     let realtime = rx

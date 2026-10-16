@@ -21,8 +21,18 @@ pub struct FcmService {
 
 impl FcmService {
     pub fn new(token_provider: Arc<dyn FcmTokenProvider>, base_url: &str) -> Result<Self, Error> {
+        Self::new_with_connection_budget(token_provider, base_url, 32)
+    }
+
+    pub fn new_with_connection_budget(
+        token_provider: Arc<dyn FcmTokenProvider>,
+        base_url: &str,
+        idle_connections: usize,
+    ) -> Result<Self, Error> {
         let client = Client::builder()
             .user_agent("pushgo-backend/0.1.0")
+            .pool_max_idle_per_host(idle_connections)
+            .pool_idle_timeout(PROVIDER_REQUEST_TIMEOUT)
             .connect_timeout(PROVIDER_CONNECT_TIMEOUT)
             .timeout(PROVIDER_REQUEST_TIMEOUT)
             .build()
@@ -41,6 +51,20 @@ impl FcmService {
         payload: Arc<FcmPayload>,
         prepared_body: Option<Arc<[u8]>>,
     ) -> DispatchResult {
+        self.send_to_device_with_deadline(device_token, payload, prepared_body, None)
+            .await
+    }
+
+    async fn send_to_device_with_deadline(
+        &self,
+        device_token: &str,
+        payload: Arc<FcmPayload>,
+        prepared_body: Option<Arc<[u8]>>,
+        deadline: Option<i64>,
+    ) -> DispatchResult {
+        if crate::providers::local_deadline_expired(deadline) {
+            return DispatchResult::delivery_expired();
+        }
         let body = match prepared_body {
             Some(body) => body,
             None => match payload.encoded_body(device_token) {
@@ -55,27 +79,35 @@ impl FcmService {
             Ok(access) => access,
             Err(err) => return DispatchResult::provider_access_failure(err),
         };
-        let dispatch = self.send_once(&access, body.as_ref()).await;
+        let dispatch = self.send_once(&access, body.as_ref(), deadline).await;
         if dispatch.should_refresh_credentials() {
             let _ = self.token_provider.token_info_fresh().await;
         }
         dispatch
     }
 
-    async fn send_once(&self, access: &crate::providers::FcmAccess, body: &[u8]) -> DispatchResult {
+    async fn send_once(
+        &self,
+        access: &crate::providers::FcmAccess,
+        body: &[u8],
+        deadline: Option<i64>,
+    ) -> DispatchResult {
         let endpoint = format!(
             "{}/v1/projects/{}/messages:send",
             self.base_url, access.project_id
         );
-        let response = match self
+        let request = self
             .client
             .post(&endpoint)
             .bearer_auth(access.token.token.as_ref())
             .header("content-type", "application/json")
-            .body(body.to_vec())
-            .send()
-            .await
-        {
+            .body(body.to_vec());
+        // Credentials may have been unavailable long enough to cross local TTL.
+        // This is not a serialized vendor TTL and does not resend a request.
+        if crate::providers::local_deadline_expired(deadline) {
+            return DispatchResult::delivery_expired();
+        }
+        let response = match request.send().await {
             Ok(resp) => resp,
             Err(err) => return DispatchResult::transport(Error::Internal(err.to_string())),
         };
@@ -88,7 +120,7 @@ impl FcmService {
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|value| value.to_str().ok()),
         );
-        let response_body = response.bytes().await.unwrap_or_default();
+        let response_body = crate::providers::bounded_response_body(response).await;
 
         if status.is_success() {
             return DispatchResult::success(status_code);
@@ -173,6 +205,21 @@ impl FcmClient for FcmService {
             self.send_to_device(device_token, payload, prepared_body)
                 .await
         })
+    }
+
+    fn send_to_device_before<'a>(
+        &'a self,
+        device_token: &'a str,
+        payload: Arc<FcmPayload>,
+        prepared_body: Option<Arc<[u8]>>,
+        expires_at: i64,
+    ) -> BoxFuture<'a, DispatchResult> {
+        Box::pin(self.send_to_device_with_deadline(
+            device_token,
+            payload,
+            prepared_body,
+            Some(expires_at),
+        ))
     }
 
     fn token_info<'a>(&'a self) -> BoxFuture<'a, Result<TokenInfo, Error>> {

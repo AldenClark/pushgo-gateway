@@ -12,6 +12,7 @@ use crate::{
     util::encode_crockford_base32_128,
 };
 
+mod budget;
 #[path = "config.rs"]
 mod config;
 #[path = "runtime.rs"]
@@ -21,6 +22,7 @@ mod types;
 #[path = "workers.rs"]
 mod workers;
 
+pub(crate) use budget::ProviderBudgets;
 use config::DispatchRuntimeConfig;
 use runtime::DispatchWorkerRuntime;
 pub(crate) use types::{

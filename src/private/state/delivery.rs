@@ -2,6 +2,31 @@ use super::{types::TerminalDeliveryDisposition, *};
 use std::sync::Arc;
 
 impl PrivateState {
+    /// MQTT's packet map already proves this ID came from the ordinary source.
+    /// A duplicate or stale ordinary ACK must never select the legacy outbox.
+    pub(crate) async fn complete_ordinary_terminal_delivery(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        generation: Option<i64>,
+    ) -> Result<bool, crate::Error> {
+        let channel_id = self.hub.ordinary_channel_id(device_id, delivery_id).await;
+        let cleared = self
+            .hub
+            .ack_ordinary_delivery(device_id, delivery_id, generation)
+            .await?
+            .unwrap_or(false);
+        if cleared {
+            self.runtime_counters.record_private_ack_with_channel(
+                format!("private:{}", encode_lower_hex_128(&device_id)),
+                channel_id,
+                1,
+                chrono::Utc::now().timestamp_millis(),
+            );
+        }
+        Ok(cleared)
+    }
+
     pub async fn enqueue_private_delivery(
         &self,
         device_id: DeviceId,
@@ -148,6 +173,41 @@ impl PrivateState {
             delivery_id,
             seq,
             TerminalDeliveryDisposition::Acked,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn complete_terminal_delivery_from_session(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        seq: Option<u64>,
+        generation: Option<i64>,
+    ) -> Result<bool, crate::Error> {
+        self.settle_terminal_delivery(
+            device_id,
+            delivery_id,
+            seq,
+            TerminalDeliveryDisposition::Acked,
+            generation,
+        )
+        .await
+    }
+
+    pub(crate) async fn reject_terminal_delivery_from_session(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+        seq: Option<u64>,
+        generation: Option<i64>,
+    ) -> Result<bool, crate::Error> {
+        self.settle_terminal_delivery(
+            device_id,
+            delivery_id,
+            seq,
+            TerminalDeliveryDisposition::Rejected,
+            generation,
         )
         .await
     }
@@ -162,6 +222,7 @@ impl PrivateState {
             delivery_id,
             None,
             TerminalDeliveryDisposition::Dropped,
+            None,
         )
         .await
     }
@@ -172,11 +233,12 @@ impl PrivateState {
         delivery_id: &str,
         seq: Option<u64>,
         disposition: TerminalDeliveryDisposition,
+        generation: Option<i64>,
     ) -> Result<bool, crate::Error> {
         let resolved_delivery_id = if let Some(seq) = seq {
             self.hub
-                .ack_by_seq(device_id, seq, Some(delivery_id))
-                .await?
+                .peek_delivery_by_seq(device_id, seq, delivery_id)
+                .map(|envelope| envelope.delivery_id)
         } else {
             Some(delivery_id.to_owned())
         };
@@ -192,12 +254,29 @@ impl PrivateState {
             return Ok(false);
         };
         let channel_id = self
-            .resolve_channel_id_for_delivery(resolved_delivery_id.as_str())
+            .resolve_channel_id_for_delivery(device_id, resolved_delivery_id.as_str())
             .await;
-        let cleared = self
-            .hub
-            .ack_delivery(device_id, resolved_delivery_id.as_str())
-            .await?;
+        let ordinary_result = if disposition == TerminalDeliveryDisposition::Rejected {
+            self.hub
+                .reject_ordinary_delivery(device_id, resolved_delivery_id.as_str(), generation)
+                .await?
+        } else {
+            self.hub
+                .ack_ordinary_delivery(device_id, resolved_delivery_id.as_str(), generation)
+                .await?
+        };
+        let cleared = match ordinary_result {
+            Some(cleared) => cleared,
+            None => {
+                let cleared = self
+                    .hub
+                    .ack_delivery(device_id, resolved_delivery_id.as_str())
+                    .await?;
+                self.hub
+                    .forget_delivery_after_commit(device_id, resolved_delivery_id.as_str());
+                cleared
+            }
+        };
         if cleared {
             self.cancel_fallback(device_id, resolved_delivery_id.as_str());
             if disposition == TerminalDeliveryDisposition::Acked {
@@ -221,7 +300,14 @@ impl PrivateState {
         Ok(cleared)
     }
 
-    async fn resolve_channel_id_for_delivery(&self, delivery_id: &str) -> Option<[u8; 16]> {
+    async fn resolve_channel_id_for_delivery(
+        &self,
+        device_id: DeviceId,
+        delivery_id: &str,
+    ) -> Option<[u8; 16]> {
+        if let Some(channel) = self.hub.ordinary_channel_id(device_id, delivery_id).await {
+            return Some(channel);
+        }
         if let Ok(Some(context)) = self
             .hub
             .store()
