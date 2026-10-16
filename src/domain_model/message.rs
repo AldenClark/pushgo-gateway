@@ -28,11 +28,6 @@ pub(crate) struct MessageInput {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum MessageCommand {
-    Send(MessageSend),
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct MessageSend {
     pub(crate) input: MessageInput,
 }
