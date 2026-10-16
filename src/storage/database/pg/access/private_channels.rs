@@ -102,6 +102,26 @@ impl PostgresDb {
         global_max_pending: usize,
         _protected_delivery_id: Option<&str>,
     ) -> StoreResult<usize> {
+        self.enqueue_private_outbox_batch_with_ordinary_capacity(
+            entries,
+            max_pending_per_device,
+            global_max_pending,
+            _protected_delivery_id,
+            &hashbrown::HashMap::new(),
+            0,
+        )
+        .await
+    }
+
+    pub(crate) async fn enqueue_private_outbox_batch_with_ordinary_capacity(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+        max_pending_per_device: usize,
+        global_max_pending: usize,
+        _protected_delivery_id: Option<&str>,
+        ordinary_per_device: &hashbrown::HashMap<DeviceId, usize>,
+        ordinary_global: usize,
+    ) -> StoreResult<usize> {
         if entries.is_empty() {
             return Ok(0);
         }
@@ -140,9 +160,11 @@ impl PostgresDb {
         for device_id in unique_batch_device_ids(entries) {
             let pending: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM private_outbox WHERE device_id=$1 AND status IN ('pending','claimed','sent')")
                 .bind(device_id.as_slice()).fetch_one(&mut *tx).await?;
-            if pending > max_pending_per_device as i64 {
+            let combined = (pending.max(0) as usize)
+                .saturating_add(ordinary_per_device.get(&device_id).copied().unwrap_or(0));
+            if combined > max_pending_per_device {
                 return Err(StoreError::PrivateOutboxCapacityExceeded {
-                    pending: pending as usize,
+                    pending: combined,
                     capacity: max_pending_per_device,
                 });
             }
@@ -152,9 +174,10 @@ impl PostgresDb {
         )
         .fetch_one(&mut *tx)
         .await?;
-        if total > global_max_pending as i64 {
+        let combined = (total.max(0) as usize).saturating_add(ordinary_global);
+        if combined > global_max_pending {
             return Err(StoreError::PrivateOutboxCapacityExceeded {
-                pending: total as usize,
+                pending: combined,
                 capacity: global_max_pending,
             });
         }

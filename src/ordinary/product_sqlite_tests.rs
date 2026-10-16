@@ -1,0 +1,838 @@
+//! Focused normal Storage/application contracts, with isolated new databases.
+//! These do not claim client or network acceptance and never start the fixture.
+use super::owner::ProductOwner;
+use super::store::{Health, now};
+use super::{AcceptRequest, Config, KernelError, OrdinaryStore};
+use crate::storage::{DeviceId, DeviceRouteRecordRow, PrivateDeviceId, Storage, StorageInitConfig};
+use sqlx::{Connection, Row, SqliteConnection};
+use std::sync::Arc;
+
+struct Product {
+    directory: tempfile::TempDir,
+    storage: Storage,
+    ordinary: OrdinaryStore,
+    owner: ProductOwner,
+    fixture_credential: String,
+}
+impl Product {
+    async fn open() -> Self {
+        Self::reopen(tempfile::tempdir().unwrap()).await
+    }
+    async fn reopen(directory: tempfile::TempDir) -> Self {
+        Self::reopen_with_private(directory, true).await
+    }
+    async fn reopen_with_private(directory: tempfile::TempDir, private_enabled: bool) -> Self {
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("product.db").display()
+        );
+        let health = Arc::new(Health::default());
+        let owner = ProductOwner::acquire(Some(&url), health.clone())
+            .await
+            .unwrap();
+        let storage = Storage::new_with_config(StorageInitConfig {
+            db_url: Some(url),
+            mcp_enabled: false,
+            managed_upgrade: false,
+            ..StorageInitConfig::default()
+        })
+        .await
+        .unwrap();
+        let mut config = Config {
+            max_messages: i64::MAX,
+            max_targets: i64::MAX,
+            max_payload_bytes: i64::MAX,
+            ..Config::default()
+        };
+        config.private.enabled = private_enabled;
+        let ordinary = storage.initialize_ordinary(config, health).await.unwrap();
+        Self {
+            directory,
+            storage,
+            ordinary,
+            owner,
+            fixture_credential: crate::util::generate_hex_id_128(),
+        }
+    }
+    async fn inspect(&self) -> SqliteConnection {
+        SqliteConnection::connect(&format!(
+            "sqlite://{}?mode=ro",
+            self.directory.path().join("product.db").display()
+        ))
+        .await
+        .unwrap()
+    }
+    async fn stop(self) -> tempfile::TempDir {
+        self.storage.close_ordinary_storage().await.unwrap();
+        self.owner.shutdown().await.unwrap();
+        self.directory
+    }
+    async fn channel(&self) -> [u8; 16] {
+        self.storage
+            .upsert_private_channel(None, Some("ordinary integration"), &self.fixture_credential)
+            .await
+            .unwrap()
+            .channel_id
+    }
+    async fn route(
+        &self,
+        channel: [u8; 16],
+        key: &str,
+        platform: &str,
+        kind: &str,
+        token: Option<&str>,
+    ) {
+        self.storage
+            .upsert_device_route(&route(key, platform, kind, token))
+            .await
+            .unwrap();
+        self.storage
+            .private_subscribe_channel(channel, device_id(key))
+            .await
+            .unwrap();
+    }
+    fn request(&self, channel: [u8; 16], op: &str) -> AcceptRequest {
+        AcceptRequest {
+            channel_id: crate::value::ChannelId::from(channel).to_string(),
+            authorized_channel: Some(channel),
+            op_id: Some(op.into()),
+            title: "中文 ordinary".into(),
+            body: Some("body \"escape\" 🛰".into()),
+            thing_id: Some("thing-synthetic".into()),
+            occurred_at: Some(now()),
+            ..AcceptRequest::default()
+        }
+    }
+}
+fn device_id(key: &str) -> DeviceId {
+    PrivateDeviceId::derive(key).into()
+}
+fn route(key: &str, platform: &str, kind: &str, token: Option<&str>) -> DeviceRouteRecordRow {
+    DeviceRouteRecordRow {
+        device_key: key.into(),
+        platform: platform.into(),
+        channel_type: kind.into(),
+        provider_token: token.map(str::to_owned),
+        updated_at: now(),
+    }
+}
+
+#[tokio::test]
+async fn sqlite_product_freezes_all_ordinary_targets_and_releases_one_body() {
+    let product = Product::open().await;
+    let channel = product.channel().await;
+    let apple = "a1".repeat(32);
+    let watch = "a2".repeat(32);
+    let mac = "a3".repeat(32);
+    product
+        .route(
+            channel,
+            "android",
+            "android",
+            "fcm",
+            Some("synthetic-fcm-token-ordinary"),
+        )
+        .await;
+    product
+        .route(channel, "apple", "ios", "apns", Some(&apple))
+        .await;
+    product
+        .route(channel, "watch", "watchos", "apns", Some(&watch))
+        .await;
+    product
+        .route(channel, "mac", "macos", "apns", Some(&mac))
+        .await;
+    product
+        .route(
+            channel,
+            "windows",
+            "windows",
+            "wns",
+            Some("https://ordinary.invalid/wns/synthetic"),
+        )
+        .await;
+    product
+        .route(channel, "private", "mqtt", "private", None)
+        .await;
+    let original = product.request(channel, "product-all-targets");
+    let accepted = product.ordinary.accept(original.clone()).await.unwrap();
+    let initial = product
+        .ordinary
+        .status("product-all-targets")
+        .await
+        .unwrap();
+    assert_eq!(
+        product
+            .ordinary
+            .target_status("product-all-targets")
+            .await
+            .unwrap()["targets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+    product
+        .storage
+        .private_unsubscribe_channel(channel, device_id("private"))
+        .await
+        .unwrap();
+    product
+        .route(
+            channel,
+            "later",
+            "android",
+            "fcm",
+            Some("later-fcm-token-ordinary"),
+        )
+        .await;
+    let duplicate = product.ordinary.accept(original.clone()).await.unwrap();
+    assert_eq!(duplicate.message_id, accepted.message_id);
+    assert_eq!(duplicate.delivery_id, accepted.delivery_id);
+    assert_eq!(
+        initial["accepted_at"],
+        product
+            .ordinary
+            .status("product-all-targets")
+            .await
+            .unwrap()["accepted_at"]
+    );
+    let mut changed = original.clone();
+    changed.thing_id = Some("another-thing".into());
+    assert!(matches!(
+        product.ordinary.accept(changed).await,
+        Err(KernelError::ScopeConflict)
+    ));
+    for provider in ["FCM", "APNS", "WNS"] {
+        let batch = product
+            .ordinary
+            .claim_reserved(provider, 8, false)
+            .await
+            .unwrap();
+        assert_eq!(batch.tickets.len(), if provider == "APNS" { 3 } else { 1 });
+        for ticket in batch.tickets {
+            assert_eq!(ticket.payload["thing_id"], "thing-synthetic");
+            assert_eq!(ticket.payload["message_id"], accepted.message_id);
+            if ticket.platform == "watchos" {
+                assert_eq!(
+                    ticket.watch_alert_deadline,
+                    Some(ticket.accepted_at + 30 * 60_000)
+                );
+            }
+            assert!(product.ordinary.authorize_ticket(&ticket).await.unwrap());
+            product
+                .ordinary
+                .settle(&ticket, "provider_accepted", 200, "", now(), None)
+                .await
+                .unwrap();
+            assert_eq!(
+                product
+                    .ordinary
+                    .ack(&ticket.device_key, vec![accepted.delivery_id.clone()])
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                product
+                    .ordinary
+                    .ack(&ticket.device_key, vec![accepted.delivery_id.clone()])
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+    }
+    let private_route = product.ordinary.private_route("private").await.unwrap();
+    let tickets = product
+        .ordinary
+        .private_claim(&private_route, "synthetic-session", 1)
+        .await
+        .unwrap();
+    assert_eq!(tickets.len(), 1, "unsubscribe preserves accepted targets");
+    let payload: serde_json::Value = serde_json::from_slice(&tickets[0].payload).unwrap();
+    assert_eq!(payload["body"], "body \"escape\" 🛰");
+    assert!(
+        product
+            .ordinary
+            .private_ack(&private_route, &tickets[0])
+            .await
+            .unwrap()
+    );
+    assert!(
+        !product
+            .ordinary
+            .private_ack(&private_route, &tickets[0])
+            .await
+            .unwrap()
+    );
+    let mut inspect = product.inspect().await;
+    let identity=sqlx::query("SELECT payload_bytes,length(payload_blob) AS actual,thing_id,dedupe_until-accepted_at AS retained FROM ordinary_messages WHERE delivery_id=?").bind(&accepted.delivery_id).fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(identity.get::<i64, _>("payload_bytes"), 0);
+    assert_eq!(identity.get::<i64, _>("actual"), 0);
+    assert_eq!(identity.get::<String, _>("thing_id"), "thing-synthetic");
+    assert_eq!(identity.get::<i64, _>("retained"), 30 * 86_400_000);
+    let old:i64=sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM sender_submit_status)+(SELECT COUNT(*) FROM semantic_id_registry)").fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(old, 0, "ordinary identities have one owner");
+    let duplicates:i64=sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('ordinary_devices','ordinary_channels','ordinary_channel_subscriptions')").fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(duplicates, 0);
+    inspect.close().await.unwrap();
+    let completed = product.ordinary.accept(original).await.unwrap();
+    assert_eq!(completed.delivery_id, accepted.delivery_id);
+    assert_eq!(completed.dispatch_status, "attempted_accepted");
+    product.stop().await;
+}
+
+#[tokio::test]
+async fn sqlite_product_private_clear_and_negative_receipt_preserve_active_route() {
+    let product = Product::open().await;
+    let channel = product.channel().await;
+    product
+        .route(channel, "private", "mqtt", "private", None)
+        .await;
+    let first = product
+        .ordinary
+        .accept(product.request(channel, "private-before-clear"))
+        .await
+        .unwrap();
+    let old_route = product.ordinary.private_route("private").await.unwrap();
+    let old = product
+        .ordinary
+        .private_claim(&old_route, "old-session", 1)
+        .await
+        .unwrap()
+        .remove(0);
+    product
+        .storage
+        .upsert_device_route(&route("private", "mqtt", "private", None))
+        .await
+        .unwrap();
+    assert!(
+        product.ordinary.private_authorize(&old).await.unwrap(),
+        "same-route sync keeps generation"
+    );
+    product
+        .storage
+        .clear_ordinary_private_channel(&route("private", "mqtt", "private", None))
+        .await
+        .unwrap();
+    assert!(!product.ordinary.private_authorize(&old).await.unwrap());
+    assert!(
+        !product
+            .ordinary
+            .private_ack(&old_route, &old)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        product
+            .storage
+            .list_private_subscribed_channels_for_device(device_id("private"))
+            .await
+            .unwrap(),
+        vec![channel]
+    );
+    let second = product
+        .ordinary
+        .accept(product.request(channel, "private-after-clear"))
+        .await
+        .unwrap();
+    let current = product.ordinary.private_route("private").await.unwrap();
+    assert_eq!(current.route_generation, old_route.route_generation);
+    let ticket = product
+        .ordinary
+        .private_claim(&current, "new-session", 1)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(ticket.delivery_id, second.delivery_id);
+    assert!(
+        product
+            .ordinary
+            .private_reject(&current, &ticket, "invalid_payload")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !product
+            .ordinary
+            .private_reject(&current, &ticket, "invalid_payload")
+            .await
+            .unwrap()
+    );
+    let mut inspect = product.inspect().await;
+    let first_body: i64 =
+        sqlx::query_scalar("SELECT payload_bytes FROM ordinary_messages WHERE delivery_id=?")
+            .bind(&first.delivery_id)
+            .fetch_one(&mut inspect)
+            .await
+            .unwrap();
+    assert_eq!(first_body, 0);
+    let negative = sqlx::query(
+        "SELECT payload_bytes,private_rejected_count FROM ordinary_messages WHERE delivery_id=?",
+    )
+    .bind(&second.delivery_id)
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(negative.get::<i64, _>("payload_bytes"), 0);
+    assert_eq!(negative.get::<i64, _>("private_rejected_count"), 1);
+    inspect.close().await.unwrap();
+    product.stop().await;
+}
+
+#[tokio::test]
+async fn sqlite_product_coalescing_keeps_frozen_receipt_and_restart_replay() {
+    let product = Product::open().await;
+    let channel = product.channel().await;
+    product
+        .route(
+            channel,
+            "old-owner",
+            "android",
+            "fcm",
+            Some("same-synthetic-token"),
+        )
+        .await;
+    let original = product.request(channel, "coalescing-restart");
+    let accepted = product.ordinary.accept(original.clone()).await.unwrap();
+    let ticket = product
+        .ordinary
+        .claim_reserved("FCM", 1, false)
+        .await
+        .unwrap()
+        .tickets
+        .remove(0);
+    product
+        .storage
+        .upsert_device_route(&route(
+            "new-owner",
+            "android",
+            "fcm",
+            Some("same-synthetic-token"),
+        ))
+        .await
+        .unwrap();
+    assert!(!product.ordinary.authorize_ticket(&ticket).await.unwrap());
+    assert_eq!(
+        product.ordinary.pull("new-owner", None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    product
+        .ordinary
+        .settle(&ticket, "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        product.ordinary.status("coalescing-restart").await.unwrap()["status"],
+        "sent"
+    );
+    let directory = product.stop().await;
+    let product = Product::reopen(directory).await;
+    let replay = product.ordinary.accept(original).await.unwrap();
+    assert_eq!(replay.delivery_id, accepted.delivery_id);
+    assert_eq!(replay.message_id, accepted.message_id);
+    assert_eq!(
+        product
+            .ordinary
+            .pull("new-owner", Some(&accepted.delivery_id))
+            .await
+            .unwrap()["items"][0]["delivery_id"],
+        accepted.delivery_id
+    );
+    assert_eq!(
+        product
+            .ordinary
+            .ack("new-owner", vec![accepted.delivery_id.clone()])
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        product.ordinary.pull("new-owner", None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    product.stop().await;
+}
+
+#[tokio::test]
+async fn sqlite_product_transition_attachment_is_not_reused_by_identity_coalescing() {
+    use crate::storage::{RouteChannelType, StoreError};
+
+    // Each case first borrows the one delivery writer through the real product
+    // transition, then coalesces on that same pool while a core write is held.
+    // A leaked attachment makes this ordinary operation wait on its own core TX.
+    for exit in ["committed", "stale-return", "native-error"] {
+        let product = Product::open().await;
+        let channel = product.channel().await;
+        product
+            .route(channel, "transition-owner", "android", "private", None)
+            .await;
+        let request = product.request(channel, "transition-attachment");
+        let accepted = product.ordinary.accept(request.clone()).await.unwrap();
+        let private_route = product
+            .ordinary
+            .private_route("transition-owner")
+            .await
+            .unwrap();
+        let private_ticket = product
+            .ordinary
+            .private_claim(&private_route, "before-transition", 1)
+            .await
+            .unwrap()
+            .remove(0);
+        let mut provider = route(
+            "transition-owner",
+            "android",
+            "fcm",
+            Some("transition-synthetic-fcm-token"),
+        );
+        // The normal transition deliberately ignores stale route timestamps.
+        provider.updated_at = now().saturating_add(100);
+        if exit == "native-error" {
+            let mut invalid = provider.clone();
+            invalid.provider_token = None;
+            let error = product
+                .storage
+                .transition_device_route(&invalid, RouteChannelType::Private, 30, 1024)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, StoreError::InvalidDeviceToken));
+            assert!(
+                product
+                    .ordinary
+                    .private_authorize(&private_ticket)
+                    .await
+                    .unwrap()
+            );
+            // Exercise the next normal borrower after an in-transaction error.
+            product
+                .storage
+                .upsert_device_route(&provider)
+                .await
+                .unwrap();
+        } else {
+            product
+                .storage
+                .transition_device_route(&provider, RouteChannelType::Private, 30, 1024)
+                .await
+                .unwrap();
+            if exit == "stale-return" {
+                assert_eq!(
+                    product
+                        .storage
+                        .transition_device_route(&provider, RouteChannelType::Fcm, 30, 1024)
+                        .await
+                        .unwrap(),
+                    0
+                );
+            }
+        }
+        assert!(
+            !product
+                .ordinary
+                .private_authorize(&private_ticket)
+                .await
+                .unwrap()
+        );
+        let mut winner = provider.clone();
+        winner.device_key = "transition-winner".into();
+        winner.updated_at += 1;
+        product.storage.upsert_device_route(&winner).await.unwrap();
+        let items = product
+            .ordinary
+            .pull("transition-winner", None)
+            .await
+            .unwrap();
+        assert_eq!(items["items"].as_array().unwrap().len(), 1, "{exit}");
+        assert_eq!(items["items"][0]["delivery_id"], accepted.delivery_id);
+        assert_eq!(
+            items["items"][0]["payload"]["body"],
+            request.body.as_deref().unwrap()
+        );
+        let replay = product.ordinary.accept(request).await.unwrap();
+        assert_eq!(replay.delivery_id, accepted.delivery_id);
+        assert_eq!(replay.message_id, accepted.message_id);
+        assert_eq!(
+            product
+                .ordinary
+                .ack("transition-winner", vec![accepted.delivery_id.clone()])
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(
+            !product
+                .ordinary
+                .private_ack(&private_route, &private_ticket)
+                .await
+                .unwrap()
+        );
+        let mut inspect = product.inspect().await;
+        let bytes: i64 =
+            sqlx::query_scalar("SELECT payload_bytes FROM ordinary_messages WHERE delivery_id=?")
+                .bind(&accepted.delivery_id)
+                .fetch_one(&mut inspect)
+                .await
+                .unwrap();
+        assert_eq!(bytes, 0, "{exit}");
+        inspect.close().await.unwrap();
+        product.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn sqlite_product_widget_marker_uses_original_clock_without_body_or_fanout_authority() {
+    use crate::api::handlers::widget_push::{WIDGET_KIND_UNREAD, WIDGET_KIND_WATCH_SUMMARY};
+    use crate::storage::{Platform, WidgetPushSubscriptionRecord};
+
+    for private_enabled in [true, false] {
+        let product =
+            Product::reopen_with_private(tempfile::tempdir().unwrap(), private_enabled).await;
+        let channel = product.channel().await;
+        product
+            .route(channel, "widget-owner", "ios", "private", None)
+            .await;
+        let token = "a4".repeat(32);
+        let widgets = [WIDGET_KIND_UNREAD, WIDGET_KIND_WATCH_SUMMARY].map(|kind| {
+            WidgetPushSubscriptionRecord {
+                device_key: "widget-owner".into(),
+                platform: "ios".into(),
+                token: token.clone(),
+                widget_kind: kind.into(),
+                family: "systemSmall".into(),
+                schema_version: 1,
+                created_at: now(),
+                updated_at: now(),
+            }
+        });
+        product
+            .storage
+            .upsert_widget_push_subscriptions(
+                "widget-owner",
+                Platform::IOS,
+                &token,
+                &widgets,
+                1,
+                now(),
+            )
+            .await
+            .unwrap();
+        let request = product.request(channel, "widget-marker-first");
+        let accepted = product.ordinary.accept(request.clone()).await.unwrap();
+        let first = product
+            .ordinary
+            .next_widget_refresh()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.delivery_id, accepted.delivery_id);
+        assert_eq!(first.channel_id, channel);
+        assert!(first.coalesce_order > 0);
+        let targets = product
+            .ordinary
+            .widget_refresh_targets(channel, None, 1)
+            .await
+            .unwrap();
+        assert_eq!(targets.len(), 1, "Widget kinds share one token target");
+        assert_eq!(targets[0].token, token);
+        if private_enabled {
+            let route = product
+                .ordinary
+                .private_route("widget-owner")
+                .await
+                .unwrap();
+            let ticket = product
+                .ordinary
+                .private_claim(&route, "widget-body-release", 1)
+                .await
+                .unwrap()
+                .remove(0);
+            assert!(product.ordinary.private_ack(&route, &ticket).await.unwrap());
+        } else {
+            assert!(
+                product
+                    .ordinary
+                    .target_status("widget-marker-first")
+                    .await
+                    .unwrap()["targets"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let mut inspect = product.inspect().await;
+        let bytes: i64 =
+            sqlx::query_scalar("SELECT payload_bytes FROM ordinary_messages WHERE delivery_id=?")
+                .bind(&accepted.delivery_id)
+                .fetch_one(&mut inspect)
+                .await
+                .unwrap();
+        assert_eq!(bytes, 0);
+        inspect.close().await.unwrap();
+        let replay = product.ordinary.accept(request).await.unwrap();
+        assert_eq!(replay.delivery_id, accepted.delivery_id);
+        assert_eq!(
+            product
+                .ordinary
+                .next_widget_refresh()
+                .await
+                .unwrap()
+                .unwrap()
+                .coalesce_order,
+            first.coalesce_order
+        );
+        let mut expired = product.request(channel, "widget-marker-expired");
+        expired.ttl = Some(0);
+        product.ordinary.accept(expired).await.unwrap();
+        let second = product
+            .ordinary
+            .accept(product.request(channel, "widget-marker-second"))
+            .await
+            .unwrap();
+        assert!(
+            !product
+                .ordinary
+                .complete_widget_refresh(&first.delivery_id, first.coalesce_order + 1)
+                .await
+                .unwrap()
+        );
+        assert!(
+            product
+                .ordinary
+                .complete_widget_refresh(&first.delivery_id, first.coalesce_order)
+                .await
+                .unwrap()
+        );
+        let next = product
+            .ordinary
+            .next_widget_refresh()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.delivery_id, second.delivery_id);
+        assert_eq!(
+            next.coalesce_order,
+            first.coalesce_order + 1,
+            "duplicate and expired sends do not reserve the dispatch clock"
+        );
+        let directory = product.stop().await;
+        let product = Product::reopen_with_private(directory, private_enabled).await;
+        assert_eq!(
+            product
+                .ordinary
+                .next_widget_refresh()
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_id,
+            second.delivery_id
+        );
+        assert!(
+            product
+                .ordinary
+                .complete_widget_refresh(&next.delivery_id, next.coalesce_order)
+                .await
+                .unwrap()
+        );
+        assert!(
+            product
+                .ordinary
+                .next_widget_refresh()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        product.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn sqlite_product_empty_fanout_replay_remains_not_attempted() {
+    let product = Product::open().await;
+    let channel = product.channel().await;
+    let original = product.request(channel, "empty-frozen-fanout");
+    let accepted = product.ordinary.accept(original.clone()).await.unwrap();
+    assert_eq!(accepted.dispatch_status, "not_attempted");
+    let first_status = product
+        .ordinary
+        .status("empty-frozen-fanout")
+        .await
+        .unwrap();
+    product
+        .route(channel, "later-private", "mqtt", "private", None)
+        .await;
+    let replay = product.ordinary.accept(original.clone()).await.unwrap();
+    assert_eq!(replay.delivery_id, accepted.delivery_id);
+    assert_eq!(replay.message_id, accepted.message_id);
+    assert_eq!(replay.dispatch_status, "not_attempted");
+    let replay_status = product
+        .ordinary
+        .status("empty-frozen-fanout")
+        .await
+        .unwrap();
+    assert_eq!(replay_status["accepted_at"], first_status["accepted_at"]);
+    assert_eq!(replay_status["expires_at"], first_status["expires_at"]);
+    assert!(
+        product
+            .ordinary
+            .target_status("empty-frozen-fanout")
+            .await
+            .unwrap()["targets"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        product.ordinary.private_pending_count(None).await.unwrap(),
+        0
+    );
+    // An explicit new operation freezes the now-subscribed recipient. Retrying
+    // the accepted empty operation never changes its original frozen fanout.
+    let mut new_request = original;
+    new_request.op_id = Some("nonempty-after-explicit-new-op".into());
+    let fresh = product.ordinary.accept(new_request).await.unwrap();
+    assert_ne!(fresh.message_id, accepted.message_id);
+    assert_ne!(fresh.delivery_id, accepted.delivery_id);
+    assert_eq!(fresh.dispatch_status, "attempted_accepted");
+    assert_eq!(
+        product.ordinary.private_pending_count(None).await.unwrap(),
+        1
+    );
+    let route = product
+        .ordinary
+        .private_route("later-private")
+        .await
+        .unwrap();
+    let tickets = product
+        .ordinary
+        .private_claim(&route, "new-operation-group", 1)
+        .await
+        .unwrap();
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0].delivery_id, fresh.delivery_id);
+    assert!(
+        product
+            .ordinary
+            .private_authorize(&tickets[0])
+            .await
+            .unwrap()
+    );
+    assert!(
+        product
+            .ordinary
+            .private_ack(&route, &tickets[0])
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        product.ordinary.private_pending_count(None).await.unwrap(),
+        0
+    );
+    product.stop().await;
+}

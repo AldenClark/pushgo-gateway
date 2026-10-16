@@ -21,6 +21,8 @@ macro_rules! delegate_db_async {
 mod driver_access;
 #[path = "config.rs"]
 mod driver_config;
+#[path = "ordinary.rs"]
+mod ordinary;
 
 #[cfg(test)]
 #[path = "tests.rs"]

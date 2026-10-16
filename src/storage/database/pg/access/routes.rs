@@ -4,6 +4,7 @@ use crate::value::{DeviceKeyRef, ProviderTokenRef};
 pub(in crate::storage::database::pg) async fn upsert_device_route_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     route: &DeviceRouteRecordRow,
+    ordinary: Option<&crate::ordinary::pg_store::PgDeliveryStore>,
 ) -> StoreResult<()> {
     let values = route.persistence_values()?;
     sqlx::query(
@@ -30,12 +31,18 @@ pub(in crate::storage::database::pg) async fn upsert_device_route_in_tx(
     .bind(values.updated_at)
     .execute(&mut **tx)
     .await?;
+    if let Some(ordinary) = ordinary {
+        ordinary
+            .canonical_route_tx(tx, &values.device_key, values.channel_type == "private")
+            .await?;
+    }
     Ok(())
 }
 
 #[derive(Debug)]
 struct DuplicateProviderRouteRow {
     device_id: Vec<u8>,
+    device_key: Option<String>,
 }
 
 async fn collect_duplicate_provider_routes_in_tx(
@@ -46,7 +53,7 @@ async fn collect_duplicate_provider_routes_in_tx(
         return Ok(Vec::new());
     };
     let rows = sqlx::query(
-        "SELECT device_id \
+        "SELECT device_id, device_key \
          FROM devices \
          WHERE platform = $1 AND provider_token = $2 AND device_id <> $3 \
          ORDER BY device_id FOR UPDATE",
@@ -60,6 +67,7 @@ async fn collect_duplicate_provider_routes_in_tx(
         .into_iter()
         .map(|row| DuplicateProviderRouteRow {
             device_id: row.get("device_id"),
+            device_key: row.get("device_key"),
         })
         .collect())
 }
@@ -99,6 +107,7 @@ async fn cleanup_orphan_private_payloads_in_tx(
 pub(in crate::storage::database::pg) async fn coalesce_duplicate_provider_routes_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     route: &DeviceRoutePersistenceValues,
+    ordinary: Option<&crate::ordinary::pg_store::PgDeliveryStore>,
 ) -> StoreResult<()> {
     let duplicates = collect_duplicate_provider_routes_in_tx(tx, route).await?;
     if duplicates.is_empty() {
@@ -106,6 +115,16 @@ pub(in crate::storage::database::pg) async fn coalesce_duplicate_provider_routes
     }
 
     for duplicate in duplicates {
+        if let (Some(ordinary), Some(loser)) = (ordinary, duplicate.device_key.as_deref()) {
+            ordinary
+                .canonical_coalesce_tx(
+                    tx,
+                    loser,
+                    &route.device_key,
+                    route.channel_type == "private",
+                )
+                .await?;
+        }
         let delivery_ids =
             load_device_delivery_ids_in_tx(tx, duplicate.device_id.as_slice()).await?;
 
@@ -193,6 +212,41 @@ pub(in crate::storage::database::pg) async fn coalesce_duplicate_provider_routes
 }
 
 impl PostgresDb {
+    /// Private route deletion keeps the route and subscriptions usable for new
+    /// messages, while atomically clearing only its currently accepted Private
+    /// consumers. Provider Pull ownership and retained identities stay intact.
+    pub(crate) async fn clear_ordinary_private_channel(
+        &self,
+        route: &DeviceRouteRecordRow,
+    ) -> StoreResult<()> {
+        if !route.channel_type_kind()?.is_private() {
+            return Err(StoreError::InvalidPlatform);
+        }
+        let ordinary = self.ordinary_store().ok_or_else(|| {
+            StoreError::UnsafeDurabilityConfiguration(
+                "ordinary authority is not initialized".into(),
+            )
+        })?;
+        let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
+        upsert_device_route_in_tx(&mut tx, route, Some(ordinary)).await?;
+        // Clearing this queue preserves the active Private session. The target
+        // delivery epochs below fence only capabilities issued for cleared work.
+        ordinary
+            .canonical_clear_private_tx(&mut tx, &route.device_key)
+            .await?;
+        if let Err(error) = tx.commit().await {
+            ordinary
+                .fail_closed("Private route clear COMMIT failed; exclusive-owner restart required");
+            return Err(StoreError::Ordinary(
+                crate::ordinary::KernelError::Database(error),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
         let minutes: Option<i64> = sqlx::query_scalar("SELECT watch_alert_window_minutes FROM devices WHERE device_key = $1 AND platform = 'watchos'")
             .bind(device_key).fetch_optional(&self.pool).await?;
@@ -265,9 +319,12 @@ impl PostgresDb {
         route: &DeviceRouteRecordRow,
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
         let values = route.persistence_values()?;
         let now = values.updated_at;
-        upsert_device_route_in_tx(&mut tx, route).await?;
+        upsert_device_route_in_tx(&mut tx, route, self.ordinary_store()).await?;
         if let Some(provider_token) = values.provider_token.as_deref() {
             let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
             sqlx::query(
@@ -286,7 +343,7 @@ impl PostgresDb {
             .execute(&mut *tx)
             .await?;
         }
-        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values, self.ordinary_store()).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -316,9 +373,12 @@ impl PostgresDb {
         route: &DeviceRouteRecordRow,
     ) -> StoreResult<()> {
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
         let values = route.persistence_values()?;
         let now = values.updated_at;
-        upsert_device_route_in_tx(&mut tx, route).await?;
+        upsert_device_route_in_tx(&mut tx, route, self.ordinary_store()).await?;
         if let Some(provider_token) = values.provider_token.as_deref() {
             let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
             sqlx::query(
@@ -337,7 +397,7 @@ impl PostgresDb {
             .execute(&mut *tx)
             .await?;
         }
-        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values, self.ordinary_store()).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -353,6 +413,9 @@ impl PostgresDb {
         let next_channel_type = route.channel_type_kind()?;
         let now = Utc::now().timestamp_millis();
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
 
         let current_route = sqlx::query(
             "SELECT channel_type, route_updated_at, route_revision FROM devices WHERE device_id = $1 FOR UPDATE",
@@ -480,7 +543,7 @@ impl PostgresDb {
         } else {
             0
         };
-        upsert_device_route_in_tx(&mut tx, route).await?;
+        upsert_device_route_in_tx(&mut tx, route, self.ordinary_store()).await?;
         if let Some(provider_token) = values.provider_token.as_deref() {
             let (token_hash, _) = ProviderTokenSnapshot::from_token(provider_token).into_parts();
             sqlx::query(
@@ -504,7 +567,7 @@ impl PostgresDb {
                 .execute(&mut *tx)
                 .await?;
         }
-        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values, self.ordinary_store()).await?;
         tx.commit().await?;
         Ok(migrated)
     }
@@ -521,6 +584,9 @@ impl PostgresDb {
         let old_device_id = old_key.map(|key| PrivateDeviceId::derive(key.as_str()).to_vec());
 
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
         let delivery_ids = if let Some(device_id) = old_device_id.as_deref() {
             let rows = sqlx::query(
                 "SELECT delivery_id FROM private_outbox WHERE device_id = $1 \
@@ -536,10 +602,20 @@ impl PostgresDb {
             Vec::new()
         };
 
-        upsert_device_route_in_tx(&mut tx, route).await?;
-        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
+        upsert_device_route_in_tx(&mut tx, route, self.ordinary_store()).await?;
+        coalesce_duplicate_provider_routes_in_tx(&mut tx, &values, self.ordinary_store()).await?;
 
         if let (Some(old_key), Some(device_id)) = (old_key, old_device_id.as_deref()) {
+            if let Some(ordinary) = self.ordinary_store() {
+                ordinary
+                    .canonical_coalesce_tx(
+                        &mut tx,
+                        old_key.as_str(),
+                        &values.device_key,
+                        values.channel_type == "private",
+                    )
+                    .await?;
+            }
             for statement in [
                 "DELETE FROM channel_subscriptions WHERE device_id = $1",
                 "DELETE FROM provider_pull_queue WHERE device_id = $1",
@@ -571,6 +647,14 @@ impl PostgresDb {
         };
         let device_id = PrivateDeviceId::derive(normalized_key.as_str()).to_vec();
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_delete_tx(&mut tx, normalized_key.as_str())
+                .await?;
+        }
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM private_outbox WHERE device_id = $1 \
              UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = $1",
@@ -625,7 +709,7 @@ impl PostgresDb {
         device_key: &str,
     ) -> StoreResult<Option<DeviceRouteSnapshot>> {
         let row = sqlx::query(
-            "SELECT route_revision, channel_type, provider_token FROM devices \
+            "SELECT route_revision, channel_type, provider_token, platform, route_updated_at FROM devices \
              WHERE device_key = $1 AND channel_type IS NOT NULL",
         )
         .bind(device_key)
@@ -635,6 +719,8 @@ impl PostgresDb {
             route_revision: row.get("route_revision"),
             channel_type: row.get("channel_type"),
             provider_token: row.get("provider_token"),
+            platform: row.get("platform"),
+            updated_at: row.get("route_updated_at"),
         }))
     }
 
@@ -652,6 +738,14 @@ impl PostgresDb {
         let (token_hash, _) =
             ProviderTokenSnapshot::from_token(normalized_token.as_str()).into_parts();
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_retire_token_tx(&mut tx, platform_name, normalized_token.as_str())
+                .await?;
+        }
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM provider_pull_queue WHERE platform = $1 AND provider_token = $2",
         )

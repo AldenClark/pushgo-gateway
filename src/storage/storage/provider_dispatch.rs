@@ -15,9 +15,76 @@ impl Storage {
             ));
         }
         let _admission = self.durable_write_gate.lock().await;
+        self.enqueue_provider_dispatch_job_under_gate(record).await
+    }
+
+    /// A Widget invalidation is a derived latest-state job, not another
+    /// ordinary acceptance. Hold the existing shared write gate across the
+    /// order check and native enqueue so replay cannot reset a committed job,
+    /// including a terminal job whose earlier COMMIT result was unknown.
+    pub(crate) async fn enqueue_ordinary_widget_refresh(
+        &self,
+        record: &ProviderDispatchOutboxRecord,
+    ) -> StoreResult<bool> {
+        let _admission = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        if record.provider != "APNS_WIDGETS"
+            || record.op_id.is_some()
+            || record.dedupe_key.is_some()
+            || !record.coalescible
+            || record.coalesce_order <= 0
+        {
+            return Err(StoreError::UnsafeDurabilityConfiguration(
+                "invalid ordinary derived Widget job".into(),
+            ));
+        }
+        let ordinary = self
+            .ordinary_handle()
+            .ok_or(crate::ordinary::KernelError::Unavailable)?;
+        if ordinary
+            .widget_refresh_job_order(&record.job_id)
+            .await?
+            .is_some_and(|existing| existing >= record.coalesce_order)
+        {
+            return Ok(false);
+        }
+        self.enqueue_provider_dispatch_job_under_gate(record).await
+    }
+
+    async fn enqueue_provider_dispatch_job_under_gate(
+        &self,
+        record: &ProviderDispatchOutboxRecord,
+    ) -> StoreResult<bool> {
+        self.ensure_ordinary_health()?;
+        let ordinary_pending = if let Some(ordinary) = self.ordinary_handle() {
+            usize::try_from(
+                ordinary.active_provider_count().await.map_err(|error| {
+                    StoreError::UnsafeDurabilityConfiguration(error.to_string())
+                })?,
+            )
+            .map_err(|_| {
+                StoreError::UnsafeDurabilityConfiguration("invalid ordinary Provider usage".into())
+            })?
+        } else {
+            0
+        };
+        // All ordinary and retained-feature admission shares this write gate.
+        // Preserve the native old-path transaction and replay/coalescing rules.
         self.db
-            .enqueue_provider_dispatch_job(record, PROVIDER_DISPATCH_HARD_CAPACITY)
+            .enqueue_provider_dispatch_job(
+                record,
+                PROVIDER_DISPATCH_HARD_CAPACITY.saturating_sub(ordinary_pending),
+            )
             .await
+            .map_err(|error| match error {
+                StoreError::ProviderDispatchCapacityExceeded { pending, .. } => {
+                    StoreError::ProviderDispatchCapacityExceeded {
+                        pending: pending.saturating_add(ordinary_pending),
+                        capacity: PROVIDER_DISPATCH_HARD_CAPACITY,
+                    }
+                }
+                other => other,
+            })
     }
 
     pub(crate) async fn activate_provider_dispatch_jobs(

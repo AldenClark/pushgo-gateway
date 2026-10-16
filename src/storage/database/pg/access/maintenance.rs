@@ -602,6 +602,9 @@ impl PostgresDb {
         limit: usize,
     ) -> StoreResult<usize> {
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.configure_control_tx(&mut tx).await?;
+        }
         let rows = sqlx::query(select_sql)
             .bind(before_ts)
             .bind(limit as i64)
@@ -610,6 +613,12 @@ impl PostgresDb {
         let mut deleted = 0usize;
         for row in rows {
             let device_id: Vec<u8> = row.get("device_id");
+            if let (Some(ordinary), Some(key)) = (
+                self.ordinary_store(),
+                row.get::<Option<String>, _>("device_key"),
+            ) {
+                ordinary.canonical_delete_tx(&mut tx, &key).await?;
+            }
             let delivery_ids = sqlx::query(
                 "SELECT delivery_id FROM private_outbox WHERE device_id = $1 \
                  UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = $1",

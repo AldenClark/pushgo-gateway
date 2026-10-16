@@ -25,6 +25,11 @@ debug = 2
 lto = "off"
 codegen-units = 16
 
+[features]
+default = []
+# Local synthetic Provider substitutes; absent from normal product builds.
+qa = []
+
 [dependencies]
 tokio = { version = "1.53.1", features = [
     "io-util",
@@ -81,10 +86,12 @@ warp-link = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link"
 warp-link-coordination = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "fded360134f2144876bb11b95e7431cb1d72aef3" }
 pushgo-warp-profile = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "fded360134f2144876bb11b95e7431cb1d72aef3" }
 futures-util = "0.3.33"
+hyper-util = { version = "0.1.20", features = ["server-auto", "service", "tokio"] }
 parking_lot = "0.12.5"
 scc = "3.8.6"
 rustls = "0.23.45"
 tokio-rustls = "0.26.4"
+quinn = { version = "=0.11.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 mqttbytes = "0.6.0"
 bytes = "1.12.1"
 rmcp = { version = "1.8.0", features = ["transport-streamable-http-server"] }

@@ -24,6 +24,32 @@ pub struct SqliteDb {
 }
 
 impl SqliteDb {
+    pub(crate) fn ordinary_pool(&self) -> SqlitePool {
+        self.pool.clone()
+    }
+
+    pub(crate) fn ordinary_control_read_pool(&self) -> SqlitePool {
+        self.core_read_pool.clone()
+    }
+
+    pub(crate) fn ordinary_delivery_pool(&self) -> SqlitePool {
+        self.delivery_pool.clone()
+    }
+
+    pub(crate) fn ordinary_dispatch_pool(&self) -> SqlitePool {
+        self.dispatch_pool.clone()
+    }
+
+    pub(crate) async fn close_product_pools(&self) {
+        self.core_read_pool.close().await;
+        self.delivery_pool.close().await;
+        self.dispatch_pool.close().await;
+        if let Some(pool) = &self.runtime_pool {
+            pool.close().await;
+        }
+        self.pool.close().await;
+    }
+
     fn core_read_pool(&self) -> &SqlitePool {
         &self.core_read_pool
     }

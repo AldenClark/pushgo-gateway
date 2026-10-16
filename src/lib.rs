@@ -53,3 +53,9 @@ pub fn remote_apns_token_provider(
         client,
     ))
 }
+
+pub mod ordinary;
+
+/// Synthetic local Provider substitutes; not compiled into normal builds.
+#[cfg(feature = "qa")]
+pub mod qa;

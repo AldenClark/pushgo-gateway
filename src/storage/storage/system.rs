@@ -24,6 +24,8 @@ impl Storage {
         device_key: &str,
         minutes: i64,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db
             .set_watch_alert_window_minutes(device_key, minutes)
             .await
@@ -113,6 +115,16 @@ impl Storage {
         &self,
         record: &SenderSubmitStatusRecord,
     ) -> StoreResult<bool> {
+        let _scope_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        if let Some(ordinary) = self.ordinary_handle() {
+            match ordinary.status(&record.op_id).await {
+                Ok(_) => return Err(StoreError::OperationScopeConflict),
+                Err(crate::ordinary::KernelError::NotFound) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+
         self.db.insert_sender_submit_status_if_absent(record).await
     }
 
@@ -270,9 +282,12 @@ impl Storage {
     }
 
     pub async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db.upsert_device_route(route).await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -305,9 +320,12 @@ impl Storage {
         &self,
         route: &DeviceRouteRecordRow,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db.persist_device_route_change(route).await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -318,6 +336,20 @@ impl Storage {
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
     ) -> StoreResult<usize> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        if route.channel_type.eq_ignore_ascii_case("private") {
+            if let Some(ordinary) = self.ordinary_handle() {
+                let (pending, capacity) =
+                    ordinary.private_route_capacity(&route.device_key).await?;
+                if pending > capacity {
+                    return Err(StoreError::RouteMigrationCapacityExceeded {
+                        pending: pending as usize,
+                        capacity: capacity as usize,
+                    });
+                }
+            }
+        }
         let migrated = self
             .db
             .transition_device_route(
@@ -329,6 +361,7 @@ impl Storage {
             .await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(migrated)
     }
 
@@ -344,18 +377,24 @@ impl Storage {
         route: &DeviceRouteRecordRow,
         old_device_key: Option<&str>,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db
             .replace_device_identity(route, old_device_key)
             .await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
     pub async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db.revoke_device_identity(device_key).await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -364,6 +403,8 @@ impl Storage {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         let provider_token = ProviderTokenRef::canonicalize_for_platform(provider_token, platform)
             .map_err(|_| StoreError::InvalidDeviceToken)?;
         self.db
@@ -371,6 +412,7 @@ impl Storage {
             .await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 

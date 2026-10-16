@@ -108,7 +108,10 @@ impl PostgresDb {
             .connect(db_url)
             .await?;
         validate_postgres_durability(&pool).await?;
-        let this = Self { pool };
+        let this = Self {
+            pool,
+            ordinary_store: Default::default(),
+        };
         this.init_schema().await?;
         Ok(this)
     }
@@ -126,7 +129,10 @@ impl PostgresDb {
             .max_lifetime(tuning.max_lifetime)
             .connect(db_url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            ordinary_store: Default::default(),
+        })
     }
 
     async fn init_schema(&self) -> StoreResult<()> {
@@ -733,7 +739,12 @@ impl PostgresDb {
                     .execute(&mut *tx)
                     .await?;
             }
-            super::access::routes::upsert_device_route_in_tx(&mut tx, &route).await?;
+            super::access::routes::upsert_device_route_in_tx(
+                &mut tx,
+                &route,
+                self.ordinary_store(),
+            )
+            .await?;
             let (token_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
             sqlx::query(
                 "INSERT INTO private_bindings \
@@ -750,8 +761,12 @@ impl PostgresDb {
             .bind(values.updated_at)
             .execute(&mut *tx)
             .await?;
-            super::access::routes::coalesce_duplicate_provider_routes_in_tx(&mut tx, &values)
-                .await?;
+            super::access::routes::coalesce_duplicate_provider_routes_in_tx(
+                &mut tx,
+                &values,
+                self.ordinary_store(),
+            )
+            .await?;
         }
         sqlx::query(
             "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ($1, 'complete') \

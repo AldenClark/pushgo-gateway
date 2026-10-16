@@ -3,6 +3,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error(transparent)]
+    Ordinary(#[from] crate::ordinary::KernelError),
+    #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -28,6 +30,8 @@ pub enum StoreError {
     ChannelAliasMissing,
     #[error("Channel subscriber limit exceeded")]
     ChannelSubscriberLimitExceeded,
+    #[error("op_id is already used by a different operation")]
+    OperationScopeConflict,
     #[error(
         "Device route migration requires {pending} pending slots, but only {capacity} are available"
     )]
