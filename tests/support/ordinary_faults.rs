@@ -527,7 +527,7 @@ pub async fn terminate_fixed_owner_session(ledger: &ProductLedger) {
                 .fetch_one(&mut connection).await.unwrap();
             assert_eq!(uuid.len(), 32);
             assert!(uuid.bytes().all(|byte| byte.is_ascii_hexdigit()));
-            let owner: Option<i64> = sqlx::query_scalar("SELECT IS_USED_LOCK(?)")
+            let owner: Option<u64> = sqlx::query_scalar("SELECT IS_USED_LOCK(?)")
                 .bind(format!("pushgo-product-{uuid}"))
                 .fetch_one(&mut connection)
                 .await
@@ -540,7 +540,7 @@ pub async fn terminate_fixed_owner_session(ledger: &ProductLedger) {
                 .unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
-                let current: Option<i64> = sqlx::query_scalar("SELECT IS_USED_LOCK(?)")
+                let current: Option<u64> = sqlx::query_scalar("SELECT IS_USED_LOCK(?)")
                     .bind(format!("pushgo-product-{uuid}"))
                     .fetch_one(&mut connection)
                     .await
