@@ -16,12 +16,16 @@ use serde_json::{Value, json};
 use sqlx::{Connection, MySql, MySqlConnection, MySqlPool, Row, Transaction};
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use tokio::sync::{Mutex, MutexGuard, Notify};
 #[derive(Clone)]
 pub struct MySqlDeliveryStore {
     pub(super) connection: Arc<Mutex<Option<sqlx::pool::PoolConnection<MySql>>>>,
+    transaction_armed: Arc<AtomicBool>,
     #[cfg(test)]
     pub(super) pool: MySqlPool,
     pub(super) gate: Arc<Mutex<()>>,
@@ -30,7 +34,11 @@ pub struct MySqlDeliveryStore {
     pub(super) wake: [Arc<Notify>; 3],
     pub(super) health: Arc<Health>,
 }
-pub(super) struct MySqlDataGuard<'a>(MutexGuard<'a, Option<sqlx::pool::PoolConnection<MySql>>>);
+pub(super) struct MySqlDataGuard<'a>(
+    MutexGuard<'a, Option<sqlx::pool::PoolConnection<MySql>>>,
+    Arc<Health>,
+    Arc<AtomicBool>,
+);
 impl Deref for MySqlDataGuard<'_> {
     type Target = MySqlConnection;
     fn deref(&self) -> &Self::Target {
@@ -40,6 +48,29 @@ impl Deref for MySqlDataGuard<'_> {
 impl DerefMut for MySqlDataGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.as_mut().expect("checked ordinary data session")
+    }
+}
+impl MySqlDataGuard<'_> {
+    // Arm before BEGIN is sent: cancellation can happen after the server starts
+    // a transaction but before SQLx records its transaction depth.
+    pub(super) async fn begin(&mut self) -> sqlx::Result<Transaction<'_, MySql>> {
+        self.2.store(true, Ordering::Release);
+        self.deref_mut().begin().await
+    }
+}
+impl Drop for MySqlDataGuard<'_> {
+    fn drop(&mut self) {
+        let unfinished = self.2.load(Ordering::Acquire)
+            || self.0.as_ref().is_some_and(|connection| {
+                connection.is_in_transaction() || connection.should_flush()
+            });
+        if unfinished {
+            self.1
+                .fail("MySQL ordinary transaction interrupted before completion");
+            // This fixed session was marked close_on_drop at startup. Drop it
+            // while holding the guard; never reacquire this mutex or reconnect.
+            drop(self.0.take());
+        }
     }
 }
 
@@ -77,16 +108,52 @@ impl MySqlDeliveryStore {
         }
         // No pool acquisition or reconnect occurs after startup. The product's
         // separate fixed owner session still owns the dataset lock.
-        Ok(MySqlDataGuard(connection))
+        Ok(MySqlDataGuard(
+            connection,
+            self.health.clone(),
+            self.transaction_armed.clone(),
+        ))
     }
     pub(super) async fn commit(&self, tx: Transaction<'_, MySql>) -> Result<()> {
         self.health.ensure()?;
         match tx.commit().await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.transaction_armed.store(false, Ordering::Release);
+                Ok(())
+            }
             Err(error) => {
                 self.health
                     .fail("MySQL ordinary COMMIT failed or result unknown");
                 Err(error.into())
+            }
+        }
+    }
+    pub(super) async fn rollback(&self, tx: Transaction<'_, MySql>) -> Result<()> {
+        match tx.rollback().await {
+            Ok(()) => {
+                self.transaction_armed.store(false, Ordering::Release);
+                Ok(())
+            }
+            Err(error) => {
+                self.health.fail("MySQL ordinary ROLLBACK failed");
+                Err(error.into())
+            }
+        }
+    }
+    /// A dropped SQLx transaction only queues MySQL's ROLLBACK. Our data
+    /// connection stays pinned rather than returning to the pool, so known
+    /// failures must finish that rollback before releasing the data guard.
+    /// Cancellation is fenced by the pinned data guard instead of reconnecting.
+    pub(super) async fn checked_transaction<'c, T>(
+        &self,
+        tx: Transaction<'c, MySql>,
+        result: Result<T>,
+    ) -> Result<(Transaction<'c, MySql>, T)> {
+        match result {
+            Ok(value) => Ok((tx, value)),
+            Err(error) => {
+                self.rollback(tx).await?;
+                Err(error)
             }
         }
     }
@@ -170,6 +237,7 @@ impl MySqlDeliveryStore {
             .execute(&mut *connection).await?;
         let store = Self {
             connection: Arc::new(Mutex::new(Some(connection))),
+            transaction_armed: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             pool,
             gate,
@@ -283,39 +351,44 @@ impl MySqlDeliveryStore {
             return Err(KernelError::Invalid("ordinary Widget channel coalescing constraint missing; use a fresh C10 database or explicitly migrate the prior candidate before startup".into()));
         }
         let mut tx = connection.begin().await?;
-        Self::lock_usage(&mut tx).await?;
-        while self.recover_private_claims_tx(&mut tx).await? > 0 {}
-        // Recover in one startup transaction, but hold only one bounded batch
-        // of identities even if the previous owner used a larger safety cap.
-        let mut cursor = String::new();
-        loop {
-            let ids: Vec<String> = sqlx::query(RECOVERY_BATCH_SQL)
-                .bind(&cursor)
-                .fetch_all(&mut *tx)
-                .await?
-                .iter()
-                .map(|row| row.try_get_unchecked::<String, _>(0))
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            if ids.is_empty() {
-                break;
+        let result: Result<_> = async {
+            Self::lock_usage(&mut tx).await?;
+            while self.recover_private_claims_tx(&mut tx).await? > 0 {}
+            // Recover in one startup transaction, but hold only one bounded batch
+            // of identities even if the previous owner used a larger safety cap.
+            let mut cursor = String::new();
+            loop {
+                let ids: Vec<String> = sqlx::query(RECOVERY_BATCH_SQL)
+                    .bind(&cursor)
+                    .fetch_all(&mut *tx)
+                    .await?
+                    .iter()
+                    .map(|row| row.try_get_unchecked::<String, _>(0))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                if ids.is_empty() {
+                    break;
+                }
+                for id in &ids {
+                    sqlx::query("DELETE FROM ordinary_targets WHERE delivery_id=? AND state='running' AND acked_at IS NOT NULL")
+                        .bind(id).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE ordinary_targets SET state=CASE WHEN delivery_mode='provider' THEN 'retry_wait' ELSE 'superseded_route' END,next_attempt_at=? WHERE delivery_id=? AND state='running'")
+                        .bind(now()).bind(id).execute(&mut *tx).await?;
+                    self.counters
+                        .profile
+                        .sql(
+                            Path::Maintenance,
+                            Statement::Usage,
+                            Self::reconcile_message_tx(&mut tx, id),
+                        )
+                        .await?;
+                    Self::refresh_status_tx(&mut tx, id, now()).await?;
+                }
+                cursor = ids.last().unwrap().clone();
             }
-            for id in &ids {
-                sqlx::query("DELETE FROM ordinary_targets WHERE delivery_id=? AND state='running' AND acked_at IS NOT NULL")
-                    .bind(id).execute(&mut *tx).await?;
-                sqlx::query("UPDATE ordinary_targets SET state=CASE WHEN delivery_mode='provider' THEN 'retry_wait' ELSE 'superseded_route' END,next_attempt_at=? WHERE delivery_id=? AND state='running'")
-                    .bind(now()).bind(id).execute(&mut *tx).await?;
-                self.counters
-                    .profile
-                    .sql(
-                        Path::Maintenance,
-                        Statement::Usage,
-                        Self::reconcile_message_tx(&mut tx, id),
-                    )
-                    .await?;
-                Self::refresh_status_tx(&mut tx, id, now()).await?;
-            }
-            cursor = ids.last().unwrap().clone();
-        }
+
+            Ok(())
+        }.await;
+        let (tx, _) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.commit(tx).await?;
         drop(connection);
@@ -360,183 +433,202 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Accept, Phase::Begin, profile_connection.begin())
             .await?;
-        Self::lock_usage(&mut tx).await?;
-        let auth: Option<String> = self
-            .counters
-            .profile
-            .sql(
-                Path::Accept,
-                Statement::Auth,
-                sqlx::query_scalar("SELECT CAST(password_hash AS CHAR CHARACTER SET utf8mb4) FROM ordinary_channel_routes WHERE channel_id=?")
-                    .bind(channel_bytes.as_slice())
-                    .fetch_optional(&mut *tx),
-            )
-            .await?;
-        let hash = auth.ok_or(KernelError::Unauthorized)?;
-        if authorized_channel.is_none()
-            && !self
+        let result: Result<_> = async {
+            Self::lock_usage(&mut tx).await?;
+            let auth: Option<String> = self
                 .counters
                 .profile
-                .phase(
+                .sql(
                     Path::Accept,
-                    Phase::Auth,
-                    verify_password_async(hash, request.password.clone()),
+                    Statement::Auth,
+                    sqlx::query_scalar("SELECT CAST(password_hash AS CHAR CHARACTER SET utf8mb4) FROM ordinary_channel_routes WHERE channel_id=?")
+                        .bind(channel_bytes.as_slice())
+                        .fetch_optional(&mut *tx),
                 )
-                .await?
-        {
-            return Err(KernelError::Unauthorized);
-        }
-        let at = now();
-        let existing_scope: i64 = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM sender_submit_status WHERE op_id=? AND expires_at>?)",
-        )
-        .bind(&request.op_id)
-        .bind(at)
-        .fetch_one(&mut *tx)
-        .await?;
-        if existing_scope != 0 {
-            return Err(KernelError::ScopeConflict);
-        }
-        // Reclaim expired delivery bodies independently of their identity history.
-        self.maintain_tx(&mut tx, at).await?;
-        if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,thing_id,fingerprint,status,provider_target_count,private_enqueued_count FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
-            if row.get_unchecked::<String,_>("channel_id")!=request.channel_id {return Err(KernelError::ScopeConflict)}
-            if row.get_unchecked::<Option<String>,_>("thing_id")!=request.thing_id {return Err(KernelError::ScopeConflict)}
-            if row.get_unchecked::<String,_>("fingerprint")!=request.fingerprint {return Err(KernelError::Conflict)}
-            return Ok(Accepted{delivery_id:row.get_unchecked("delivery_id"),message_id:row.get_unchecked("message_id"),op_id:request.op_id,acceptance:"duplicate_completed",dispatch_status:crate::ordinary::application::accepted_dispatch_status(&row.get_unchecked::<String,_>("status"),row.get("provider_target_count"),row.get("private_enqueued_count"))?})
-        }
-        // An exact expired identity can be replaced even if bounded GC has backlog.
-        if let Some(id) = sqlx::query_scalar::<_,String>("SELECT CAST(delivery_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE op_id=? AND dedupe_until<=? AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running')")
-            .bind(&request.op_id).bind(at).fetch_optional(&mut *tx).await? {
-            Self::delete_message_tx(&mut tx,&id).await?;
-        }
-        let _compute = self.counters.profile.timer(Path::Accept, Phase::Compute);
-        let delivery_id = generate_hex_id_128();
-        let message_id = generate_hex_id_128();
-        let expires = request
-            .ttl
-            .map(|ttl| ttl.min(at.saturating_add(crate::ordinary::sender::MAX_TTL_MS)))
-            .unwrap_or(at.saturating_add(self.config.default_ttl_secs * 1000));
-        let mut fields = request.fields;
-        // Sender metadata cannot assert a Gateway endpoint. Omission of the
-        // trusted product URL stays omission on the wire.
-        fields.remove("base_url");
-        if !self.config.public_base_url.trim().is_empty() {
-            fields.insert("base_url".into(), self.config.public_base_url.clone());
-        }
-        for (key, value) in [
-            ("op_id", request.op_id.clone()),
-            ("message_id", message_id.clone()),
-            ("delivery_id", delivery_id.clone()),
-            ("channel_id", request.channel_id.clone()),
-            ("sent_at", at.to_string()),
-            ("ingested_at", at.to_string()),
-            ("occurred_at", request.occurred_at.unwrap_or(at).to_string()),
-            ("entity_type", "message".into()),
-            ("entity_id", message_id.clone()),
-            ("payload_version", "1".into()),
-            ("schema_version", "1".into()),
-        ] {
-            fields.insert(key.into(), value);
-        }
-        if request.ttl.is_some() {
-            fields.insert("ttl".into(), expires.to_string());
-        }
-        let payload = serde_json::to_vec(&fields)?;
-        drop(_compute);
-        let usage = self
-            .counters
-            .profile
-            .sql(
-                Path::Accept,
-                Statement::Usage,
-                sqlx::query(
-                    "SELECT messages,targets,bytes FROM ordinary_ledger_usage WHERE singleton=1",
-                )
-                .fetch_one(&mut *tx),
+                .await?;
+            let hash = auth.ok_or(KernelError::Unauthorized)?;
+            if authorized_channel.is_none()
+                && !self
+                    .counters
+                    .profile
+                    .phase(
+                        Path::Accept,
+                        Phase::Auth,
+                        verify_password_async(hash, request.password.clone()),
+                    )
+                    .await?
+            {
+                return Err(KernelError::Unauthorized);
+            }
+            let at = now();
+            let existing_scope: i64 = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM sender_submit_status WHERE op_id=? AND expires_at>?)",
             )
+            .bind(&request.op_id)
+            .bind(at)
+            .fetch_one(&mut *tx)
             .await?;
-        let fanout:i64=self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT COUNT(*) FROM (SELECT d.*,ROW_NUMBER() OVER(PARTITION BY d.platform,d.provider_token ORDER BY d.channel_type ASC,d.route_updated_at DESC,s.updated_at DESC,s.created_at DESC,s.device_id DESC) AS recipient_rank FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS','WNS') AND d.provider_token IS NOT NULL AND TRIM(d.provider_token)<>'' AND d.route_updated_at IS NOT NULL) recipients WHERE recipient_rank=1").bind(channel_bytes.as_slice()).bind(at).fetch_one(&mut *tx)).await?;
-        let provider_fanout = fanout;
-        if !crate::ordinary::expiry::is_expired(expires, at) && provider_fanout > 0 {
-            let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_targets WHERE provider IN ('FCM','APNS','WNS') AND delivery_mode='provider' AND state IN ('pending','running','retry_wait') AND acked_at IS NULL")
-                .fetch_one(&mut *tx).await?;
-            let legacy: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM provider_dispatch_outbox WHERE state IN ('preparing','pending','retry_wait','leased')")
-                .fetch_one(&mut *tx).await?;
-            if active
-                .saturating_add(legacy)
-                .saturating_add(provider_fanout)
-                > self.config.max_provider_targets
+            if existing_scope != 0 {
+                return Err(KernelError::ScopeConflict);
+            }
+            // Reclaim expired delivery bodies independently of their identity history.
+            self.maintain_tx(&mut tx, at).await?;
+            if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,thing_id,fingerprint,status,provider_target_count,private_enqueued_count FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
+                if row.get_unchecked::<String,_>("channel_id")!=request.channel_id {return Err(KernelError::ScopeConflict)}
+                if row.get_unchecked::<Option<String>,_>("thing_id")!=request.thing_id {return Err(KernelError::ScopeConflict)}
+                if row.get_unchecked::<String,_>("fingerprint")!=request.fingerprint {return Err(KernelError::Conflict)}
+                return Ok((Accepted{delivery_id:row.get_unchecked("delivery_id"),message_id:row.get_unchecked("message_id"),op_id:request.op_id,acceptance:"duplicate_completed",dispatch_status:crate::ordinary::application::accepted_dispatch_status(&row.get_unchecked::<String,_>("status"),row.get("provider_target_count"),row.get("private_enqueued_count"))?}, false))
+            }
+            // An exact expired identity can be replaced even if bounded GC has backlog.
+            if let Some(id) = sqlx::query_scalar::<_,String>("SELECT CAST(delivery_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE op_id=? AND dedupe_until<=? AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running')")
+                .bind(&request.op_id).bind(at).fetch_optional(&mut *tx).await? {
+                Self::delete_message_tx(&mut tx,&id).await?;
+            }
+            let _compute = self.counters.profile.timer(Path::Accept, Phase::Compute);
+            let delivery_id = generate_hex_id_128();
+            let message_id = generate_hex_id_128();
+            let expires = request
+                .ttl
+                .map(|ttl| ttl.min(at.saturating_add(crate::ordinary::sender::MAX_TTL_MS)))
+                .unwrap_or(at.saturating_add(self.config.default_ttl_secs * 1000));
+            let mut fields = request.fields;
+            // Sender metadata cannot assert a Gateway endpoint. Omission of the
+            // trusted product URL stays omission on the wire.
+            fields.remove("base_url");
+            if !self.config.public_base_url.trim().is_empty() {
+                fields.insert("base_url".into(), self.config.public_base_url.clone());
+            }
+            for (key, value) in [
+                ("op_id", request.op_id.clone()),
+                ("message_id", message_id.clone()),
+                ("delivery_id", delivery_id.clone()),
+                ("channel_id", request.channel_id.clone()),
+                ("sent_at", at.to_string()),
+                ("ingested_at", at.to_string()),
+                ("occurred_at", request.occurred_at.unwrap_or(at).to_string()),
+                ("entity_type", "message".into()),
+                ("entity_id", message_id.clone()),
+                ("payload_version", "1".into()),
+                ("schema_version", "1".into()),
+            ] {
+                fields.insert(key.into(), value);
+            }
+            if request.ttl.is_some() {
+                fields.insert("ttl".into(), expires.to_string());
+            }
+            let payload = serde_json::to_vec(&fields)?;
+            drop(_compute);
+            let usage = self
+                .counters
+                .profile
+                .sql(
+                    Path::Accept,
+                    Statement::Usage,
+                    sqlx::query(
+                        "SELECT messages,targets,bytes FROM ordinary_ledger_usage WHERE singleton=1",
+                    )
+                    .fetch_one(&mut *tx),
+                )
+                .await?;
+            let fanout:i64=self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT COUNT(*) FROM (SELECT d.*,ROW_NUMBER() OVER(PARTITION BY d.platform,d.provider_token ORDER BY d.channel_type ASC,d.route_updated_at DESC,s.updated_at DESC,s.created_at DESC,s.device_id DESC) AS recipient_rank FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS','WNS') AND d.provider_token IS NOT NULL AND TRIM(d.provider_token)<>'' AND d.route_updated_at IS NOT NULL) recipients WHERE recipient_rank=1").bind(channel_bytes.as_slice()).bind(at).fetch_one(&mut *tx)).await?;
+            let provider_fanout = fanout;
+            if !crate::ordinary::expiry::is_expired(expires, at) && provider_fanout > 0 {
+                let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_targets WHERE provider IN ('FCM','APNS','WNS') AND delivery_mode='provider' AND state IN ('pending','running','retry_wait') AND acked_at IS NULL")
+                    .fetch_one(&mut *tx).await?;
+                let legacy: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM provider_dispatch_outbox WHERE state IN ('preparing','pending','retry_wait','leased')")
+                    .fetch_one(&mut *tx).await?;
+                if active
+                    .saturating_add(legacy)
+                    .saturating_add(provider_fanout)
+                    > self.config.max_provider_targets
+                {
+                    return Err(KernelError::Capacity);
+                }
+            }
+            let private_fanout = if !crate::ordinary::expiry::is_expired(expires, at) {
+                self.check_private_admission_tx(&mut tx, &channel_bytes, at)
+                    .await?
+            } else {
+                0
+            };
+            let fanout = provider_fanout.saturating_add(private_fanout);
+            let live = fanout > 0 && !crate::ordinary::expiry::is_expired(expires, at);
+            if live
+                && (usage.get::<i64, _>("messages") >= self.config.max_messages
+                    || usage
+                        .get::<i64, _>("bytes")
+                        .saturating_add(payload.len() as i64)
+                        > self.config.max_payload_bytes
+                    || usage.get::<i64, _>("targets").saturating_add(fanout) > self.config.max_targets)
             {
                 return Err(KernelError::Capacity);
             }
-        }
-        let private_fanout = if !crate::ordinary::expiry::is_expired(expires, at) {
-            self.check_private_admission_tx(&mut tx, &channel_bytes, at)
-                .await?
-        } else {
-            0
-        };
-        let fanout = provider_fanout.saturating_add(private_fanout);
-        let live = fanout > 0 && !crate::ordinary::expiry::is_expired(expires, at);
-        if live
-            && (usage.get::<i64, _>("messages") >= self.config.max_messages
-                || usage
-                    .get::<i64, _>("bytes")
-                    .saturating_add(payload.len() as i64)
-                    > self.config.max_payload_bytes
-                || usage.get::<i64, _>("targets").saturating_add(fanout) > self.config.max_targets)
-        {
-            return Err(KernelError::Capacity);
-        }
-        let status = if !live {
-            "failed"
-        } else if provider_fanout > 0 {
-            "provider_queued"
-        } else {
-            "sent"
-        };
-        self.counters.profile.sql(Path::Accept, Statement::MessageInsert, sqlx::query("INSERT INTO ordinary_messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at,provider_target_count,private_enqueued_count,thing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(&delivery_id).bind(&message_id).bind(&request.op_id).bind(&request.channel_id).bind(&request.fingerprint).bind(if live{payload.as_slice()}else{&[]}).bind(if live{payload.len() as i64}else{0}).bind(at).bind(expires).bind(at.saturating_add(self.config.dedupe_retention_ms)).bind(status).bind(at).bind(if live {provider_fanout} else {0}).bind(if live {private_fanout} else {0}).bind(request.thing_id.as_deref()).execute(&mut *tx)).await?;
-        if live {
-            self.counters.profile.sql(Path::Fanout, Statement::FanoutInsert, sqlx::query("INSERT INTO ordinary_targets(delivery_id,device_key,pull_owner,owner_generation,control_epoch,platform,provider,provider_token,route_generation,accepted_at,watch_alert_deadline_at,state,next_attempt_at) SELECT ?,d.device_key,d.device_key,d.route_generation,(SELECT control_epoch FROM ordinary_ledger_usage WHERE singleton=1),d.platform,d.provider,d.provider_token,d.route_generation,?,CASE WHEN d.platform='watchos' THEN ? + COALESCE(d.watch_alert_window_minutes,30)*60000 ELSE NULL END,'pending',? FROM (SELECT d.*,ROW_NUMBER() OVER(PARTITION BY d.platform,d.provider_token ORDER BY d.channel_type ASC,d.route_updated_at DESC,s.updated_at DESC,s.created_at DESC,s.device_id DESC) AS recipient_rank FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS','WNS') AND d.provider_token IS NOT NULL AND TRIM(d.provider_token)<>'' AND d.route_updated_at IS NOT NULL) d WHERE d.recipient_rank=1").bind(&delivery_id).bind(at).bind(at).bind(at).bind(channel_bytes.as_slice()).bind(at).execute(&mut *tx)).await?;
-        }
-        if live && private_fanout > 0 {
-            self.counters.profile.sql(Path::Fanout, Statement::FanoutInsert, sqlx::query("INSERT INTO ordinary_targets(delivery_id,device_key,pull_owner,owner_generation,control_epoch,platform,provider,provider_token,route_generation,accepted_at,state,next_attempt_at,delivery_mode) SELECT ?,d.device_key,d.device_key,d.route_generation,(SELECT control_epoch FROM ordinary_ledger_usage WHERE singleton=1),d.platform,'PRIVATE','',d.route_generation,?,'superseded_route',?,'private' FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL").bind(&delivery_id).bind(at).bind(at).bind(channel_bytes.as_slice()).bind(at).execute(&mut *tx)).await?;
-            Self::reconcile_private_message_tx(&mut tx, &delivery_id, &[]).await?;
-        }
-        self.counters
-            .profile
-            .sql(
-                Path::Accept,
-                Statement::Usage,
-                Self::reconcile_message_tx(&mut tx, &delivery_id),
-            )
-            .await?;
-        if !crate::ordinary::expiry::is_expired(expires, at) {
-            let widget: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM widget_push_subscriptions w JOIN devices d ON d.device_key=w.device_key JOIN channel_subscriptions s ON s.device_id=d.device_id WHERE s.channel_id=? AND s.status='active' AND LOWER(TRIM(w.platform)) IN ('ios','ipados','macos','watchos') AND w.widget_kind IN (?,?))")
-                .bind(channel_bytes.as_slice())
-                .bind(crate::api::handlers::widget_push::WIDGET_KIND_UNREAD)
-                .bind(crate::api::handlers::widget_push::WIDGET_KIND_WATCH_SUMMARY)
-                .fetch_one(&mut *tx).await?;
-            if widget != 0 {
-                // Reuse the normal product ordering row inside this admission
-                // transaction. The marker has no ordinary payload or FK.
-                let advanced = sqlx::query("UPDATE dispatch_acceptance_sequence SET current_value=current_value+1 WHERE singleton=1 AND current_value<9223372036854775807")
-                    .execute(&mut *tx).await?.rows_affected();
-                if advanced != 1 {
-                    return Err(KernelError::Invalid(
-                        "dispatch acceptance order exhausted or missing".into(),
-                    ));
-                }
-                let order: i64 = sqlx::query_scalar(
-                    "SELECT current_value FROM dispatch_acceptance_sequence WHERE singleton=1",
-                )
-                .fetch_one(&mut *tx)
-                .await?;
-                sqlx::query("INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,coalesce_order,accepted_at,expires_at) VALUES(?,?,?,?,?) AS latest ON DUPLICATE KEY UPDATE delivery_id=latest.delivery_id,coalesce_order=latest.coalesce_order,accepted_at=latest.accepted_at,expires_at=latest.expires_at")
-                    .bind(&delivery_id).bind(channel_bytes.as_slice()).bind(order).bind(at).bind(expires)
-                    .execute(&mut *tx).await?;
+            let status = if !live {
+                "failed"
+            } else if provider_fanout > 0 {
+                "provider_queued"
+            } else {
+                "sent"
+            };
+            self.counters.profile.sql(Path::Accept, Statement::MessageInsert, sqlx::query("INSERT INTO ordinary_messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at,provider_target_count,private_enqueued_count,thing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(&delivery_id).bind(&message_id).bind(&request.op_id).bind(&request.channel_id).bind(&request.fingerprint).bind(if live{payload.as_slice()}else{&[]}).bind(if live{payload.len() as i64}else{0}).bind(at).bind(expires).bind(at.saturating_add(self.config.dedupe_retention_ms)).bind(status).bind(at).bind(if live {provider_fanout} else {0}).bind(if live {private_fanout} else {0}).bind(request.thing_id.as_deref()).execute(&mut *tx)).await?;
+            if live {
+                self.counters.profile.sql(Path::Fanout, Statement::FanoutInsert, sqlx::query("INSERT INTO ordinary_targets(delivery_id,device_key,pull_owner,owner_generation,control_epoch,platform,provider,provider_token,route_generation,accepted_at,watch_alert_deadline_at,state,next_attempt_at) SELECT ?,d.device_key,d.device_key,d.route_generation,(SELECT control_epoch FROM ordinary_ledger_usage WHERE singleton=1),d.platform,d.provider,d.provider_token,d.route_generation,?,CASE WHEN d.platform='watchos' THEN ? + COALESCE(d.watch_alert_window_minutes,30)*60000 ELSE NULL END,'pending',? FROM (SELECT d.*,ROW_NUMBER() OVER(PARTITION BY d.platform,d.provider_token ORDER BY d.channel_type ASC,d.route_updated_at DESC,s.updated_at DESC,s.created_at DESC,s.device_id DESC) AS recipient_rank FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.retired_at IS NULL AND d.provider IN ('FCM','APNS','WNS') AND d.provider_token IS NOT NULL AND TRIM(d.provider_token)<>'' AND d.route_updated_at IS NOT NULL) d WHERE d.recipient_rank=1").bind(&delivery_id).bind(at).bind(at).bind(at).bind(channel_bytes.as_slice()).bind(at).execute(&mut *tx)).await?;
             }
+            if live && private_fanout > 0 {
+                self.counters.profile.sql(Path::Fanout, Statement::FanoutInsert, sqlx::query("INSERT INTO ordinary_targets(delivery_id,device_key,pull_owner,owner_generation,control_epoch,platform,provider,provider_token,route_generation,accepted_at,state,next_attempt_at,delivery_mode) SELECT ?,d.device_key,d.device_key,d.route_generation,(SELECT control_epoch FROM ordinary_ledger_usage WHERE singleton=1),d.platform,'PRIVATE','',d.route_generation,?,'superseded_route',?,'private' FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL").bind(&delivery_id).bind(at).bind(at).bind(channel_bytes.as_slice()).bind(at).execute(&mut *tx)).await?;
+                Self::reconcile_private_message_tx(&mut tx, &delivery_id, &[]).await?;
+            }
+            self.counters
+                .profile
+                .sql(
+                    Path::Accept,
+                    Statement::Usage,
+                    Self::reconcile_message_tx(&mut tx, &delivery_id),
+                )
+                .await?;
+            if !crate::ordinary::expiry::is_expired(expires, at) {
+                let widget: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM widget_push_subscriptions w JOIN devices d ON d.device_key=w.device_key JOIN channel_subscriptions s ON s.device_id=d.device_id WHERE s.channel_id=? AND s.status='active' AND LOWER(TRIM(w.platform)) IN ('ios','ipados','macos','watchos') AND w.widget_kind IN (?,?))")
+                    .bind(channel_bytes.as_slice())
+                    .bind(crate::api::handlers::widget_push::WIDGET_KIND_UNREAD)
+                    .bind(crate::api::handlers::widget_push::WIDGET_KIND_WATCH_SUMMARY)
+                    .fetch_one(&mut *tx).await?;
+                if widget != 0 {
+                    // Reuse the normal product ordering row inside this admission
+                    // transaction. The marker has no ordinary payload or FK.
+                    let advanced = sqlx::query("UPDATE dispatch_acceptance_sequence SET current_value=current_value+1 WHERE singleton=1 AND current_value<9223372036854775807")
+                        .execute(&mut *tx).await?.rows_affected();
+                    if advanced != 1 {
+                        return Err(KernelError::Invalid(
+                            "dispatch acceptance order exhausted or missing".into(),
+                        ));
+                    }
+                    let order: i64 = sqlx::query_scalar(
+                        "SELECT current_value FROM dispatch_acceptance_sequence WHERE singleton=1",
+                    )
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    sqlx::query("INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,coalesce_order,accepted_at,expires_at) VALUES(?,?,?,?,?) AS latest ON DUPLICATE KEY UPDATE delivery_id=latest.delivery_id,coalesce_order=latest.coalesce_order,accepted_at=latest.accepted_at,expires_at=latest.expires_at")
+                        .bind(&delivery_id).bind(channel_bytes.as_slice()).bind(order).bind(at).bind(expires)
+                        .execute(&mut *tx).await?;
+                }
+            }
+
+            Ok((Accepted {
+                delivery_id,
+                message_id,
+                op_id: request.op_id,
+                acceptance: "new",
+                dispatch_status: crate::ordinary::application::accepted_dispatch_status(
+                    status,
+                    if live { provider_fanout } else { 0 },
+                    if live { private_fanout } else { 0 },
+                )?,
+            }, true))
+        }.await;
+        let (tx, (accepted, is_new)) = self.checked_transaction(tx, result).await?;
+        if !is_new {
+            self.rollback(tx).await?;
+            return Ok(accepted);
         }
         let commit_at = std::time::Instant::now();
         self.health.ensure()?;
@@ -559,17 +651,7 @@ impl MySqlDeliveryStore {
             .admission
             .record(admission_started.elapsed());
         self.notify();
-        Ok(Accepted {
-            delivery_id,
-            message_id,
-            op_id: request.op_id,
-            acceptance: "new",
-            dispatch_status: crate::ordinary::application::accepted_dispatch_status(
-                status,
-                if live { provider_fanout } else { 0 },
-                if live { private_fanout } else { 0 },
-            )?,
-        })
+        Ok(accepted)
     }
     pub(super) async fn release_acked_tx(
         &self,
@@ -634,8 +716,14 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Maintenance, Phase::Begin, profile_connection.begin())
             .await?;
-        Self::lock_usage(&mut tx).await?;
-        let removed = self.maintain_tx(&mut tx, now()).await?;
+        let result: Result<_> = async {
+            Self::lock_usage(&mut tx).await?;
+            let removed = self.maintain_tx(&mut tx, now()).await?;
+
+            Ok(removed)
+        }
+        .await;
+        let (tx, removed) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.counters
             .profile
@@ -764,47 +852,52 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Ack, Phase::Begin, profile_connection.begin())
             .await?;
-        Self::lock_usage(&mut tx).await?;
-        let at = now();
-        self.counters.sql(1);
-        let rows = if let Some(id) = delivery {
-            self.counters
-                .profile
-                .sql(
-                    Path::Ack,
-                    Statement::Control,
-                    sqlx::query(PULL_EXACT_SQL)
-                        .bind(device)
-                        .bind(id)
-                        .bind(at)
-                        .fetch_all(&mut *tx),
-                )
-                .await?
-        } else {
-            self.counters
-                .profile
-                .sql(
-                    Path::Ack,
-                    Statement::Control,
-                    sqlx::query(PULL_BATCH_SQL)
-                        .bind(device)
-                        .bind(at)
-                        .bind(512_i64)
-                        .fetch_all(&mut *tx),
-                )
-                .await?
-        };
-        let mut items = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: String = row.get_unchecked("delivery_id");
-            let payload: Value = serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?;
+        let result: Result<_> = async {
+            Self::lock_usage(&mut tx).await?;
+            let at = now();
             self.counters.sql(1);
-            self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='provider' AND acked_at IS NULL")
-                .bind(at).bind(device).bind(&id).execute(&mut *tx)).await?;
-            self.release_acked_tx(&mut tx, device, &id, Path::Ack)
-                .await?;
-            items.push(json!({"delivery_id":id,"payload":payload}));
-        }
+            let rows = if let Some(id) = delivery {
+                self.counters
+                    .profile
+                    .sql(
+                        Path::Ack,
+                        Statement::Control,
+                        sqlx::query(PULL_EXACT_SQL)
+                            .bind(device)
+                            .bind(id)
+                            .bind(at)
+                            .fetch_all(&mut *tx),
+                    )
+                    .await?
+            } else {
+                self.counters
+                    .profile
+                    .sql(
+                        Path::Ack,
+                        Statement::Control,
+                        sqlx::query(PULL_BATCH_SQL)
+                            .bind(device)
+                            .bind(at)
+                            .bind(512_i64)
+                            .fetch_all(&mut *tx),
+                    )
+                    .await?
+            };
+            let mut items = Vec::with_capacity(rows.len());
+            for row in rows {
+                let id: String = row.get_unchecked("delivery_id");
+                let payload: Value = serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?;
+                self.counters.sql(1);
+                self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='provider' AND acked_at IS NULL")
+                    .bind(at).bind(device).bind(&id).execute(&mut *tx)).await?;
+                self.release_acked_tx(&mut tx, device, &id, Path::Ack)
+                    .await?;
+                items.push(json!({"delivery_id":id,"payload":payload}));
+            }
+
+            Ok(items)
+        }.await;
+        let (tx, items) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.counters
             .profile
@@ -850,14 +943,19 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Ack, Phase::Begin, profile_connection.begin())
             .await?;
-        Self::lock_usage(&mut tx).await?;
-        let mut removed = 0;
-        let at = now();
-        for id in ids {
-            removed+=usize::from(self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='provider' AND acked_at IS NULL AND EXISTS(SELECT 1 FROM ordinary_device_routes WHERE ordinary_device_routes.device_key=ordinary_targets.pull_owner AND retired_at IS NULL) AND EXISTS(SELECT 1 FROM ordinary_messages WHERE ordinary_messages.delivery_id=ordinary_targets.delivery_id AND expires_at>?) AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=ordinary_targets.platform AND r.provider_token=ordinary_targets.provider_token AND ordinary_targets.control_epoch<r.control_epoch)").bind(at).bind(device).bind(&id).bind(at).execute(&mut *tx)).await?.rows_affected()>0);
-            self.release_acked_tx(&mut tx, device, &id, Path::Ack)
-                .await?;
-        }
+        let result: Result<_> = async {
+            Self::lock_usage(&mut tx).await?;
+            let mut removed = 0;
+            let at = now();
+            for id in ids {
+                removed+=usize::from(self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='provider' AND acked_at IS NULL AND EXISTS(SELECT 1 FROM ordinary_device_routes WHERE ordinary_device_routes.device_key=ordinary_targets.pull_owner AND retired_at IS NULL) AND EXISTS(SELECT 1 FROM ordinary_messages WHERE ordinary_messages.delivery_id=ordinary_targets.delivery_id AND expires_at>?) AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=ordinary_targets.platform AND r.provider_token=ordinary_targets.provider_token AND ordinary_targets.control_epoch<r.control_epoch)").bind(at).bind(device).bind(&id).bind(at).execute(&mut *tx)).await?.rows_affected()>0);
+                self.release_acked_tx(&mut tx, device, &id, Path::Ack)
+                    .await?;
+            }
+
+            Ok(removed)
+        }.await;
+        let (tx, removed) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.counters
             .profile
@@ -916,92 +1014,97 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Claim, Phase::Begin, profile_connection.begin())
             .await?;
-        Self::lock_usage(&mut tx).await?;
-        self.maintain_tx(&mut tx, at).await?;
-        let cooldown: Option<i64> = self
-            .counters
-            .profile
-            .sql(
-                Path::Claim,
-                Statement::ClaimCooldown,
-                sqlx::query_scalar(
-                    "SELECT next_attempt_at FROM ordinary_provider_cooldowns WHERE provider=?",
+        let result: Result<_> = async {
+            Self::lock_usage(&mut tx).await?;
+            self.maintain_tx(&mut tx, at).await?;
+            let cooldown: Option<i64> = self
+                .counters
+                .profile
+                .sql(
+                    Path::Claim,
+                    Statement::ClaimCooldown,
+                    sqlx::query_scalar(
+                        "SELECT next_attempt_at FROM ordinary_provider_cooldowns WHERE provider=?",
+                    )
+                    .bind(provider)
+                    .fetch_optional(&mut *tx),
                 )
-                .bind(provider)
-                .fetch_optional(&mut *tx),
-            )
-            .await?;
-        let mut tickets = Vec::new();
-        if cooldown.is_none_or(|due| due <= at) {
-            let classes = if retry_first {
-                ["retry_wait", "pending"]
-            } else {
-                ["pending", "retry_wait"]
-            };
-            for n in 0..limit {
-                let mut selected = None;
-                for class in [classes[n % 2], classes[(n + 1) % 2]] {
-                    self.counters.sql(1);
-                    let row = self
-                        .counters
-                        .profile
-                        .sql(
-                            Path::Claim,
-                            Statement::ClaimSelect,
-                            sqlx::query(CLAIM_ONE_SQL)
-                                .bind(provider)
-                                .bind(class)
-                                .bind(at)
-                                .bind(at)
-                                .fetch_optional(&mut *tx),
-                        )
-                        .await?;
-                    if row.is_some() {
-                        selected = row;
-                        break;
+                .await?;
+            let mut tickets = Vec::new();
+            if cooldown.is_none_or(|due| due <= at) {
+                let classes = if retry_first {
+                    ["retry_wait", "pending"]
+                } else {
+                    ["pending", "retry_wait"]
+                };
+                for n in 0..limit {
+                    let mut selected = None;
+                    for class in [classes[n % 2], classes[(n + 1) % 2]] {
+                        self.counters.sql(1);
+                        let row = self
+                            .counters
+                            .profile
+                            .sql(
+                                Path::Claim,
+                                Statement::ClaimSelect,
+                                sqlx::query(CLAIM_ONE_SQL)
+                                    .bind(provider)
+                                    .bind(class)
+                                    .bind(at)
+                                    .bind(at)
+                                    .fetch_optional(&mut *tx),
+                            )
+                            .await?;
+                        if row.is_some() {
+                            selected = row;
+                            break;
+                        }
                     }
+                    let Some(row) = selected else { break };
+                    let delivery: String = row.get_unchecked("delivery_id");
+                    let device: String = row.get_unchecked("device_key");
+                    self.counters.sql(1);
+                    self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET state='running',attempts=attempts+1,attempt_id=attempt_id+1 WHERE delivery_id=? AND device_key=?").bind(&delivery).bind(&device).execute(&mut *tx)).await?;
+                    let _compute = self.counters.profile.timer(Path::Claim, Phase::Compute);
+                    tickets.push(Ticket {
+                        delivery_id: delivery,
+                        device_key: device,
+                        platform: row.get_unchecked("platform"),
+                        provider: row.get_unchecked("provider"),
+                        token: row.get_unchecked("provider_token"),
+                        route_generation: row.get("route_generation"),
+                        watch_alert_deadline: row.get("watch_alert_deadline_at"),
+                        attempt_id: row.get::<i64, _>("attempt_id") + 1,
+                        attempts: row.get::<i64, _>("attempts") + 1,
+                        payload: serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?,
+                        accepted_at: row.get("accepted_at"),
+                        expires_at: row.get("expires_at"),
+                    });
+                    drop(_compute);
                 }
-                let Some(row) = selected else { break };
-                let delivery: String = row.get_unchecked("delivery_id");
-                let device: String = row.get_unchecked("device_key");
-                self.counters.sql(1);
-                self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET state='running',attempts=attempts+1,attempt_id=attempt_id+1 WHERE delivery_id=? AND device_key=?").bind(&delivery).bind(&device).execute(&mut *tx)).await?;
-                let _compute = self.counters.profile.timer(Path::Claim, Phase::Compute);
-                tickets.push(Ticket {
-                    delivery_id: delivery,
-                    device_key: device,
-                    platform: row.get_unchecked("platform"),
-                    provider: row.get_unchecked("provider"),
-                    token: row.get_unchecked("provider_token"),
-                    route_generation: row.get("route_generation"),
-                    watch_alert_deadline: row.get("watch_alert_deadline_at"),
-                    attempt_id: row.get::<i64, _>("attempt_id") + 1,
-                    attempts: row.get::<i64, _>("attempts") + 1,
-                    payload: serde_json::from_slice(&row.get::<Vec<u8>, _>("payload_blob"))?,
-                    accepted_at: row.get("accepted_at"),
-                    expires_at: row.get("expires_at"),
-                });
-                drop(_compute);
             }
-        }
-        let due: Option<i64> = self
-            .counters
-            .profile
-            .sql(
-                Path::Claim,
-                Statement::ClaimNextDue,
-                sqlx::query_scalar(NEXT_DUE_SQL)
-                    .bind(provider)
-                    .bind(provider)
-                    .fetch_one(&mut *tx),
-            )
-            .await?;
-        let retiring:bool=self.counters.profile.sql(Path::Claim, Statement::ClaimRetiring, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_device_routes d WHERE d.retired_at IS NOT NULL AND d.coalesced_to IS NULL AND (EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.pull_owner=d.device_key AND t.acked_at IS NULL) OR EXISTS(SELECT 1 FROM ordinary_subscriptions s WHERE s.device_key=d.device_key)))").fetch_one(&mut *tx)).await?;
-        let next_due = if retiring {
-            Some(at)
-        } else {
-            due.map(|due| due.max(cooldown.unwrap_or(0)))
-        };
+            let due: Option<i64> = self
+                .counters
+                .profile
+                .sql(
+                    Path::Claim,
+                    Statement::ClaimNextDue,
+                    sqlx::query_scalar(NEXT_DUE_SQL)
+                        .bind(provider)
+                        .bind(provider)
+                        .fetch_one(&mut *tx),
+                )
+                .await?;
+            let retiring:bool=self.counters.profile.sql(Path::Claim, Statement::ClaimRetiring, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_device_routes d WHERE d.retired_at IS NOT NULL AND d.coalesced_to IS NULL AND (EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.pull_owner=d.device_key AND t.acked_at IS NULL) OR EXISTS(SELECT 1 FROM ordinary_subscriptions s WHERE s.device_key=d.device_key)))").fetch_one(&mut *tx)).await?;
+            let next_due = if retiring {
+                Some(at)
+            } else {
+                due.map(|due| due.max(cooldown.unwrap_or(0)))
+            };
+
+            Ok((tickets, next_due))
+        }.await;
+        let (tx, (tickets, next_due)) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.counters
             .profile
@@ -1063,42 +1166,47 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Receipt, Phase::Begin, profile_connection.begin())
             .await?;
-        Self::lock_usage(&mut tx).await?;
-        let state = if state == "retry_wait"
-            && crate::ordinary::expiry::is_expired(ticket.expires_at, now())
-        {
-            "permanent_failed"
-        } else {
-            state
-        };
-        let changed=self.counters.profile.sql(Path::Receipt, Statement::ReceiptTarget, sqlx::query("UPDATE ordinary_targets SET state=CASE WHEN delivery_mode='private' AND ? IN ('pending','retry_wait') THEN 'superseded_route' ELSE ? END,provider_status=?,provider_error=?,receipt_at=?,next_attempt_at=? WHERE delivery_id=? AND device_key=? AND state='running' AND attempt_id=?").bind(state).bind(state).bind(i64::from(status)).bind(error).bind(now()).bind(next_due).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).execute(&mut *tx)).await?.rows_affected();
-        if let Some(due) = cooldown {
-            self.counters.profile.sql(Path::Receipt, Statement::ReceiptCooldown, sqlx::query("INSERT INTO ordinary_provider_cooldowns(provider,next_attempt_at) VALUES(?,?) ON DUPLICATE KEY UPDATE next_attempt_at=GREATEST(ordinary_provider_cooldowns.next_attempt_at,VALUES(next_attempt_at))").bind(&ticket.provider).bind(due).execute(&mut *tx)).await?;
-        }
-        if changed > 0 {
-            // Invalidate only this channel's subscription for the exact frozen
-            // route. A token that changes A -> B -> A is a different generation.
-            if error == "invalid_token" {
-                let channel: String = sqlx::query_scalar("SELECT CAST(channel_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE delivery_id=?")
-                    .bind(&ticket.delivery_id).fetch_one(&mut *tx).await?;
-                let channel = crate::value::ChannelId::parse(&channel)
-                    .map_err(|error| KernelError::Invalid(error.to_string()))?
-                    .into_inner();
-                self.counters.profile.sql(Path::Receipt, Statement::ReceiptSubscription,
-                    sqlx::query("DELETE s FROM channel_subscriptions s JOIN devices d ON d.device_id=s.device_id WHERE d.device_key=? AND s.channel_id=? AND d.platform=? AND CASE WHEN d.platform='android' THEN 'FCM' WHEN d.platform IN ('ios','macos','watchos') THEN 'APNS' WHEN d.platform='windows' THEN 'WNS' END=? AND d.provider_token=? AND d.ordinary_route_generation=?")
-                        .bind(&ticket.device_key).bind(channel.as_slice()).bind(&ticket.platform)
-                        .bind(&ticket.provider).bind(&ticket.token).bind(ticket.route_generation)
-                        .execute(&mut *tx)).await?;
+        let result: Result<_> = async {
+            Self::lock_usage(&mut tx).await?;
+            let state = if state == "retry_wait"
+                && crate::ordinary::expiry::is_expired(ticket.expires_at, now())
+            {
+                "permanent_failed"
+            } else {
+                state
+            };
+            let changed=self.counters.profile.sql(Path::Receipt, Statement::ReceiptTarget, sqlx::query("UPDATE ordinary_targets SET state=CASE WHEN delivery_mode='private' AND ? IN ('pending','retry_wait') THEN 'superseded_route' ELSE ? END,provider_status=?,provider_error=?,receipt_at=?,next_attempt_at=? WHERE delivery_id=? AND device_key=? AND state='running' AND attempt_id=?").bind(state).bind(state).bind(i64::from(status)).bind(error).bind(now()).bind(next_due).bind(&ticket.delivery_id).bind(&ticket.device_key).bind(ticket.attempt_id).execute(&mut *tx)).await?.rows_affected();
+            if let Some(due) = cooldown {
+                self.counters.profile.sql(Path::Receipt, Statement::ReceiptCooldown, sqlx::query("INSERT INTO ordinary_provider_cooldowns(provider,next_attempt_at) VALUES(?,?) ON DUPLICATE KEY UPDATE next_attempt_at=GREATEST(ordinary_provider_cooldowns.next_attempt_at,VALUES(next_attempt_at))").bind(&ticket.provider).bind(due).execute(&mut *tx)).await?;
             }
-            self.counters.profile.sql(Path::Receipt, Statement::ReceiptCounts, sqlx::query("UPDATE ordinary_messages SET provider_accepted_count=provider_accepted_count+?,provider_failed_count=provider_failed_count+? WHERE delivery_id=?").bind(i64::from(state=="provider_accepted")).bind(i64::from(matches!(state,"permanent_failed"|"expired"|"cancelled"))).bind(&ticket.delivery_id).execute(&mut *tx)).await?;
-            self.release_acked_tx(
-                &mut tx,
-                &ticket.device_key,
-                &ticket.delivery_id,
-                Path::Receipt,
-            )
-            .await?;
-        }
+            if changed > 0 {
+                // Invalidate only this channel's subscription for the exact frozen
+                // route. A token that changes A -> B -> A is a different generation.
+                if error == "invalid_token" {
+                    let channel: String = sqlx::query_scalar("SELECT CAST(channel_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE delivery_id=?")
+                        .bind(&ticket.delivery_id).fetch_one(&mut *tx).await?;
+                    let channel = crate::value::ChannelId::parse(&channel)
+                        .map_err(|error| KernelError::Invalid(error.to_string()))?
+                        .into_inner();
+                    self.counters.profile.sql(Path::Receipt, Statement::ReceiptSubscription,
+                        sqlx::query("DELETE s FROM channel_subscriptions s JOIN devices d ON d.device_id=s.device_id WHERE d.device_key=? AND s.channel_id=? AND d.platform=? AND CASE WHEN d.platform='android' THEN 'FCM' WHEN d.platform IN ('ios','macos','watchos') THEN 'APNS' WHEN d.platform='windows' THEN 'WNS' END=? AND d.provider_token=? AND d.ordinary_route_generation=?")
+                            .bind(&ticket.device_key).bind(channel.as_slice()).bind(&ticket.platform)
+                            .bind(&ticket.provider).bind(&ticket.token).bind(ticket.route_generation)
+                            .execute(&mut *tx)).await?;
+                }
+                self.counters.profile.sql(Path::Receipt, Statement::ReceiptCounts, sqlx::query("UPDATE ordinary_messages SET provider_accepted_count=provider_accepted_count+?,provider_failed_count=provider_failed_count+? WHERE delivery_id=?").bind(i64::from(state=="provider_accepted")).bind(i64::from(matches!(state,"permanent_failed"|"expired"|"cancelled"))).bind(&ticket.delivery_id).execute(&mut *tx)).await?;
+                self.release_acked_tx(
+                    &mut tx,
+                    &ticket.device_key,
+                    &ticket.delivery_id,
+                    Path::Receipt,
+                )
+                .await?;
+            }
+
+            Ok(())
+        }.await;
+        let (tx, _) = self.checked_transaction(tx, result).await?;
         let commit_at = std::time::Instant::now();
         self.health.ensure()?;
         self.counters
@@ -1149,14 +1257,20 @@ impl MySqlDeliveryStore {
         self.health.ensure()?;
         let mut connection = self.acquire().await?;
         let mut tx = connection.begin().await?;
-        let removed = sqlx::query(
-            "DELETE FROM ordinary_widget_refresh WHERE delivery_id=? AND coalesce_order=?",
-        )
-        .bind(delivery_id)
-        .bind(coalesce_order)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let result: Result<_> = async {
+            let removed = sqlx::query(
+                "DELETE FROM ordinary_widget_refresh WHERE delivery_id=? AND coalesce_order=?",
+            )
+            .bind(delivery_id)
+            .bind(coalesce_order)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
+            Ok(removed)
+        }
+        .await;
+        let (tx, removed) = self.checked_transaction(tx, result).await?;
         self.commit(tx).await?;
         Ok(removed != 0)
     }
@@ -1537,6 +1651,20 @@ mod product_contract_tests {
         )
     }
 
+    async fn assert_usage_unlocked(pool: &MySqlPool) {
+        // Use another physical session before issuing any next C command:
+        // that next command would otherwise flush a stranded queued ROLLBACK
+        // and conceal the pinned-session regression.
+        let mut tx = pool.begin().await.expect("independent control transaction");
+        sqlx::query(
+            "SELECT singleton FROM ordinary_ledger_usage WHERE singleton=1 FOR UPDATE NOWAIT",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .expect("completed ordinary request must release its usage row lock");
+        tx.rollback().await.expect("control probe rollback");
+    }
+
     /// This is deliberately opt-in and refuses every nonempty/non-C10 database.
     /// Provision a new isolated c10_* database, never an existing user dataset.
     #[tokio::test]
@@ -1638,6 +1766,7 @@ mod product_contract_tests {
             .expect("empty target replay");
         assert_eq!(empty_replay.dispatch_status, "not_attempted");
         assert_eq!(empty_replay.delivery_id, empty.delivery_id);
+        assert_usage_unlocked(&store.pool).await;
         let key = "c10-native-device";
         let mut route = DeviceRouteRecordRow {
             device_key: key.into(),
@@ -1744,6 +1873,7 @@ mod product_contract_tests {
             store.accept(changed).await,
             Err(KernelError::Conflict)
         ));
+        assert_usage_unlocked(&store.pool).await;
         let mut scoped = request.clone();
         scoped.thing_id = Some("c10-associated-thing".into());
         scoped.occurred_at = Some(now());
@@ -1751,6 +1881,7 @@ mod product_contract_tests {
             store.accept(scoped).await,
             Err(KernelError::ScopeConflict)
         ));
+        assert_usage_unlocked(&store.pool).await;
         let remaining: i64 =
             sqlx::query_scalar("SELECT payload_bytes FROM ordinary_messages WHERE delivery_id=?")
                 .bind(&accepted.delivery_id)
@@ -1917,6 +2048,7 @@ mod product_contract_tests {
             store.accept(rejected).await,
             Err(KernelError::Capacity)
         ));
+        assert_usage_unlocked(&store.pool).await;
         assert!(matches!(
             store.status("c10-mixed-global-full").await,
             Err(KernelError::NotFound)
@@ -2321,6 +2453,45 @@ mod product_contract_tests {
             .close()
             .await
             .expect("scoped ordinary data session closes cleanly");
+        let interrupted = MySqlDeliveryStore::from_product(
+            store.pool.clone(),
+            store.gate.clone(),
+            store.config.clone(),
+            Arc::new(Health::default()),
+            Arc::new(Counters::default()),
+        )
+        .await
+        .expect("restart scoped ordinary data session for cancellation check");
+        let (locked, ready) = tokio::sync::oneshot::channel();
+        let task_store = interrupted.clone();
+        let task = tokio::spawn(async move {
+            let mut connection = task_store.acquire().await.expect("cancel data guard");
+            let mut tx = connection.begin().await.expect("cancel transaction");
+            MySqlDeliveryStore::lock_usage(&mut tx)
+                .await
+                .expect("cancel usage lock");
+            locked.send(()).expect("report actual held SQL row lock");
+            std::future::pending::<()>().await;
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), ready)
+            .await
+            .expect("cancel transaction acquired its real row lock")
+            .expect("cancel readiness sender");
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("transaction task must cancel")
+                .is_cancelled()
+        );
+        assert!(matches!(
+            interrupted.health.ensure(),
+            Err(KernelError::Unavailable)
+        ));
+        assert!(interrupted.connection.lock().await.is_none());
+        assert!(matches!(
+            interrupted.acquire().await,
+            Err(KernelError::Unavailable)
+        ));
         store.pool.close().await;
     }
 }

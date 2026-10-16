@@ -5,7 +5,7 @@ use crate::ordinary::private_model::{PrivateRoute, PrivateTicket};
 use crate::ordinary::profiling::{Path, Phase, Statement};
 use crate::ordinary::store::{KernelError, Result, control_error, now};
 use crate::ordinary::types::generate_hex_id_128;
-use sqlx::{Connection, Row};
+use sqlx::Row;
 
 impl MySqlDeliveryStore {
     pub(crate) async fn private_route(&self, device: &str) -> Result<PrivateRoute> {
@@ -66,59 +66,63 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Claim, Phase::Begin, connection.begin())
             .await?;
-        self.health.ensure()?;
-        Self::lock_usage(&mut tx).await?;
-        // Accepted waiting rows are durable obligations, not active session
-        // slots. Only already-issued C capabilities and retained legacy queues
-        // consume the per-device and global Private execution allowances.
-        let legacy_id =
-            crate::storage::types::PrivateDeviceId::derive(&route.device_key).into_inner();
-        let legacy = sqlx::query("SELECT COUNT(*) AS global_count,COUNT(CASE WHEN device_id=? THEN 1 END) AS device_count FROM private_outbox WHERE status IN ('pending','claimed','sent')")
-            .bind(legacy_id.as_slice()).fetch_one(&mut *tx).await?;
-        // Coalesced physical siblings share one issued logical capability. A
-        // delivery sent to different owners still consumes one slot per owner.
-        let executing = sqlx::query("SELECT COUNT(*) AS global_count,COUNT(CASE WHEN pull_owner=? THEN 1 END) AS device_count FROM (SELECT pull_owner,delivery_id FROM ordinary_targets WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL GROUP BY pull_owner,delivery_id) executing")
-            .bind(&route.device_key).fetch_one(&mut *tx).await?;
-        let per_device_capacity =
-            i64::try_from(self.config.private.max_pending_per_device).unwrap_or(i64::MAX);
-        let global_capacity = i64::try_from(self.config.private.max_pending).unwrap_or(i64::MAX);
-        let per_device_available = per_device_capacity
-            .saturating_sub(legacy.try_get::<i64, _>("device_count")?)
-            .saturating_sub(executing.try_get::<i64, _>("device_count")?);
-        let global_available = global_capacity
-            .saturating_sub(legacy.try_get::<i64, _>("global_count")?)
-            .saturating_sub(executing.try_get::<i64, _>("global_count")?);
-        let available = per_device_available.min(global_available).max(0);
-        let limit = limit.min(usize::try_from(available).unwrap_or(usize::MAX));
-        if limit == 0 {
-            self.commit(tx).await?;
-            return Ok(Vec::new());
-        }
-        let at = now();
-        // One canonical frozen key represents every coalesced unacknowledged
-        // private row for this (consumer, delivery). A logical item is not claimed
-        // twice by separate sessions, and only this bounded batch loads payloads.
-        let rows = self.counters.profile.sql(Path::Claim, Statement::ClaimSelect, sqlx::query("SELECT t.delivery_id,t.device_key,t.delivery_epoch,m.payload_blob,m.accepted_at,m.expires_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='private' AND t.acked_at IS NULL AND t.private_claim IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets s WHERE s.pull_owner=t.pull_owner AND s.delivery_id=t.delivery_id AND s.delivery_mode='private' AND s.acked_at IS NULL AND (s.device_key<t.device_key OR s.private_claim IS NOT NULL)) ORDER BY t.accepted_at,t.delivery_id LIMIT ?").bind(&route.device_key).bind(route.route_generation).bind(at).bind(limit as i64).fetch_all(&mut *tx)).await?;
-        let mut tickets = Vec::with_capacity(rows.len());
-        for row in rows {
-            let delivery_id: String = row.try_get_unchecked("delivery_id")?;
-            let claim_token = generate_hex_id_128();
-            // Claim token and group are shared across all physical siblings;
-            // canonical receipt_owner + epoch fences the issued logical grant.
-            self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=?,private_group=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NULL").bind(&claim_token).bind(group).bind(&route.device_key).bind(&delivery_id).execute(&mut *tx)).await?;
-            tickets.push(PrivateTicket {
-                delivery_id,
-                receipt_owner: row.try_get_unchecked("device_key")?,
-                pull_owner: route.device_key.clone(),
-                route_generation: route.route_generation,
-                delivery_epoch: row.try_get("delivery_epoch")?,
-                claim_token,
-                group_id: group.to_owned(),
-                payload: row.try_get("payload_blob")?,
-                accepted_at: row.try_get("accepted_at")?,
-                expires_at: row.try_get("expires_at")?,
-            });
-        }
+        let result: Result<_> = async {
+            self.health.ensure()?;
+            Self::lock_usage(&mut tx).await?;
+            // Accepted waiting rows are durable obligations, not active session
+            // slots. Only already-issued C capabilities and retained legacy queues
+            // consume the per-device and global Private execution allowances.
+            let legacy_id =
+                crate::storage::types::PrivateDeviceId::derive(&route.device_key).into_inner();
+            let legacy = sqlx::query("SELECT COUNT(*) AS global_count,COUNT(CASE WHEN device_id=? THEN 1 END) AS device_count FROM private_outbox WHERE status IN ('pending','claimed','sent')")
+                .bind(legacy_id.as_slice()).fetch_one(&mut *tx).await?;
+            // Coalesced physical siblings share one issued logical capability. A
+            // delivery sent to different owners still consumes one slot per owner.
+            let executing = sqlx::query("SELECT COUNT(*) AS global_count,COUNT(CASE WHEN pull_owner=? THEN 1 END) AS device_count FROM (SELECT pull_owner,delivery_id FROM ordinary_targets WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL GROUP BY pull_owner,delivery_id) executing")
+                .bind(&route.device_key).fetch_one(&mut *tx).await?;
+            let per_device_capacity =
+                i64::try_from(self.config.private.max_pending_per_device).unwrap_or(i64::MAX);
+            let global_capacity = i64::try_from(self.config.private.max_pending).unwrap_or(i64::MAX);
+            let per_device_available = per_device_capacity
+                .saturating_sub(legacy.try_get::<i64, _>("device_count")?)
+                .saturating_sub(executing.try_get::<i64, _>("device_count")?);
+            let global_available = global_capacity
+                .saturating_sub(legacy.try_get::<i64, _>("global_count")?)
+                .saturating_sub(executing.try_get::<i64, _>("global_count")?);
+            let available = per_device_available.min(global_available).max(0);
+            let limit = limit.min(usize::try_from(available).unwrap_or(usize::MAX));
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+            let at = now();
+            // One canonical frozen key represents every coalesced unacknowledged
+            // private row for this (consumer, delivery). A logical item is not claimed
+            // twice by separate sessions, and only this bounded batch loads payloads.
+            let rows = self.counters.profile.sql(Path::Claim, Statement::ClaimSelect, sqlx::query("SELECT t.delivery_id,t.device_key,t.delivery_epoch,m.payload_blob,m.accepted_at,m.expires_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='private' AND t.acked_at IS NULL AND t.private_claim IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets s WHERE s.pull_owner=t.pull_owner AND s.delivery_id=t.delivery_id AND s.delivery_mode='private' AND s.acked_at IS NULL AND (s.device_key<t.device_key OR s.private_claim IS NOT NULL)) ORDER BY t.accepted_at,t.delivery_id LIMIT ?").bind(&route.device_key).bind(route.route_generation).bind(at).bind(limit as i64).fetch_all(&mut *tx)).await?;
+            let mut tickets = Vec::with_capacity(rows.len());
+            for row in rows {
+                let delivery_id: String = row.try_get_unchecked("delivery_id")?;
+                let claim_token = generate_hex_id_128();
+                // Claim token and group are shared across all physical siblings;
+                // canonical receipt_owner + epoch fences the issued logical grant.
+                self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=?,private_group=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NULL").bind(&claim_token).bind(group).bind(&route.device_key).bind(&delivery_id).execute(&mut *tx)).await?;
+                tickets.push(PrivateTicket {
+                    delivery_id,
+                    receipt_owner: row.try_get_unchecked("device_key")?,
+                    pull_owner: route.device_key.clone(),
+                    route_generation: route.route_generation,
+                    delivery_epoch: row.try_get("delivery_epoch")?,
+                    claim_token,
+                    group_id: group.to_owned(),
+                    payload: row.try_get("payload_blob")?,
+                    accepted_at: row.try_get("accepted_at")?,
+                    expires_at: row.try_get("expires_at")?,
+                });
+            }
+
+            Ok(tickets)
+        }.await;
+        let (tx, tickets) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.counters
             .profile
@@ -195,34 +199,39 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Ack, Phase::Begin, connection.begin())
             .await?;
-        self.health.ensure()?;
-        Self::lock_usage(&mut tx).await?;
-        let at = now();
-        let granted: i64 = self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t JOIN ordinary_device_routes d ON d.device_key=t.pull_owner JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.pull_owner=? AND t.delivery_mode='private' AND t.delivery_epoch=? AND t.private_claim=? AND t.private_group=? AND t.acked_at IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='private' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key))").bind(&ticket.delivery_id).bind(&ticket.receipt_owner).bind(&ticket.pull_owner).bind(ticket.delivery_epoch).bind(&ticket.claim_token).bind(&ticket.group_id).bind(ticket.route_generation).bind(at).fetch_one(&mut *tx)).await?;
-        let removed = if granted != 0 {
-            let before = Self::private_owners_for_message_tx(&mut tx, &ticket.delivery_id).await?;
-            let changed = self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=?,private_claim=NULL,private_group=NULL,state=CASE WHEN state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND private_claim=? AND private_group=? AND acked_at IS NULL").bind(at).bind(&ticket.pull_owner).bind(&ticket.delivery_id).bind(&ticket.claim_token).bind(&ticket.group_id).execute(&mut *tx)).await?.rows_affected() > 0;
-            if changed && rejected {
-                // A negative durable result is not an ACK success. The issued
-                // capability predicate above makes this increment idempotent.
-                sqlx::query("UPDATE ordinary_messages SET private_rejected_count=private_rejected_count+1 WHERE delivery_id=?")
-                    .bind(&ticket.delivery_id).execute(&mut *tx).await?;
-            }
-            Self::reconcile_private_message_tx(&mut tx, &ticket.delivery_id, &before).await?;
-            Self::reconcile_message_tx(&mut tx, &ticket.delivery_id).await?;
-            // Keep any frozen running Provider attempt until its own receipt.
-            // Private ACK is delivery evidence, never Provider acceptance.
-            self.release_acked_tx(
-                &mut tx,
-                &ticket.receipt_owner,
-                &ticket.delivery_id,
-                Path::Ack,
-            )
-            .await?;
-            changed
-        } else {
-            false
-        };
+        let result: Result<_> = async {
+            self.health.ensure()?;
+            Self::lock_usage(&mut tx).await?;
+            let at = now();
+            let granted: i64 = self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t JOIN ordinary_device_routes d ON d.device_key=t.pull_owner JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.pull_owner=? AND t.delivery_mode='private' AND t.delivery_epoch=? AND t.private_claim=? AND t.private_group=? AND t.acked_at IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='private' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key))").bind(&ticket.delivery_id).bind(&ticket.receipt_owner).bind(&ticket.pull_owner).bind(ticket.delivery_epoch).bind(&ticket.claim_token).bind(&ticket.group_id).bind(ticket.route_generation).bind(at).fetch_one(&mut *tx)).await?;
+            let removed = if granted != 0 {
+                let before = Self::private_owners_for_message_tx(&mut tx, &ticket.delivery_id).await?;
+                let changed = self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=?,private_claim=NULL,private_group=NULL,state=CASE WHEN state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND private_claim=? AND private_group=? AND acked_at IS NULL").bind(at).bind(&ticket.pull_owner).bind(&ticket.delivery_id).bind(&ticket.claim_token).bind(&ticket.group_id).execute(&mut *tx)).await?.rows_affected() > 0;
+                if changed && rejected {
+                    // A negative durable result is not an ACK success. The issued
+                    // capability predicate above makes this increment idempotent.
+                    sqlx::query("UPDATE ordinary_messages SET private_rejected_count=private_rejected_count+1 WHERE delivery_id=?")
+                        .bind(&ticket.delivery_id).execute(&mut *tx).await?;
+                }
+                Self::reconcile_private_message_tx(&mut tx, &ticket.delivery_id, &before).await?;
+                Self::reconcile_message_tx(&mut tx, &ticket.delivery_id).await?;
+                // Keep any frozen running Provider attempt until its own receipt.
+                // Private ACK is delivery evidence, never Provider acceptance.
+                self.release_acked_tx(
+                    &mut tx,
+                    &ticket.receipt_owner,
+                    &ticket.delivery_id,
+                    Path::Ack,
+                )
+                .await?;
+                changed
+            } else {
+                false
+            };
+
+            Ok(removed)
+        }.await;
+        let (tx, removed) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.counters
             .profile
@@ -267,13 +276,18 @@ impl MySqlDeliveryStore {
             .profile
             .phase(Path::Claim, Phase::Begin, connection.begin())
             .await?;
-        self.health.ensure()?;
-        Self::lock_usage(&mut tx).await?;
-        let mut released = 0;
-        for token in claim_tokens {
-            let changed = self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=NULL,private_group=NULL WHERE delivery_mode='private' AND private_group=? AND private_claim=?").bind(group).bind(token).execute(&mut *tx)).await?.rows_affected();
-            released += usize::from(changed > 0);
-        }
+        let result: Result<_> = async {
+            self.health.ensure()?;
+            Self::lock_usage(&mut tx).await?;
+            let mut released = 0;
+            for token in claim_tokens {
+                let changed = self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=NULL,private_group=NULL WHERE delivery_mode='private' AND private_group=? AND private_claim=?").bind(group).bind(token).execute(&mut *tx)).await?.rows_affected();
+                released += usize::from(changed > 0);
+            }
+
+            Ok(released)
+        }.await;
+        let (tx, released) = self.checked_transaction(tx, result).await?;
         self.health.ensure()?;
         self.counters
             .profile
