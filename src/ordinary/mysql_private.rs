@@ -68,6 +68,32 @@ impl MySqlDeliveryStore {
             .await?;
         self.health.ensure()?;
         Self::lock_usage(&mut tx).await?;
+        // Accepted waiting rows are durable obligations, not active session
+        // slots. Only already-issued C capabilities and retained legacy queues
+        // consume the per-device and global Private execution allowances.
+        let legacy_id =
+            crate::storage::types::PrivateDeviceId::derive(&route.device_key).into_inner();
+        let legacy = sqlx::query("SELECT COUNT(*) AS global_count,COUNT(CASE WHEN device_id=? THEN 1 END) AS device_count FROM private_outbox WHERE status IN ('pending','claimed','sent')")
+            .bind(legacy_id.as_slice()).fetch_one(&mut *tx).await?;
+        // Coalesced physical siblings share one issued logical capability. A
+        // delivery sent to different owners still consumes one slot per owner.
+        let executing = sqlx::query("SELECT COUNT(*) AS global_count,COUNT(CASE WHEN pull_owner=? THEN 1 END) AS device_count FROM (SELECT pull_owner,delivery_id FROM ordinary_targets WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL GROUP BY pull_owner,delivery_id) executing")
+            .bind(&route.device_key).fetch_one(&mut *tx).await?;
+        let per_device_capacity =
+            i64::try_from(self.config.private.max_pending_per_device).unwrap_or(i64::MAX);
+        let global_capacity = i64::try_from(self.config.private.max_pending).unwrap_or(i64::MAX);
+        let per_device_available = per_device_capacity
+            .saturating_sub(legacy.try_get::<i64, _>("device_count")?)
+            .saturating_sub(executing.try_get::<i64, _>("device_count")?);
+        let global_available = global_capacity
+            .saturating_sub(legacy.try_get::<i64, _>("global_count")?)
+            .saturating_sub(executing.try_get::<i64, _>("global_count")?);
+        let available = per_device_available.min(global_available).max(0);
+        let limit = limit.min(usize::try_from(available).unwrap_or(usize::MAX));
+        if limit == 0 {
+            self.commit(tx).await?;
+            return Ok(Vec::new());
+        }
         let at = now();
         // One canonical frozen key represents every coalesced unacknowledged
         // private row for this (consumer, delivery). A logical item is not claimed
@@ -256,7 +282,8 @@ impl MySqlDeliveryStore {
         Ok(released)
     }
 
-    /// Admission uses derived counters and at most one channel's frozen fanout.
+    /// Count this channel's Private fanout for the shared active-target admission
+    /// budget. Private execution windows are reserved only when claiming work.
     /// The caller already owns the writer transaction and global usage lock.
     pub(super) async fn check_private_admission_tx(
         &self,
@@ -268,35 +295,6 @@ impl MySqlDeliveryStore {
             return Ok(0);
         }
         let fanout: i64 = self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL").bind(channel.as_slice()).bind(accepted_at).fetch_one(&mut **tx)).await?;
-        let per_device =
-            i64::try_from(self.config.private.max_pending_per_device).unwrap_or(i64::MAX);
-        let global = i64::try_from(self.config.private.max_pending).unwrap_or(i64::MAX);
-        let pending: i64 = self
-            .counters
-            .profile
-            .sql(
-                Path::Accept,
-                Statement::Usage,
-                sqlx::query_scalar(
-                    "SELECT private_pending FROM ordinary_ledger_usage WHERE singleton=1",
-                )
-                .fetch_one(&mut **tx),
-            )
-            .await?;
-        let legacy_pending: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM private_outbox WHERE status IN ('pending','claimed','sent')",
-        )
-        .fetch_one(&mut **tx)
-        .await?;
-        let full: i64 = self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key LEFT JOIN ordinary_private_usage u ON u.device_key=d.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND COALESCE(u.pending,0)+(SELECT COUNT(*) FROM private_outbox o WHERE o.device_id=LEFT(d.device_id,16) AND o.status IN ('pending','claimed','sent'))>=?)").bind(channel.as_slice()).bind(accepted_at).bind(per_device).fetch_one(&mut **tx)).await?;
-        if full != 0
-            || pending
-                .saturating_add(legacy_pending)
-                .saturating_add(fanout)
-                > global
-        {
-            return Err(KernelError::Capacity);
-        }
         Ok(fanout)
     }
 

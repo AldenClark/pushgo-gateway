@@ -72,6 +72,49 @@ impl PgDeliveryStore {
             .await?;
         self.health.ensure()?;
         Self::lock_usage(&mut tx).await?;
+        // Accepted Private targets are durable waiting work. Only issued
+        // capabilities occupy this device's execution window; retained legacy
+        // pending/claimed/sent work uses the same original device budget.
+        let occupancy = self
+            .counters
+            .profile
+            .sql(
+                Path::Claim,
+                Statement::Usage,
+                sqlx::query(
+                    "SELECT COUNT(DISTINCT private_claim) AS executing_global, \
+                       COUNT(DISTINCT private_claim) FILTER(WHERE pull_owner=$1) AS executing_device, \
+                       (SELECT COUNT(*) FROM private_outbox WHERE status IN ('pending','claimed','sent')) AS legacy_global, \
+                       (SELECT COUNT(*) FROM private_outbox o JOIN devices d ON d.device_id=o.device_id \
+                        WHERE d.device_key=$1 AND o.status IN ('pending','claimed','sent')) AS legacy_device \
+                     FROM ordinary_targets WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL",
+                )
+                .bind(&route.device_key)
+                .fetch_one(&mut *tx),
+            )
+            .await?;
+        let available = i64::try_from(self.config.private.max_pending_per_device)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(occupancy.try_get("legacy_device")?)
+            .saturating_sub(occupancy.try_get("executing_device")?)
+            .min(
+                i64::try_from(self.config.private.max_pending)
+                    .unwrap_or(i64::MAX)
+                    .saturating_sub(occupancy.try_get("legacy_global")?)
+                    .saturating_sub(occupancy.try_get("executing_global")?),
+            )
+            .max(0);
+        let limit = limit.min(usize::try_from(available).unwrap_or(usize::MAX));
+        self.health.ensure()?;
+        if limit == 0 {
+            // Do not load even one accepted body while the window is full.
+            self.health.ensure()?;
+            self.counters
+                .profile
+                .phase(Path::Claim, Phase::Commit, tx.commit())
+                .await?;
+            return Ok(Vec::new());
+        }
         let at = now();
         // One canonical frozen key represents every coalesced unacknowledged
         // private row for this (consumer, delivery). A logical item is not claimed
@@ -271,8 +314,9 @@ impl PgDeliveryStore {
         Ok(())
     }
 
-    /// Admission uses derived counters and at most one channel's frozen fanout.
-    /// The caller already owns the writer transaction and global usage lock.
+    /// Count this channel's accepted Private responsibility. The complete fanout
+    /// is reserved against the system target budget by accept in this same TX;
+    /// neither Private execution window rejects persistent waiting work.
     pub(super) async fn check_private_admission_tx(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -283,23 +327,6 @@ impl PgDeliveryStore {
             return Ok(0);
         }
         let fanout: i64 = self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=$1 AND s.created_at<=$2 AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL").bind(channel).bind(accepted_at).fetch_one(&mut **tx)).await?;
-        let per_device =
-            i64::try_from(self.config.private.max_pending_per_device).unwrap_or(i64::MAX);
-        let global = i64::try_from(self.config.private.max_pending).unwrap_or(i64::MAX);
-        let pending: i64 = self
-            .counters
-            .profile
-            .sql(
-                Path::Accept,
-                Statement::Usage,
-                sqlx::query_scalar("SELECT private_pending+(SELECT COUNT(*) FROM private_outbox WHERE status IN ('pending','claimed','sent')) FROM ordinary_ledger_usage WHERE singleton=1")
-                    .fetch_one(&mut **tx),
-            )
-            .await?;
-        let full: bool = self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key LEFT JOIN ordinary_private_usage u ON u.device_key=d.device_key WHERE s.channel_id=$1 AND s.created_at<=$3 AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND COALESCE(u.pending,0)+(SELECT COUNT(*) FROM private_outbox o WHERE o.device_id=d.device_id AND o.status IN ('pending','claimed','sent'))>=$2)").bind(channel).bind(per_device).bind(accepted_at).fetch_one(&mut **tx)).await?;
-        if full || pending.saturating_add(fanout) > global {
-            return Err(KernelError::Capacity);
-        }
         Ok(fanout)
     }
 
@@ -438,6 +465,7 @@ CREATE INDEX IF NOT EXISTS ordinary_targets_private_logical ON ordinary_targets(
 CREATE INDEX IF NOT EXISTS ordinary_targets_private_pending ON ordinary_targets(pull_owner,accepted_at,delivery_id,device_key) WHERE delivery_mode='private' AND acked_at IS NULL;
 CREATE INDEX IF NOT EXISTS ordinary_targets_private_group ON ordinary_targets(private_group,private_claim,pull_owner,delivery_id) WHERE private_claim IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ordinary_targets_private_recovery ON ordinary_targets(delivery_id,device_key) WHERE private_claim IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ordinary_targets_private_executing ON ordinary_targets(pull_owner,private_claim) WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL;
 CREATE OR REPLACE FUNCTION ordinary_private_usage_targets() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
  old_private BOOLEAN:=FALSE; new_private BOOLEAN:=FALSE;

@@ -147,7 +147,9 @@ impl Storage {
         let Some(ordinary) = self.ordinary_handle() else {
             return Ok((per_device, 0));
         };
-        let global = ordinary_private_usage_count(ordinary.private_pending_count(None).await)?;
+        // Persisted waiting targets already consume ordinary admission capacity;
+        // only issued claims occupy the retained transport's execution window.
+        let global = ordinary_private_usage_count(ordinary.private_executing_count(None).await)?;
         if global == 0 {
             return Ok((per_device, 0));
         }
@@ -162,8 +164,9 @@ impl Storage {
                 .await
                 .map_err(|error| StoreError::UnsafeDurabilityConfiguration(error.to_string()))?;
             if let Some(key) = key {
-                let count =
-                    ordinary_private_usage_count(ordinary.private_pending_count(Some(&key)).await)?;
+                let count = ordinary_private_usage_count(
+                    ordinary.private_executing_count(Some(&key)).await,
+                )?;
                 if count != 0 {
                     per_device.insert(device, count);
                 }

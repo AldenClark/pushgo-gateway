@@ -11,7 +11,7 @@ CREATE INDEX IF NOT EXISTS ordinary_targets_token_retirement ON ordinary_targets
 CREATE TABLE IF NOT EXISTS ordinary_provider_cooldowns(provider TEXT COLLATE "C" PRIMARY KEY,next_attempt_at BIGINT NOT NULL);
 -- A pending derived Widget refresh is not a second ordinary message/body.
 -- No FK: a client ACK may release ordinary content before projection finishes.
-CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id TEXT COLLATE "C" PRIMARY KEY,channel_id BYTEA NOT NULL CHECK(octet_length(channel_id)=16),acceptance_order BIGINT NOT NULL UNIQUE,accepted_at BIGINT NOT NULL,expires_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id TEXT COLLATE "C" PRIMARY KEY,channel_id BYTEA NOT NULL UNIQUE CHECK(octet_length(channel_id)=16),acceptance_order BIGINT NOT NULL UNIQUE,accepted_at BIGINT NOT NULL,expires_at BIGINT NOT NULL);
 INSERT INTO ordinary_ledger_usage(singleton,messages,targets,bytes) VALUES(1,0,0,0) ON CONFLICT(singleton) DO NOTHING;
 
 -- All counters have one owner: these row triggers, including cascaded deletes.

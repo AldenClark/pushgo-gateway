@@ -508,10 +508,11 @@ pub async fn build_app(
     let ordinary_store = store
         .initialize_ordinary(
             crate::ordinary::Config {
-                // Existing product limits apply to active Provider/Private work.
-                // Retained bodies and the 30-day identity window gain no new quota.
+                // Reuse C's pending-work budget for frozen Private waiting and
+                // pending/running/retrying Provider targets. Completed Provider
+                // content and 30-day identities gain no new retention quota.
                 max_messages: i64::MAX,
-                max_targets: i64::MAX,
+                max_targets: crate::ordinary::Config::default().max_targets,
                 max_payload_bytes: i64::MAX,
                 provider_budget: runtime_tuning
                     .providers

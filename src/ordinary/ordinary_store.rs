@@ -428,6 +428,14 @@ impl OrdinaryStore {
         };
         self.checked(result)
     }
+    pub(crate) async fn private_executing_count(&self, device: Option<&str>) -> Result<i64> {
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.private_executing_count(device).await,
+            Backend::Postgres(s) => s.private_executing_count(device).await,
+            Backend::MySql(s) => s.private_executing_count(device).await,
+        };
+        self.checked(result)
+    }
 }
 impl std::fmt::Debug for OrdinaryStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

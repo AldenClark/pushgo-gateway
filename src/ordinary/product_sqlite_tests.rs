@@ -22,6 +22,21 @@ impl Product {
         Self::reopen_with_private(directory, true).await
     }
     async fn reopen_with_private(directory: tempfile::TempDir, private_enabled: bool) -> Self {
+        Self::reopen_with_private_config(
+            directory,
+            super::private_model::PrivateLedgerConfig {
+                enabled: private_enabled,
+                ..super::private_model::PrivateLedgerConfig::default()
+            },
+            i64::MAX,
+        )
+        .await
+    }
+    async fn reopen_with_private_config(
+        directory: tempfile::TempDir,
+        private_config: super::private_model::PrivateLedgerConfig,
+        max_targets: i64,
+    ) -> Self {
         let url = format!(
             "sqlite://{}?mode=rwc",
             directory.path().join("product.db").display()
@@ -40,11 +55,11 @@ impl Product {
         .unwrap();
         let mut config = Config {
             max_messages: i64::MAX,
-            max_targets: i64::MAX,
+            max_targets,
             max_payload_bytes: i64::MAX,
             ..Config::default()
         };
-        config.private.enabled = private_enabled;
+        config.private = private_config;
         let ordinary = storage.initialize_ordinary(config, health).await.unwrap();
         Self {
             directory,
@@ -703,7 +718,7 @@ async fn sqlite_product_widget_marker_uses_original_clock_without_body_or_fanout
                 .unwrap()
         );
         assert!(
-            product
+            !product
                 .ordinary
                 .complete_widget_refresh(&first.delivery_id, first.coalesce_order)
                 .await
@@ -715,6 +730,18 @@ async fn sqlite_product_widget_marker_uses_original_clock_without_body_or_fanout
             .await
             .unwrap()
             .unwrap();
+        let mut inspect = product.inspect().await;
+        let pending_markers: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_widget_refresh WHERE channel_id=?")
+                .bind(channel.as_slice())
+                .fetch_one(&mut inspect)
+                .await
+                .unwrap();
+        assert_eq!(
+            pending_markers, 1,
+            "one latest-state obligation per channel"
+        );
+        inspect.close().await.unwrap();
         assert_eq!(next.delivery_id, second.delivery_id);
         assert_eq!(
             next.coalesce_order,
@@ -750,6 +777,345 @@ async fn sqlite_product_widget_marker_uses_original_clock_without_body_or_fanout
         );
         product.stop().await;
     }
+}
+
+#[tokio::test]
+async fn sqlite_product_private_waiting_does_not_block_healthy_provider() {
+    use crate::storage::{
+        PrivateMessage, PrivateOutboxBatchEntry, PrivateOutboxEntry, RouteChannelType,
+    };
+    let product = Product::reopen_with_private_config(
+        tempfile::tempdir().unwrap(),
+        super::private_model::PrivateLedgerConfig {
+            enabled: true,
+            max_pending_per_device: 1,
+            max_pending: 1,
+        },
+        4,
+    )
+    .await;
+    let channel = product.channel().await;
+    product
+        .route(channel, "congested-private", "mqtt", "private", None)
+        .await;
+    product
+        .route(
+            channel,
+            "healthy-provider",
+            "android",
+            "fcm",
+            Some("healthy-synthetic-fcm-token"),
+        )
+        .await;
+    let at = now();
+    product
+        .storage
+        .insert_private_message(
+            "retained-event-capacity",
+            &PrivateMessage {
+                payload: Arc::from(&b"synthetic retained event capacity"[..]),
+                size: b"synthetic retained event capacity".len(),
+                sent_at: at,
+                expires_at: at + 60_000,
+            },
+        )
+        .await
+        .unwrap();
+    product
+        .storage
+        .enqueue_private_outbox_batch(
+            &[PrivateOutboxBatchEntry {
+                device_id: device_id("congested-private"),
+                entry: PrivateOutboxEntry {
+                    delivery_id: "retained-event-capacity".into(),
+                    status: "pending".into(),
+                    occurred_at: at,
+                    created_at: at,
+                    next_attempt_at: at,
+                    updated_at: at,
+                    ..PrivateOutboxEntry::default()
+                },
+            }],
+            1,
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+    let first_request = product.request(channel, "mixed-waiting-first");
+    let first = product
+        .ordinary
+        .accept(first_request.clone())
+        .await
+        .unwrap();
+    let second = product
+        .ordinary
+        .accept(product.request(channel, "mixed-waiting-second"))
+        .await
+        .unwrap();
+    for op in ["mixed-waiting-first", "mixed-waiting-second"] {
+        assert_eq!(
+            product.ordinary.target_status(op).await.unwrap()["targets"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    assert_eq!(
+        product.ordinary.private_pending_count(None).await.unwrap(),
+        2
+    );
+    // Replays do not re-run a now-full system target admission budget.
+    let replay = product.ordinary.accept(first_request).await.unwrap();
+    assert_eq!(replay.delivery_id, first.delivery_id);
+    assert_eq!(replay.message_id, first.message_id);
+    assert!(matches!(
+        product
+            .ordinary
+            .accept(product.request(channel, "mixed-waiting-over-system"))
+            .await,
+        Err(KernelError::Capacity)
+    ));
+    assert!(matches!(
+        product.ordinary.status("mixed-waiting-over-system").await,
+        Err(KernelError::NotFound)
+    ));
+    // Already accepted waiting is not a reason to reject same-Private sync or
+    // reconnect; it consumes the system target responsibility budget, not execution grants.
+    let mut unchanged = route("congested-private", "mqtt", "private", None);
+    unchanged.updated_at = now().saturating_add(100);
+    product
+        .storage
+        .upsert_device_route(&unchanged)
+        .await
+        .unwrap();
+    unchanged.updated_at += 1;
+    product
+        .storage
+        .transition_device_route(&unchanged, RouteChannelType::Private, 30, 1)
+        .await
+        .unwrap();
+    let private_route = product
+        .ordinary
+        .private_route("congested-private")
+        .await
+        .unwrap();
+    assert!(
+        product
+            .ordinary
+            .private_claim(&private_route, "full-legacy", 8)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        product
+            .ordinary
+            .private_executing_count(Some("congested-private"))
+            .await
+            .unwrap(),
+        0
+    );
+    let provider = product
+        .ordinary
+        .claim_reserved("FCM", 8, false)
+        .await
+        .unwrap();
+    assert_eq!(provider.tickets.len(), 2);
+    for ticket in provider.tickets {
+        assert!(product.ordinary.authorize_ticket(&ticket).await.unwrap());
+        product
+            .ordinary
+            .settle(&ticket, "provider_accepted", 200, "", now(), None)
+            .await
+            .unwrap();
+    }
+    assert!(
+        product
+            .storage
+            .ack_private_delivery(device_id("congested-private"), "retained-event-capacity")
+            .await
+            .unwrap()
+    );
+    let mut remaining = std::collections::HashMap::from([
+        (first.delivery_id.clone(), first.message_id.clone()),
+        (second.delivery_id.clone(), second.message_id.clone()),
+    ]);
+    for group in ["after-release-first", "after-release-second"] {
+        let tickets = product
+            .ordinary
+            .private_claim(&private_route, group, 8)
+            .await
+            .unwrap();
+        assert_eq!(tickets.len(), 1);
+        let ticket = &tickets[0];
+        let payload: serde_json::Value = serde_json::from_slice(&ticket.payload).unwrap();
+        assert_eq!(
+            payload["message_id"],
+            remaining.remove(&ticket.delivery_id).unwrap()
+        );
+        assert_eq!(
+            product
+                .ordinary
+                .private_executing_count(Some("congested-private"))
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(
+            product
+                .ordinary
+                .private_claim(&private_route, "already-executing", 1)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            product
+                .ordinary
+                .private_ack(&private_route, ticket)
+                .await
+                .unwrap()
+        );
+    }
+    assert!(remaining.is_empty());
+    assert_eq!(
+        product.ordinary.private_pending_count(None).await.unwrap(),
+        0
+    );
+    assert_eq!(
+        product
+            .ordinary
+            .private_executing_count(Some("congested-private"))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        product
+            .ordinary
+            .ack(
+                "healthy-provider",
+                vec![first.delivery_id, second.delivery_id]
+            )
+            .await
+            .unwrap(),
+        2
+    );
+    product.stop().await;
+}
+
+#[tokio::test]
+async fn sqlite_product_private_claim_reserves_global_execution_window() {
+    let product = Product::reopen_with_private_config(
+        tempfile::tempdir().unwrap(),
+        super::private_model::PrivateLedgerConfig {
+            enabled: true,
+            max_pending_per_device: 2,
+            max_pending: 1,
+        },
+        2,
+    )
+    .await;
+    let channel = product.channel().await;
+    for device in ["first-private-executor", "second-private-executor"] {
+        product
+            .route(channel, device, "mqtt", "private", None)
+            .await;
+    }
+    let accepted = product
+        .ordinary
+        .accept(product.request(channel, "global-private-execution"))
+        .await
+        .unwrap();
+    assert_eq!(
+        product.ordinary.private_pending_count(None).await.unwrap(),
+        2
+    );
+    let first = product
+        .ordinary
+        .private_route("first-private-executor")
+        .await
+        .unwrap();
+    let second = product
+        .ordinary
+        .private_route("second-private-executor")
+        .await
+        .unwrap();
+    let tickets = product
+        .ordinary
+        .private_claim(&first, "first-global-grant", 2)
+        .await
+        .unwrap();
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(
+        product
+            .ordinary
+            .private_executing_count(None)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        product
+            .ordinary
+            .private_executing_count(Some("second-private-executor"))
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(
+        product
+            .ordinary
+            .private_claim(&second, "global-full", 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        product
+            .ordinary
+            .private_ack(&first, &tickets[0])
+            .await
+            .unwrap()
+    );
+    let tickets = product
+        .ordinary
+        .private_claim(&second, "second-global-grant", 2)
+        .await
+        .unwrap();
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0].delivery_id, accepted.delivery_id);
+    assert!(
+        product
+            .ordinary
+            .private_ack(&second, &tickets[0])
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        product
+            .ordinary
+            .private_executing_count(None)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        product.ordinary.private_pending_count(None).await.unwrap(),
+        0
+    );
+    let mut inspect = product.inspect().await;
+    let bytes: i64 =
+        sqlx::query_scalar("SELECT payload_bytes FROM ordinary_messages WHERE delivery_id=?")
+            .bind(&accepted.delivery_id)
+            .fetch_one(&mut inspect)
+            .await
+            .unwrap();
+    assert_eq!(bytes, 0);
+    inspect.close().await.unwrap();
+    product.stop().await;
 }
 
 #[tokio::test]

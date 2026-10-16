@@ -259,12 +259,57 @@ mod tests {
             platform: Platform::IOS,
             widget_kinds: vec!["unread".to_string()].into(),
             collapse_id: Some(Arc::from("widgets:message:channel")),
+            ordinary_target_scoped: false,
         };
         let first = DurableProviderJob::from_widget(&make("delivery-1"));
         let second = DurableProviderJob::from_widget(&make("delivery-2"));
 
         assert_eq!(first.job_id(), second.job_id());
         assert!(first.is_coalescible());
+    }
+
+    #[test]
+    fn ordinary_widget_job_identity_scopes_tokens_and_survives_hint_round_trip() {
+        let make = |delivery_id: &'static str, token: &'static str, platform| WidgetPushJob {
+            channel_id: [4; 16],
+            correlation_id: Arc::from(delivery_id),
+            delivery_id: Arc::from(delivery_id),
+            device_key: Arc::from("widget-device"),
+            device_token: Arc::from(token),
+            platform,
+            widget_kinds: vec!["unread".to_string(), "watch-summary".to_string()].into(),
+            collapse_id: Some(Arc::from("widgets:message:channel")),
+            ordinary_target_scoped: true,
+        };
+        let first = DurableProviderJob::from_widget(&make("first", "token-a", Platform::IOS));
+        let next = DurableProviderJob::from_widget(&make("next", "token-a", Platform::IOS));
+        let other = DurableProviderJob::from_widget(&make("first", "token-b", Platform::IOS));
+        let mac = DurableProviderJob::from_widget(&make("first", "token-a", Platform::MACOS));
+        assert_eq!(first.job_id(), next.job_id());
+        assert_ne!(first.job_id(), other.job_id());
+        assert_ne!(first.job_id(), mac.job_id());
+        let restored: DurableProviderJob =
+            serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
+        let hint = restored.into_widget().unwrap();
+        assert!(hint.ordinary_target_scoped);
+        assert_eq!(
+            DurableProviderJob::from_widget(&hint).job_id(),
+            first.job_id()
+        );
+
+        // Existing retained-feature payloads have no new field. They retain
+        // the exact legacy key, including its device-level coalescing rule.
+        let mut legacy = make("legacy", "token-a", Platform::IOS);
+        legacy.ordinary_target_scoped = false;
+        let legacy = DurableProviderJob::from_widget(&legacy);
+        let mut old_payload = serde_json::to_value(&legacy).unwrap();
+        old_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("ordinary_target_scoped");
+        let restored: DurableProviderJob = serde_json::from_value(old_payload).unwrap();
+        assert_eq!(restored.job_id(), legacy.job_id());
+        assert!(!restored.into_widget().unwrap().ordinary_target_scoped);
     }
 }
 
@@ -295,6 +340,9 @@ pub(crate) struct WidgetPushJob {
     pub platform: Platform,
     pub widget_kinds: Arc<[String]>,
     pub collapse_id: Option<Arc<str>>,
+    /// Ordinary invalidations must preserve distinct canonical Widget tokens
+    /// even when one device has several. Retained Event/Thing keys stay intact.
+    pub ordinary_target_scoped: bool,
 }
 
 pub(crate) struct FcmJob {
@@ -363,6 +411,8 @@ pub(crate) enum DurableProviderJob {
         platform: Platform,
         widget_kinds: Vec<String>,
         collapse_id: Option<String>,
+        #[serde(default)]
+        ordinary_target_scoped: bool,
     },
     Fcm {
         op_id: Option<String>,
@@ -443,6 +493,7 @@ impl DurableProviderJob {
             platform: job.platform,
             widget_kinds: job.widget_kinds.to_vec(),
             collapse_id: job.collapse_id.as_ref().map(ToString::to_string),
+            ordinary_target_scoped: job.ordinary_target_scoped,
         }
     }
 
@@ -557,6 +608,18 @@ impl DurableProviderJob {
         }
         material.push('\0');
         material.push_str(self.device_key());
+        if let Self::Widget {
+            ordinary_target_scoped: true,
+            platform,
+            device_token,
+            ..
+        } = self
+        {
+            material.push('\0');
+            material.push_str(platform.name());
+            material.push('\0');
+            material.push_str(device_token);
+        }
         format!(
             "{}:{}",
             self.provider().to_ascii_lowercase(),
@@ -647,6 +710,7 @@ impl DurableProviderJob {
             platform,
             widget_kinds,
             collapse_id,
+            ordinary_target_scoped,
             ..
         } = self
         else {
@@ -661,6 +725,7 @@ impl DurableProviderJob {
             platform,
             widget_kinds: widget_kinds.into(),
             collapse_id: collapse_id.map(Arc::from),
+            ordinary_target_scoped,
         })
     }
 

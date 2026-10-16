@@ -155,6 +155,7 @@ pub(crate) fn widget_push_job(
             "widgets:{entity_type}:{}",
             crate::value::ChannelId::from(channel_id)
         ))),
+        ordinary_target_scoped: false,
     }
 }
 

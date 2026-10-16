@@ -115,6 +115,11 @@ impl PgDeliveryStore {
         sqlx::raw_sql(include_str!("pg_schema.sql"))
             .execute(&mut *tx)
             .await?;
+        let channel_unique: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_index idx JOIN pg_attribute col ON col.attrelid=idx.indrelid AND col.attname='channel_id' AND col.attnum=idx.indkey[0] WHERE idx.indrelid='ordinary_widget_refresh'::regclass AND idx.indisunique AND idx.indisvalid AND idx.indpred IS NULL AND idx.indexprs IS NULL AND idx.indnkeyatts=1)")
+            .fetch_one(&mut *tx).await?;
+        if !channel_unique {
+            return Err(KernelError::Invalid("ordinary Widget channel coalescing constraint missing; use a fresh C10 database or explicitly migrate the prior candidate before startup".into()));
+        }
         sqlx::raw_sql(crate::ordinary::pg_private::PRIVATE_USAGE_SCHEMA)
             .execute(&mut *tx)
             .await?;
@@ -393,7 +398,11 @@ impl PgDeliveryStore {
         })?;
         sqlx::query(
             "INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,acceptance_order,accepted_at,expires_at) \
-             VALUES($1,decode($2,'hex'),$3,$4,$5)",
+             VALUES($1,decode($2,'hex'),$3,$4,$5) \
+             ON CONFLICT(channel_id) DO UPDATE SET delivery_id=EXCLUDED.delivery_id, \
+             acceptance_order=EXCLUDED.acceptance_order,accepted_at=EXCLUDED.accepted_at, \
+             expires_at=EXCLUDED.expires_at \
+             WHERE ordinary_widget_refresh.acceptance_order<EXCLUDED.acceptance_order",
         )
         .bind(delivery_id)
         .bind(storage_channel)
@@ -1355,6 +1364,30 @@ impl PgDeliveryStore {
         let count: i64 = match device {
             Some(key) => sqlx::query_scalar("SELECT COALESCE((SELECT pending FROM ordinary_private_usage WHERE device_key=$1),0)").bind(key).fetch_one(&mut *connection).await?,
             None => sqlx::query_scalar("SELECT private_pending FROM ordinary_ledger_usage WHERE singleton=1").fetch_one(&mut *connection).await?,
+        };
+        Ok(count.max(0))
+    }
+
+    /// Read-only C share of the device/global execution window. Waiting targets
+    /// remain system target responsibility, not this issued-grant count.
+    pub(crate) async fn private_executing_count(&self, device: Option<&str>) -> Result<i64> {
+        let mut connection = self.acquire().await?;
+        let count: i64 = match device {
+            Some(device) => sqlx::query_scalar(
+                "SELECT COUNT(DISTINCT private_claim) FROM ordinary_targets WHERE pull_owner=$1 \
+                 AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL",
+            )
+            .bind(device)
+            .fetch_one(&mut *connection)
+            .await?,
+            None => {
+                sqlx::query_scalar(
+                    "SELECT COUNT(DISTINCT private_claim) FROM ordinary_targets WHERE \
+                 delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL",
+                )
+                .fetch_one(&mut *connection)
+                .await?
+            }
         };
         Ok(count.max(0))
     }

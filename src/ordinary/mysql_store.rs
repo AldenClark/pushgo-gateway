@@ -96,8 +96,8 @@ impl MySqlDeliveryStore {
             .await?;
         Ok(())
     }
-    /// All callers hold ledger_usage FOR UPDATE. This reads exactly one
-    /// immutable accepted fanout (at most 32), never the retained ledger.
+    /// All callers hold ledger_usage FOR UPDATE. This reads one delivery's
+    /// accepted targets, bounded by the admission target budget, not history.
     /// Profiling callers record this four-SQL bundle as one Usage sample;
     /// sample count is a helper invocation count, not a SQL statement count.
     pub(super) async fn reconcile_message_tx(
@@ -277,6 +277,11 @@ impl MySqlDeliveryStore {
         sqlx::raw_sql(include_str!("mysql_schema.sql"))
             .execute(&mut *connection)
             .await?;
+        let channel_unique: i64 = sqlx::query_scalar("SELECT CAST(COUNT(*) AS SIGNED) FROM (SELECT INDEX_NAME FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ordinary_widget_refresh' AND NON_UNIQUE=0 GROUP BY INDEX_NAME HAVING COUNT(*)=1 AND MAX(COLUMN_NAME)='channel_id') channel_keys")
+            .fetch_one(&mut *connection).await?;
+        if channel_unique == 0 {
+            return Err(KernelError::Invalid("ordinary Widget channel coalescing constraint missing; use a fresh C10 database or explicitly migrate the prior candidate before startup".into()));
+        }
         let mut tx = connection.begin().await?;
         Self::lock_usage(&mut tx).await?;
         while self.recover_private_claims_tx(&mut tx).await? > 0 {}
@@ -528,7 +533,7 @@ impl MySqlDeliveryStore {
                 )
                 .fetch_one(&mut *tx)
                 .await?;
-                sqlx::query("INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,coalesce_order,accepted_at,expires_at) VALUES(?,?,?,?,?)")
+                sqlx::query("INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,coalesce_order,accepted_at,expires_at) VALUES(?,?,?,?,?) AS latest ON DUPLICATE KEY UPDATE delivery_id=latest.delivery_id,coalesce_order=latest.coalesce_order,accepted_at=latest.accepted_at,expires_at=latest.expires_at")
                     .bind(&delivery_id).bind(channel_bytes.as_slice()).bind(order).bind(at).bind(expires)
                     .execute(&mut *tx).await?;
             }
@@ -1246,6 +1251,18 @@ impl MySqlDeliveryStore {
         Ok(count.max(0))
     }
 
+    pub(crate) async fn private_executing_count(&self, device: Option<&str>) -> Result<i64> {
+        let mut connection = self.acquire().await?;
+        let executing: i64 = if let Some(device) = device {
+            sqlx::query_scalar("SELECT COUNT(DISTINCT delivery_id) FROM ordinary_targets WHERE pull_owner=? AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL")
+                .bind(device).fetch_one(&mut *connection).await?
+        } else {
+            sqlx::query_scalar("SELECT COUNT(*) FROM (SELECT pull_owner,delivery_id FROM ordinary_targets WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL GROUP BY pull_owner,delivery_id) executing")
+                .fetch_one(&mut *connection).await?
+        };
+        Ok(executing.max(0))
+    }
+
     pub(crate) async fn private_pending_count(&self, device: Option<&str>) -> Result<i64> {
         let mut connection = self.acquire().await?;
         let count: i64 = if let Some(key) = device {
@@ -1563,6 +1580,9 @@ mod product_contract_tests {
         drop(normal_before);
         let mut config = Config::default();
         config.private.enabled = true;
+        config.private.max_pending_per_device = 1;
+        config.private.max_pending = 1;
+        config.max_targets = 4;
         config.public_base_url.clear();
         let store = MySqlDeliveryStore::from_product(
             db.ordinary_pool(),
@@ -1833,6 +1853,238 @@ mod product_contract_tests {
         .expect("released capacity");
         assert_eq!(usage, (0, 0, 0));
 
+        // A full Private execution allowance leaves accepted rows waiting on
+        // disk while healthy Provider targets of the same message can finish.
+        let waiting_key = "c10-native-waiting-private";
+        let healthy_key = "c10-native-healthy-provider";
+        let mut waiting_route = DeviceRouteRecordRow {
+            device_key: waiting_key.into(),
+            platform: "android".into(),
+            channel_type: "private".into(),
+            provider_token: None,
+            updated_at: now(),
+        };
+        let healthy_route = DeviceRouteRecordRow {
+            device_key: healthy_key.into(),
+            platform: "android".into(),
+            channel_type: "fcm".into(),
+            provider_token: Some("c10-healthy-provider-token".into()),
+            updated_at: now(),
+        };
+        for route in [&waiting_route, &healthy_route] {
+            db.upsert_device_route(route)
+                .await
+                .expect("mixed canonical route");
+            db.private_subscribe_channel(
+                created.channel_id,
+                PrivateDeviceId::derive(&route.device_key).into_inner(),
+            )
+            .await
+            .expect("mixed canonical subscription");
+        }
+        let mixed = AcceptRequest {
+            authorized_channel: Some(created.channel_id),
+            channel_id: crate::util::encode_crockford_base32_128(&created.channel_id),
+            title: "mixed waiting and healthy Provider".into(),
+            op_id: Some("c10-mixed-first".into()),
+            ..Default::default()
+        };
+        let first = store
+            .accept(mixed.clone())
+            .await
+            .expect("first mixed acceptance");
+        let mut second_request = mixed.clone();
+        second_request.op_id = Some("c10-mixed-second".into());
+        let second = store
+            .accept(second_request)
+            .await
+            .expect("Private per-device fullness retains accepted waiting");
+        let replay = store
+            .accept(mixed.clone())
+            .await
+            .expect("duplicate remains accepted at full active-target budget");
+        assert_eq!(replay.delivery_id, first.delivery_id);
+        assert_eq!(
+            store
+                .private_pending_count(Some(waiting_key))
+                .await
+                .unwrap(),
+            2
+        );
+        let mut rejected = mixed;
+        rejected.op_id = Some("c10-mixed-global-full".into());
+        assert!(matches!(
+            store.accept(rejected).await,
+            Err(KernelError::Capacity)
+        ));
+        assert!(matches!(
+            store.status("c10-mixed-global-full").await,
+            Err(KernelError::NotFound)
+        ));
+        let provider = store
+            .claim_reserved("FCM", 8, false)
+            .await
+            .expect("healthy Provider proceeds");
+        assert_eq!(provider.tickets.len(), 2);
+        for ticket in provider.tickets {
+            store
+                .settle(&ticket, "provider_accepted", 200, "", now(), None)
+                .await
+                .expect("healthy Provider receipt");
+        }
+        assert_eq!(
+            store
+                .ack(
+                    healthy_key,
+                    vec![first.delivery_id.clone(), second.delivery_id.clone()]
+                )
+                .await
+                .expect("healthy Provider content ACK"),
+            2
+        );
+        let private_route = store
+            .private_route(waiting_key)
+            .await
+            .expect("waiting Private route");
+        let first_grant = store
+            .private_claim(&private_route, "c10-waiting-session", 8)
+            .await
+            .expect("bounded Private execution")
+            .into_iter()
+            .next()
+            .expect("one execution slot");
+        assert_eq!(
+            store
+                .private_executing_count(Some(waiting_key))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.private_executing_count(None).await.unwrap(), 1);
+        let other_key = "c10-native-other-private";
+        let other_channel = db
+            .upsert_private_channel(None, Some("c10-other"), "unused-authorized-context")
+            .await
+            .expect("second Private canonical channel");
+        db.upsert_device_route(&DeviceRouteRecordRow {
+            device_key: other_key.into(),
+            platform: "android".into(),
+            channel_type: "private".into(),
+            provider_token: None,
+            updated_at: now(),
+        })
+        .await
+        .expect("second Private canonical route");
+        db.private_subscribe_channel(
+            other_channel.channel_id,
+            PrivateDeviceId::derive(other_key).into_inner(),
+        )
+        .await
+        .expect("second Private canonical subscription");
+        let other = store
+            .accept(AcceptRequest {
+                authorized_channel: Some(other_channel.channel_id),
+                channel_id: crate::util::encode_crockford_base32_128(&other_channel.channel_id),
+                title: "global Private execution waiting".into(),
+                op_id: Some("c10-mixed-other-private".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("global Private fullness retains accepted waiting");
+        let other_route = store
+            .private_route(other_key)
+            .await
+            .expect("second Private current route");
+        assert_eq!(
+            store
+                .private_executing_count(Some(other_key))
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            store
+                .private_claim(&other_route, "c10-other-device-session", 8)
+                .await
+                .expect("global execution allowance shared across devices")
+                .is_empty()
+        );
+        assert!(
+            store
+                .private_claim(&private_route, "c10-other-session", 8)
+                .await
+                .expect("full execution allowance")
+                .is_empty()
+        );
+        waiting_route.updated_at += 1;
+        db.upsert_device_route(&waiting_route)
+            .await
+            .expect("same Private sync with a waiting backlog");
+        assert!(
+            store
+                .private_authorize(&first_grant)
+                .await
+                .expect("same Private sync preserves issued grant")
+        );
+        assert!(
+            store
+                .private_ack(&private_route, &first_grant)
+                .await
+                .expect("release one execution slot")
+        );
+        let second_grant = store
+            .private_claim(&private_route, "c10-waiting-session", 8)
+            .await
+            .expect("waiting target advances")
+            .into_iter()
+            .next()
+            .expect("next accepted obligation");
+        assert_ne!(first_grant.delivery_id, second_grant.delivery_id);
+        assert!(
+            store
+                .private_ack(&private_route, &second_grant)
+                .await
+                .expect("waiting target durable ACK")
+        );
+        assert_eq!(
+            store
+                .private_executing_count(Some(waiting_key))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(store.private_executing_count(None).await.unwrap(), 0);
+        let other_grant = store
+            .private_claim(&other_route, "c10-other-device-session", 8)
+            .await
+            .expect("global waiting advances after durable ACK")
+            .into_iter()
+            .next()
+            .expect("global execution slot released");
+        assert_eq!(other_grant.delivery_id, other.delivery_id);
+        assert!(
+            store
+                .private_ack(&other_route, &other_grant)
+                .await
+                .expect("second Private owner durable ACK")
+        );
+        assert_eq!(
+            store
+                .private_pending_count(Some(waiting_key))
+                .await
+                .unwrap(),
+            0
+        );
+        db.revoke_device_identity(waiting_key)
+            .await
+            .expect("exit mixed Private device");
+        db.revoke_device_identity(healthy_key)
+            .await
+            .expect("exit mixed Provider device");
+        db.revoke_device_identity(other_key)
+            .await
+            .expect("exit second Private device");
+
         // Native derived-Widget boundary: normal canonical registration and
         // production job projection, not a second ordinary payload/identity.
         let widget_key = "c10-native-widget-device";
@@ -1947,14 +2199,14 @@ mod product_contract_tests {
         );
         assert_eq!(
             store
-                .accept(widget_request)
+                .accept(widget_request.clone())
                 .await
                 .expect("Widget identity replay")
                 .delivery_id,
             refresh.delivery_id
         );
         let target = target.into_iter().next().unwrap();
-        let projected = crate::api::handlers::message::widget_push_job(
+        let mut projected = crate::api::handlers::message::widget_push_job(
             refresh.channel_id,
             "message",
             Arc::from(refresh.delivery_id.as_str()),
@@ -1963,6 +2215,7 @@ mod product_contract_tests {
             target.device_key,
             target.token,
         );
+        projected.ordinary_target_scoped = true;
         let mut derived = crate::dispatch::DurableProviderJob::from_widget(&projected)
             .to_record("pending", refresh.accepted_at, refresh.expires_at)
             .expect("production Widget job projection");
@@ -1987,6 +2240,39 @@ mod product_contract_tests {
                 .expect("committed derived order"),
             Some(refresh.coalesce_order)
         );
+        let mut blocked = derived.clone();
+        blocked.job_id.push_str("-capacity-probe");
+        assert!(
+            matches!(
+                db.enqueue_provider_dispatch_job(&blocked, 0).await,
+                Err(crate::storage::StoreError::ProviderDispatchCapacityExceeded { .. })
+            ),
+            "a known full native derived budget leaves the durable marker pending"
+        );
+        let mut latest = refresh.clone();
+        for index in 0..3 {
+            let mut request = widget_request.clone();
+            request.op_id = Some(format!("c10-widget-coalesced-{index}"));
+            let accepted = store
+                .accept(request)
+                .await
+                .expect("coalesced Widget accept");
+            latest = store.next_widget_refresh().await.unwrap().unwrap();
+            assert_eq!(latest.delivery_id, accepted.delivery_id);
+            let mut read = store.acquire().await.unwrap();
+            let count: i64 = sqlx::query_scalar(
+                "SELECT CAST(COUNT(*) AS SIGNED) FROM ordinary_widget_refresh WHERE channel_id=?",
+            )
+            .bind(created.channel_id.as_slice())
+            .fetch_one(&mut *read)
+            .await
+            .unwrap();
+            assert_eq!(
+                count, 1,
+                "derived backpressure must not accumulate per-request markers"
+            );
+        }
+        assert!(latest.coalesce_order > refresh.coalesce_order);
         assert!(
             !store
                 .complete_widget_refresh(&refresh.delivery_id, refresh.coalesce_order + 1)
@@ -1994,10 +2280,16 @@ mod product_contract_tests {
                 .expect("stale marker completion")
         );
         assert!(
-            store
+            !store
                 .complete_widget_refresh(&refresh.delivery_id, refresh.coalesce_order)
                 .await
-                .expect("complete only after derived COMMIT")
+                .expect("old snapshot cannot delete latest channel marker")
+        );
+        assert!(
+            store
+                .complete_widget_refresh(&latest.delivery_id, latest.coalesce_order)
+                .await
+                .expect("complete latest marker after derived COMMIT")
         );
         assert!(
             store

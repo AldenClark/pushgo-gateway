@@ -2,7 +2,7 @@
 //! identity, body, recipient ledger, Pull source or delivery receipt owner.
 use crate::{
     api::handlers::message::widget_push_job,
-    dispatch::{DispatchChannels, DurableProviderJob},
+    dispatch::{DispatchChannels, DurableProviderJob, WidgetPushJob},
     storage::{Platform, Storage, StoreError},
 };
 use std::sync::Arc;
@@ -31,6 +31,20 @@ pub(crate) struct WidgetRefreshTarget {
     pub device_key: String,
     pub platform: Platform,
     pub token: String,
+}
+
+fn ordinary_widget_job(refresh: &WidgetRefresh, target: WidgetRefreshTarget) -> WidgetPushJob {
+    let mut job = widget_push_job(
+        refresh.channel_id,
+        "message",
+        Arc::from(refresh.delivery_id.as_str()),
+        Arc::from(refresh.delivery_id.as_str()),
+        target.platform,
+        target.device_key,
+        target.token,
+    );
+    job.ordinary_target_scoped = true;
+    job
 }
 
 struct ProjectionOutcomeGuard {
@@ -135,15 +149,7 @@ async fn project_one(
             {
                 break;
             }
-            let job = widget_push_job(
-                refresh.channel_id,
-                "message",
-                Arc::from(refresh.delivery_id.as_str()),
-                Arc::from(refresh.delivery_id.as_str()),
-                target.platform,
-                target.device_key,
-                target.token,
-            );
+            let job = ordinary_widget_job(refresh, target);
             let mut record = DurableProviderJob::from_widget(&job)
                 .to_record("pending", refresh.accepted_at, refresh.expires_at)
                 .map_err(|error| KernelError::Invalid(error.to_string()))?;
@@ -165,14 +171,13 @@ async fn project_one(
             cursor = Some(next);
         }
     }
-    if !ordinary
+    // A newer accepted refresh may have atomically replaced this channel's
+    // marker while its bounded pages were projected. Zero rows means the old
+    // snapshot was superseded, not that the newer obligation may be removed.
+    // Native COMMIT errors still propagate to the shared fail-stop guard.
+    let _ = ordinary
         .complete_widget_refresh(&refresh.delivery_id, refresh.coalesce_order)
-        .await?
-    {
-        return Err(KernelError::Invalid(
-            "Widget projection marker changed before completion".into(),
-        ));
-    }
+        .await?;
     Ok(true)
 }
 
@@ -191,6 +196,50 @@ mod tests {
         },
     };
 
+    #[tokio::test]
+    async fn product_widget_prior_candidate_without_channel_constraint_refuses_startup() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("old-marker.db").display()
+        );
+        let health = Arc::new(Health::default());
+        let owner = ProductOwner::acquire(Some(&url), health.clone())
+            .await
+            .unwrap();
+        let storage = Storage::new_with_config(StorageInitConfig {
+            db_url: Some(url.clone()),
+            managed_upgrade: false,
+            ..StorageInitConfig::default()
+        })
+        .await
+        .unwrap();
+        let mut connection = sqlx::SqliteConnection::connect(&url).await.unwrap();
+        sqlx::query("CREATE TABLE ordinary_widget_refresh(delivery_id TEXT PRIMARY KEY,channel_id BLOB NOT NULL,coalesce_order INTEGER NOT NULL UNIQUE,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL)")
+            .execute(&mut connection).await.unwrap();
+        connection.close().await.unwrap();
+        let result = storage.initialize_ordinary(Config::default(), health).await;
+        assert!(matches!(result, Err(KernelError::Invalid(ref reason))
+            if reason.contains("channel coalescing constraint missing")));
+        assert!(
+            storage.ordinary_handle().is_none(),
+            "no initialized ordinary ingress authority"
+        );
+        let mut connection = sqlx::SqliteConnection::connect(&url).await.unwrap();
+        let markers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_widget_refresh")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(
+            markers, 0,
+            "startup neither accepts nor migrates prior-candidate markers"
+        );
+        connection.close().await.unwrap();
+        storage.close_ordinary_storage().await.unwrap();
+        owner.shutdown().await.unwrap();
+    }
+    use sqlx::Connection;
+
     // A normal Storage test, with a real new SQLite core/sidecar and shared
     // mutation gate. No fixture ledger or second application server is used.
     #[tokio::test]
@@ -205,7 +254,7 @@ mod tests {
             .await
             .unwrap();
         let storage = Storage::new_with_config(StorageInitConfig {
-            db_url: Some(url),
+            db_url: Some(url.clone()),
             managed_upgrade: false,
             ..StorageInitConfig::default()
         })
@@ -213,7 +262,10 @@ mod tests {
         .unwrap();
         let mut config = Config::default();
         config.private.enabled = false;
-        let ordinary = storage.initialize_ordinary(config, health).await.unwrap();
+        let ordinary = storage
+            .initialize_ordinary(config.clone(), health)
+            .await
+            .unwrap();
         let fixture_auth = crate::util::generate_hex_id_128();
         let channel = storage
             .upsert_private_channel(None, Some("widget recovery"), &fixture_auth)
@@ -261,6 +313,18 @@ mod tests {
             )
             .await
             .unwrap();
+        let second_widget_token = "cd".repeat(32);
+        storage
+            .upsert_widget_push_subscriptions(
+                device_key,
+                Platform::IOS,
+                &second_widget_token,
+                &widgets,
+                1,
+                now(),
+            )
+            .await
+            .unwrap();
         let request = AcceptRequest {
             channel_id: crate::value::ChannelId::from(channel).to_string(),
             authorized_channel: Some(channel),
@@ -272,36 +336,28 @@ mod tests {
         let refresh = ordinary.next_widget_refresh().await.unwrap().unwrap();
         assert_eq!(refresh.delivery_id, accepted.delivery_id);
         // Widget-only invalidation remains valid even with zero active ordinary
-        // delivery targets; the two Widget kinds share one bounded target.
+        // delivery targets. Two kinds share one target per platform/token,
+        // while two tokens on the same device must remain distinct targets.
         let targets = ordinary
             .widget_refresh_targets(channel, None, 1)
             .await
             .unwrap();
         assert_eq!(targets.len(), 1);
-        assert!(
-            ordinary
-                .widget_refresh_targets(
-                    channel,
-                    Some(&WidgetRefreshCursor {
-                        platform: "ios".into(),
-                        token: widget_token.clone(),
-                    }),
-                    1,
-                )
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        let second_page = ordinary
+            .widget_refresh_targets(
+                channel,
+                Some(&WidgetRefreshCursor {
+                    platform: "ios".into(),
+                    token: widget_token.clone(),
+                }),
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_page.len(), 1);
+        assert_eq!(second_page[0].token, second_widget_token);
         let target = targets.into_iter().next().unwrap();
-        let job = widget_push_job(
-            channel,
-            "message",
-            Arc::from(refresh.delivery_id.as_str()),
-            Arc::from(refresh.delivery_id.as_str()),
-            target.platform,
-            target.device_key,
-            target.token,
-        );
+        let job = ordinary_widget_job(&refresh, target);
         let mut record = DurableProviderJob::from_widget(&job)
             .to_record("pending", refresh.accepted_at, refresh.expires_at)
             .unwrap();
@@ -345,21 +401,171 @@ mod tests {
                 .await
                 .unwrap()
         );
+        // Pending work, including a blocked derived queue, must coalesce as
+        // metadata instead of allocating one obligation per request. This test
+        // exercises zero ordinary target usage without filling a million rows.
+        let mut latest_request = request.clone();
+        let mut latest_accepted = accepted.clone();
+        for index in 0..32 {
+            latest_request.op_id = Some(format!("widget-coalesced-{index}"));
+            latest_accepted = ordinary.accept(latest_request.clone()).await.unwrap();
+        }
+        let mut inspect = sqlx::SqliteConnection::connect(&url).await.unwrap();
+        let marker_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_widget_refresh WHERE channel_id=?")
+                .bind(channel.as_slice())
+                .fetch_one(&mut inspect)
+                .await
+                .unwrap();
+        assert_eq!(marker_count, 1);
+        let target_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_targets")
+            .fetch_one(&mut inspect)
+            .await
+            .unwrap();
+        assert_eq!(target_count, 0, "these are Widget-only ordinary accepts");
+        inspect.close().await.unwrap();
+        let latest = ordinary.next_widget_refresh().await.unwrap().unwrap();
+        assert_eq!(latest.delivery_id, latest_accepted.delivery_id);
+        assert!(latest.coalesce_order > refresh.coalesce_order);
+        assert_eq!(
+            ordinary.accept(latest_request).await.unwrap().delivery_id,
+            latest_accepted.delivery_id
+        );
+        assert_eq!(
+            ordinary
+                .next_widget_refresh()
+                .await
+                .unwrap()
+                .unwrap()
+                .coalesce_order,
+            latest.coalesce_order,
+            "identity replay does not renew the derived obligation"
+        );
+        let (dispatch, _receivers) = DispatchChannels::new();
+        // The first token was already projected before new acceptance replaced
+        // the marker. Finishing its old snapshot is a normal supersession: it
+        // cannot delete the newer marker or poison process health.
+        assert!(
+            project_one(&storage, &dispatch, &ordinary, &refresh)
+                .await
+                .unwrap()
+        );
+        ordinary.health.ensure().unwrap();
+        assert_eq!(
+            ordinary
+                .next_widget_refresh()
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_id,
+            latest.delivery_id
+        );
+        storage.close_ordinary_storage().await.unwrap();
+        owner.shutdown().await.unwrap();
+        let health = Arc::new(Health::default());
+        let owner = ProductOwner::acquire(Some(&url), health.clone())
+            .await
+            .unwrap();
+        let storage = Storage::new_with_config(StorageInitConfig {
+            db_url: Some(url),
+            managed_upgrade: false,
+            ..StorageInitConfig::default()
+        })
+        .await
+        .unwrap();
+        let ordinary = storage.initialize_ordinary(config, health).await.unwrap();
         let (dispatch, _receivers) = DispatchChannels::new();
         assert_eq!(project_pending(&storage, &dispatch, 1).await.unwrap(), 1);
         assert!(ordinary.next_widget_refresh().await.unwrap().is_none());
+        let remaining = storage
+            .claim_provider_dispatch_job(
+                "APNS_WIDGETS",
+                None,
+                "after-recovery",
+                now(),
+                now() + 5000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        // A new accepted refresh legitimately updates the same stable target
+        // job. It must use the latest order and preserve both token jobs.
+        let restored: DurableProviderJob =
+            serde_json::from_slice(&remaining.record.payload_blob).unwrap();
+        let restored = restored.into_widget().unwrap();
+        assert!(restored.ordinary_target_scoped);
+        let first_restored_token = restored.device_token.to_string();
+        assert_eq!(remaining.record.delivery_id, latest_accepted.delivery_id);
+        assert_eq!(remaining.record.coalesce_order, latest.coalesce_order);
         assert!(
             storage
-                .claim_provider_dispatch_job(
-                    "APNS_WIDGETS",
-                    None,
-                    "after-recovery",
+                .settle_provider_dispatch_job(
+                    &remaining,
+                    ProviderDispatchSettlement::Accepted,
                     now(),
-                    now() + 5000
+                    200,
+                    None,
+                    now()
                 )
                 .await
                 .unwrap()
-                .is_none()
+        );
+        let second_remaining = storage
+            .claim_provider_dispatch_job(
+                "APNS_WIDGETS",
+                None,
+                "second-token-after-recovery",
+                now(),
+                now() + 5000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(second_remaining.record.job_id, remaining.record.job_id);
+        assert_eq!(
+            second_remaining.record.delivery_id,
+            latest_accepted.delivery_id
+        );
+        let second_restored: DurableProviderJob =
+            serde_json::from_slice(&second_remaining.record.payload_blob).unwrap();
+        let second_restored = second_restored.into_widget().unwrap();
+        let mut recovered_tokens = vec![
+            first_restored_token,
+            second_restored.device_token.to_string(),
+        ];
+        recovered_tokens.sort();
+        assert_eq!(
+            recovered_tokens,
+            vec![widget_token.clone(), second_widget_token.clone()]
+        );
+        assert!(
+            storage
+                .settle_provider_dispatch_job(
+                    &second_remaining,
+                    ProviderDispatchSettlement::Accepted,
+                    now(),
+                    200,
+                    None,
+                    now()
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .delete_widget_push_token(Platform::IOS, &widget_token)
+                .await
+                .unwrap(),
+            2
+        );
+        let remaining_targets = ordinary
+            .widget_refresh_targets(channel, None, 128)
+            .await
+            .unwrap();
+        assert_eq!(remaining_targets.len(), 1);
+        assert_eq!(
+            remaining_targets[0].token, second_widget_token,
+            "one invalid token cleanup must preserve another token on the same device"
         );
         assert_eq!(
             ordinary.accept(request).await.unwrap().delivery_id,

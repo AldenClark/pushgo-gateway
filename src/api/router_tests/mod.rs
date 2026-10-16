@@ -50,6 +50,14 @@ async fn build_test_state_with_receivers_and_db_url() -> (AppState, DispatchWork
 async fn build_test_state_with_private_mode(
     private_enabled: bool,
 ) -> (AppState, DispatchWorkerReceivers, String) {
+    let private = private_enabled.then(test_private_config);
+    build_test_state_with_private_config(private.as_ref(), None).await
+}
+
+async fn build_test_state_with_private_config(
+    private: Option<&PrivateConfig>,
+    ordinary_target_limit: Option<i64>,
+) -> (AppState, DispatchWorkerReceivers, String) {
     let unique_id = TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let db_url = format!(
         "sqlite:///tmp/pushgo-router-test-{}-{}-{}.db",
@@ -69,12 +77,14 @@ async fn build_test_state_with_private_mode(
         public_base_url: "https://sandbox.pushgo.dev".into(),
         ..crate::ordinary::Config::default()
     };
-    if private_enabled {
-        let private = test_private_config();
+    if let Some(private) = private {
         ordinary.private.enabled = true;
         ordinary.private.max_pending_per_device = private.max_pending_per_device;
         ordinary.private.max_pending = private.global_max_pending;
         ordinary.default_ttl_secs = private.default_ttl_secs;
+    }
+    if let Some(limit) = ordinary_target_limit {
+        ordinary.max_targets = limit;
     }
     store
         .initialize_ordinary(ordinary, Arc::default())
@@ -176,18 +186,28 @@ async fn seed_provider_channel_for_router_test(
 }
 
 async fn build_private_test_state() -> AppState {
-    let mut state = build_test_state_with_private_mode(true).await.0;
+    build_private_test_state_with_limits(test_private_config(), None)
+        .await
+        .0
+}
+
+async fn build_private_test_state_with_limits(
+    private_config: PrivateConfig,
+    ordinary_target_limit: Option<i64>,
+) -> (AppState, String) {
+    let (mut state, _receivers, db_url) =
+        build_test_state_with_private_config(Some(&private_config), ordinary_target_limit).await;
     let registry = Arc::clone(&state.device_registry);
     let runtime_counters = Arc::clone(&state.runtime_counters);
     let private = Arc::new(PrivateState::new(
         state.store.clone(),
-        test_private_config(),
+        private_config,
         registry,
         runtime_counters,
     ));
     state.private_channel_enabled = true;
     state.private = Some(private);
-    state
+    (state, db_url)
 }
 
 async fn build_private_without_wss_test_state() -> AppState {

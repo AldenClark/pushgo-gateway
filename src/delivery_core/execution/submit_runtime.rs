@@ -73,9 +73,9 @@ impl SubmitRuntime for AppState {
             .accept_authorized(channel.channel_id, message, now_millis)
             .await
             .map_err(CoreError::from)?;
-        crate::ordinary::widget_refresh::project_pending(&self.store, &self.dispatch, 1)
-            .await
-            .map_err(CoreError::from)?;
+        // accept committed the recoverable Widget invalidation and notified
+        // the existing recovery worker. The HTTP/MCP/MQTT caller must not own
+        // another cancellable post-commit outbox write or wait on its fanout.
         ordinary_submit_result(channel, thing_id, accepted)
     }
 

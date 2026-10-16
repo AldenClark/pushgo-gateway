@@ -311,7 +311,7 @@ pub(super) const RECOVER_RUNNING_SQL: &str = "UPDATE ordinary_targets SET state=
 pub(super) const RETIRE_TOKEN_TARGETS_SQL: &str = "SELECT t.delivery_id,t.device_key FROM ordinary_retired_provider_tokens r CROSS JOIN ordinary_targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.delivery_mode='provider' AND t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256";
 const SCHEMA:&str="
 CREATE TABLE IF NOT EXISTS ordinary_messages(delivery_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,thing_id TEXT,fingerprint TEXT NOT NULL,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,dedupe_until INTEGER NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,pending_targets INTEGER NOT NULL DEFAULT 0,provider_accepted_count INTEGER NOT NULL DEFAULT 0,provider_failed_count INTEGER NOT NULL DEFAULT 0,provider_target_count INTEGER NOT NULL DEFAULT 0,private_enqueued_count INTEGER NOT NULL DEFAULT 0,private_rejected_count INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id TEXT PRIMARY KEY,channel_id BLOB NOT NULL CHECK(length(channel_id)=16),coalesce_order INTEGER NOT NULL UNIQUE,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id TEXT PRIMARY KEY,channel_id BLOB NOT NULL UNIQUE CHECK(length(channel_id)=16),coalesce_order INTEGER NOT NULL UNIQUE,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS ordinary_targets(delivery_id TEXT NOT NULL REFERENCES ordinary_messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,pull_owner TEXT NOT NULL DEFAULT '',owner_generation INTEGER NOT NULL DEFAULT 0,control_epoch INTEGER NOT NULL DEFAULT 0,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,route_generation INTEGER NOT NULL DEFAULT 0,accepted_at INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,delivery_mode TEXT NOT NULL DEFAULT 'provider',delivery_epoch INTEGER NOT NULL DEFAULT 0,private_claim TEXT,private_group TEXT,watch_alert_deadline_at INTEGER,PRIMARY KEY(delivery_id,device_key));
 CREATE INDEX IF NOT EXISTS ordinary_targets_due ON ordinary_targets(provider,state,next_attempt_at,delivery_id);
 CREATE INDEX IF NOT EXISTS ordinary_targets_device ON ordinary_targets(pull_owner,accepted_at,delivery_id) WHERE acked_at IS NULL;
@@ -361,9 +361,10 @@ BEGIN
  SELECT CASE WHEN EXISTS(SELECT 1 FROM ordinary_targets WHERE pull_owner=OLD.device_key AND acked_at IS NULL AND delivery_epoch=9223372036854775807) THEN RAISE(ABORT,'ordinary private epoch exhausted') END;
  UPDATE ordinary_ledger_usage SET control_epoch=control_epoch+1 WHERE singleton=1;
  UPDATE devices SET ordinary_route_generation=(SELECT control_epoch FROM ordinary_ledger_usage WHERE singleton=1) WHERE device_id=NEW.device_id;
+ SELECT CASE WHEN lower(NEW.channel_type)='private' AND lower(COALESCE(OLD.channel_type,''))<>'private' AND EXISTS(SELECT 1 FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.pull_owner=OLD.device_key AND t.delivery_mode<>'private' AND t.acked_at IS NULL AND m.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch)) AND EXISTS(SELECT 1 FROM ordinary_limits l WHERE COALESCE((SELECT pending FROM ordinary_private_usage WHERE device_key=OLD.device_key),0)+(SELECT COUNT(DISTINCT t.delivery_id) FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.pull_owner=OLD.device_key AND t.delivery_mode<>'private' AND t.acked_at IS NULL AND m.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) AND NOT EXISTS(SELECT 1 FROM ordinary_targets s WHERE s.pull_owner=t.pull_owner AND s.delivery_id=t.delivery_id AND s.delivery_mode='private' AND s.acked_at IS NULL) AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch))>l.max_private_per_device) THEN RAISE(ABORT,'ordinary route transition capacity exceeded') END;
  UPDATE ordinary_targets SET delivery_mode=CASE WHEN lower(NEW.channel_type)='private' THEN 'private' ELSE 'provider' END,delivery_epoch=delivery_epoch+1,private_claim=NULL,private_group=NULL,owner_generation=-1,state=CASE WHEN state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END WHERE pull_owner=OLD.device_key AND acked_at IS NULL AND (lower(NEW.channel_type)<>'private' OR EXISTS(SELECT 1 FROM ordinary_messages m WHERE m.delivery_id=ordinary_targets.delivery_id AND m.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER))) AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=ordinary_targets.platform AND r.provider_token=ordinary_targets.provider_token AND ordinary_targets.control_epoch<r.control_epoch);
  UPDATE ordinary_messages SET status=CASE WHEN EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.delivery_id=ordinary_messages.delivery_id AND t.provider IN ('FCM','APNS','WNS') AND (t.state='running' OR (t.delivery_mode='provider' AND t.acked_at IS NULL AND t.state IN ('pending','retry_wait')))) THEN 'provider_queued' WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) WHERE status='provider_queued' AND delivery_id IN (SELECT delivery_id FROM ordinary_targets WHERE pull_owner=COALESCE(OLD.device_key,lower(hex(OLD.device_id))));
- SELECT CASE WHEN EXISTS(SELECT 1 FROM ordinary_limits l JOIN ordinary_ledger_usage u ON u.singleton=l.singleton WHERE u.messages>l.max_messages OR u.targets>l.max_targets OR u.bytes>l.max_payload_bytes OR u.private_pending>l.max_private) OR EXISTS(SELECT 1 FROM ordinary_private_usage u CROSS JOIN ordinary_limits l WHERE u.device_key=NEW.device_key AND u.pending>l.max_private_per_device) THEN RAISE(ABORT,'ordinary route transition capacity exceeded') END;
+ SELECT CASE WHEN EXISTS(SELECT 1 FROM ordinary_limits l JOIN ordinary_ledger_usage u ON u.singleton=l.singleton WHERE u.messages>l.max_messages OR u.targets>l.max_targets OR u.bytes>l.max_payload_bytes) THEN RAISE(ABORT,'ordinary route transition capacity exceeded') END;
 END;
 CREATE TRIGGER IF NOT EXISTS ordinary_device_delete_fence BEFORE DELETE ON devices
 BEGIN
@@ -438,65 +439,45 @@ impl DeliveryStore {
         Ok(order)
     }
 
-    /// Read the retained lane without attaching either write database to the
-    /// other pool. Each page and its aggregate result have a fixed upper bound.
-    /// Storage's shared gate keeps both producers from increasing these counts.
-    async fn legacy_private_admission(
-        &self,
-        connection: &mut sqlx::SqliteConnection,
-        channel: &str,
-        at: i64,
-    ) -> Result<(i64, bool)> {
+    // The retained lane already owns its execution queue budget. Accepted C
+    // targets wait durably under the system target budget, and reserve these
+    // per-device/global execution slots only at private_claim.
+    pub(super) async fn legacy_private_pending(&self) -> Result<i64> {
         if !self.config.private.enabled {
-            return Ok((0, false));
+            return Ok(0);
         }
         let Some(pool) = self.legacy_delivery_pool.get() else {
-            return Ok((0, false));
+            return Ok(0);
         };
-        let pending: i64 = sqlx::query_scalar(
+        Ok(sqlx::query_scalar(
             "SELECT COUNT(*) FROM private_outbox WHERE status IN ('pending','claimed','sent')",
         )
         .fetch_one(pool)
-        .await?;
-        let channel = channel_storage_key(channel)?;
-        let per_device = self.config.private.max_pending_per_device as i64;
-        let mut after: Option<String> = None;
-        loop {
-            let rows=sqlx::query("SELECT d.device_key,d.device_id,COALESCE(u.pending,0) AS ordinary_pending FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key LEFT JOIN ordinary_private_usage u ON u.device_key=d.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.channel_type='private' AND length(d.device_id)=16 AND d.retired_at IS NULL AND (? IS NULL OR d.device_key>?) ORDER BY d.device_key LIMIT 256")
-                .bind(&channel).bind(at).bind(&after).bind(&after).fetch_all(&mut *connection).await?;
-            if rows.is_empty() {
-                break;
-            }
-            let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-                "SELECT device_id,COUNT(*) AS pending FROM private_outbox WHERE status IN ('pending','claimed','sent') AND device_id IN (",
-            );
-            let mut ids = query.separated(",");
-            for row in &rows {
-                ids.push_bind(row.get::<Vec<u8>, _>("device_id"));
-            }
-            ids.push_unseparated(") GROUP BY device_id");
-            let counts = query.build().fetch_all(pool).await?;
-            let legacy: hashbrown::HashMap<Vec<u8>, i64> = counts
-                .into_iter()
-                .map(|row| (row.get("device_id"), row.get("pending")))
-                .collect();
-            for row in &rows {
-                let id: Vec<u8> = row.get("device_id");
-                if row
-                    .get::<i64, _>("ordinary_pending")
-                    .saturating_add(legacy.get(&id).copied().unwrap_or(0))
-                    >= per_device
-                {
-                    return Ok((pending, true));
-                }
-            }
-            after = rows.last().map(|r| r.get("device_key"));
-            if rows.len() < 256 {
-                break;
-            }
-        }
-        Ok((pending, false))
+        .await?)
     }
+
+    pub(super) async fn legacy_private_pending_for_device(&self, device: &str) -> Result<i64> {
+        let Some(pool) = self.legacy_delivery_pool.get() else {
+            return Ok(0);
+        };
+        let id: crate::storage::DeviceId = crate::storage::PrivateDeviceId::derive(device).into();
+        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM private_outbox WHERE device_id=? AND status IN ('pending','claimed','sent')")
+            .bind(id.as_slice()).fetch_one(pool).await?)
+    }
+
+    /// Read only; Storage owns the shared mutation gate when combining this
+    /// count with the retained nonordinary lane's per-device capacity check.
+    pub(crate) async fn private_executing_count(&self, device: Option<&str>) -> Result<i64> {
+        self.health.ensure()?;
+        if let Some(device) = device {
+            Ok(sqlx::query_scalar("SELECT COUNT(DISTINCT private_claim) FROM ordinary_targets WHERE pull_owner=? AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL")
+                .bind(device).fetch_one(&self.pool).await?)
+        } else {
+            Ok(sqlx::query_scalar("SELECT COUNT(DISTINCT private_claim) FROM ordinary_targets WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL")
+                .fetch_one(&self.pool).await?)
+        }
+    }
+
     /// The caller owns Storage's shared gate. Return the existing product's
     /// route-migration pending/capacity units without claiming work or writing.
     pub(crate) async fn private_route_capacity(&self, device: &str) -> Result<(i64, i64)> {
@@ -579,6 +560,11 @@ impl DeliveryStore {
     async fn initialize(&self) -> Result<()> {
         let mut connection = SqliteWriteConnection::acquire(&self.pool).await?;
         sqlx::raw_sql(SCHEMA).execute(&mut *connection).await?;
+        let channel_unique: bool = sqlx::query_scalar(r#"SELECT EXISTS(SELECT 1 FROM pragma_index_list('ordinary_widget_refresh') idx WHERE idx."unique"=1 AND idx.partial=0 AND (SELECT COUNT(*) FROM pragma_index_info(idx.name))=1 AND EXISTS(SELECT 1 FROM pragma_index_info(idx.name) col WHERE col.name='channel_id'))"#)
+            .fetch_one(&mut *connection).await?;
+        if !channel_unique {
+            return Err(KernelError::Invalid("ordinary Widget channel coalescing constraint missing; use a fresh C10 database or explicitly migrate the prior candidate before startup".into()));
+        }
         let columns = sqlx::query("PRAGMA table_info(devices)")
             .fetch_all(&mut *connection)
             .await?;
@@ -743,9 +729,6 @@ impl DeliveryStore {
             .await?;
         let at = now();
         let legacy_provider = self.legacy_active_provider_count().await?;
-        let (legacy_private_pending, legacy_private_full) = self
-            .legacy_private_admission(&mut profile_connection, &request.channel_id, at)
-            .await?;
         let mut tx = self
             .counters
             .profile
@@ -816,14 +799,8 @@ impl DeliveryStore {
             return Err(KernelError::Capacity);
         }
         let private_fanout = if !is_expired(expires, at) {
-            self.check_private_admission_tx(
-                &mut tx,
-                &request.channel_id,
-                at,
-                legacy_private_pending,
-                legacy_private_full,
-            )
-            .await?
+            self.count_private_fanout_tx(&mut tx, &request.channel_id, at)
+                .await?
         } else {
             0
         };
@@ -876,7 +853,7 @@ impl DeliveryStore {
                 // This is the normal sidecar clock, shared with existing Widget,
                 // Event and Thing ordering. A failed outer TX may leave a gap.
                 let order = self.reserve_widget_refresh_order().await?;
-                sqlx::query("INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,coalesce_order,accepted_at,expires_at) SELECT delivery_id,?, ?,accepted_at,expires_at FROM ordinary_messages WHERE delivery_id=?")
+                sqlx::query("INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,coalesce_order,accepted_at,expires_at) SELECT delivery_id,?, ?,accepted_at,expires_at FROM ordinary_messages WHERE delivery_id=? ON CONFLICT(channel_id) DO UPDATE SET delivery_id=excluded.delivery_id,coalesce_order=excluded.coalesce_order,accepted_at=excluded.accepted_at,expires_at=excluded.expires_at WHERE ordinary_widget_refresh.coalesce_order<excluded.coalesce_order")
                     .bind(canonical_channel.as_slice())
                     .bind(order).bind(&delivery_id).execute(&mut *tx).await?;
             }

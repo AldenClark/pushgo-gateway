@@ -27,8 +27,12 @@ pub(crate) mod legacy;
 
 pub mod ingress;
 #[cfg(test)]
+mod product_pg_tests;
+#[cfg(test)]
 mod product_sqlite_tests;
 pub mod server;
+#[cfg(test)]
+mod widget_provider_tests;
 
 pub(crate) mod expiry;
 pub(crate) mod widget_refresh;

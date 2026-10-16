@@ -338,7 +338,9 @@ impl Storage {
     ) -> StoreResult<usize> {
         let _control_write = self.durable_write_gate.lock().await;
         self.ensure_ordinary_health()?;
-        if route.channel_type.eq_ignore_ascii_case("private") {
+        if previous_channel_type != RouteChannelType::Private
+            && route.channel_type.eq_ignore_ascii_case("private")
+        {
             if let Some(ordinary) = self.ordinary_handle() {
                 let (pending, capacity) =
                     ordinary.private_route_capacity(&route.device_key).await?;

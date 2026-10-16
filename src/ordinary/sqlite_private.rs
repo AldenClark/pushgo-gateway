@@ -77,6 +77,29 @@ impl DeliveryStore {
             .await?;
         self.health.ensure()?;
         let at = now();
+        let legacy_executing = self
+            .legacy_private_pending_for_device(&route.device_key)
+            .await?;
+        let executing: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT private_claim) FROM ordinary_targets WHERE pull_owner=? AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL")
+            .bind(&route.device_key).fetch_one(&mut *tx).await?;
+        let legacy_global = self.legacy_private_pending().await?;
+        let executing_global: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT private_claim) FROM ordinary_targets WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL")
+            .fetch_one(&mut *tx).await?;
+        let per_device_available = i64::try_from(self.config.private.max_pending_per_device)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(legacy_executing)
+            .saturating_sub(executing);
+        let global_available = i64::try_from(self.config.private.max_pending)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(legacy_global)
+            .saturating_sub(executing_global);
+        let available = per_device_available.min(global_available).max(0);
+        let limit = limit.min(usize::try_from(available).unwrap_or(usize::MAX));
+        if limit == 0 {
+            tx.commit().await?;
+            connection.restore().await?;
+            return Ok(Vec::new());
+        }
         // One canonical frozen key represents every coalesced unacknowledged
         // private row for this (consumer, delivery). A logical item is not claimed
         // twice by separate sessions, and only this bounded batch loads payloads.
@@ -290,46 +313,18 @@ impl DeliveryStore {
         Ok(())
     }
 
-    /// Admission uses derived counters and at most one channel's frozen fanout.
-    /// The caller already owns the writer transaction and global usage lock.
-    pub(super) async fn check_private_admission_tx(
+    /// Frozen target count participates in the one system target admission
+    /// budget. Private execution slots are reserved separately during claim.
+    pub(super) async fn count_private_fanout_tx(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         channel: &str,
         at: i64,
-        legacy_pending: i64,
-        legacy_full: bool,
     ) -> Result<i64> {
         if !self.config.private.enabled {
             return Ok(0);
         }
         let fanout: i64 = self.counters.profile.sql(Path::Fanout, Statement::FanoutCount, sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.channel_type='private' AND length(d.device_id)=16 AND d.retired_at IS NULL AND d.coalesced_to IS NULL").bind(crate::ordinary::store::channel_storage_key(channel)?).bind(at).fetch_one(&mut **tx)).await?;
-        let per_device =
-            i64::try_from(self.config.private.max_pending_per_device).unwrap_or(i64::MAX);
-        let global = i64::try_from(self.config.private.max_pending).unwrap_or(i64::MAX);
-        let pending: i64 = self
-            .counters
-            .profile
-            .sql(
-                Path::Accept,
-                Statement::Usage,
-                sqlx::query_scalar(
-                    "SELECT private_pending FROM ordinary_ledger_usage WHERE singleton=1",
-                )
-                .fetch_one(&mut **tx),
-            )
-            .await?;
-        let full:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key LEFT JOIN ordinary_private_usage u ON u.device_key=d.device_key WHERE s.channel_id=? AND s.created_at<=? AND d.channel_type='private' AND length(d.device_id)=16 AND d.retired_at IS NULL AND COALESCE(u.pending,0)>=?)")
-            .bind(crate::ordinary::store::channel_storage_key(channel)?).bind(at).bind(per_device).fetch_one(&mut **tx).await?;
-        if full
-            || legacy_full
-            || pending
-                .saturating_add(legacy_pending)
-                .saturating_add(fanout)
-                > global
-        {
-            return Err(KernelError::Capacity);
-        }
         Ok(fanout)
     }
 
@@ -355,6 +350,7 @@ CREATE INDEX IF NOT EXISTS ordinary_targets_private_logical ON ordinary_targets(
 CREATE INDEX IF NOT EXISTS ordinary_targets_private_pending ON ordinary_targets(pull_owner,accepted_at,delivery_id,device_key) WHERE delivery_mode='private' AND acked_at IS NULL;
 CREATE INDEX IF NOT EXISTS ordinary_targets_private_group ON ordinary_targets(private_group,private_claim,pull_owner,delivery_id) WHERE private_claim IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ordinary_targets_private_recovery ON ordinary_targets(delivery_id,device_key) WHERE private_claim IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ordinary_targets_private_executing ON ordinary_targets(pull_owner,private_claim) WHERE delivery_mode='private' AND acked_at IS NULL AND private_claim IS NOT NULL;
 CREATE TRIGGER IF NOT EXISTS ordinary_private_usage_insert AFTER INSERT ON ordinary_targets
 WHEN NEW.delivery_mode='private' AND NEW.acked_at IS NULL AND NEW.pull_owner<>''
 AND NOT EXISTS(SELECT 1 FROM ordinary_targets s WHERE s.pull_owner=NEW.pull_owner AND s.delivery_id=NEW.delivery_id AND s.delivery_mode='private' AND s.acked_at IS NULL AND s.device_key<>NEW.device_key)
