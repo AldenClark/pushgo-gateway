@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS ordinary_private_usage(device_key VARCHAR(255) PRIMAR
 
 -- Body-free derived Widget refresh intent. It survives ordinary ACK and does
 -- not own ordinary identity, content, recipients or sender delivery status.
-CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id VARCHAR(32) NOT NULL PRIMARY KEY,channel_id BINARY(16) NOT NULL,coalesce_order BIGINT NOT NULL,accepted_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,UNIQUE KEY ordinary_widget_refresh_order(coalesce_order),UNIQUE KEY ordinary_widget_refresh_channel(channel_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id VARCHAR(32) NOT NULL PRIMARY KEY,channel_id BINARY(16) NOT NULL,coalesce_order BIGINT NOT NULL,accepted_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,UNIQUE KEY ordinary_widget_refresh_order(coalesce_order),UNIQUE KEY ordinary_widget_refresh_channel(channel_id),KEY ordinary_widget_refresh_expiry(expires_at,delivery_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 -- These views do not copy or own control state. Canonical normal-product
 -- control rows are read by the same transaction that freezes recipients.

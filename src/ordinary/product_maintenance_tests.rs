@@ -351,11 +351,52 @@ async fn maintenance_contract(url: String) {
 
     let live_expiry = now() + 600_000;
     inspect.insert_marker(1, live_expiry).await;
+    let captured_ceiling = ordinary.widget_refresh_ceiling().await.unwrap().unwrap();
+    assert_eq!(captured_ceiling, 1);
     let same_expiry = now() - 60_000;
     for order in 2..=ROWS + 1 {
         inspect.insert_marker(order, same_expiry).await;
     }
     assert_eq!(inspect.counts().await.markers, ROWS + 1);
+    let latest_ceiling = ordinary.widget_refresh_ceiling().await.unwrap().unwrap();
+    assert_eq!(latest_ceiling, ROWS + 1);
+    let first = ordinary
+        .widget_refresh_after(0, captured_ceiling)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.coalesce_order, 1);
+    assert!(
+        ordinary
+            .widget_refresh_after(1, captured_ceiling)
+            .await
+            .unwrap()
+            .is_none(),
+        "new markers above the captured ceiling cannot extend or wrap an active cycle"
+    );
+    let second = ordinary
+        .widget_refresh_after(1, latest_ceiling)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        second.coalesce_order, 2,
+        "a later finite cycle advances beyond the retained first marker"
+    );
+    let last = ordinary
+        .widget_refresh_after(ROWS, latest_ceiling)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(last.coalesce_order, latest_ceiling);
+    assert!(
+        ordinary
+            .widget_refresh_after(latest_ceiling, latest_ceiling)
+            .await
+            .unwrap()
+            .is_none(),
+        "the selector does not wrap to the blocked oldest marker"
+    );
     storage
         .run_maintenance_cleanup(now(), MaintenanceCleanupConfig::default())
         .await

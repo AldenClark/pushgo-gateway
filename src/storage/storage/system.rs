@@ -453,6 +453,16 @@ impl Storage {
             );
             return Ok(MaintenanceCleanupStats::default());
         }
+        // Ordinary content and identities have one ledger, but share this
+        // existing maintenance owner. One native bounded turn also services
+        // a quiet ledger; no new timer or drain-until-empty loop is needed.
+        let ordinary_started = Instant::now();
+        let ordinary_identities_pruned = if let Some(ordinary) = self.ordinary_handle() {
+            ordinary.maintenance().await.map_err(StoreError::from)?
+        } else {
+            0
+        };
+        let ordinary_maintenance_elapsed_ms = ordinary_started.elapsed().as_millis() as u64;
         let mut phase_started = Instant::now();
         let private_sessions_pruned = self.db.cleanup_private_sessions(now).await?;
         let private_sessions_elapsed_ms = phase_started.elapsed().as_millis() as u64;
@@ -569,6 +579,8 @@ impl Storage {
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "storage.maintenance_cleanup_finished",
+            ordinary_identities_pruned = (ordinary_identities_pruned as u64),
+            ordinary_maintenance_elapsed_ms = (ordinary_maintenance_elapsed_ms),
             private_sessions_pruned = (private_sessions_pruned as u64),
             private_outbox_pruned = (private_outbox_pruned as u64),
             provider_pull_pruned = (provider_pull_pruned as u64),

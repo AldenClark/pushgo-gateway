@@ -26,7 +26,8 @@ pub struct OrdinaryStore {
     pub(crate) health: Arc<Health>,
     pub(crate) private_wake: Arc<Notify>,
     pub(crate) widget_wake: Arc<Notify>,
-    pub(crate) widget_projection_gate: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) widget_projection_gate:
+        Arc<tokio::sync::Mutex<super::widget_refresh::WidgetProjectionState>>,
 }
 impl From<DeliveryStore> for OrdinaryStore {
     fn from(store: DeliveryStore) -> Self {
@@ -38,7 +39,7 @@ impl From<DeliveryStore> for OrdinaryStore {
             health: store.health.clone(),
             private_wake: Arc::new(Notify::new()),
             widget_wake: Arc::new(Notify::new()),
-            widget_projection_gate: Arc::new(tokio::sync::Mutex::new(())),
+            widget_projection_gate: Arc::new(tokio::sync::Mutex::new(Default::default())),
             backend: Backend::Sqlite(store),
         }
     }
@@ -53,7 +54,7 @@ impl From<PgDeliveryStore> for OrdinaryStore {
             health: store.health.clone(),
             private_wake: Arc::new(Notify::new()),
             widget_wake: Arc::new(Notify::new()),
-            widget_projection_gate: Arc::new(tokio::sync::Mutex::new(())),
+            widget_projection_gate: Arc::new(tokio::sync::Mutex::new(Default::default())),
             backend: Backend::Postgres(store),
         }
     }
@@ -68,7 +69,7 @@ impl From<MySqlDeliveryStore> for OrdinaryStore {
             health: store.health.clone(),
             private_wake: Arc::new(Notify::new()),
             widget_wake: Arc::new(Notify::new()),
-            widget_projection_gate: Arc::new(tokio::sync::Mutex::new(())),
+            widget_projection_gate: Arc::new(tokio::sync::Mutex::new(Default::default())),
             backend: Backend::MySql(store),
         }
     }
@@ -112,14 +113,33 @@ impl OrdinaryStore {
 }
 
 impl OrdinaryStore {
+    #[cfg(test)]
     pub(crate) async fn next_widget_refresh(
         &self,
     ) -> Result<Option<super::widget_refresh::WidgetRefresh>> {
+        self.widget_refresh_after(0, i64::MAX).await
+    }
+
+    pub(crate) async fn widget_refresh_ceiling(&self) -> Result<Option<i64>> {
         self.health.ensure()?;
         let result = match &self.backend {
-            Backend::Sqlite(s) => s.next_widget_refresh().await,
-            Backend::Postgres(s) => s.next_widget_refresh().await,
-            Backend::MySql(s) => s.next_widget_refresh().await,
+            Backend::Sqlite(s) => s.widget_refresh_ceiling().await,
+            Backend::Postgres(s) => s.widget_refresh_ceiling().await,
+            Backend::MySql(s) => s.widget_refresh_ceiling().await,
+        };
+        self.checked(result)
+    }
+
+    pub(crate) async fn widget_refresh_after(
+        &self,
+        after: i64,
+        ceiling: i64,
+    ) -> Result<Option<super::widget_refresh::WidgetRefresh>> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.widget_refresh_after(after, ceiling).await,
+            Backend::Postgres(s) => s.widget_refresh_after(after, ceiling).await,
+            Backend::MySql(s) => s.widget_refresh_after(after, ceiling).await,
         };
         self.checked(result)
     }

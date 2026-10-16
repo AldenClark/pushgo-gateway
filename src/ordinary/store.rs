@@ -312,6 +312,7 @@ pub(super) const RETIRE_TOKEN_TARGETS_SQL: &str = "SELECT t.delivery_id,t.device
 const SCHEMA:&str="
 CREATE TABLE IF NOT EXISTS ordinary_messages(delivery_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,thing_id TEXT,fingerprint TEXT NOT NULL,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,dedupe_until INTEGER NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,pending_targets INTEGER NOT NULL DEFAULT 0,provider_accepted_count INTEGER NOT NULL DEFAULT 0,provider_failed_count INTEGER NOT NULL DEFAULT 0,provider_target_count INTEGER NOT NULL DEFAULT 0,private_enqueued_count INTEGER NOT NULL DEFAULT 0,private_rejected_count INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id TEXT PRIMARY KEY,channel_id BLOB NOT NULL UNIQUE CHECK(length(channel_id)=16),coalesce_order INTEGER NOT NULL UNIQUE,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ordinary_widget_refresh_expiry ON ordinary_widget_refresh(expires_at,delivery_id);
 CREATE TABLE IF NOT EXISTS ordinary_targets(delivery_id TEXT NOT NULL REFERENCES ordinary_messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,pull_owner TEXT NOT NULL DEFAULT '',owner_generation INTEGER NOT NULL DEFAULT 0,control_epoch INTEGER NOT NULL DEFAULT 0,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,route_generation INTEGER NOT NULL DEFAULT 0,accepted_at INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,delivery_mode TEXT NOT NULL DEFAULT 'provider',delivery_epoch INTEGER NOT NULL DEFAULT 0,private_claim TEXT,private_group TEXT,watch_alert_deadline_at INTEGER,PRIMARY KEY(delivery_id,device_key));
 CREATE INDEX IF NOT EXISTS ordinary_targets_due ON ordinary_targets(provider,state,next_attempt_at,delivery_id);
 CREATE INDEX IF NOT EXISTS ordinary_targets_device ON ordinary_targets(pull_owner,accepted_at,delivery_id) WHERE acked_at IS NULL;
@@ -961,6 +962,8 @@ impl DeliveryStore {
         at: i64,
     ) -> Result<usize> {
         self.retire_token_targets_tx(tx).await?;
+        sqlx::query("DELETE FROM ordinary_widget_refresh WHERE delivery_id IN (SELECT delivery_id FROM ordinary_widget_refresh WHERE expires_at<=? ORDER BY expires_at,delivery_id LIMIT 256)")
+            .bind(at).execute(&mut **tx).await?;
         // Expiry is a terminal failure only for ordinary_targets not yet accepted by a
         // provider. Running attempts retain their unknown outcome until receipt.
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryCount, sqlx::query("UPDATE ordinary_messages SET provider_failed_count=provider_failed_count+(SELECT COUNT(*) FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND delivery_mode='provider' AND provider IN ('FCM','APNS','WNS') AND acked_at IS NULL AND state IN ('pending','retry_wait')) WHERE delivery_id IN (SELECT delivery_id FROM ordinary_messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx)).await?;
@@ -1435,11 +1438,30 @@ impl DeliveryStore {
             .fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) async fn next_widget_refresh(
         &self,
     ) -> Result<Option<crate::ordinary::widget_refresh::WidgetRefresh>> {
+        self.widget_refresh_after(0, i64::MAX).await
+    }
+
+    pub(crate) async fn widget_refresh_ceiling(&self) -> Result<Option<i64>> {
         self.health.ensure()?;
-        let row = sqlx::query("SELECT delivery_id,channel_id,coalesce_order,accepted_at,expires_at FROM ordinary_widget_refresh ORDER BY coalesce_order LIMIT 1")
+        Ok(
+            sqlx::query_scalar("SELECT MAX(coalesce_order) FROM ordinary_widget_refresh")
+                .fetch_one(&self.pool)
+                .await?,
+        )
+    }
+
+    pub(crate) async fn widget_refresh_after(
+        &self,
+        after: i64,
+        ceiling: i64,
+    ) -> Result<Option<crate::ordinary::widget_refresh::WidgetRefresh>> {
+        self.health.ensure()?;
+        let row = sqlx::query("SELECT delivery_id,channel_id,coalesce_order,accepted_at,expires_at FROM ordinary_widget_refresh WHERE coalesce_order>? AND coalesce_order<=? ORDER BY coalesce_order LIMIT 1")
+            .bind(after).bind(ceiling)
             .fetch_optional(&self.pool).await?;
         row.map(|row| {
             let channel: Vec<u8> = row.try_get("channel_id")?;

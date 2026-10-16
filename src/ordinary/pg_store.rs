@@ -414,13 +414,36 @@ impl PgDeliveryStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn next_widget_refresh(&self) -> Result<Option<WidgetRefresh>> {
+        self.widget_refresh_after(0, i64::MAX).await
+    }
+
+    pub(crate) async fn widget_refresh_ceiling(&self) -> Result<Option<i64>> {
+        let mut connection = self.acquire().await?;
+        let mut tx = Self::begin_ordinary(&mut connection).await?;
+        let ceiling =
+            sqlx::query_scalar("SELECT MAX(acceptance_order) FROM ordinary_widget_refresh")
+                .fetch_one(&mut *tx)
+                .await?;
+        self.health.ensure()?;
+        tx.commit().await?;
+        Ok(ceiling)
+    }
+
+    pub(crate) async fn widget_refresh_after(
+        &self,
+        after: i64,
+        ceiling: i64,
+    ) -> Result<Option<WidgetRefresh>> {
         let mut connection = self.acquire().await?;
         let mut tx = Self::begin_ordinary(&mut connection).await?;
         let row = sqlx::query(
             "SELECT delivery_id,channel_id,acceptance_order,accepted_at,expires_at \
-             FROM ordinary_widget_refresh ORDER BY acceptance_order LIMIT 1",
+             FROM ordinary_widget_refresh WHERE acceptance_order>$1 AND acceptance_order<=$2 ORDER BY acceptance_order LIMIT 1",
         )
+        .bind(after)
+        .bind(ceiling)
         .fetch_optional(&mut *tx)
         .await?;
         let refresh = row
@@ -603,6 +626,8 @@ impl PgDeliveryStore {
         at: i64,
     ) -> Result<usize> {
         self.retire_token_targets_tx(tx).await?;
+        sqlx::query("DELETE FROM ordinary_widget_refresh WHERE delivery_id IN (SELECT delivery_id FROM ordinary_widget_refresh WHERE expires_at<=$1 ORDER BY expires_at,delivery_id LIMIT 256)")
+            .bind(at).execute(&mut **tx).await?;
         // Canonical controls are owned and cleaned by normal Storage. A
         // deleted route is not a second device history in the ordinary ledger.
         // Retire at most one bounded orphan target batch per maintenance turn.

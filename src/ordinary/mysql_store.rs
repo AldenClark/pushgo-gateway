@@ -350,6 +350,14 @@ impl MySqlDeliveryStore {
         if channel_unique == 0 {
             return Err(KernelError::Invalid("ordinary Widget channel coalescing constraint missing; use a fresh C10 database or explicitly migrate the prior candidate before startup".into()));
         }
+        // CREATE TABLE IF NOT EXISTS cannot add this index to a prior
+        // candidate. Inspect only: startup must not silently ALTER that data
+        // set, nor run expiry cleanup with an unbounded metadata table scan.
+        let expiry_index: i64 = sqlx::query_scalar("SELECT CAST(COUNT(*) AS SIGNED) FROM (SELECT INDEX_NAME FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ordinary_widget_refresh' AND INDEX_TYPE='BTREE' AND IS_VISIBLE='YES' AND SEQ_IN_INDEX<=2 GROUP BY INDEX_NAME HAVING COUNT(*)=2 AND MAX(CASE WHEN SEQ_IN_INDEX=1 THEN COLUMN_NAME END)='expires_at' AND MAX(CASE WHEN SEQ_IN_INDEX=2 THEN COLUMN_NAME END)='delivery_id' AND SUM(SUB_PART IS NOT NULL)=0 AND MIN(COLLATION)=MAX(COLLATION)) expiry_keys")
+            .fetch_one(&mut *connection).await?;
+        if expiry_index == 0 {
+            return Err(KernelError::Invalid("ordinary Widget expiry index missing or incompatible; use a fresh C11 database or explicitly migrate the prior candidate offline before startup".into()));
+        }
         let mut tx = connection.begin().await?;
         let result: Result<_> = async {
             Self::lock_usage(&mut tx).await?;
@@ -738,6 +746,8 @@ impl MySqlDeliveryStore {
         at: i64,
     ) -> Result<usize> {
         self.retire_token_targets_tx(tx).await?;
+        sqlx::query("DELETE FROM ordinary_widget_refresh WHERE expires_at<=? ORDER BY expires_at,delivery_id LIMIT 256")
+            .bind(at).execute(&mut **tx).await?;
         // One captured keyset owns all expiry mutations, including equal-TTL rows.
         let expiring: Vec<String> = sqlx::query(EXPIRY_BATCH_SQL)
             .bind(at)
@@ -1229,11 +1239,30 @@ impl MySqlDeliveryStore {
             .fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) async fn next_widget_refresh(
         &self,
     ) -> Result<Option<crate::ordinary::widget_refresh::WidgetRefresh>> {
+        self.widget_refresh_after(0, i64::MAX).await
+    }
+
+    pub(crate) async fn widget_refresh_ceiling(&self) -> Result<Option<i64>> {
         let mut connection = self.acquire().await?;
-        let row = sqlx::query("SELECT delivery_id,channel_id,coalesce_order,accepted_at,expires_at FROM ordinary_widget_refresh ORDER BY coalesce_order,delivery_id LIMIT 1")
+        Ok(
+            sqlx::query_scalar("SELECT MAX(coalesce_order) FROM ordinary_widget_refresh")
+                .fetch_one(&mut *connection)
+                .await?,
+        )
+    }
+
+    pub(crate) async fn widget_refresh_after(
+        &self,
+        after: i64,
+        ceiling: i64,
+    ) -> Result<Option<crate::ordinary::widget_refresh::WidgetRefresh>> {
+        let mut connection = self.acquire().await?;
+        let row = sqlx::query("SELECT delivery_id,channel_id,coalesce_order,accepted_at,expires_at FROM ordinary_widget_refresh WHERE coalesce_order>? AND coalesce_order<=? ORDER BY coalesce_order LIMIT 1")
+            .bind(after).bind(ceiling)
             .fetch_optional(&mut *connection).await?;
         row.map(|row| {
             let channel: Vec<u8> = row.try_get("channel_id")?;
@@ -1663,6 +1692,67 @@ mod product_contract_tests {
         .await
         .expect("completed ordinary request must release its usage row lock");
         tx.rollback().await.expect("control probe rollback");
+    }
+
+    async fn expiry_index_shape(pool: &MySqlPool) -> (i64, i64, i64) {
+        sqlx::query_as("SELECT CAST(COUNT(*) AS SIGNED),CAST(COALESCE(MAX(SUB_PART),0) AS SIGNED),CAST(COALESCE(SUM(SEQ_IN_INDEX=1 AND COLUMN_NAME='expires_at'),0) AS SIGNED) FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ordinary_widget_refresh' AND INDEX_NAME='ordinary_widget_refresh_expiry'")
+            .fetch_one(pool).await.expect("isolated index shape probe")
+    }
+
+    // Called only after this native test's c10_* name and empty-database
+    // guards. These DDL statements inject faults into that newly created test
+    // schema; production startup only inspects metadata and never repairs it.
+    async fn assert_widget_expiry_index_required_on_reopen(store: &MySqlDeliveryStore) {
+        sqlx::raw_sql("DROP INDEX ordinary_widget_refresh_expiry ON ordinary_widget_refresh")
+            .execute(&store.pool)
+            .await
+            .expect("inject missing expiry index");
+        for replacement in [
+            None,
+            Some(
+                "CREATE INDEX ordinary_widget_refresh_expiry ON ordinary_widget_refresh(expires_at,delivery_id(8))",
+            ),
+            Some(
+                "CREATE INDEX ordinary_widget_refresh_expiry ON ordinary_widget_refresh(delivery_id,expires_at)",
+            ),
+        ] {
+            if let Some(ddl) = replacement {
+                sqlx::raw_sql(ddl)
+                    .execute(&store.pool)
+                    .await
+                    .expect("inject incompatible expiry index");
+            }
+            let before = expiry_index_shape(&store.pool).await;
+            let reopen = MySqlDeliveryStore::from_product(
+                store.pool.clone(),
+                store.gate.clone(),
+                store.config.clone(),
+                Arc::new(Health::default()),
+                Arc::new(Counters::default()),
+            )
+            .await;
+            assert!(
+                matches!(reopen, Err(KernelError::Invalid(ref reason))
+                if reason.contains("Widget expiry index missing or incompatible")
+                    && reason.contains("offline before startup")),
+                "prior-candidate missing, truncated or reversed index must refuse initialization"
+            );
+            assert_eq!(
+                expiry_index_shape(&store.pool).await,
+                before,
+                "rejected initialization must not silently create or replace the index"
+            );
+            if replacement.is_some() {
+                sqlx::raw_sql(
+                    "DROP INDEX ordinary_widget_refresh_expiry ON ordinary_widget_refresh",
+                )
+                .execute(&store.pool)
+                .await
+                .expect("remove injected test index");
+            }
+        }
+        sqlx::raw_sql("CREATE INDEX ordinary_widget_refresh_expiry ON ordinary_widget_refresh(expires_at,delivery_id)")
+            .execute(&store.pool).await.expect("restore fresh test schema index");
     }
 
     /// This is deliberately opt-in and refuses every nonempty/non-C10 database.
@@ -2462,6 +2552,7 @@ mod product_contract_tests {
             .close()
             .await
             .expect("scoped ordinary data session closes cleanly");
+        assert_widget_expiry_index_required_on_reopen(&store).await;
         let interrupted = MySqlDeliveryStore::from_product(
             store.pool.clone(),
             store.gate.clone(),

@@ -47,6 +47,38 @@ fn ordinary_widget_job(refresh: &WidgetRefresh, target: WidgetRefreshTarget) -> 
     job
 }
 
+/// One metadata-only continuation, shared by clones of the existing serial
+/// projector. Restart intentionally resumes from the ledger and durable job
+/// orders instead of persisting another per-target progress table.
+#[derive(Default)]
+pub(crate) struct WidgetProjectionState {
+    continuation: Option<WidgetProjectionPass>,
+    after_order: i64,
+    cycle_ceiling: Option<i64>,
+    #[cfg(test)]
+    test_capacity_full: bool,
+}
+
+struct WidgetProjectionPass {
+    refresh: WidgetRefresh,
+    cursor: Option<WidgetRefreshCursor>,
+    had_full: bool,
+    #[cfg(test)]
+    test_capacity_full: bool,
+}
+
+impl WidgetProjectionPass {
+    fn new(refresh: WidgetRefresh) -> Self {
+        Self {
+            refresh,
+            cursor: None,
+            had_full: false,
+            #[cfg(test)]
+            test_capacity_full: false,
+        }
+    }
+}
+
 struct ProjectionOutcomeGuard {
     ordinary: super::OrdinaryStore,
     established: bool,
@@ -61,72 +93,113 @@ impl Drop for ProjectionOutcomeGuard {
     }
 }
 
-/// One serial projector is shared by immediate product submission and the
-/// existing bounded recovery worker. A page contains metadata only; the
-/// ordinary canonical body remains exclusively in its ledger.
+/// The existing recovery worker projects at most eight pages per turn, each
+/// with at most 128 metadata targets. The return value remains completed
+/// snapshots, not page count. An unfinished page sequence keeps one cursor;
+/// the ordinary canonical body remains exclusively in its ledger.
 pub(crate) async fn project_pending(
     storage: &Storage,
     dispatch: &DispatchChannels,
-    max_messages: usize,
+    max_pages: usize,
 ) -> Result<usize> {
     let ordinary = storage.ordinary_handle().ok_or(KernelError::Unavailable)?;
     ordinary.health.ensure()?;
-    let _projecting = ordinary.widget_projection_gate.lock().await;
-    // HTTP cancellation must not silently retry an enqueue whose COMMIT was
-    // interrupted. Restart recovery can inspect the durable order safely.
+    let mut projecting = ordinary.widget_projection_gate.lock().await;
+    // Cancellation must not silently retry an enqueue whose COMMIT was
+    // interrupted. Restart inspects the durable order with a fresh cursor.
     let mut outcome = ProjectionOutcomeGuard {
         ordinary: ordinary.clone(),
         established: false,
     };
     let mut completed = 0;
-    for _ in 0..max_messages.min(8) {
+    let mut used_pages = 0;
+    let mut needs_more = false;
+    let mut capacity_blocked = false;
+    let budget = max_pages.min(8);
+    for _ in 0..budget {
         ordinary.health.ensure()?;
-        let Some(refresh) = ordinary.next_widget_refresh().await.inspect_err(|_| {
-            ordinary.fail("ordinary Widget marker read did not establish a durable outcome");
-        })?
-        else {
-            break;
-        };
-        let result = project_one(storage, dispatch, &ordinary, &refresh).await;
-        match result {
-            Ok(true) => completed += 1,
-            // Known durable capacity rollback leaves this marker for the
-            // existing recovery worker. It must not reject accepted ordinary
-            // content or trigger a restart just because invalidation is queued.
-            Ok(false) => break,
-            Err(error) => {
-                ordinary.fail("ordinary Widget projection did not establish a durable outcome");
-                return Err(error);
+        if projecting.continuation.is_none() {
+            if projecting.cycle_ceiling.is_none() {
+                projecting.cycle_ceiling = ordinary.widget_refresh_ceiling().await?;
+                projecting.after_order = 0;
             }
+            let Some(ceiling) = projecting.cycle_ceiling else {
+                break;
+            };
+            if ceiling <= 0 {
+                return Err(KernelError::Invalid(
+                    "Widget invalidation has no durable acceptance order".into(),
+                ));
+            }
+            let Some(refresh) = ordinary
+                .widget_refresh_after(projecting.after_order, ceiling)
+                .await?
+            else {
+                // New acceptance orders cannot keep an older capacity-blocked
+                // marker behind an endlessly extending sweep. Wrap next turn.
+                projecting.after_order = 0;
+                projecting.cycle_ceiling = None;
+                needs_more = true;
+                break;
+            };
+            projecting.continuation = Some(WidgetProjectionPass::new(refresh));
         }
+        let mut pass = projecting
+            .continuation
+            .take()
+            .expect("selected Widget pass");
+        #[cfg(test)]
+        {
+            pass.test_capacity_full = projecting.test_capacity_full;
+        }
+        used_pages += 1;
+        let (finished, full) = project_one_page(storage, dispatch, &ordinary, &mut pass)
+            .await
+            .inspect_err(|_| {
+                ordinary.fail("ordinary Widget projection did not establish a durable outcome");
+            })?;
+        capacity_blocked |= full;
+        if finished {
+            projecting.after_order = pass.refresh.coalesce_order;
+            if !pass.had_full {
+                completed += 1;
+            }
+        } else {
+            projecting.continuation = Some(pass);
+        }
+    }
+    if !capacity_blocked && (used_pages == budget && budget != 0 || needs_more) {
+        // Keep the same worker/Notify owner. A known full outbox waits for the
+        // existing timer or external wake instead of spinning through retries.
+        ordinary.widget_wake.notify_one();
     }
     outcome.established = true;
     Ok(completed)
 }
 
-async fn project_one(
+async fn project_one_page(
     storage: &Storage,
     dispatch: &DispatchChannels,
     ordinary: &super::OrdinaryStore,
-    refresh: &WidgetRefresh,
-) -> Result<bool> {
+    pass: &mut WidgetProjectionPass,
+) -> Result<(bool, bool)> {
+    let refresh = &pass.refresh;
     if refresh.coalesce_order <= 0 {
         return Err(KernelError::Invalid(
             "Widget invalidation has no durable acceptance order".into(),
         ));
     }
-    let mut cursor: Option<WidgetRefreshCursor> = None;
-    while !super::expiry::is_expired(refresh.expires_at, chrono::Utc::now().timestamp_millis()) {
+    let mut capacity_blocked = false;
+    let mut finished = true;
+    if !super::expiry::is_expired(refresh.expires_at, chrono::Utc::now().timestamp_millis()) {
         let page = ordinary
             .widget_refresh_targets(
                 refresh.channel_id,
-                cursor.as_ref(),
+                pass.cursor.as_ref(),
                 WIDGET_REFRESH_PAGE_SIZE,
             )
             .await?;
-        if page.is_empty() {
-            break;
-        }
+        finished = page.len() < WIDGET_REFRESH_PAGE_SIZE;
         if page.len() > WIDGET_REFRESH_PAGE_SIZE {
             return Err(KernelError::Invalid(
                 "Widget selector exceeded its bounded page".into(),
@@ -138,7 +211,7 @@ async fn project_one(
                 platform: target.platform.name().to_owned(),
                 token: target.token.clone(),
             };
-            if cursor.as_ref().is_some_and(|previous| {
+            if pass.cursor.as_ref().is_some_and(|previous| {
                 (&next.platform, &next.token) <= (&previous.platform, &previous.token)
             }) {
                 return Err(KernelError::Invalid(
@@ -147,6 +220,7 @@ async fn project_one(
             }
             if super::expiry::is_expired(refresh.expires_at, chrono::Utc::now().timestamp_millis())
             {
+                finished = true;
                 break;
             }
             let job = ordinary_widget_job(refresh, target);
@@ -154,31 +228,61 @@ async fn project_one(
                 .to_record("pending", refresh.accepted_at, refresh.expires_at)
                 .map_err(|error| KernelError::Invalid(error.to_string()))?;
             record.coalesce_order = refresh.coalesce_order;
-            match storage.enqueue_ordinary_widget_refresh(&record).await {
+            let enqueue: std::result::Result<bool, StoreError> = async {
+                // Only this test build can synthesize a known capacity
+                // rollback. Existing target jobs may still coalesce when the
+                // new-job capacity is exhausted, matching normal Storage.
+                #[cfg(test)]
+                if pass.test_capacity_full
+                    && ordinary
+                        .widget_refresh_job_order(&record.job_id)
+                        .await?
+                        .is_none()
+                {
+                    return Err(StoreError::ProviderDispatchCapacityExceeded {
+                        pending: 1_000_000,
+                        capacity: 1_000_000,
+                    });
+                }
+                storage.enqueue_ordinary_widget_refresh(&record).await
+            }
+            .await;
+            match enqueue {
                 Ok(true) => {
                     // This is only a bounded hint. The existing APNS_WIDGETS
                     // consumer recovers the same committed derived job.
                     let _ = dispatch.try_send_widget_push(job);
                 }
                 Ok(false) => {}
-                Err(StoreError::ProviderDispatchCapacityExceeded { .. }) => return Ok(false),
+                Err(StoreError::ProviderDispatchCapacityExceeded { .. }) => {
+                    pass.had_full = true;
+                    capacity_blocked = true;
+                }
                 Err(error) => {
                     return Err(KernelError::Invalid(format!(
                         "Widget durable projection: {error}"
                     )));
                 }
             }
-            cursor = Some(next);
+            // A known rollback advances this scan, never the durable delivery
+            // result. Retaining the marker replays failed targets next sweep,
+            // while later existing jobs and channels can still make progress.
+            pass.cursor = Some(next);
         }
     }
     // A newer accepted refresh may have atomically replaced this channel's
     // marker while its bounded pages were projected. Zero rows means the old
     // snapshot was superseded, not that the newer obligation may be removed.
     // Native COMMIT errors still propagate to the shared fail-stop guard.
-    let _ = ordinary
-        .complete_widget_refresh(&refresh.delivery_id, refresh.coalesce_order)
-        .await?;
-    Ok(true)
+    let expired =
+        super::expiry::is_expired(refresh.expires_at, chrono::Utc::now().timestamp_millis());
+    if finished && (!pass.had_full || expired) {
+        let _ = ordinary
+            .complete_widget_refresh(&refresh.delivery_id, refresh.coalesce_order)
+            .await?;
+        pass.had_full = false;
+    }
+    Ok((finished, capacity_blocked))
 }
 
 #[cfg(test)]
@@ -240,21 +344,15 @@ mod tests {
     }
     use sqlx::Connection;
 
-    // A normal Storage test, with a real new SQLite core/sidecar and shared
-    // mutation gate. No fixture ledger or second application server is used.
-    #[tokio::test]
-    async fn product_widget_projection_limits_a_turn_and_continues_257_targets() {
-        let directory = tempfile::tempdir().unwrap();
-        let url = format!(
-            "sqlite://{}?mode=rwc",
-            directory.path().join("widget-bounded-product.db").display()
-        );
+    async fn open_product_widget(
+        url: &str,
+    ) -> (ProductOwner, Storage, super::super::OrdinaryStore) {
         let health = Arc::new(Health::default());
-        let owner = ProductOwner::acquire(Some(&url), health.clone())
+        let owner = ProductOwner::acquire(Some(url), health.clone())
             .await
             .unwrap();
         let storage = Storage::new_with_config(StorageInitConfig {
-            db_url: Some(url),
+            db_url: Some(url.to_owned()),
             managed_upgrade: false,
             ..StorageInitConfig::default()
         })
@@ -263,13 +361,16 @@ mod tests {
         let mut config = Config::default();
         config.private.enabled = false;
         let ordinary = storage.initialize_ordinary(config, health).await.unwrap();
+        (owner, storage, ordinary)
+    }
+
+    async fn widget_channel(storage: &Storage, device_key: &str, count: usize) -> [u8; 16] {
         let fixture_auth = crate::util::generate_hex_id_128();
         let channel = storage
             .upsert_private_channel(None, Some("bounded Widget projection"), &fixture_auth)
             .await
             .unwrap()
             .channel_id;
-        let device_key = "widget-bounded-owner";
         storage
             .upsert_device_route(&DeviceRouteRecordRow {
                 device_key: device_key.into(),
@@ -284,7 +385,7 @@ mod tests {
             .private_subscribe_channel(channel, PrivateDeviceId::derive(device_key).into())
             .await
             .unwrap();
-        for index in 0..257 {
+        for index in 0..count {
             let token = format!("{index:064x}");
             let widget = WidgetPushSubscriptionRecord {
                 device_key: device_key.into(),
@@ -308,6 +409,46 @@ mod tests {
                 .await
                 .unwrap();
         }
+        channel
+    }
+
+    async fn accept_widget(ordinary: &super::super::OrdinaryStore, channel: [u8; 16], op: &str) {
+        ordinary
+            .accept(AcceptRequest {
+                channel_id: crate::value::ChannelId::from(channel).to_string(),
+                authorized_channel: Some(channel),
+                op_id: Some(op.into()),
+                title: "bounded Widget projection".into(),
+                ..AcceptRequest::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    // A normal Storage test, with a real new SQLite core/sidecar and shared
+    // mutation gate. No fixture ledger or second application server is used.
+    #[tokio::test]
+    async fn product_widget_projection_limits_a_turn_and_continues_257_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("widget-bounded-product.db").display()
+        );
+        let health = Arc::new(Health::default());
+        let owner = ProductOwner::acquire(Some(&url), health.clone())
+            .await
+            .unwrap();
+        let storage = Storage::new_with_config(StorageInitConfig {
+            db_url: Some(url),
+            managed_upgrade: false,
+            ..StorageInitConfig::default()
+        })
+        .await
+        .unwrap();
+        let mut config = Config::default();
+        config.private.enabled = false;
+        let ordinary = storage.initialize_ordinary(config, health).await.unwrap();
+        let channel = widget_channel(&storage, "widget-bounded-owner", 257).await;
         ordinary
             .accept(AcceptRequest {
                 channel_id: crate::value::ChannelId::from(channel).to_string(),
@@ -332,6 +473,253 @@ mod tests {
         }
         assert!(ordinary.next_widget_refresh().await.unwrap().is_none());
         ordinary.health.ensure().unwrap();
+        storage.close_ordinary_storage().await.unwrap();
+        owner.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn product_widget_projection_full_pass_keeps_responsibility_and_rotates_channels() {
+        use futures_util::FutureExt;
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("widget-full.db").display()
+        );
+        let (owner, storage, ordinary) = open_product_widget(&url).await;
+        let blocked = widget_channel(&storage, "widget-full-owner", 257).await;
+        accept_widget(&ordinary, blocked, "widget-full-first").await;
+        let first = ordinary.next_widget_refresh().await.unwrap().unwrap();
+        let healthy = widget_channel(&storage, "widget-coalesce-owner", 1).await;
+        accept_widget(&ordinary, healthy, "widget-coalesce-seed").await;
+        let seed = ordinary
+            .widget_refresh_after(first.coalesce_order, i64::MAX)
+            .await
+            .unwrap()
+            .unwrap();
+        let target = ordinary
+            .widget_refresh_targets(healthy, None, 1)
+            .await
+            .unwrap()
+            .remove(0);
+        let job = ordinary_widget_job(&seed, target);
+        let mut record = DurableProviderJob::from_widget(&job)
+            .to_record("pending", seed.accepted_at, seed.expires_at)
+            .unwrap();
+        record.coalesce_order = seed.coalesce_order;
+        storage
+            .enqueue_ordinary_widget_refresh(&record)
+            .await
+            .unwrap();
+        ordinary
+            .complete_widget_refresh(&seed.delivery_id, seed.coalesce_order)
+            .await
+            .unwrap();
+        accept_widget(&ordinary, healthy, "widget-coalesce-latest").await;
+        ordinary
+            .widget_projection_gate
+            .lock()
+            .await
+            .test_capacity_full = true;
+        let (dispatch, _receivers) = DispatchChannels::new();
+
+        // This is a known-capacity-rollback injection in cfg(test), not a
+        // claim that this test creates a million-row native full outbox.
+        for last_token in [127, 255] {
+            let _ = ordinary.widget_wake.notified().now_or_never();
+            assert_eq!(project_pending(&storage, &dispatch, 1).await.unwrap(), 0);
+            assert!(
+                ordinary.widget_wake.notified().now_or_never().is_none(),
+                "full pages must not spin by notifying themselves"
+            );
+            let state = ordinary.widget_projection_gate.lock().await;
+            let pass = state.continuation.as_ref().unwrap();
+            assert_eq!(
+                pass.cursor.as_ref().unwrap().token,
+                format!("{last_token:064x}")
+            );
+            assert!(pass.had_full);
+        }
+        assert_eq!(project_pending(&storage, &dispatch, 1).await.unwrap(), 0);
+        assert!(
+            ordinary
+                .widget_projection_gate
+                .lock()
+                .await
+                .continuation
+                .is_none()
+        );
+        assert_eq!(
+            ordinary
+                .next_widget_refresh()
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_id,
+            first.delivery_id
+        );
+        assert_eq!(
+            storage
+                .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                .await
+                .unwrap(),
+            1
+        );
+
+        // Full new-job capacity must not prevent a following channel from
+        // updating its already existing, target-scoped durable job.
+        assert_eq!(project_pending(&storage, &dispatch, 1).await.unwrap(), 1);
+        assert!(
+            ordinary
+                .widget_refresh_job_order(&record.job_id)
+                .await
+                .unwrap()
+                .unwrap()
+                > seed.coalesce_order
+        );
+        let later = widget_channel(&storage, "widget-later-owner", 1).await;
+        accept_widget(&ordinary, later, "widget-newer-than-cycle").await;
+        assert_eq!(
+            project_pending(&storage, &dispatch, 1).await.unwrap(),
+            0,
+            "the captured cycle must wrap before a newer order is selected"
+        );
+        ordinary
+            .widget_projection_gate
+            .lock()
+            .await
+            .test_capacity_full = false;
+        for expected in [129, 257, 258, 259] {
+            project_pending(&storage, &dispatch, 1).await.unwrap();
+            assert_eq!(
+                storage
+                    .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        assert!(ordinary.next_widget_refresh().await.unwrap().is_none());
+        ordinary.health.ensure().unwrap();
+        storage.close_ordinary_storage().await.unwrap();
+        owner.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn product_widget_projection_caps_pages_across_ten_channels() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("widget-channels.db").display()
+        );
+        let (owner, storage, ordinary) = open_product_widget(&url).await;
+        for index in 0..10 {
+            let channel = widget_channel(&storage, &format!("widget-channel-{index}"), 1).await;
+            accept_widget(&ordinary, channel, &format!("widget-channel-op-{index}")).await;
+        }
+        let (dispatch, _receivers) = DispatchChannels::new();
+        assert_eq!(
+            project_pending(&storage, &dispatch, usize::MAX)
+                .await
+                .unwrap(),
+            8
+        );
+        assert_eq!(
+            storage
+                .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                .await
+                .unwrap(),
+            8
+        );
+        assert_eq!(
+            project_pending(&storage, &dispatch, usize::MAX)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            storage
+                .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                .await
+                .unwrap(),
+            10
+        );
+        assert!(ordinary.next_widget_refresh().await.unwrap().is_none());
+        storage.close_ordinary_storage().await.unwrap();
+        owner.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn product_widget_projection_restart_replays_pages_without_reopening_terminal_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("widget-pages-restart.db").display()
+        );
+        let (owner, storage, ordinary) = open_product_widget(&url).await;
+        let channel = widget_channel(&storage, "widget-pages-restart-owner", 129).await;
+        accept_widget(&ordinary, channel, "widget-pages-restart").await;
+        let (dispatch, _receivers) = DispatchChannels::new();
+        project_pending(&storage, &dispatch, 1).await.unwrap();
+        assert_eq!(
+            storage
+                .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                .await
+                .unwrap(),
+            128
+        );
+        let lease = storage
+            .claim_provider_dispatch_job(
+                "APNS_WIDGETS",
+                None,
+                "before-pages-restart",
+                now(),
+                now() + 5000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        storage
+            .settle_provider_dispatch_job(
+                &lease,
+                ProviderDispatchSettlement::Accepted,
+                now(),
+                200,
+                None,
+                now(),
+            )
+            .await
+            .unwrap();
+        storage.close_ordinary_storage().await.unwrap();
+        owner.shutdown().await.unwrap();
+        let (owner, storage, ordinary) = open_product_widget(&url).await;
+        assert!(
+            ordinary
+                .widget_projection_gate
+                .lock()
+                .await
+                .continuation
+                .is_none()
+        );
+        let (dispatch, _receivers) = DispatchChannels::new();
+        // The first page is read again after restart, but its any-state durable
+        // orders skip enqueue and leave the accepted target terminal.
+        project_pending(&storage, &dispatch, 1).await.unwrap();
+        assert_eq!(
+            storage
+                .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                .await
+                .unwrap(),
+            127
+        );
+        project_pending(&storage, &dispatch, 1).await.unwrap();
+        assert_eq!(
+            storage
+                .count_pending_provider_dispatch_jobs("APNS_WIDGETS")
+                .await
+                .unwrap(),
+            128
+        );
+        assert!(ordinary.next_widget_refresh().await.unwrap().is_none());
         storage.close_ordinary_storage().await.unwrap();
         owner.shutdown().await.unwrap();
     }
@@ -540,9 +928,15 @@ mod tests {
         // the marker. Finishing its old snapshot is a normal supersession: it
         // cannot delete the newer marker or poison process health.
         assert!(
-            project_one(&storage, &dispatch, &ordinary, &refresh)
-                .await
-                .unwrap()
+            project_one_page(
+                &storage,
+                &dispatch,
+                &ordinary,
+                &mut WidgetProjectionPass::new(refresh.clone())
+            )
+            .await
+            .unwrap()
+            .0
         );
         ordinary.health.ensure().unwrap();
         assert_eq!(
