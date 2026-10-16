@@ -110,9 +110,29 @@ pub struct McpRuntimeTuning {
     pub bind_session_ttl_secs: i64,
 }
 
+/// Shared external-request limits for every business path in this process.
+/// H32 is the measured starting configuration, not a throughput guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRuntimeTuning {
+    pub apns: usize,
+    pub fcm: usize,
+    pub wns: usize,
+}
+
+impl Default for ProviderRuntimeTuning {
+    fn default() -> Self {
+        Self {
+            apns: 32,
+            fcm: 32,
+            wns: 32,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct RuntimeTuning {
     pub profile: GatewayRuntimeProfile,
+    pub providers: ProviderRuntimeTuning,
     pub private: PrivateRuntimeTuning,
     pub maintenance: MaintenanceRuntimeTuning,
     pub runtime_counters: RuntimeCounterRuntimeTuning,
@@ -174,6 +194,7 @@ impl RuntimeTuning {
         const DAY_SECS: i64 = 24 * 60 * 60;
         Self {
             profile: GatewayRuntimeProfile::Small,
+            providers: ProviderRuntimeTuning::default(),
             private: PrivateRuntimeTuning {
                 session_ttl_secs: 3600,
                 grace_window_secs: 60,
@@ -266,6 +287,7 @@ impl RuntimeTuning {
         const DAY_SECS: i64 = 24 * 60 * 60;
         Self {
             profile: GatewayRuntimeProfile::Public,
+            providers: ProviderRuntimeTuning::default(),
             private: PrivateRuntimeTuning {
                 session_ttl_secs: 3600,
                 grace_window_secs: 60,

@@ -1,15 +1,10 @@
-use std::{
-    error::Error,
-    future::{Future, IntoFuture},
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{error::Error, future::Future, net::SocketAddr, sync::Arc};
 
 use clap::Parser;
 use tokio::{
     net::TcpListener,
     signal,
-    sync::oneshot,
+    sync::watch,
     time::{Instant as TokioInstant, timeout_at},
 };
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
@@ -17,7 +12,6 @@ use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 use pushgo_gateway::{
     app::{AppRuntime, build_app},
     args::{Args, ObservabilityConfig, ObservabilityLogLevel, PrivateTransports},
-    private::PrivateState,
     providers::{ApnsService, FcmService, WnsService},
     runtime_config::RuntimeTuning,
     storage::{
@@ -68,24 +62,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         token_service_url.as_str(),
     );
 
-    let client = build_token_service_http_client()?;
-
-    let apns_token_provider = Arc::new(RemoteApnsTokenProvider::new(
+    let (apns, fcm, wns) = provider_clients(
+        &args,
+        runtime_tuning,
+        apns_endpoint,
         token_service_url.as_str(),
-        client.clone(),
-    ));
-    let fcm_token_provider = Arc::new(RemoteFcmTokenProvider::new(
-        token_service_url.as_str(),
-        client.clone(),
-    ));
-    let wns_token_provider = Arc::new(RemoteWnsTokenProvider::new(
-        token_service_url.as_str(),
-        client,
-    ));
-
-    let apns = Arc::new(ApnsService::new(apns_token_provider, apns_endpoint)?);
-    let fcm = Arc::new(FcmService::new(fcm_token_provider, FCM_SEND_BASE_URL)?);
-    let wns = Arc::new(WnsService::new(wns_token_provider)?);
+    )?;
 
     let addr: SocketAddr = args.http_addr.parse()?;
     let docs_html = include_str!("api/docs.html");
@@ -104,69 +86,120 @@ async fn main() -> Result<(), Box<dyn Error>> {
         http_addr = %(addr.to_string())
     );
     let private = shutdown.private_state();
-    let (shutdown_started_tx, mut shutdown_started_rx) = oneshot::channel();
-    let graceful_shutdown = async move {
-        shutdown_signal(private).await;
-        let _ = shutdown_started_tx.send(());
-    };
-    let mut serve = Box::pin(
-        axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(graceful_shutdown)
-        .into_future(),
-    );
-
-    let (serve_result, shutdown_report, http_shutdown_timed_out) = tokio::select! {
+    let mut failure = shutdown.failure_receiver();
+    let stop_claims = shutdown.ordinary_stop_requester();
+    let counters = shutdown.ordinary_counters();
+    let (http_stop, stop_rx) = watch::channel(false);
+    // This is the normal Gateway router and its only HTTP listener. The
+    // connection driver adds bounded transport ownership before request tasks.
+    let mut serve = Box::pin(pushgo_gateway::ordinary::server::serve(
+        listener,
+        router,
+        pushgo_gateway::ordinary::server::HttpLimits::default(),
+        counters,
+        stop_rx,
+    ));
+    let (initial_serve_result, runtime_failure) = tokio::select! {
         biased;
-        result = &mut serve => {
-            let report = shutdown.shutdown(APP_SHUTDOWN_GRACE).await;
-            (Some(result), report, false)
-        }
-        signal_result = &mut shutdown_started_rx => {
-            if signal_result.is_err() {
-                // The notifier is owned by the HTTP serve future. It can only
-                // disappear before sending if that future has already ended.
-                let result = (&mut serve).await;
-                let report = shutdown.shutdown(APP_SHUTDOWN_GRACE).await;
-                (Some(result), report, false)
-            } else {
-                let deadline = TokioInstant::now() + APP_SHUTDOWN_GRACE;
-                finish_shutdown_until(
-                    &mut serve,
-                    shutdown.shutdown_until(deadline),
-                    deadline,
-                )
-                .await
-            }
-        }
+        reason = wait_runtime_failure(&mut failure) => (None, Some(reason)),
+        result = &mut serve => (Some(result), None),
+        _ = shutdown_signal() => (None, None),
     };
-    // Axum owns per-connection tasks. Dropping the serve future after its
-    // absolute deadline, followed by returning from `main`, makes Tokio abort
-    // any connection that ignored graceful shutdown (for example a stalled
-    // request body or upgraded connection).
+    let http_ended_unexpectedly = initial_serve_result.is_some();
+    stop_claims.send_replace(true);
+    if let Some(private) = private {
+        private.begin_shutdown();
+    }
+    http_stop.send_replace(true);
+    let deadline = TokioInstant::now() + APP_SHUTDOWN_GRACE;
+    let (serve_result, shutdown_report, http_shutdown_timed_out) =
+        if let Some(result) = initial_serve_result {
+            (
+                Some(result),
+                Some(shutdown.shutdown_until(deadline).await),
+                false,
+            )
+        } else {
+            finish_shutdown_until(&mut serve, shutdown.shutdown_until(deadline), deadline).await
+        };
+    // A timed-out connection is aborted by dropping the driver's JoinSet.
+    // AppShutdown has not been polled in that case: its abnormal Drop retains
+    // dataset ownership until this process exits, so a replacement cannot race
+    // an old HTTP/SQL operation that is still being cancelled.
     drop(serve);
-
     if http_shutdown_timed_out {
-        return Err(format!(
-            "HTTP graceful shutdown deadline exceeded: panicked={}, aborted={}",
-            shutdown_report.panicked, shutdown_report.aborted
-        )
-        .into());
+        return Err(
+            "HTTP graceful shutdown deadline exceeded; product owner retained until process exit"
+                .into(),
+        );
     }
-    if let Some(serve_result) = serve_result {
-        serve_result?;
+    let shutdown_report = shutdown_report.expect("HTTP drained before application shutdown");
+    if let Some(result) = serve_result {
+        result?;
     }
-    if shutdown_report.panicked > 0 || shutdown_report.aborted > 0 {
+    if let Some(reason) = runtime_failure {
+        return Err(format!("product runtime failed; restart required: {reason}").into());
+    }
+    if http_ended_unexpectedly {
+        return Err("HTTP listener ended unexpectedly".into());
+    }
+    if shutdown_report.panicked > 0 || shutdown_report.aborted > 0 || shutdown_report.failed > 0 {
         return Err(format!(
-            "application runtime did not shut down cleanly: panicked={}, aborted={}",
-            shutdown_report.panicked, shutdown_report.aborted
+            "application runtime did not shut down cleanly: panicked={}, aborted={}, failed={}",
+            shutdown_report.panicked, shutdown_report.aborted, shutdown_report.failed,
         )
         .into());
     }
 
     Ok(())
+}
+
+type ProviderClients = (
+    Arc<dyn pushgo_gateway::providers::ApnsClient>,
+    Arc<dyn pushgo_gateway::providers::FcmClient>,
+    Arc<dyn pushgo_gateway::providers::WnsClient>,
+);
+
+fn provider_clients(
+    args: &Args,
+    tuning: RuntimeTuning,
+    apns_endpoint: &str,
+    token_service_url: &str,
+) -> Result<ProviderClients, Box<dyn Error>> {
+    #[cfg(feature = "qa")]
+    if let Some(directory) = args.qa_provider_fixture_dir.as_deref() {
+        if !args.http_addr.parse::<SocketAddr>()?.ip().is_loopback() {
+            return Err("QA Provider fixtures require a loopback HTTP listener".into());
+        }
+        // The feature-only fixture is selected before creating token owners or
+        // real Provider clients. It cannot enter a normal product build.
+        return Ok(pushgo_gateway::qa::ProductMockClients::from_directory(directory)?.clients());
+    }
+    #[cfg(not(feature = "qa"))]
+    let _ = args;
+    let client = build_token_service_http_client()?;
+    let apns_tokens = Arc::new(RemoteApnsTokenProvider::new(
+        token_service_url,
+        client.clone(),
+    ));
+    let fcm_tokens = Arc::new(RemoteFcmTokenProvider::new(
+        token_service_url,
+        client.clone(),
+    ));
+    let wns_tokens = Arc::new(RemoteWnsTokenProvider::new(token_service_url, client));
+    Ok((
+        Arc::new(ApnsService::new_with_connection_budget(
+            apns_tokens,
+            apns_endpoint,
+            tuning.providers.apns,
+        )?),
+        Arc::new(FcmService::new_with_connection_budget(
+            fcm_tokens,
+            FCM_SEND_BASE_URL,
+            tuning.providers.fcm,
+        )?),
+        Arc::new(WnsService::new(wns_tokens)?),
+    ))
 }
 
 async fn initialize_runtime_then_bind<R, Init, InitFuture, Cleanup, CleanupFuture>(
@@ -198,7 +231,7 @@ async fn shutdown_app_runtime_after_startup_failure(runtime: AppRuntime) {
     // Release HTTP-owned dispatch senders before joining provider workers.
     drop(router);
     let report = shutdown.shutdown(APP_SHUTDOWN_GRACE).await;
-    let clean = report.panicked == 0 && report.aborted == 0;
+    let clean = report.panicked == 0 && report.aborted == 0 && report.failed == 0;
     if clean {
         ::tracing::event!(
             target: "gateway.trace_event",
@@ -224,15 +257,27 @@ async fn finish_shutdown_until<S, H, R>(
     serve: &mut S,
     app_shutdown: H,
     deadline: TokioInstant,
-) -> (Option<S::Output>, R, bool)
+) -> (Option<S::Output>, Option<R>, bool)
 where
     S: Future + Unpin,
     H: Future<Output = R>,
 {
-    let (timed_serve_result, report) = tokio::join!(timeout_at(deadline, serve), app_shutdown,);
-    match timed_serve_result {
-        Ok(result) => (Some(result), report, false),
-        Err(_) => (None, report, true),
+    match timeout_at(deadline, serve).await {
+        Ok(result) => (Some(result), Some(app_shutdown.await), false),
+        // Dropping the unpolled shutdown future keeps normal Storage and the
+        // exclusive owner out of their orderly close/release path.
+        Err(_) => (None, None, true),
+    }
+}
+
+async fn wait_runtime_failure(failure: &mut watch::Receiver<Option<String>>) -> String {
+    loop {
+        if let Some(reason) = failure.borrow().clone() {
+            return reason;
+        }
+        if failure.changed().await.is_err() {
+            return "product health owner disappeared".into();
+        }
     }
 }
 
@@ -246,13 +291,17 @@ async fn run_db_upgrade_subpath(args: &Args, raw_mode: &str) -> Result<(), Box<d
             );
         }
     };
-    let manager = UpgradeManager::new(StorageInitConfig {
+    let config = StorageInitConfig {
         db_url: args.db_url.clone(),
         runtime_profile: args.runtime_profile()?,
         mcp_enabled: args.mcp_enabled,
         managed_upgrade: false,
-    });
-    manager.run(mode).await?;
+    };
+    if matches!(mode, UpgradeMode::PlanOnly) {
+        UpgradeManager::new(config).run(mode).await?;
+    } else {
+        pushgo_gateway::ordinary::owner::run_exclusive_upgrade(config, mode).await?;
+    }
     Ok(())
 }
 
@@ -276,7 +325,7 @@ fn init_native_tracing(log_level: ObservabilityLogLevel) {
 }
 
 /// Wait for Ctrl+C or SIGTERM, then trigger graceful shutdown.
-async fn shutdown_signal(private: Option<Arc<PrivateState>>) {
+async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = signal::ctrl_c().await;
     };
@@ -294,10 +343,6 @@ async fn shutdown_signal(private: Option<Arc<PrivateState>>) {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
-    }
-
-    if let Some(private) = private {
-        private.begin_shutdown();
     }
 }
 
@@ -331,6 +376,9 @@ fn print_startup_diagnostics(
         private_online_fast_path_enabled = (runtime_tuning.private.online_fast_path_enabled),
         runtime_counter_channel_capacity = (runtime_tuning.runtime_counters.channel_capacity as u64),
         // Configured resource limits, not live allocations or open connection counts.
+        provider_apns_owned_attempt_limit = (runtime_tuning.providers.apns as u64),
+        provider_fcm_owned_attempt_limit = (runtime_tuning.providers.fcm as u64),
+        provider_wns_owned_attempt_limit = (runtime_tuning.providers.wns as u64),
         sqlite_core_read_connection_limit = (runtime_tuning.sqlite.core_read_connections as u64),
         sqlite_page_cache_kib = (runtime_tuning.sqlite.page_cache_kib),
         external_db_max_connections = (runtime_tuning.external_db.max_connections as u64),
@@ -349,6 +397,7 @@ fn print_startup_diagnostics(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::oneshot;
 
     #[test]
     fn startup_diagnostics_report_resource_limits_without_retired_dispatch_fields() {
@@ -422,15 +471,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stalled_http_drain_cannot_extend_the_absolute_shutdown_deadline() {
+    async fn stalled_http_drain_keeps_application_shutdown_unpolled() {
         let mut stalled_http = Box::pin(std::future::pending::<Result<(), std::io::Error>>());
         let started = TokioInstant::now();
         let deadline = started + std::time::Duration::from_millis(25);
+        let app_started = Arc::new(AtomicBool::new(false));
+        let app_started_probe = Arc::clone(&app_started);
 
         let (serve_result, app_report, timed_out) = finish_shutdown_until(
             &mut stalled_http,
-            async {
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            async move {
+                app_started_probe.store(true, Ordering::SeqCst);
                 "app_shutdown_completed"
             },
             deadline,
@@ -439,10 +490,49 @@ mod tests {
 
         assert!(serve_result.is_none());
         assert!(timed_out);
-        assert_eq!(app_report, "app_shutdown_completed");
+        assert!(app_report.is_none());
+        assert!(!app_started.load(Ordering::SeqCst));
         assert!(
             started.elapsed() < std::time::Duration::from_secs(1),
             "a stalled HTTP drain must remain bounded"
+        );
+    }
+
+    #[tokio::test]
+    async fn application_shutdown_starts_after_http_drain() {
+        let http_finished = Arc::new(AtomicBool::new(false));
+        let finished = Arc::clone(&http_finished);
+        let mut http = Box::pin(async move {
+            tokio::task::yield_now().await;
+            finished.store(true, Ordering::SeqCst);
+            Ok::<(), std::io::Error>(())
+        });
+        let (result, report, timed_out) = finish_shutdown_until(
+            &mut http,
+            async move {
+                assert!(http_finished.load(Ordering::SeqCst));
+                "owner_can_close"
+            },
+            TokioInstant::now() + std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(!timed_out);
+        assert!(result.unwrap().is_ok());
+        assert_eq!(report, Some("owner_can_close"));
+    }
+
+    #[tokio::test]
+    async fn runtime_failure_is_observed_even_before_first_watch_change() {
+        let (failure, mut receiver) = watch::channel(Some("fixed owner lost".to_string()));
+        assert_eq!(
+            wait_runtime_failure(&mut receiver).await,
+            "fixed owner lost"
+        );
+        failure.send_replace(None);
+        drop(failure);
+        assert_eq!(
+            wait_runtime_failure(&mut receiver).await,
+            "product health owner disappeared"
         );
     }
 

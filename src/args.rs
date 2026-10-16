@@ -202,6 +202,11 @@ impl ObservabilityLogLevel {
 #[derive(Parser, Debug, Clone)]
 #[command(name = "pushgo-gateway", version, about = "PushGo 推送网关")]
 pub struct Args {
+    /// QA builds only: local synthetic Provider scenario and bounded observations.
+    #[cfg(feature = "qa")]
+    #[arg(long = "qa-provider-fixture-dir")]
+    pub qa_provider_fixture_dir: Option<std::path::PathBuf>,
+
     /// HTTP bind address.
     #[arg(
         env = "PUSHGO_HTTP_ADDR",
@@ -247,6 +252,18 @@ pub struct Args {
         default_value = "small"
     )]
     pub runtime_profile: String,
+
+    /// Shared APNs owned-attempt limit (through receipt COMMIT), including Live Activity and Widget.
+    #[arg(env = "PUSHGO_APNS_MAX_INFLIGHT", long = "apns-max-inflight", value_parser = parse_provider_budget)]
+    pub apns_max_inflight: Option<usize>,
+
+    /// Shared FCM owned-attempt limit through receipt COMMIT across all message types.
+    #[arg(env = "PUSHGO_FCM_MAX_INFLIGHT", long = "fcm-max-inflight", value_parser = parse_provider_budget)]
+    pub fcm_max_inflight: Option<usize>,
+
+    /// Shared WNS owned-attempt limit through receipt COMMIT across all message types.
+    #[arg(env = "PUSHGO_WNS_MAX_INFLIGHT", long = "wns-max-inflight", value_parser = parse_provider_budget)]
+    pub wns_max_inflight: Option<usize>,
 
     /// Override native tracing log level from observability profile default.
     #[arg(
@@ -440,7 +457,19 @@ impl Args {
     }
 
     pub fn runtime_tuning(&self) -> Result<RuntimeTuning, IoError> {
-        Ok(RuntimeTuning::for_profile(self.runtime_profile()?))
+        let mut tuning = RuntimeTuning::for_profile(self.runtime_profile()?);
+        for (configured, limit) in [
+            (self.apns_max_inflight, &mut tuning.providers.apns),
+            (self.fcm_max_inflight, &mut tuning.providers.fcm),
+            (self.wns_max_inflight, &mut tuning.providers.wns),
+        ] {
+            if let Some(value) = configured {
+                validate_provider_budget(value)
+                    .map_err(|error| IoError::new(ErrorKind::InvalidInput, error))?;
+                *limit = value;
+            }
+        }
+        Ok(tuning)
     }
 
     fn validate_private_transport_dependencies(
@@ -626,6 +655,24 @@ fn parse_private_transports(raw: &str) -> Result<PrivateTransports, IoError> {
         ));
     }
     Ok(transports)
+}
+
+fn validate_provider_budget(value: usize) -> Result<(), String> {
+    if value == 0 || value > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err(format!(
+            "Provider in-flight limit must be between 1 and {}",
+            tokio::sync::Semaphore::MAX_PERMITS,
+        ));
+    }
+    Ok(())
+}
+
+fn parse_provider_budget(raw: &str) -> Result<usize, String> {
+    let value = raw
+        .parse::<usize>()
+        .map_err(|_| "Provider in-flight limit must be a positive integer".to_owned())?;
+    validate_provider_budget(value)?;
+    Ok(value)
 }
 
 fn validate_bind_addr(env_name: &str, raw: &str, message: &str) -> Result<SocketAddr, IoError> {
@@ -1080,6 +1127,51 @@ mod tests {
         assert_eq!(tuning.profile, GatewayRuntimeProfile::Small);
         assert_eq!(tuning.private.max_pending_per_device, 96);
         assert_eq!(tuning.sqlite.core_read_connections, 2);
+        assert_eq!(
+            tuning.providers,
+            crate::runtime_config::ProviderRuntimeTuning::default()
+        );
+    }
+
+    #[test]
+    fn provider_overrides_feed_one_runtime_tuning() {
+        let args = Args::parse_from([
+            "pushgo-gateway",
+            "--db-url",
+            "sqlite:///tmp/pushgo.db",
+            "--apns-max-inflight",
+            "17",
+            "--fcm-max-inflight",
+            "4",
+            "--wns-max-inflight",
+            "1",
+        ]);
+        let tuning = args.runtime_tuning().unwrap();
+        assert_eq!(tuning.providers.apns, 17);
+        assert_eq!(tuning.providers.fcm, 4);
+        assert_eq!(tuning.providers.wns, 1);
+    }
+
+    #[test]
+    fn provider_overrides_reject_zero_and_semaphore_overflow() {
+        for value in [
+            "0".to_owned(),
+            (tokio::sync::Semaphore::MAX_PERMITS + 1).to_string(),
+        ] {
+            assert!(
+                Args::try_parse_from([
+                    "pushgo-gateway",
+                    "--db-url",
+                    "sqlite:///tmp/pushgo.db",
+                    "--apns-max-inflight",
+                    &value,
+                ])
+                .is_err()
+            );
+        }
+        let mut args = Args::parse_from(["pushgo-gateway", "--db-url", "sqlite:///tmp/pushgo.db"]);
+        args.fcm_max_inflight = Some(0);
+        assert!(args.runtime_tuning().is_err());
     }
 
     #[test]

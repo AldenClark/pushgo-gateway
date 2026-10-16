@@ -45,6 +45,8 @@ mod types;
 mod widgets;
 mod windows;
 
+pub(crate) use widgets::widget_push_job;
+
 const DISPATCH_SUBMISSION_PAYLOAD_VERSION: i32 = 1;
 const DISPATCH_SUBMISSION_RETENTION_MILLIS: i64 = 35 * 24 * 60 * 60 * 1_000;
 const DISPATCH_SUBMISSION_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -242,9 +244,11 @@ pub(crate) async fn dispatch_entity_notification(
     channel_id: [u8; 16],
     mut request: DispatchRequest,
 ) -> Result<NotificationDispatchSummary, Error> {
+    // The ordinary application service owns its identity and admission. This
+    // shared legacy producer remains only for Event/Thing and their supplements.
+    // Guard before reserving any delivery identity or writing a manifest.
+    let entity_type = legacy_dispatch_entity_type(request.payload.kind().as_str())?;
     let live_activity = request.live_activity.take();
-    let entity_kind = request.payload.kind();
-    let entity_type = entity_kind.as_str();
     let entity_id = request.payload.entity_id().trim().to_string();
     let op_id = OpId::parse(&request.op_id)?.into_inner();
     request.op_id = op_id.clone();
@@ -252,12 +256,7 @@ pub(crate) async fn dispatch_entity_notification(
     let channel_id_value = format_channel_id(&channel_id);
     let sent_at = Utc::now().timestamp_millis();
     let delivery_id = DeliveryId::reserve(state, sent_at).await?.into_inner();
-    let dedupe_entity_id = if entity_kind == crate::delivery_core::payload::EntityKind::Message {
-        "-"
-    } else {
-        entity_id.as_str()
-    };
-    let dedupe_key = SemanticScope::new(&channel_id_value, entity_type, dedupe_entity_id)
+    let dedupe_key = SemanticScope::new(&channel_id_value, entity_type, entity_id.as_str())
         .op_dedupe_key(&OpId::parse(&op_id)?);
     let dispatch_targets = state
         .store
@@ -366,6 +365,10 @@ async fn execute_committed_submission(
     acceptance_order: i64,
     op_guard: DispatchOpGuard,
 ) -> Result<NotificationDispatchSummary, Error> {
+    // Startup rejects retained old ordinary data. Keep a second fence at the
+    // consumer itself so another internal caller cannot silently reactivate it.
+    let entity_type = legacy_dispatch_entity_type(submission.entity_type.as_str())?;
+    legacy_dispatch_entity_type(submission.request.payload.kind().as_str())?;
     let materialization_dedupe_key = submission.dedupe_key.clone();
     let materialization_delivery_id = submission.delivery_id.clone();
     let materialization_accepted_at = submission.sent_at;
@@ -399,16 +402,6 @@ async fn execute_committed_submission(
     if !claimed {
         return Err(Error::TooBusy);
     }
-    let entity_type = match submission.entity_type.as_str() {
-        "message" => "message",
-        "event" => "event",
-        "thing" => "thing",
-        _ => {
-            return Err(Error::Internal(
-                "unknown dispatch submission entity type".into(),
-            ));
-        }
-    };
     let provider_outcome = Arc::new(ProviderDispatchOutcome::new(
         Arc::from(submission.op_id.clone().into_boxed_str()),
         Arc::from(submission.dedupe_key.clone().into_boxed_str()),
@@ -660,6 +653,16 @@ pub(crate) async fn recover_pending_dispatch_submissions_before(
         if record.accepted_at > accepted_before {
             continue;
         }
+        if record
+            .dedupe_key
+            .strip_prefix("op:")
+            .and_then(|scope| scope.split(':').nth(1))
+            == Some("message")
+        {
+            // Recognize the established op:<channel>:<model>:... scope even
+            // when its old payload version cannot be decoded by this binary.
+            legacy_dispatch_entity_type("message")?;
+        }
         if record.payload_version != DISPATCH_SUBMISSION_PAYLOAD_VERSION {
             let terminalized = state
                 .store
@@ -710,6 +713,10 @@ pub(crate) async fn recover_pending_dispatch_submissions_before(
                     continue;
                 }
             };
+        // Do not terminalize, rewrite or materialize an old ordinary manifest.
+        // Migration is a deliberate cutover requirement, not a fallback lane.
+        legacy_dispatch_entity_type(submission.entity_type.as_str())?;
+        legacy_dispatch_entity_type(submission.request.payload.kind().as_str())?;
         if submission.delivery_id != record.delivery_id
             || submission.op_id != record.op_id
             || submission.dedupe_key != record.dedupe_key
@@ -765,6 +772,17 @@ pub(crate) async fn recover_pending_dispatch_submissions_before(
         }
     }
     Ok(recovered)
+}
+
+fn legacy_dispatch_entity_type(raw: &str) -> Result<&'static str, Error> {
+    match raw {
+        "event" => Ok("event"),
+        "thing" => Ok("thing"),
+        "message" => Err(Error::Internal(
+            "ordinary messages require the C application service; retained legacy ordinary submissions require explicit cutover migration".into(),
+        )),
+        _ => Err(Error::Internal("unknown dispatch submission entity type".into())),
+    }
 }
 
 async fn await_owned_dispatch_lifecycle<T, F>(lifecycle: F) -> Result<T, Error>
@@ -825,7 +843,7 @@ fn materialization_retry_delay_millis(delivery_id: &str, elapsed_millis: i64) ->
 mod lifecycle_tests {
     use super::{
         DISPATCH_MATERIALIZATION_RETRY_MAX_MILLIS, DISPATCH_MATERIALIZATION_RETRY_MIN_MILLIS,
-        DurableDispatchSubmissionV1, await_owned_dispatch_lifecycle,
+        DurableDispatchSubmissionV1, await_owned_dispatch_lifecycle, legacy_dispatch_entity_type,
         materialization_retry_delay_millis,
     };
     use std::sync::{
@@ -833,6 +851,28 @@ mod lifecycle_tests {
         atomic::{AtomicBool, Ordering},
     };
     use std::time::Duration;
+
+    #[test]
+    fn ordinary_legacy_guard_stops_before_identity_and_manifest_phases() {
+        let mut persistence_entered = false;
+        let result = legacy_dispatch_entity_type(
+            crate::delivery_core::payload::EntityKind::Message.as_str(),
+        )
+        .map(|_| persistence_entered = true);
+        assert!(
+            matches!(result, Err(crate::api::Error::Internal(message)) if message.contains("cutover migration"))
+        );
+        assert!(!persistence_entered);
+        for kind in [
+            crate::delivery_core::payload::EntityKind::Event,
+            crate::delivery_core::payload::EntityKind::Thing,
+        ] {
+            assert_eq!(
+                legacy_dispatch_entity_type(kind.as_str()).unwrap(),
+                kind.as_str()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn aborting_request_waiter_does_not_cancel_owned_dispatch_lifecycle() {
