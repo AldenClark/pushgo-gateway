@@ -7,7 +7,50 @@ use crate::{mqtt::MqttRole, private::protocol::DeliverEnvelope};
 
 use super::{AuthenticatedMqttClient, MAX_INFLIGHT, MqttInflightDelivery, MqttSession};
 
+fn fresh_source_order(ordinary_first: bool) -> [bool; 2] {
+    [ordinary_first, !ordinary_first]
+}
+
+fn record_fresh_handoff(ordinary_first: &mut bool, ordinary: bool, fresh: bool) {
+    if fresh {
+        *ordinary_first = !ordinary;
+    }
+}
+
 impl MqttSession {
+    pub(super) async fn try_write_fresh_delivery(
+        &mut self,
+        client: &AuthenticatedMqttClient,
+    ) -> Result<bool, ()> {
+        // Only successful fresh handoffs rotate this connection's single bit.
+        // An empty source or a full ordinary claim window falls through in the
+        // same turn. The existing owned-retransmit branch keeps its order.
+        for ordinary in fresh_source_order(self.ordinary_first) {
+            let envelope = if ordinary {
+                let Some(device_id) = client.device_id else {
+                    continue;
+                };
+                // Keep the durable claim outside the cancellable packet select.
+                self.runtime
+                    .private
+                    .hub
+                    .ordinary_outbound(device_id, client.ordinary_route_generation)
+                    .await
+                    .map_err(|error| {
+                        self.log_failure("mqtt.ordinary_claim_failed", error.to_string().as_str());
+                    })?
+            } else {
+                client.rx.as_ref().and_then(|rx| rx.try_recv().ok())
+            };
+            if let Some(envelope) = envelope {
+                self.write_delivery(client.device_id, envelope, true)
+                    .await?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) async fn handle_puback(&mut self, client: &AuthenticatedMqttClient, puback: PubAck) {
         let Some(device_id) = client.device_id else {
             self.runtime.private.metrics.mark_ack_non_ok();
@@ -60,6 +103,7 @@ impl MqttSession {
         &mut self,
         device_id: Option<crate::storage::DeviceId>,
         envelope: DeliverEnvelope,
+        fresh: bool,
     ) -> Result<(), ()> {
         let existing_packet_id = envelope
             .ordinary
@@ -191,6 +235,48 @@ impl MqttSession {
         }
         self.runtime.private.metrics.mark_deliver_sent();
         self.runtime.private.metrics.mark_mqtt_downlink_sent();
+        record_fresh_handoff(&mut self.ordinary_first, ordinary, fresh);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fresh_source_tests {
+    use super::{fresh_source_order, record_fresh_handoff};
+
+    #[test]
+    fn continuously_ready_sources_alternate_successful_fresh_handoffs() {
+        let mut ordinary_first = true;
+        let mut handed = [0usize; 2];
+        for _ in 0..128 {
+            let source = fresh_source_order(ordinary_first)[0];
+            handed[usize::from(source)] += 1;
+            record_fresh_handoff(&mut ordinary_first, source, true);
+        }
+        assert_eq!(handed, [64, 64]);
+    }
+
+    #[test]
+    fn empty_or_capacity_limited_preferred_source_falls_back_in_the_same_turn() {
+        for preferred in [false, true] {
+            let mut ordinary_first = preferred;
+            let selected = fresh_source_order(ordinary_first)
+                .into_iter()
+                .find(|source| *source != preferred)
+                .unwrap();
+            assert_eq!(selected, !preferred);
+            record_fresh_handoff(&mut ordinary_first, selected, true);
+            assert_eq!(ordinary_first, preferred);
+        }
+    }
+
+    #[test]
+    fn owned_retransmit_does_not_rotate_preference() {
+        for preferred in [false, true] {
+            let mut ordinary_first = preferred;
+            record_fresh_handoff(&mut ordinary_first, preferred, false);
+            assert_eq!(ordinary_first, preferred);
+            assert_eq!(fresh_source_order(ordinary_first), [preferred, !preferred]);
+        }
     }
 }

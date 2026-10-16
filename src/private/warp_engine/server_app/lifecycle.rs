@@ -4,7 +4,7 @@ use warp_link::warp_link_core::{
 
 use crate::routing::derive_private_device_id;
 
-use super::PushgoServerApp;
+use super::{super::registry::PendingOutbound, PushgoServerApp};
 
 impl PushgoServerApp {
     pub(super) async fn handle_ack(&self, session: &SessionCtx, ack: AckMsg) {
@@ -80,6 +80,22 @@ impl PushgoServerApp {
     pub(super) async fn handle_disconnect(&self, session: &SessionCtx, reason: DisconnectReason) {
         self.sessions.detach_control(session.session_id.as_str());
         if let Some(runtime) = self.sessions.remove(session.session_id.as_str()) {
+            runtime.request_termination();
+            let pending = runtime.pending_outbound.lock().await.take();
+            if let Some(pending) = pending {
+                // Losing Warp's select branch is normal. Finish adopting any
+                // COMMIT result, then discard an unsent frame without ACKing it.
+                match pending {
+                    PendingOutbound::Running(task) => {
+                        if task.await.is_err() {
+                            self.state.record_session_task_failure(
+                                "Private outbound task failed during disconnect join",
+                            );
+                        }
+                    }
+                    PendingOutbound::Ready(_) => {}
+                }
+            }
             self.state
                 .hub
                 .unregister_connection(runtime.device_id, runtime.conn_id);

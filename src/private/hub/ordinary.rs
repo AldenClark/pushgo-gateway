@@ -119,6 +119,22 @@ fn encode_ordinary_private_payload(canonical: &[u8]) -> Result<Arc<[u8]>, crate:
     .map_err(ordinary_private_error)
 }
 
+/// Deterministic cancellation negative control using the exact production
+/// adoption guard. The pause represents COMMIT returned, not yet adopted by
+/// its bounded transport owner; it does not replace native database tests.
+#[cfg(test)]
+pub(crate) async fn ordinary_adoption_guard_probe(
+    store: OrdinaryStore,
+    reached: tokio::sync::oneshot::Sender<()>,
+    adopt: tokio::sync::oneshot::Receiver<()>,
+) -> Option<warp_link::warp_link_core::OutboundMsg> {
+    let operation = OrdinaryPrivateOperation::new(&store);
+    let _ = reached.send(());
+    let _ = adopt.await;
+    operation.completed();
+    None
+}
+
 impl PrivateHub {
     fn ordinary_is_inflight(&self, device: DeviceId, delivery: &str) -> bool {
         self.with_resume_state(device, |state| {
@@ -362,6 +378,56 @@ impl PrivateHub {
             operation.completed();
         }
         Ok(authorized)
+    }
+
+    /// The last handoff may be cancelled by Warp's normal inbound/control
+    /// select. Keep it read-only: a failed check is cleaned up by the single
+    /// owned outbound operation, never by a cancellable transaction here.
+    pub(crate) async fn ordinary_outbound_is_current(
+        &self,
+        device: DeviceId,
+        envelope: &protocol::DeliverEnvelope,
+    ) -> Result<bool, crate::Error> {
+        if !envelope.ordinary {
+            return Ok(true);
+        }
+        let Some(store) = self.store.ordinary_handle() else {
+            return Ok(false);
+        };
+        let ticket = {
+            let groups = self.ordinary.groups.lock().await;
+            let Some(work) = groups
+                .get(&device)
+                .and_then(|group| group.work.get(&envelope.delivery_id))
+            else {
+                return Ok(false);
+            };
+            // The active ticket's canonical payload was cleared on adoption;
+            // this snapshot copies capability metadata, not another body.
+            work.ticket.clone()
+        };
+        let current = store
+            .private_authorize(&ticket)
+            .await
+            .map_err(ordinary_private_error)?;
+        let at = chrono::Utc::now().timestamp_millis();
+        if !current
+            || crate::ordinary::expiry::is_expired(ticket.expires_at, at)
+            || envelope.ordinary_expired_at(at)
+        {
+            return Ok(false);
+        }
+        let groups = self.ordinary.groups.lock().await;
+        // ACK/release may have committed while the read was in flight. A ready
+        // result must still refer to the same owned capability at handoff.
+        Ok(groups
+            .get(&device)
+            .and_then(|group| group.work.get(&envelope.delivery_id))
+            .is_some_and(|work| {
+                work.ticket.claim_token == ticket.claim_token
+                    && work.ticket.delivery_epoch == ticket.delivery_epoch
+                    && work.ticket.route_generation == ticket.route_generation
+            }))
     }
 
     /// None selects the legacy non-ordinary data source. An issued ordinary

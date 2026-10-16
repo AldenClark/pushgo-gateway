@@ -60,6 +60,7 @@ struct MqttSession {
     handshake_deadline: Option<Instant>,
     handshake_permit: Option<OwnedSemaphorePermit>,
     write_failed: bool,
+    ordinary_first: bool,
 }
 
 struct MqttInflightDelivery {
@@ -123,6 +124,7 @@ impl MqttSession {
             handshake_deadline: Some(handshake_deadline),
             handshake_permit: Some(handshake_permit),
             write_failed: false,
+            ordinary_first: true,
         }
     }
 
@@ -445,28 +447,10 @@ impl MqttSession {
                         break;
                     }
                 }
-                // Do not put this transaction in the cancellable select below.
-                // A packet arrival must not abandon an issued ledger capability.
-                match shutdown
-                    .hub
-                    .ordinary_outbound(device_id, client.ordinary_route_generation)
-                    .await
-                {
-                    Ok(Some(envelope)) => {
-                        if self
-                            .write_delivery(client.device_id, envelope)
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                        continue;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        self.log_failure("mqtt.ordinary_claim_failed", error.to_string().as_str());
-                        break;
-                    }
+                match self.try_write_fresh_delivery(&client).await {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(()) => break,
                 }
             }
             let ack_timeout = Duration::from_secs(shutdown.config.ack_timeout_secs.max(2));
@@ -524,7 +508,7 @@ impl MqttSession {
                 outbound = recv_outbound(&client), if client.rx.is_some() => {
                     match outbound {
                         Some(envelope) => {
-                            if self.write_delivery(client.device_id, envelope).await.is_err() {
+                            if self.write_delivery(client.device_id, envelope, true).await.is_err() {
                                 break;
                             }
                         }
@@ -540,7 +524,7 @@ impl MqttSession {
                             shutdown.metrics.mark_retransmit_exhausted(retransmit.exhausted_count);
                         }
                         if let Some((_, envelope)) = retransmit.outbound {
-                            if self.write_delivery(client.device_id, envelope).await.is_err() {
+                            if self.write_delivery(client.device_id, envelope, false).await.is_err() {
                                 break;
                             }
                         }

@@ -1,15 +1,62 @@
-use std::{future::pending, time::Duration};
+use std::{
+    collections::VecDeque,
+    future::pending,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
-use warp_link::warp_link_core::{OutboundMsg, SessionCtx};
+use warp_link::warp_link_core::{OutboundMsg, SessionControl, SessionCtx};
 
-use crate::{private::ConnectionMode, storage::DeviceId};
+use crate::{
+    private::{ConnectionMode, PrivateState, protocol::DeliverEnvelope},
+    storage::DeviceId,
+};
 
-use super::{super::registry::SessionRuntime, PushgoServerApp};
+use super::{
+    super::registry::{PendingOutbound, PreparedOutbound, SessionRuntime},
+    PushgoServerApp,
+};
+
+fn fresh_source_order(preference: &AtomicBool) -> [bool; 2] {
+    let ordinary = preference.load(Ordering::Relaxed);
+    [ordinary, !ordinary]
+}
+
+fn record_fresh_handoff(preference: &AtomicBool, ordinary: bool, seq: Option<u64>) {
+    if seq.is_none() {
+        preference.store(!ordinary, Ordering::Relaxed);
+    }
+}
+
+/// Poll a tracked preparation without taking ownership of its JoinHandle. An
+/// inbound/control branch may cancel this borrow; the one bounded task keeps
+/// making progress even if ACK needs a lock held by its native transaction.
+async fn poll_pending_outbound(
+    pending: &mut Option<PendingOutbound>,
+) -> Result<bool, tokio::task::JoinError> {
+    let Some(operation) = pending.as_mut() else {
+        return Ok(false);
+    };
+    if let PendingOutbound::Running(task) = operation {
+        match task.await {
+            Ok(Some(prepared)) => *pending = Some(PendingOutbound::Ready(prepared)),
+            Ok(None) => *pending = None,
+            Err(error) => {
+                *pending = None;
+                return Err(error);
+            }
+        }
+    }
+    Ok(pending.is_some())
+}
 
 /// Shared last application handoff for fresh work, reconnect bootstrap and
 /// retransmit. Expiry never creates an ACK and never renews the original TTL.
 fn outbound_from_queue_at(
-    envelope: &crate::private::protocol::DeliverEnvelope,
+    envelope: &DeliverEnvelope,
     seq: Option<u64>,
     at: i64,
 ) -> Option<OutboundMsg> {
@@ -34,93 +81,228 @@ impl PushgoServerApp {
             runtime.request_termination();
             return pending::<Option<OutboundMsg>>().await;
         }
-        if !self
-            .state
-            .hub
-            .validate_ordinary_session_route(runtime.device_id, runtime.ordinary_route_generation)
-            .await
-            .unwrap_or(false)
-        {
-            runtime.request_termination();
+        let context = OutboundContext::new(self.state.clone(), runtime.as_ref());
+        let mut pending = runtime.pending_outbound.lock().await;
+        let stopped = context.outbound_stop.notified();
+        tokio::pin!(stopped);
+        stopped.as_mut().enable();
+        if runtime.is_terminating() {
             return None;
         }
-        match self
-            .state
-            .hub
-            .connection_mode(runtime.device_id, runtime.conn_id)
-        {
-            ConnectionMode::Stale => {
-                runtime.request_termination();
-                return pending::<Option<OutboundMsg>>().await;
-            }
-            ConnectionMode::Active | ConnectionMode::Draining => {}
-        }
-
-        // Register before the durable read. Admission/ACK can notify while that
-        // read is in progress; an idle session needs no new polling task/timer.
-        let notify = self
+        // Register before a fresh durable read, including when a prior read was
+        // cancelled by inbound and later completed with no work.
+        let notify = context
             .state
             .hub
             .ordinary_notifier()
-            .unwrap_or_else(|| std::sync::Arc::new(tokio::sync::Notify::new()));
+            .unwrap_or_else(|| Arc::new(tokio::sync::Notify::new()));
         let changed = notify.notified();
         tokio::pin!(changed);
         changed.as_mut().enable();
-        let ack_timeout = Duration::from_secs(self.state.config.ack_timeout_secs.max(2));
-        if let Some(outbound) = self
-            .take_outbound_ready(runtime.as_ref(), ack_timeout)
-            .await
+        let ack_timeout = Duration::from_secs(context.state.config.ack_timeout_secs.max(2));
+        if pending.is_some()
+            && let Some(outbound) = context.finish_pending(&mut pending).await
         {
             return Some(outbound);
         }
-        let retransmit_wait = self
+        if runtime.is_terminating() {
+            return None;
+        }
+        let preparing = context.clone();
+        *pending = Some(PendingOutbound::Running(tokio::spawn(async move {
+            preparing.take_outbound_ready(ack_timeout).await
+        })));
+        if let Some(outbound) = context.finish_pending(&mut pending).await {
+            return Some(outbound);
+        }
+        if runtime.is_terminating() {
+            return None;
+        }
+        let retransmit_wait = context
             .state
             .hub
-            .next_retransmit_due_in(runtime.device_id, ack_timeout)
+            .next_retransmit_due_in(context.device_id, ack_timeout)
             .unwrap_or_else(|| Duration::from_millis(max_wait_ms.max(1)));
         let wait = retransmit_wait
             .min(Duration::from_millis(max_wait_ms.max(1)))
             .max(Duration::from_millis(1));
-        tokio::select! {
-            _ = changed => self.take_outbound_ready(runtime.as_ref(), ack_timeout).await,
-            result = runtime.receiver.recv_async() => {
-                match result {
-                    Ok(envelope) => self.authorized_new_outbound(runtime.as_ref(), envelope).await,
-                    Err(_) => None,
-                }
+        // Idle connections add no preparation task. Only a notification,
+        // bounded transport queue item or the existing retransmit timer starts
+        // another operation; at most one task/result occupies this slot.
+        let received = tokio::select! {
+            _ = stopped => return None,
+            _ = changed => None,
+            result = context.receiver.recv_async() => {
+                match result { Ok(envelope) => Some(envelope), Err(_) => return None }
             }
-            _ = tokio::time::sleep(wait) => self.take_outbound_ready(runtime.as_ref(), ack_timeout).await,
+            _ = tokio::time::sleep(wait) => None,
+        };
+        let preparing = context.clone();
+        *pending = Some(PendingOutbound::Running(tokio::spawn(async move {
+            match received {
+                Some(envelope) => preparing.authorized_new_outbound(envelope).await,
+                None => preparing.take_outbound_ready(ack_timeout).await,
+            }
+        })));
+        context.finish_pending(&mut pending).await
+    }
+}
+
+#[derive(Clone)]
+struct OutboundContext {
+    state: Arc<PrivateState>,
+    device_id: DeviceId,
+    conn_id: u64,
+    ordinary_route_generation: Option<i64>,
+    ordinary_first: Arc<AtomicBool>,
+    terminate_requested: Arc<AtomicBool>,
+    outbound_stop: Arc<tokio::sync::Notify>,
+    control: Arc<parking_lot::Mutex<Option<SessionControl>>>,
+    receiver: flume::Receiver<DeliverEnvelope>,
+    bootstrap_inflight: Arc<parking_lot::Mutex<VecDeque<(u64, DeliverEnvelope)>>>,
+    bootstrap_pending: Arc<parking_lot::Mutex<VecDeque<DeliverEnvelope>>>,
+}
+
+impl OutboundContext {
+    fn new(state: Arc<PrivateState>, runtime: &SessionRuntime) -> Self {
+        Self {
+            state,
+            device_id: runtime.device_id,
+            conn_id: runtime.conn_id,
+            ordinary_route_generation: runtime.ordinary_route_generation,
+            ordinary_first: runtime.ordinary_first.clone(),
+            terminate_requested: runtime.terminate_requested.clone(),
+            outbound_stop: runtime.outbound_stop.clone(),
+            control: runtime.control.clone(),
+            receiver: runtime.receiver.clone(),
+            bootstrap_inflight: runtime.bootstrap_inflight.clone(),
+            bootstrap_pending: runtime.bootstrap_pending.clone(),
         }
     }
 
-    async fn authorized_new_outbound(
-        &self,
-        runtime: &SessionRuntime,
-        envelope: crate::private::protocol::DeliverEnvelope,
-    ) -> Option<OutboundMsg> {
+    fn request_termination(&self) {
+        if !self.terminate_requested.swap(true, Ordering::SeqCst)
+            && let Some(control) = self.control.lock().clone()
+        {
+            control.expire_now();
+        }
+        self.outbound_stop.notify_waiters();
+    }
+
+    async fn finish_pending(&self, pending: &mut Option<PendingOutbound>) -> Option<OutboundMsg> {
+        loop {
+            match poll_pending_outbound(pending).await {
+                Ok(true) => {}
+                Ok(false) => return None,
+                Err(_) => {
+                    self.state
+                        .record_session_task_failure("Private outbound preparation task failed");
+                    self.request_termination();
+                    return None;
+                }
+            }
+            let Some(PendingOutbound::Ready(prepared)) = pending.as_ref() else {
+                return None;
+            };
+            if self.terminate_requested.load(Ordering::SeqCst) || self.state.is_shutting_down() {
+                return None;
+            }
+            // A completed task may have waited behind inbound ACK or control.
+            // This last query is read-only and holds no Hub lock across await:
+            // cancellation leaves Ready intact and next handoff reads again.
+            let current = match self
+                .state
+                .hub
+                .ordinary_outbound_is_current(self.device_id, &prepared.envelope)
+                .await
+            {
+                Ok(current) => current,
+                Err(_) => {
+                    self.state.record_session_task_failure(
+                        "Private outbound handoff authorization failed",
+                    );
+                    self.request_termination();
+                    return None;
+                }
+            };
+            if !current
+                || prepared
+                    .envelope
+                    .ordinary_expired_at(chrono::Utc::now().timestamp_millis())
+            {
+                let Some(PendingOutbound::Ready(prepared)) = pending.take() else {
+                    return None;
+                };
+                let context = self.clone();
+                *pending = Some(PendingOutbound::Running(tokio::spawn(async move {
+                    // An expired/retired reservation is released only by the
+                    // same tracked durable-operation owner, never this read.
+                    if context
+                        .state
+                        .hub
+                        .authorize_ordinary_outbound(context.device_id, &prepared.envelope)
+                        .await
+                        .is_err()
+                    {
+                        context.state.record_session_task_failure(
+                            "Private outbound reservation release failed",
+                        );
+                        context.request_termination();
+                    }
+                    None
+                })));
+                continue;
+            }
+            let Some(PendingOutbound::Ready(prepared)) = pending.take() else {
+                return None;
+            };
+            if matches!(
+                self.state.hub.connection_mode(self.device_id, self.conn_id),
+                ConnectionMode::Stale
+            ) {
+                self.request_termination();
+                return None;
+            }
+            let mut outbound = outbound_from_queue_at(
+                &prepared.envelope,
+                prepared.seq,
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+            record_fresh_handoff(
+                &self.ordinary_first,
+                prepared.envelope.ordinary,
+                prepared.seq,
+            );
+            if let Some(seq) = prepared.seq {
+                self.state.hub.mark_delivery_sent(self.device_id, seq);
+                self.state.metrics.mark_deliver_retransmit_sent();
+            } else {
+                let (seq, _) = self
+                    .state
+                    .hub
+                    .track_sent_outbound(self.device_id, prepared.envelope);
+                outbound.seq = Some(seq);
+                self.state.metrics.mark_deliver_sent();
+            }
+            return Some(outbound);
+        }
+    }
+
+    async fn authorized_new_outbound(&self, envelope: DeliverEnvelope) -> Option<PreparedOutbound> {
         match self
             .state
             .hub
-            .authorize_ordinary_outbound(runtime.device_id, &envelope)
+            .authorize_ordinary_outbound(self.device_id, &envelope)
             .await
         {
-            Ok(true) => {
-                let outbound = self.track_new_outbound(runtime.device_id, envelope.clone());
-                if outbound.is_none() {
-                    // Expired after the SQL result returned. Adopt a durable
-                    // release before its owned reservation can become reusable.
-                    let _ = self
-                        .state
-                        .hub
-                        .authorize_ordinary_outbound(runtime.device_id, &envelope)
-                        .await;
-                }
-                outbound
-            }
+            Ok(true) => Some(PreparedOutbound {
+                seq: None,
+                envelope,
+            }),
             Ok(false) => None,
             Err(error) => {
                 tracing::error!(error = %error, "ordinary Private send authorization failed");
-                runtime.request_termination();
+                self.request_termination();
                 None
             }
         }
@@ -128,122 +310,106 @@ impl PushgoServerApp {
 
     async fn authorized_retransmit(
         &self,
-        runtime: &SessionRuntime,
         seq: u64,
-        envelope: crate::private::protocol::DeliverEnvelope,
-    ) -> Option<OutboundMsg> {
+        envelope: DeliverEnvelope,
+    ) -> Option<PreparedOutbound> {
         match self
             .state
             .hub
-            .authorize_ordinary_outbound(runtime.device_id, &envelope)
+            .authorize_ordinary_outbound(self.device_id, &envelope)
             .await
         {
-            Ok(true) => {
-                let outbound = outbound_from_queue_at(
-                    &envelope,
-                    Some(seq),
-                    chrono::Utc::now().timestamp_millis(),
-                );
-                if outbound.is_none() {
-                    let _ = self
-                        .state
-                        .hub
-                        .authorize_ordinary_outbound(runtime.device_id, &envelope)
-                        .await;
-                    return None;
-                }
-                self.state.hub.mark_delivery_sent(runtime.device_id, seq);
-                self.state.metrics.mark_deliver_retransmit_sent();
-                outbound
-            }
+            Ok(true) => Some(PreparedOutbound {
+                seq: Some(seq),
+                envelope,
+            }),
             Ok(false) => None,
             Err(error) => {
                 tracing::error!(error = %error, "ordinary Private retransmit authorization failed");
-                runtime.request_termination();
+                self.request_termination();
                 None
             }
         }
     }
 
-    async fn take_outbound_ready(
-        &self,
-        runtime: &SessionRuntime,
-        ack_timeout: Duration,
-    ) -> Option<OutboundMsg> {
-        if self.state.is_shutting_down() {
-            runtime.request_termination();
+    async fn take_outbound_ready(&self, ack_timeout: Duration) -> Option<PreparedOutbound> {
+        if self.terminate_requested.load(Ordering::SeqCst) || self.state.is_shutting_down() {
+            self.request_termination();
             return None;
         }
         if !self
             .state
             .hub
-            .validate_ordinary_session_route(runtime.device_id, runtime.ordinary_route_generation)
+            .validate_ordinary_session_route(self.device_id, self.ordinary_route_generation)
             .await
             .unwrap_or(false)
         {
-            runtime.request_termination();
+            self.request_termination();
             return None;
         }
-        // Every collection here is bounded by the normal connection/window
-        // configuration. Never hold a parking_lot guard across a database await.
-        let bootstrap_inflight = runtime.bootstrap_inflight.lock().pop_front();
+        if matches!(
+            self.state.hub.connection_mode(self.device_id, self.conn_id),
+            ConnectionMode::Stale
+        ) {
+            self.request_termination();
+            return None;
+        }
+        let bootstrap_inflight = self.bootstrap_inflight.lock().pop_front();
         if let Some((seq, envelope)) = bootstrap_inflight {
-            if let Some(outbound) = self.authorized_retransmit(runtime, seq, envelope).await {
-                return Some(outbound);
+            if let Some(prepared) = self.authorized_retransmit(seq, envelope).await {
+                return Some(prepared);
             }
         }
-        let bootstrap_pending = runtime.bootstrap_pending.lock().pop_front();
+        let bootstrap_pending = self.bootstrap_pending.lock().pop_front();
         if let Some(envelope) = bootstrap_pending {
-            if let Some(outbound) = self.authorized_new_outbound(runtime, envelope).await {
-                return Some(outbound);
+            if let Some(prepared) = self.authorized_new_outbound(envelope).await {
+                return Some(prepared);
             }
         }
         let retransmit = self
             .state
             .hub
-            .poll_retransmit_outbound(runtime.device_id, ack_timeout);
+            .poll_retransmit_outbound(self.device_id, ack_timeout);
         if retransmit.exhausted_count > 0 {
             self.state
                 .metrics
                 .mark_retransmit_exhausted(retransmit.exhausted_count);
         }
         if let Some((seq, envelope)) = retransmit.outbound {
-            if let Some(outbound) = self.authorized_retransmit(runtime, seq, envelope).await {
-                return Some(outbound);
+            if let Some(prepared) = self.authorized_retransmit(seq, envelope).await {
+                return Some(prepared);
             }
         }
-        if let Ok(envelope) = runtime.receiver.try_recv() {
-            if let Some(outbound) = self.authorized_new_outbound(runtime, envelope).await {
-                return Some(outbound);
+        // A single preference bit alternates successful fresh handoffs. A
+        // source with no work or execution budget never blocks the other one.
+        // Already-owned bootstrap/retransmit work above keeps its prior order.
+        for ordinary in fresh_source_order(&self.ordinary_first) {
+            if ordinary {
+                match self
+                    .state
+                    .hub
+                    .ordinary_outbound(self.device_id, self.ordinary_route_generation)
+                    .await
+                {
+                    Ok(Some(envelope)) => {
+                        if let Some(prepared) = self.authorized_new_outbound(envelope).await {
+                            return Some(prepared);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::error!(error = %error, "ordinary Private claim failed");
+                        self.request_termination();
+                        return None;
+                    }
+                }
+            } else if let Ok(envelope) = self.receiver.try_recv() {
+                if let Some(prepared) = self.authorized_new_outbound(envelope).await {
+                    return Some(prepared);
+                }
             }
         }
-        match self
-            .state
-            .hub
-            .ordinary_outbound(runtime.device_id, runtime.ordinary_route_generation)
-            .await
-        {
-            Ok(Some(envelope)) => self.authorized_new_outbound(runtime, envelope).await,
-            Ok(None) => None,
-            Err(error) => {
-                tracing::error!(error = %error, "ordinary Private claim failed");
-                runtime.request_termination();
-                None
-            }
-        }
-    }
-
-    fn track_new_outbound(
-        &self,
-        device_id: DeviceId,
-        envelope: crate::private::protocol::DeliverEnvelope,
-    ) -> Option<OutboundMsg> {
-        let mut outbound =
-            outbound_from_queue_at(&envelope, None, chrono::Utc::now().timestamp_millis())?;
-        let (seq, _) = self.state.hub.track_sent_outbound(device_id, envelope);
-        outbound.seq = Some(seq);
-        self.state.metrics.mark_deliver_sent();
-        Some(outbound)
+        None
     }
 }
 
@@ -304,5 +470,134 @@ mod ordinary_expiry_tests {
         let mut frame = ordinary(100);
         frame.ordinary_expires_at = None;
         assert!(outbound_from_queue_at(&frame, Some(1), 99).is_none());
+    }
+
+    #[test]
+    fn ordinary_and_retained_fresh_sources_alternate_without_blocking_on_an_empty_source() {
+        let preference = AtomicBool::new(true);
+        let mut handed = [0usize; 2];
+        for _ in 0..128 {
+            let order = fresh_source_order(&preference);
+            let source = order[0];
+            handed[usize::from(source)] += 1;
+            record_fresh_handoff(&preference, source, None);
+            assert_eq!(fresh_source_order(&preference)[0], !source);
+        }
+        assert_eq!(handed, [64, 64]);
+        // A full ordinary execution window is equivalent to no immediately
+        // available work: the second source remains eligible in this turn.
+        let selected = fresh_source_order(&preference)
+            .into_iter()
+            .find(|ordinary| !ordinary)
+            .unwrap();
+        assert!(!selected);
+        record_fresh_handoff(&preference, selected, None);
+        assert_eq!(fresh_source_order(&preference), [true, false]);
+        record_fresh_handoff(&preference, true, Some(7));
+        assert_eq!(
+            fresh_source_order(&preference),
+            [true, false],
+            "owned retransmission must not alter fresh-source preference"
+        );
+    }
+
+    async fn adoption_probe_store() -> (
+        tempfile::TempDir,
+        crate::storage::Storage,
+        crate::ordinary::OrdinaryStore,
+        Arc<crate::ordinary::store::Health>,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = crate::storage::Storage::new_with_config(crate::storage::StorageInitConfig {
+            db_url: Some(format!(
+                "sqlite://{}?mode=rwc",
+                directory.path().join("adoption-product.db").display()
+            )),
+            managed_upgrade: false,
+            ..crate::storage::StorageInitConfig::default()
+        })
+        .await
+        .unwrap();
+        let health = Arc::new(crate::ordinary::store::Health::default());
+        let ordinary = storage
+            .initialize_ordinary(crate::ordinary::Config::default(), health.clone())
+            .await
+            .unwrap();
+        (directory, storage, ordinary, health)
+    }
+
+    #[tokio::test]
+    async fn ordinary_select_negative_control_drops_unadopted_claim_and_fences_health() {
+        let (_directory, storage, ordinary, health) = adoption_probe_store().await;
+        let failures = health.subscribe();
+        let (reached, arrived) = tokio::sync::oneshot::channel();
+        let (_adopt, adoption) = tokio::sync::oneshot::channel();
+        let mut old_wait = Box::pin(crate::private::hub::ordinary_adoption_guard_probe(
+            ordinary, reached, adoption,
+        ));
+        // The old Warp select owns and drops this future when inbound wins.
+        tokio::select! {
+            _ = old_wait.as_mut() => panic!("claim adopted before the controlled boundary"),
+            result = arrived => result.unwrap(),
+        }
+        drop(old_wait);
+        assert_eq!(
+            failures.borrow().as_deref(),
+            Some("ordinary Private transaction interrupted before its result was adopted")
+        );
+        assert!(health.ensure().is_err());
+        storage.close_ordinary_storage().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ordinary_select_cancellation_keeps_one_owned_claim_until_adoption() {
+        let (_directory, storage, ordinary, health) = adoption_probe_store().await;
+        let failures = health.subscribe();
+        let (reached, arrived) = tokio::sync::oneshot::channel();
+        let (adopt, adoption) = tokio::sync::oneshot::channel();
+        let mut slot = Some(PendingOutbound::Running(tokio::spawn(async move {
+            crate::private::hub::ordinary_adoption_guard_probe(ordinary, reached, adoption).await;
+            None
+        })));
+        // Exercise the same borrowed poll used by the production ServerApp.
+        // Its cancellation leaves the single future in the existing owner.
+        tokio::select! {
+            biased;
+            _ = poll_pending_outbound(&mut slot) => panic!("claim adopted before the controlled boundary"),
+            result = arrived => result.unwrap(),
+        }
+        assert!(slot.is_some());
+        assert!(failures.borrow().is_none());
+        health.ensure().unwrap();
+        adopt.send(()).unwrap();
+        assert!(!poll_pending_outbound(&mut slot).await.unwrap());
+        assert!(slot.is_none());
+        assert!(failures.borrow().is_none());
+        health.ensure().unwrap();
+        storage.close_ordinary_storage().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ordinary_disconnect_drains_the_owned_claim_before_releasing_it() {
+        let (_directory, storage, ordinary, health) = adoption_probe_store().await;
+        let (reached, arrived) = tokio::sync::oneshot::channel();
+        let (adopt, adoption) = tokio::sync::oneshot::channel();
+        let mut slot = Some(PendingOutbound::Running(tokio::spawn(async move {
+            crate::private::hub::ordinary_adoption_guard_probe(ordinary, reached, adoption).await;
+            None
+        })));
+        tokio::select! {
+            biased;
+            _ = poll_pending_outbound(&mut slot) => panic!("claim adopted before the controlled boundary"),
+            result = arrived => result.unwrap(),
+        }
+        let PendingOutbound::Running(draining) = slot.take().unwrap() else {
+            panic!("claim must still be running at the controlled boundary");
+        };
+        adopt.send(()).unwrap();
+        assert!(draining.await.unwrap().is_none());
+        assert!(slot.is_none());
+        health.ensure().unwrap();
+        storage.close_ordinary_storage().await.unwrap();
     }
 }
