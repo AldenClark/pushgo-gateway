@@ -1,7 +1,7 @@
 //! Fixed-main dfb6b7c/v12 MySQL offline history conversion only.
 //! Operators must stop old main: its processes do not honor ProductOwner.
-//! Session inspection and table locks are admission checks, not an old-binary
-//! restart fence. No connection here is pooled or automatically reconnected.
+//! Session inspection and table locks provide offline admission; the durable
+//! v13 header fences old-binary restarts. No connection is pooled/reconnected.
 use super::{
     owner::ProductOwner,
     store::{Health, KernelError},
@@ -18,7 +18,10 @@ use std::{
     sync::Arc,
 };
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-const FORMAT: &str = "ordinary-mysql-cutover-dfb6b7c-v1";
+const LEGACY_FORMAT: &str = "ordinary-mysql-cutover-dfb6b7c-v1";
+const FORMAT: &str = "ordinary-mysql-cutover-dfb6b7c-v2";
+const SOURCE_VERSION: &str = crate::storage::STORAGE_SCHEMA_VERSION_DURABLE_V12;
+const FENCED_VERSION: &str = crate::storage::STORAGE_SCHEMA_VERSION;
 const CATALOG: &str = include_str!("mysql_cutover/catalog.sql");
 const SOURCE: &str = include_str!("mysql_cutover/source_schema.json");
 const MARKER: &str = "pushgo_ordinary_cutover";
@@ -31,8 +34,15 @@ struct Manifest {
     source_profile: String,
     sha256: String,
     histories: u64,
+    #[serde(default)]
+    metadata_sha256: Option<String>,
+    #[serde(default)]
+    metadata_rows_sha256: Option<String>,
+    #[serde(default)]
+    source_version: Option<String>,
 }
 struct State {
+    format: String,
     phase: String,
     backup: PathBuf,
     profile: String,
@@ -343,16 +353,79 @@ fn verify_backup(dir: &Path, s: &State, database: &str) -> Result<Manifest> {
         return Err(invalid("oversized native backup manifest"));
     }
     let m: Manifest = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
-    if m.format != FORMAT
+    if m.format != s.format
         || m.dataset != s.dataset
         || m.database != database
         || m.source_profile != s.profile
-        || m.sha256 != s.sha256
         || m.sha256 != digest(&dir.join("source.dump"))?
     {
         return Err(invalid("backup identity/profile/hash mismatch"));
     }
+    let bound = if s.format == FORMAT {
+        if m.source_version.as_deref() != Some(SOURCE_VERSION)
+            || m.metadata_rows_sha256.is_none()
+            || m.metadata_sha256.as_deref() != Some(digest(&dir.join("metadata.dump"))?.as_str())
+        {
+            return Err(invalid("fenced backup metadata/provenance mismatch"));
+        }
+        backup_binding(
+            &m.sha256,
+            m.metadata_sha256.as_deref().unwrap(),
+            m.metadata_rows_sha256.as_deref().unwrap(),
+        )
+    } else {
+        m.sha256.clone()
+    };
+    if bound != s.sha256 {
+        return Err(invalid("backup pair binding mismatch"));
+    }
     Ok(m)
+}
+fn backup_binding(source: &str, metadata: &str, rows: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(format!(
+        "{FORMAT}\n{SOURCE_VERSION}\n{source}\n{metadata}\n{rows}\n"
+    ));
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+async fn version(c: &mut MySqlConnection) -> Result<String> {
+    Ok(sqlx::query_scalar("SELECT CAST(meta_value AS CHAR CHARACTER SET utf8mb4) FROM pushgo_schema_meta WHERE meta_key='schema_version'").fetch_one(c).await?)
+}
+async fn set_version(c: &mut MySqlConnection, from: &str, to: &str) -> Result<()> {
+    sqlx::query("UPDATE pushgo_schema_meta SET meta_value=? WHERE meta_key='schema_version' AND meta_value=?")
+        .bind(to).bind(from).execute(&mut *c).await?;
+    if version(c).await? != to {
+        return Err(invalid("durable MySQL version fence mismatch"));
+    }
+    Ok(())
+}
+async fn metadata_digest(c: &mut MySqlConnection) -> Result<String> {
+    metadata_digest_with_header(c, None).await
+}
+async fn metadata_digest_with_header(
+    c: &mut MySqlConnection,
+    header: Option<&str>,
+) -> Result<String> {
+    let rows = sqlx::query("SELECT HEX(meta_key) AS k,HEX(meta_value) AS v FROM pushgo_schema_meta ORDER BY BINARY meta_key LIMIT 65537").fetch_all(c).await?;
+    if rows.len() > 65536 {
+        return Err(invalid("schema metadata exceeds fenced backup limit"));
+    }
+    let mut h = Sha256::new();
+    for r in rows {
+        let k: String = r.get_unchecked("k");
+        let mut v: String = r.get_unchecked("v");
+        if k == "736368656D615F76657273696F6E" {
+            if let Some(header) = header {
+                v = header
+                    .as_bytes()
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect();
+            }
+        }
+        h.update(format!("{k}:{v}\n"));
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 fn native(tool: &str, url: &str) -> Result<(Command, String)> {
     let u = reqwest::Url::parse(&normalized(url)?).map_err(|_| invalid("invalid MySQL URL"))?;
@@ -428,16 +501,23 @@ async fn owner_session(c: &mut MySqlConnection, require_owner: bool) -> Result<O
 /// operation; role-only grants are conservatively outside this narrow entry.
 async fn process_visibility(c: &mut MySqlConnection) -> Result<()> {
     let account: String = sqlx::query_scalar("SELECT CURRENT_USER()")
-        .fetch_one(&mut *c).await?;
+        .fetch_one(&mut *c)
+        .await?;
     let parts: Vec<_> = account.split('@').collect();
     if parts.len() != 2 {
         return Err(invalid("cannot verify MySQL migration account privileges"));
     }
-    let grantee = format!("'{}'@'{}'", parts[0].replace('\\', "\\\\").replace('\'', "\\'"), parts[1].replace('\\', "\\\\").replace('\'', "\\'"));
+    let grantee = format!(
+        "'{}'@'{}'",
+        parts[0].replace('\\', "\\\\").replace('\'', "\\'"),
+        parts[1].replace('\\', "\\\\").replace('\'', "\\'")
+    );
     let visible: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.USER_PRIVILEGES WHERE GRANTEE=? AND PRIVILEGE_TYPE='PROCESS'")
         .bind(grantee).fetch_one(c).await?;
     if visible != 1 {
-        return Err(invalid("offline MySQL cutover requires a directly verifiable global PROCESS grant to inspect all old clients"));
+        return Err(invalid(
+            "offline MySQL cutover requires a directly verifiable global PROCESS grant to inspect all old clients",
+        ));
     }
     Ok(())
 }
@@ -562,10 +642,14 @@ async fn state(c: &mut MySqlConnection) -> Result<Option<State>> {
         return Err(invalid("damaged MySQL cutover marker"));
     }
     let r = &rows[0];
-    if r.get_unchecked::<String, _>("format") != FORMAT {
+    if !matches!(
+        r.get_unchecked::<String, _>("format").as_str(),
+        FORMAT | LEGACY_FORMAT
+    ) {
         return Err(invalid("unknown MySQL cutover marker"));
     }
     let s = State {
+        format: r.get_unchecked("format"),
         phase: r.get_unchecked("phase"),
         backup: PathBuf::from(r.get_unchecked::<String, _>("backup")),
         profile: r.get_unchecked("source_profile"),
@@ -575,16 +659,20 @@ async fn state(c: &mut MySqlConnection) -> Result<Option<State>> {
     retention(&s.profile)?;
     if !matches!(
         s.phase.as_str(),
-        "prepared" | "complete" | "restoring" | "activated"
+        "preparing" | "prepared" | "complete" | "restoring" | "activated"
     ) {
         return Err(invalid("unknown MySQL cutover phase"));
     }
     Ok(Some(s))
 }
 async fn schema(c: &mut MySqlConnection) -> Result<()> {
-    schema_inner(c, false).await
+    schema_inner(c, false, SOURCE_VERSION).await
 }
-async fn schema_inner(c: &mut MySqlConnection, messages: bool) -> Result<()> {
+async fn schema_inner(
+    c: &mut MySqlConnection,
+    messages: bool,
+    expected_version: &str,
+) -> Result<()> {
     let expected: Vec<(String, String, String)> = serde_json::from_str(SOURCE)?;
     if expected.is_empty() {
         return Err(invalid("native MySQL fixed-main catalog unavailable"));
@@ -597,7 +685,11 @@ async fn schema_inner(c: &mut MySqlConnection, messages: bool) -> Result<()> {
     } else {
         CATALOG.into()
     };
-    let max_definition = expected.iter().map(|(_, _, definition)| definition.len()).max().unwrap_or(0) as i64;
+    let max_definition = expected
+        .iter()
+        .map(|(_, _, definition)| definition.len())
+        .max()
+        .unwrap_or(0) as i64;
     let rows = sqlx::query(&format!("SELECT kind,name,CASE WHEN OCTET_LENGTH(definition)<=? THEN definition END AS definition FROM ({catalog}) source_catalog ORDER BY BINARY kind,BINARY name LIMIT ?"))
         .bind(max_definition)
         .bind(expected.len() as i64 + 1)
@@ -615,9 +707,12 @@ async fn schema_inner(c: &mut MySqlConnection, messages: bool) -> Result<()> {
         return Err(invalid("unsupported fixed-main native MySQL schema"));
     }
     let version:String=sqlx::query_scalar("SELECT CAST(meta_value AS CHAR CHARACTER SET utf8mb4) FROM pushgo_schema_meta WHERE meta_key='schema_version'").fetch_one(&mut *c).await?;
-    if version != "2026-08-20-gateway-v12" {
+    if version != expected_version {
         return Err(invalid("unsupported source schema version"));
     }
+    migration_checksums(c).await
+}
+async fn migration_checksums(c: &mut MySqlConnection) -> Result<()> {
     let defs = crate::storage::database::migration::SCHEMA_MIGRATIONS;
     let rows=sqlx::query("SELECT migration_id,checksum,CAST(success AS CHAR) AS success FROM pushgo_schema_migrations ORDER BY migration_id LIMIT ?").bind(defs.len() as i64+1).fetch_all(c).await?;
     if rows.len() != defs.len()
@@ -794,7 +889,7 @@ async fn run_owned(
     sqlx::query("CREATE TABLE pushgo_ordinary_cutover(singleton TINYINT PRIMARY KEY CHECK(singleton=1),format VARBINARY(64) NOT NULL,phase VARBINARY(16) NOT NULL,backup TEXT NOT NULL,source_profile VARBINARY(16) NOT NULL,sha256 VARBINARY(64) NOT NULL,dataset VARBINARY(32) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin").execute(&mut *c).await?;
     health.ensure()?;
     alone(c, true).await?;
-    sqlx::query("INSERT INTO pushgo_ordinary_cutover VALUES(1,?,'prepared',?,?,'',?)")
+    sqlx::query("INSERT INTO pushgo_ordinary_cutover VALUES(1,?,'preparing',?,?,'',?)")
         .bind(FORMAT)
         .bind(
             dir.to_str()
@@ -810,11 +905,27 @@ async fn run_owned(
     drained(c).await?;
     if history(c, keep, false).await? != count {
         return Err(invalid(
-            "source changed between admission and prepared fence",
+            "source changed between admission and preparing marker",
         ));
     }
     health.ensure()?;
     alone(c, true).await?;
+    // Source validation above established v12 provenance. Commit only its
+    // header change under WRITE locks, then reacquire READ locks for both
+    // native snapshots. Never START TRANSACTION under LOCK TABLES.
+    lock_source(c, true, false).await?;
+    schema(c).await?;
+    drained(c).await?;
+    if history(c, keep, false).await? != count {
+        return Err(invalid("source changed before durable version fence"));
+    }
+    set_version(c, SOURCE_VERSION, FENCED_VERSION).await?;
+    // Only the durable v13 header admits the prepared phase. A crash in
+    // preparing is safe to abort only after strict pristine-source validation.
+    phase(c, health, "prepared").await?;
+    lock_source(c, false, false).await?;
+    schema_inner(c, false, FENCED_VERSION).await?;
+    let metadata_rows = metadata_digest(c).await?;
     let dump = dir.join("source.dump");
     let output = new_file(&dump)?;
     let (mut command, native_db) = native("mysqldump", url)?;
@@ -834,6 +945,7 @@ async fn run_owned(
         ])
         .arg(format!("--ignore-table={database}.pushgo_product_owner"))
         .arg(format!("--ignore-table={database}.pushgo_ordinary_cutover"))
+        .arg(format!("--ignore-table={database}.pushgo_schema_meta"))
         .arg(&database)
         .stdout(Stdio::from(output))
         .status()
@@ -848,6 +960,36 @@ async fn run_owned(
     regular(&dump)?;
     File::open(&dump)?.sync_all()?;
     let hash = digest(&dump)?;
+    let metadata_dump = dir.join("metadata.dump");
+    let (mut command, native_db) = native("mysqldump", url)?;
+    if native_db != database {
+        return Err(invalid("native metadata backup database identity mismatch"));
+    }
+    let status = command
+        .args([
+            "--single-transaction",
+            "--skip-lock-tables",
+            "--hex-blob",
+            "--no-create-info",
+            "--skip-triggers",
+            "--replace",
+            "--skip-add-locks",
+            "--no-tablespaces",
+            "--set-gtid-purged=OFF",
+        ])
+        .arg(&database)
+        .arg("pushgo_schema_meta")
+        .stdout(Stdio::from(new_file(&metadata_dump)?))
+        .status()
+        .map_err(|_| invalid("native metadata mysqldump unavailable"))?;
+    health.ensure()?;
+    alone(c, true).await?;
+    if !status.success() || metadata_digest(c).await? != metadata_rows {
+        return Err(invalid("native consistent metadata backup failed"));
+    }
+    File::open(&metadata_dump)?.sync_all()?;
+    let metadata_hash = digest(&metadata_dump)?;
+    let binding = backup_binding(&hash, &metadata_hash, &metadata_rows);
     manifest_write(
         &dir,
         &Manifest {
@@ -857,12 +999,15 @@ async fn run_owned(
             source_profile: profile.into(),
             sha256: hash.clone(),
             histories: count,
+            metadata_sha256: Some(metadata_hash),
+            metadata_rows_sha256: Some(metadata_rows),
+            source_version: Some(SOURCE_VERSION.into()),
         },
     )?;
     health.ensure()?;
     alone(c, true).await?;
     sqlx::query("UPDATE pushgo_ordinary_cutover SET sha256=? WHERE singleton=1")
-        .bind(hash)
+        .bind(binding)
         .execute(&mut *c)
         .await?;
     health.ensure()?;
@@ -902,7 +1047,7 @@ async fn run_owned(
 /// The fixed source catalog is compared with candidate-only ordinary_messages
 /// omitted. Source acceptance never enables this exclusion.
 async fn schema_with_messages(c: &mut MySqlConnection) -> Result<()> {
-    schema_inner(c, true).await
+    schema_inner(c, true, FENCED_VERSION).await
 }
 async fn restore(
     url: &str,
@@ -912,6 +1057,11 @@ async fn restore(
     s: &State,
     database: &str,
 ) -> Result<()> {
+    if s.format != FORMAT {
+        return Err(invalid(
+            "legacy v1 native backups cannot be restored safely by the fenced tool; no restore writes performed",
+        ));
+    }
     if s.phase == "activated" {
         return Err(invalid("restore prohibited after activation intent"));
     }
@@ -919,18 +1069,23 @@ async fn restore(
         return Err(invalid("restore backup path mismatch"));
     }
     if s.sha256.is_empty() {
-        if s.phase != "prepared" {
-            return Err(invalid("unbound backup in nonprepared phase"));
+        if !matches!(s.phase.as_str(), "preparing" | "prepared") {
+            return Err(invalid("unbound backup outside preparing/prepared phase"));
         }
         health.ensure()?;
         alone(c, true).await?;
-        schema(c).await?;
-        lock_source(c, false, false).await?;
-        schema(c).await?;
+        let source_header = version(c).await?;
+        if !matches!(source_header.as_str(), SOURCE_VERSION | FENCED_VERSION) {
+            return Err(invalid("unknown pristine prepared header"));
+        }
+        schema_inner(c, false, &source_header).await?;
+        lock_source(c, true, false).await?;
+        schema_inner(c, false, &source_header).await?;
         drained(c).await?;
         history(c, retention(&s.profile)?, false).await?;
         health.ensure()?;
         alone(c, true).await?;
+        set_version(c, &source_header, SOURCE_VERSION).await?;
         sqlx::query("DROP TABLE pushgo_ordinary_cutover")
             .execute(&mut *c)
             .await?;
@@ -943,6 +1098,34 @@ async fn restore(
     let m = verify_backup(dir, s, database)?;
     health.ensure()?;
     alone(c, true).await?;
+    let header = version(c).await?;
+    if header == SOURCE_VERSION && s.phase == "restoring" {
+        // Retry the sole crash window after verified source publication but
+        // before dropping the administrative marker; never replay native DDL
+        // against an exposed v12 header.
+        lock_source(c, true, false).await?;
+        schema(c).await?;
+        drained(c).await?;
+        if Some(metadata_digest_with_header(c, Some(FENCED_VERSION)).await?)
+            != m.metadata_rows_sha256
+            || history(c, retention(&s.profile)?, false).await? != m.histories
+        {
+            return Err(invalid(
+                "published restored source no longer matches backup",
+            ));
+        }
+        health.ensure()?;
+        alone(c, true).await?;
+        sqlx::query("DROP TABLE pushgo_ordinary_cutover")
+            .execute(&mut *c)
+            .await?;
+        sqlx::raw_sql("UNLOCK TABLES").execute(c).await?;
+        println!("MySQL published native restore verified; source ready");
+        return Ok(());
+    }
+    if header != FENCED_VERSION {
+        return Err(invalid("restore requires durable v13 fence"));
+    }
     phase(c, health, "restoring").await?;
     // Neither the native dump nor this cleanup may drop the persistent marker.
     // A failure during native implicit DDL keeps restoring until explicit retry.
@@ -968,15 +1151,46 @@ async fn restore(
             "native MySQL restore failed; startup remains fenced",
         ));
     }
-    schema(c).await?;
-    lock_source(c, false, false).await?;
-    schema(c).await?;
+    // The schema header table never participates in native DDL. Keep its
+    // v13 row present while replacing all other metadata with exact native
+    // REPLACE rows from the same globally locked source snapshot.
+    sqlx::query("DELETE FROM pushgo_schema_meta WHERE meta_key<>'schema_version'")
+        .execute(&mut *c)
+        .await?;
+    let (mut command, native_db) = native("mysql", url)?;
+    if native_db != database {
+        return Err(invalid(
+            "native metadata restore database identity mismatch",
+        ));
+    }
+    let status = command
+        .arg(database)
+        .stdin(Stdio::from(File::open(dir.join("metadata.dump"))?))
+        .stdout(Stdio::null())
+        .status()
+        .map_err(|_| invalid("native metadata mysql unavailable"))?;
+    health.ensure()?;
+    alone(c, true).await?;
+    if !status.success() {
+        return Err(invalid(
+            "native metadata restore failed; startup remains fenced",
+        ));
+    }
+    schema_inner(c, false, FENCED_VERSION).await?;
+    lock_source(c, true, false).await?;
+    schema_inner(c, false, FENCED_VERSION).await?;
+    if Some(metadata_digest(c).await?) != m.metadata_rows_sha256 {
+        return Err(invalid("restored schema metadata mismatch"));
+    }
     drained(c).await?;
     if history(c, retention(&s.profile)?, false).await? != m.histories {
         return Err(invalid("restored history count mismatch"));
     }
     health.ensure()?;
     alone(c, true).await?;
+    // Publish the source header only after every restored object and row has
+    // passed validation. A crash after this point exposes a pristine v12 DB.
+    set_version(c, FENCED_VERSION, SOURCE_VERSION).await?;
     sqlx::query("DROP TABLE pushgo_ordinary_cutover")
         .execute(&mut *c)
         .await?;
@@ -1005,6 +1219,29 @@ pub async fn activate_before_runtime(url: &str, target_profile: &str) -> Result<
         return Err(invalid("cutover dataset identity mismatch"));
     }
     owner_session(&mut c, true).await?;
+    let header = version(&mut c).await?;
+    if header == SOURCE_VERSION && s.format == LEGACY_FORMAT {
+        // C16 completed databases predate the durable header fence. Verify
+        // migration checksums and identity-column metadata plus the existing
+        // marker/native backup before promotion while ProductOwner is held.
+        // This is existing-candidate admission, never new source acceptance.
+        let db: String = sqlx::query_scalar("SELECT DATABASE()")
+            .fetch_one(&mut c)
+            .await?;
+        verify_backup(&s.backup, &s, &db)?;
+        migration_checksums(&mut c).await?;
+        let identity_schema: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.COLUMNS c JOIN information_schema.TABLES t ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME WHERE c.TABLE_SCHEMA=DATABASE() AND c.TABLE_NAME='ordinary_messages' AND c.COLUMN_NAME='identity_state' AND c.COLUMN_TYPE='varbinary(32)' AND c.IS_NULLABLE='NO' AND c.COLUMN_DEFAULT IN ('live','0x6C697665') AND c.EXTRA='' AND c.GENERATION_EXPRESSION='' AND t.TABLE_TYPE='BASE TABLE' AND t.ENGINE='InnoDB'")
+            .fetch_one(&mut c).await?;
+        if identity_schema != 1 {
+            return Err(invalid("legacy completed cutover identity schema missing"));
+        }
+        owner_session(&mut c, true).await?;
+        set_version(&mut c, SOURCE_VERSION, FENCED_VERSION).await?;
+    } else if header != FENCED_VERSION {
+        return Err(invalid(
+            "completed MySQL cutover requires durable v13 fence",
+        ));
+    }
     if s.phase == "complete" {
         let db: String = sqlx::query_scalar("SELECT DATABASE()")
             .fetch_one(&mut c)
@@ -1015,4 +1252,33 @@ pub async fn activate_before_runtime(url: &str, target_profile: &str) -> Result<
     }
     c.close().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fenced_backup_binding_covers_each_file_and_metadata_rows() {
+        let baseline = backup_binding("source", "metadata", "rows");
+        assert_eq!(baseline.len(), 64);
+        assert_ne!(baseline, backup_binding("other", "metadata", "rows"));
+        assert_ne!(baseline, backup_binding("source", "other", "rows"));
+        assert_ne!(baseline, backup_binding("source", "metadata", "other"));
+        assert_ne!(baseline, backup_binding("metadata", "source", "rows"));
+    }
+
+    #[test]
+    fn legacy_manifest_is_readable_only_as_legacy_provenance() {
+        let m: Manifest = serde_json::from_value(serde_json::json!({
+            "format": LEGACY_FORMAT, "dataset": "id", "database": "db",
+            "source_profile": "small", "sha256": "hash", "histories": 1
+        }))
+        .unwrap();
+        assert_eq!(m.format, LEGACY_FORMAT);
+        assert!(m.metadata_sha256.is_none());
+        assert!(m.metadata_rows_sha256.is_none());
+        assert!(m.source_version.is_none());
+        assert_ne!(FORMAT, LEGACY_FORMAT);
+    }
 }

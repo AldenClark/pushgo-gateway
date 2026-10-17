@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{StoreError, StoreResult};
 
-pub const STORAGE_SCHEMA_VERSION: &str = "2026-08-20-gateway-v12";
+// The v13 dataset owns ordinary delivery exclusively in the C ledger. Its
+// offline ownership cutover is separate from the shared-table DDL catalog.
+pub const STORAGE_SCHEMA_VERSION: &str = "2026-10-17-gateway-v13";
+pub const STORAGE_SCHEMA_VERSION_DURABLE_V12: &str = "2026-08-20-gateway-v12";
 pub const STORAGE_SCHEMA_VERSION_CONCURRENCY_V11: &str = "2026-08-08-gateway-v11";
 pub const STORAGE_SCHEMA_VERSION_FORMAL_RELEASE: &str = "2026-08-05-gateway-v10";
 pub const STORAGE_SCHEMA_VERSION_BETA1: &str = "2026-04-22-gateway-v9";

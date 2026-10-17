@@ -18,7 +18,11 @@ use std::{
     sync::Arc,
 };
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-const FORMAT: &str = "ordinary-postgres-cutover-dfb6b7c-v1";
+const LEGACY_FORMAT: &str = "ordinary-postgres-cutover-dfb6b7c-v1";
+// v2 archives contain the real fenced v13 source header, not a rewritten dump.
+const FORMAT: &str = "ordinary-postgres-cutover-dfb6b7c-v2";
+const SOURCE_VERSION: &str = crate::storage::STORAGE_SCHEMA_VERSION_DURABLE_V12;
+const FENCED_VERSION: &str = crate::storage::STORAGE_SCHEMA_VERSION;
 const CATALOG: &str = include_str!("pg_cutover/catalog.sql");
 const SOURCE: &str = include_str!("pg_cutover/source_schema.json");
 const MARKER: &str = "public.pushgo_ordinary_cutover";
@@ -33,6 +37,7 @@ struct Manifest {
     histories: u64,
 }
 struct State {
+    format: String,
     phase: String,
     backup: PathBuf,
     profile: String,
@@ -178,10 +183,14 @@ async fn state(c: &mut PgConnection) -> Result<Option<State>> {
         return Err(invalid("damaged PostgreSQL cutover marker"));
     }
     let r = &rows[0];
-    if r.get::<String, _>("format") != FORMAT {
+    if !matches!(
+        r.get::<String, _>("format").as_str(),
+        FORMAT | LEGACY_FORMAT
+    ) {
         return Err(invalid("unknown PostgreSQL cutover marker"));
     }
     let s = State {
+        format: r.get("format"),
         phase: r.get("phase"),
         backup: PathBuf::from(r.get::<String, _>("backup")),
         profile: r.get("source_profile"),
@@ -197,12 +206,37 @@ async fn state(c: &mut PgConnection) -> Result<Option<State>> {
     }
     Ok(Some(s))
 }
-async fn schema(c: &mut PgConnection) -> Result<()> {
+async fn require_version(c: &mut PgConnection, expected: &str) -> Result<()> {
+    let value: String = sqlx::query_scalar(
+        "SELECT meta_value FROM public.pushgo_schema_meta WHERE meta_key='schema_version'",
+    )
+    .fetch_one(c)
+    .await?;
+    if value != expected {
+        return Err(invalid(
+            "unexpected PostgreSQL schema version for cutover stage",
+        ));
+    }
+    Ok(())
+}
+async fn set_version(c: &mut PgConnection, expected: &str, next: &str) -> Result<()> {
+    let changed = sqlx::query("UPDATE public.pushgo_schema_meta SET meta_value=$1 WHERE meta_key='schema_version' AND meta_value=$2")
+        .bind(next).bind(expected).execute(c).await?.rows_affected();
+    if changed != 1 {
+        return Err(invalid("PostgreSQL schema version changed during cutover"));
+    }
+    Ok(())
+}
+async fn schema(c: &mut PgConnection, expected_version: &str) -> Result<()> {
     let expected: Vec<(String, String, String)> = serde_json::from_str(SOURCE)?;
     if expected.is_empty() {
         return Err(invalid("fixed-main native PostgreSQL catalog unavailable"));
     }
-    let max_definition = expected.iter().map(|(_, _, definition)| definition.len()).max().unwrap_or(0) as i64;
+    let max_definition = expected
+        .iter()
+        .map(|(_, _, definition)| definition.len())
+        .max()
+        .unwrap_or(0) as i64;
     let rows = sqlx::query(&format!("SELECT kind,name,CASE WHEN octet_length(definition)<=$2 THEN definition END AS definition FROM ({CATALOG}) source_catalog ORDER BY kind COLLATE \"C\",name COLLATE \"C\" LIMIT $1"))
         .bind(expected.len() as i64 + 1)
         .bind(max_definition)
@@ -224,7 +258,7 @@ async fn schema(c: &mut PgConnection) -> Result<()> {
     )
     .fetch_one(&mut *c)
     .await?;
-    if version != "2026-08-20-gateway-v12" {
+    if version != expected_version {
         return Err(invalid("unsupported source schema version"));
     }
     let defs = crate::storage::database::migration::SCHEMA_MIGRATIONS;
@@ -498,7 +532,8 @@ fn native(tool: &str, url: &str) -> Result<Command> {
             cmd.env_remove(key);
         }
     }
-    cmd.env("PGPASSFILE", "/dev/null").env("PGSSLMODE", "prefer");
+    cmd.env("PGPASSFILE", "/dev/null")
+        .env("PGSSLMODE", "prefer");
     cmd.env(
         "PGHOST",
         u.host_str()
@@ -564,7 +599,7 @@ fn verify_backup(dir: &Path, s: &State, database: &str) -> Result<Manifest> {
         return Err(invalid("oversized native backup manifest"));
     }
     let m: Manifest = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
-    if m.format != FORMAT
+    if m.format != s.format
         || m.dataset != s.dataset
         || m.database != database
         || m.source_profile != s.profile
@@ -627,6 +662,12 @@ async fn run_owned(
             && profile == Some(s.profile.as_str())
             && dir.canonicalize()? == s.backup
         {
+            if s.format != FORMAT {
+                return Err(invalid(
+                    "pre-release PostgreSQL v1 cutover requires normal startup promotion; restore requires the C16 recovery tool",
+                ));
+            }
+            require_version(c, FENCED_VERSION).await?;
             verify_backup(&s.backup, &s, &database)?;
             return Ok(());
         }
@@ -643,7 +684,7 @@ async fn run_owned(
         .execute(&mut *c)
         .await?;
     lock_source(c).await?;
-    schema(c).await?;
+    schema(c, SOURCE_VERSION).await?;
     drained(c).await?;
     let count = history(c, keep, false).await?;
     health.ensure()?;
@@ -670,7 +711,17 @@ async fn run_owned(
     )?;
     health.ensure()?;
     alone(c, true).await?;
-    sqlx::query("BEGIN").execute(&mut *c).await?;
+    sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *c)
+        .await?;
+    lock_source(c).await?;
+    schema(c, SOURCE_VERSION).await?;
+    drained(c).await?;
+    if history(c, keep, false).await? != count {
+        return Err(invalid("source changed before durable prepared fence"));
+    }
+    alone(c, true).await?;
+    set_version(c, SOURCE_VERSION, FENCED_VERSION).await?;
     sqlx::query("CREATE TABLE public.pushgo_ordinary_cutover(singleton SMALLINT PRIMARY KEY CHECK(singleton=1),format TEXT NOT NULL,phase TEXT NOT NULL,backup TEXT NOT NULL,source_profile TEXT NOT NULL,sha256 TEXT NOT NULL,dataset TEXT NOT NULL)").execute(&mut *c).await?;
     sqlx::query("INSERT INTO public.pushgo_ordinary_cutover VALUES(1,$1,'prepared',$2,$3,'',$4)")
         .bind(FORMAT)
@@ -688,7 +739,7 @@ async fn run_owned(
         .execute(&mut *c)
         .await?;
     lock_source(c).await?;
-    schema(c).await?;
+    schema(c, FENCED_VERSION).await?;
     drained(c).await?;
     let current = history(c, keep, false).await?;
     if count != current {
@@ -698,6 +749,10 @@ async fn run_owned(
     }
     alone(c, true).await?;
     health.ensure()?;
+    // The prepared commit already published v13. Export this real fenced
+    // source snapshot while SHARE locks retain the admitted v12 catalog/data;
+    // pg_dump keeps native ownership/ACLs and every nonmetadata object. Header
+    // v12 is published only after the entire native restore and verification.
     let snapshot: String = sqlx::query_scalar("SELECT pg_export_snapshot()")
         .fetch_one(&mut *c)
         .await?;
@@ -755,7 +810,7 @@ async fn run_owned(
         .execute(&mut *c)
         .await?;
     lock_source(c).await?;
-    schema(c).await?;
+    schema(c, FENCED_VERSION).await?;
     drained(c).await?;
     alone(c, true).await?;
     health.ensure()?;
@@ -785,6 +840,14 @@ async fn restore(
     if s.phase == "activated" {
         return Err(invalid("restore prohibited after activation intent"));
     }
+    // A pre-release v1 archive restores v12 inside its native transaction. It
+    // cannot provide the v13 fence until verification, so refuse it explicitly.
+    if s.format != FORMAT {
+        return Err(invalid(
+            "pre-release PostgreSQL v1 restore unsupported: use the C16 recovery tool while old main remains stopped",
+        ));
+    }
+    require_version(c, FENCED_VERSION).await?;
     if dir.canonicalize()? != s.backup {
         return Err(invalid("restore backup path mismatch"));
     }
@@ -800,11 +863,12 @@ async fn restore(
             .execute(&mut *c)
             .await?;
         lock_source(c).await?;
-        schema(c).await?;
+        schema(c, FENCED_VERSION).await?;
         drained(c).await?;
         history(c, retention(&s.profile)?, false).await?;
         health.ensure()?;
         alone(c, true).await?;
+        set_version(c, FENCED_VERSION, SOURCE_VERSION).await?;
         sqlx::query("DROP TABLE public.pushgo_ordinary_cutover")
             .execute(&mut *c)
             .await?;
@@ -849,13 +913,14 @@ async fn restore(
     sqlx::query("DROP TABLE IF EXISTS public.ordinary_messages")
         .execute(&mut *c)
         .await?;
-    schema(c).await?;
+    schema(c, FENCED_VERSION).await?;
     drained(c).await?;
     if history(c, retention(&s.profile)?, false).await? != m.histories {
         return Err(invalid("restored history count mismatch"));
     }
     health.ensure()?;
     alone(c, true).await?;
+    set_version(c, FENCED_VERSION, SOURCE_VERSION).await?;
     sqlx::query("DROP TABLE public.pushgo_ordinary_cutover")
         .execute(&mut *c)
         .await?;
@@ -863,6 +928,20 @@ async fn restore(
     alone(c, true).await?;
     sqlx::query("COMMIT").execute(c).await?;
     println!("PostgreSQL native restore verified; source ready");
+    Ok(())
+}
+/// Compatibility fence for the existing C16 identity schema. This deliberately
+/// does not claim complete runtime integrity: mutable Storage still performs its
+/// own admission checks before entrances. It does reject prior C identity tables.
+async fn current_identity(c: &mut PgConnection) -> Result<()> {
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace JOIN pg_attribute a ON a.attrelid=t.oid WHERE n.nspname='public' AND t.relname='ordinary_messages' AND t.relkind='r' AND t.relpersistence='p' AND NOT t.relrowsecurity AND NOT t.relforcerowsecurity AND a.attname='identity_state' AND NOT a.attisdropped AND a.atttypid='text'::regtype AND a.attnotnull AND EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid=t.oid AND k.contype='c' AND k.convalidated AND pg_get_constraintdef(k.oid,true) LIKE '%identity_state = ''live''::text%' AND pg_get_constraintdef(k.oid,true) LIKE '%identity_state = ''legacy_unverifiable''::text%' AND pg_get_constraintdef(k.oid,true) LIKE '%delivery_id IS NULL%' AND pg_get_constraintdef(k.oid,true) LIKE '%fingerprint IS NULL%' AND pg_get_constraintdef(k.oid,true) LIKE '%expires_at IS NULL%' AND pg_get_constraintdef(k.oid,true) LIKE '%historical_unverifiable%'))"
+    ).fetch_one(c).await?;
+    if !valid {
+        return Err(invalid(
+            "unsupported current PostgreSQL cutover identity schema",
+        ));
+    }
     Ok(())
 }
 /// One startup operation after owner acquisition and before mutable Storage.
@@ -884,13 +963,59 @@ pub async fn activate_before_runtime(url: &str, target_profile: &str) -> Result<
         return Err(invalid("cutover dataset identity mismatch"));
     }
     alone(&mut c, true).await?;
-    if s.phase == "complete" {
+    sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut c)
+        .await?;
+    sqlx::query("LOCK TABLE public.pushgo_ordinary_cutover,public.pushgo_schema_meta IN SHARE ROW EXCLUSIVE MODE")
+        .execute(&mut c).await?;
+    // Re-read under the marker lock; another phase is never promoted implicitly.
+    let current = state(&mut c)
+        .await?
+        .ok_or_else(|| invalid("cutover marker disappeared"))?;
+    if current.format != s.format
+        || current.phase != s.phase
+        || current.sha256 != s.sha256
+        || current.dataset != s.dataset
+        || current.profile != s.profile
+        || current.backup != s.backup
+    {
+        return Err(invalid(
+            "PostgreSQL cutover marker changed before activation",
+        ));
+    }
+    current_identity(&mut c).await?;
+    if s.format == LEGACY_FORMAT {
+        // The v1 native archive really contains v12. Its identity must remain
+        // unchanged; promoting its live dataset does not relabel that archive.
         let db: String = sqlx::query_scalar("SELECT current_database()")
             .fetch_one(&mut c)
             .await?;
         verify_backup(&s.backup, &s, &db)?;
-        sqlx::query("UPDATE public.pushgo_ordinary_cutover SET phase='activated' WHERE singleton=1 AND phase='complete'").execute(&mut c).await?;
+        let version: String = sqlx::query_scalar(
+            "SELECT meta_value FROM public.pushgo_schema_meta WHERE meta_key='schema_version'",
+        )
+        .fetch_one(&mut c)
+        .await?;
+        if version == SOURCE_VERSION {
+            set_version(&mut c, SOURCE_VERSION, FENCED_VERSION).await?;
+        } else if version != FENCED_VERSION {
+            return Err(invalid("unsupported pre-release PostgreSQL cutover header"));
+        }
+    } else {
+        require_version(&mut c, FENCED_VERSION).await?;
+        if s.phase == "complete" {
+            let db: String = sqlx::query_scalar("SELECT current_database()")
+                .fetch_one(&mut c)
+                .await?;
+            verify_backup(&s.backup, &s, &db)?;
+        }
     }
+    if s.phase == "complete" {
+        sqlx::query("UPDATE public.pushgo_ordinary_cutover SET phase='activated' WHERE singleton=1 AND phase='complete'")
+            .execute(&mut c).await?;
+    }
+    alone(&mut c, true).await?;
+    sqlx::query("COMMIT").execute(&mut c).await?;
     c.close().await?;
     Ok(())
 }

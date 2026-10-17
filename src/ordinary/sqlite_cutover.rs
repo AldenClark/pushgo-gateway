@@ -23,7 +23,9 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const FORMAT: &str = "ordinary-sqlite-cutover-dfb6b7c-v1";
 const SOURCE_SCHEMA: &str = include_str!("sqlite_cutover/source_schema.json");
 #[cfg(test)]
-tokio::task_local! { static FAIL_AFTER_CORE_COMMIT: bool; }
+tokio::task_local! { static FAIL_AFTER_CORE_COMMIT: bool; static FAIL_AFTER_VERSION_FENCE: bool; static FAIL_DURING_RESTORE: bool; static FAIL_BEFORE_RESTORE_STAGE: bool; }
+const SOURCE_VERSION: &str = crate::storage::STORAGE_SCHEMA_VERSION_DURABLE_V12;
+const FENCED_VERSION: &str = crate::storage::STORAGE_SCHEMA_VERSION;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct State {
@@ -189,6 +191,9 @@ async fn open_locked(paths: &[(&'static str, PathBuf)]) -> Result<Vec<Member>> {
     Ok(members)
 }
 async fn validate_schema(members: &mut [Member]) -> Result<()> {
+    validate_source_schema(members, SOURCE_VERSION).await
+}
+async fn validate_source_schema(members: &mut [Member], expected_version: &str) -> Result<()> {
     let expected: BTreeMap<String, Vec<(String, String, String)>> =
         serde_json::from_str(SOURCE_SCHEMA)?;
     for member in members.iter_mut() {
@@ -246,13 +251,32 @@ async fn validate_schema(members: &mut [Member]) -> Result<()> {
     )
     .fetch_one(&mut *core)
     .await?;
-    if version != "2026-08-20-gateway-v12" {
+    if version != expected_version {
         return Err(invalid("unsupported source schema version"));
     }
+    validate_migration_receipts(core).await?;
+    for member in members.iter_mut().skip(1) {
+        let key = match member.kind {
+            "dispatch" => "dispatch_migrated_from_core_v1",
+            "delivery" => "runtime_delivery_migrated_from_core_v1",
+            _ => "runtime_migrated_from_core_v1",
+        };
+        let value: Option<String> =
+            sqlx::query_scalar("SELECT meta_value FROM pushgo_sidecar_meta WHERE meta_key=?")
+                .bind(key)
+                .fetch_optional(&mut member.conn)
+                .await?;
+        if value.as_deref() != Some("done") {
+            return Err(invalid("source sidecar migration is not complete"));
+        }
+    }
+    Ok(())
+}
+async fn validate_migration_receipts(conn: &mut SqliteConnection) -> Result<()> {
     let rows = sqlx::query(
         "SELECT migration_id,checksum,success FROM pushgo_schema_migrations ORDER BY migration_id",
     )
-    .fetch_all(&mut *core)
+    .fetch_all(&mut *conn)
     .await?;
     let definitions = crate::storage::database::migration::SCHEMA_MIGRATIONS;
     if rows.len() != definitions.len() {
@@ -269,20 +293,88 @@ async fn validate_schema(members: &mut [Member]) -> Result<()> {
             return Err(invalid("source migration checksum/success mismatch"));
         }
     }
-    for member in members.iter_mut().skip(1) {
-        let key = match member.kind {
-            "dispatch" => "dispatch_migrated_from_core_v1",
-            "delivery" => "runtime_delivery_migrated_from_core_v1",
-            _ => "runtime_migrated_from_core_v1",
-        };
-        let value: Option<String> =
-            sqlx::query_scalar("SELECT meta_value FROM pushgo_sidecar_meta WHERE meta_key=?")
-                .bind(key)
-                .fetch_optional(&mut member.conn)
-                .await?;
-        if value.as_deref() != Some("done") {
-            return Err(invalid("source sidecar migration is not complete"));
+    Ok(())
+}
+/// Metadata-only transaction: no business conversion can commit under v12.
+async fn fence_core(conn: &mut SqliteConnection) -> Result<()> {
+    let changed = sqlx::query("UPDATE pushgo_schema_meta SET meta_value=? WHERE meta_key='schema_version' AND meta_value IN (?,?)")
+        .bind(FENCED_VERSION).bind(SOURCE_VERSION).bind(FENCED_VERSION)
+        .execute(&mut *conn).await?.rows_affected();
+    if changed != 1 {
+        return Err(invalid("unsupported cutover fence version"));
+    }
+    sqlx::query("COMMIT").execute(&mut *conn).await?;
+    sqlx::query("BEGIN EXCLUSIVE").execute(conn).await?;
+    Ok(())
+}
+/// Use SQLite itself to obtain the canonical C identity definition. A marker or
+/// a similarly named table alone must never authorize promotion of a v12 file.
+async fn validate_cutover_identity(conn: &mut SqliteConnection) -> Result<()> {
+    validate_migration_receipts(conn).await?;
+    let mut reference = SqliteConnection::connect("sqlite::memory:").await?;
+    sqlx::raw_sql(super::store::MESSAGE_SCHEMA)
+        .execute(&mut reference)
+        .await?;
+    let expected: String = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ordinary_messages'",
+    )
+    .fetch_one(&mut reference)
+    .await?;
+    reference.close().await?;
+    let actual: Option<String> = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ordinary_messages'",
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    if actual.as_deref().map(str::trim) != Some(expected.trim()) {
+        return Err(invalid("cutover identity schema is incomplete or unknown"));
+    }
+    let check: String = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(conn)
+        .await?;
+    if check != "ok" {
+        return Err(invalid("cutover identity integrity_check failed"));
+    }
+    Ok(())
+}
+async fn ensure_cutover_fence(paths: &[(&'static str, PathBuf)]) -> Result<()> {
+    let mut members = open_locked(paths).await?;
+    inspect_handles(paths, true)?;
+    validate_cutover_identity(&mut members[0].conn).await?;
+    if sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM sender_submit_status WHERE model='message')",
+    )
+    .fetch_one(&mut members[0].conn)
+    .await?
+        != 0
+    {
+        return Err(invalid(
+            "cutover retains unconverted ordinary source identities",
+        ));
+    }
+    for member in &mut members {
+        if exists(&mut member.conn, "semantic_id_registry").await? {
+            let mut cursor = String::new();
+            loop {
+                let keys = sqlx::query_scalar::<_, String>("SELECT dedupe_key FROM semantic_id_registry WHERE dedupe_key>? ORDER BY dedupe_key LIMIT 256")
+                    .bind(&cursor).fetch_all(&mut member.conn).await?;
+                if keys.is_empty() {
+                    break;
+                }
+                for key in keys {
+                    if scope(&key, "semantic")?.1 == "message" {
+                        return Err(invalid(
+                            "cutover retains unconverted ordinary semantic identities",
+                        ));
+                    }
+                    cursor = key;
+                }
+            }
         }
+    }
+    fence_core(&mut members[0].conn).await?;
+    for member in members {
+        member.conn.close().await?;
     }
     Ok(())
 }
@@ -623,7 +715,10 @@ fn read_restore_state(core: &Path, dir: &Path, paths: &[(&str, PathBuf)]) -> Res
         Ok(bytes) => {
             let stable: State = serde_json::from_slice(&bytes)?;
             if stable.format != FORMAT
-                || !matches!(stable.phase.as_str(), "prepared" | "complete" | "restoring")
+                || !matches!(
+                    stable.phase.as_str(),
+                    "preparing" | "prepared" | "complete" | "restoring"
+                )
             {
                 return Err(invalid(
                     "restore prohibited: stable state is activated or unknown",
@@ -656,7 +751,7 @@ fn read_restore_state(core: &Path, dir: &Path, paths: &[(&str, PathBuf)]) -> Res
                     != 1
                 {
                     return Err(invalid(
-                        "first prepared-write restore lacks complete family identity",
+                        "first preparing-write restore lacks complete family identity",
                     ));
                 }
             }
@@ -667,7 +762,9 @@ fn read_restore_state(core: &Path, dir: &Path, paths: &[(&str, PathBuf)]) -> Res
                         != Some(entry.name.as_str())
                     || digest(&dir.join(&entry.name))? != entry.sha256
                 {
-                    return Err(invalid("invalid first prepared-write backup identity/hash"));
+                    return Err(invalid(
+                        "invalid first preparing-write backup identity/hash",
+                    ));
                 }
                 if entry.name.ends_with("-shm") {
                     continue;
@@ -680,7 +777,7 @@ fn read_restore_state(core: &Path, dir: &Path, paths: &[(&str, PathBuf)]) -> Res
                 }
                 if digest(&entry.source)? != entry.sha256 {
                     return Err(invalid(
-                        "first prepared-write restore requires unchanged source family bytes",
+                        "first preparing-write restore requires unchanged source family bytes",
                     ));
                 }
             }
@@ -691,13 +788,13 @@ fn read_restore_state(core: &Path, dir: &Path, paths: &[(&str, PathBuf)]) -> Res
                     && !manifest.files.iter().any(|entry| entry.source == wal)
                 {
                     return Err(invalid(
-                        "unexpected current WAL prevents first prepared-write restore",
+                        "unexpected current WAL prevents first preparing-write restore",
                     ));
                 }
             }
             Ok(Some(State {
                 format: FORMAT.into(),
-                phase: "prepared".into(),
+                phase: "preparing".into(),
                 backup: dir.canonicalize()?,
                 source_profile: manifest.source_profile,
             }))
@@ -827,6 +924,7 @@ async fn run_owned(
             && state.backup == backup_dir.canonicalize()?
             && state.source_profile == profile
         {
+            ensure_cutover_fence(&paths).await?;
             println!("offline cutover already {}; no rows changed", state.phase);
             return Ok(());
         }
@@ -862,10 +960,23 @@ async fn run_owned(
     backup(&members, &backup_dir, profile)?;
     let mut state = State {
         format: FORMAT.into(),
-        phase: "prepared".into(),
+        phase: "preparing".into(),
         backup: backup_dir,
         source_profile: profile.into(),
     };
+    save_state(core, &state)?;
+    fence_core(&mut members[0].conn).await?;
+    #[cfg(test)]
+    if FAIL_AFTER_VERSION_FENCE
+        .try_with(|enabled| *enabled)
+        .unwrap_or(false)
+    {
+        for member in members {
+            member.conn.close().await?;
+        }
+        return Err(invalid("test interruption before business conversion"));
+    }
+    state.phase = "prepared".into();
     save_state(core, &state)?;
     sqlx::raw_sql(super::store::MESSAGE_SCHEMA)
         .execute(&mut members[0].conn)
@@ -907,7 +1018,10 @@ async fn restore(
     previous: Option<State>,
 ) -> Result<()> {
     let mut state = previous.ok_or_else(|| invalid("no cutover state to restore"))?;
-    if !matches!(state.phase.as_str(), "prepared" | "complete" | "restoring") {
+    if !matches!(
+        state.phase.as_str(),
+        "preparing" | "prepared" | "complete" | "restoring"
+    ) {
         return Err(invalid("restore prohibited after runtime activation"));
     }
     if state.backup != dir.canonicalize()? {
@@ -951,57 +1065,156 @@ async fn restore(
     // A retry may see a mixed database/WAL family from interrupted renames.
     // Never ask SQLite to recover that intermediate state; replace it directly
     // after the mandatory process/handle check and ProductOwner acquisition.
-    let members = if state.phase == "restoring" {
+    let mut members = if state.phase == "restoring" {
         Vec::new()
     } else {
         open_locked(paths).await?
     };
+    if state.phase == "preparing" {
+        // Intent may precede the metadata fence, but never business conversion.
+        // Admit only the exact source schema and supported source/fenced header.
+        let version: String = sqlx::query_scalar(
+            "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key='schema_version'",
+        )
+        .fetch_one(&mut members[0].conn)
+        .await?;
+        if !matches!(version.as_str(), SOURCE_VERSION | FENCED_VERSION) {
+            return Err(invalid(
+                "preparing restore requires pristine source version",
+            ));
+        }
+        validate_source_schema(&mut members, &version).await?;
+        check_drained(&mut members).await?;
+        visit_history(&mut members, retention(&state.source_profile)?, false).await?;
+    }
+    // Legacy C15/C16 complete backups may still have the old v12 header.
+    // Fence the original family while every member is locked, before exposing
+    // a restoring marker or releasing handles for native staging and renames.
+    if let Some(member) = members.first_mut() {
+        fence_core(&mut member.conn).await?;
+    }
     state.phase = "restoring".into();
     save_state(core, &state)?;
     for member in members {
         member.conn.close().await?;
     }
-    for entry in &manifest.files {
-        if entry.name.ends_with("-shm") {
-            continue;
-        }
-        let temporary = PathBuf::from(format!("{}.ordinary-restore", entry.source.display()));
-        if temporary.exists() {
-            fs::remove_file(&temporary)?;
-        }
-        copy_sync(&dir.join(&entry.name), &temporary)?;
+    #[cfg(test)]
+    if FAIL_BEFORE_RESTORE_STAGE
+        .try_with(|enabled| *enabled)
+        .unwrap_or(false)
+    {
+        return Err(invalid("test interruption before restore staging"));
     }
-    for path in &allowed {
-        if !manifest
+    // Validate a complete staged backup through native SQLite before changing
+    // any published member. The backups were checkpointed while all files were
+    // locked; a nonempty WAL is not a restorable byte-exact snapshot here.
+    for entry in &manifest.files {
+        if entry.name.ends_with("-wal") && fs::metadata(dir.join(&entry.name))?.len() != 0 {
+            return Err(invalid("restore requires checkpointed backup WAL"));
+        }
+    }
+    let staged_paths: Vec<_> = paths
+        .iter()
+        .map(|(kind, path)| {
+            (
+                *kind,
+                PathBuf::from(format!("{}.ordinary-restore", path.display())),
+            )
+        })
+        .collect();
+    for (_, path) in &staged_paths {
+        for suffix in ["", "-wal", "-shm"] {
+            let temporary = PathBuf::from(format!("{}{suffix}", path.display()));
+            if temporary.exists() {
+                fs::remove_file(temporary)?;
+            }
+        }
+    }
+    for ((_, original), (_, staged)) in paths.iter().zip(&staged_paths) {
+        let entry = manifest
             .files
             .iter()
-            .any(|f| f.source == *path && !f.name.ends_with("-shm"))
-            && path.exists()
+            .find(|entry| entry.source == *original)
+            .unwrap();
+        copy_sync(&dir.join(&entry.name), staged)?;
+    }
+    let mut staged = open_locked(&staged_paths).await?;
+    validate_schema(&mut staged).await?;
+    check_drained(&mut staged).await?;
+    visit_history(&mut staged, retention(&state.source_profile)?, false).await?;
+    fence_core(&mut staged[0].conn).await?;
+    for mut member in staged {
+        sqlx::query("ROLLBACK").execute(&mut member.conn).await?;
+        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(&mut member.conn)
+            .await?;
+        if row.get::<i64, _>(0) != 0 {
+            return Err(invalid("staged restore checkpoint busy"));
+        }
+        member.conn.close().await?;
+        File::open(&member.path)?.sync_all()?;
+        for suffix in ["-wal", "-shm"] {
+            let side = PathBuf::from(format!("{}{suffix}", member.path.display()));
+            if side.exists() {
+                fs::remove_file(side)?;
+            }
+        }
+    }
+    // Publish the fenced core first. No intermediate family can be admitted by
+    // fixed main. All native handles are closed before replacing live files.
+    for ((_, original), (_, staged)) in paths.iter().zip(&staged_paths) {
+        for suffix in ["-wal", "-shm"] {
+            let side = PathBuf::from(format!("{}{suffix}", original.display()));
+            if side.exists() {
+                fs::remove_file(side)?;
+            }
+        }
+        fs::rename(staged, original)?;
+        sync_dir(original.parent().unwrap())?;
+        #[cfg(test)]
+        if original == core
+            && FAIL_DURING_RESTORE
+                .try_with(|enabled| *enabled)
+                .unwrap_or(false)
         {
-            fs::remove_file(path)?;
-        }
-    }
-    for entry in &manifest.files {
-        if entry.name.ends_with("-shm") {
-            continue;
-        }
-        fs::rename(
-            PathBuf::from(format!("{}.ordinary-restore", entry.source.display())),
-            &entry.source,
-        )?;
-    }
-    sync_dir(core.parent().unwrap())?;
-    for entry in &manifest.files {
-        if !entry.name.ends_with("-shm") && digest(&entry.source)? != entry.sha256 {
-            return Err(invalid("restored family bytes do not match backup"));
+            return Err(invalid("test interruption during guarded restore"));
         }
     }
     let mut restored = open_locked(paths).await?;
-    validate_schema(&mut restored).await?;
+    validate_source_schema(&mut restored, FENCED_VERSION).await?;
     check_drained(&mut restored).await?;
     visit_history(&mut restored, retention(&state.source_profile)?, false).await?;
     for member in restored {
         member.conn.close().await?;
+    }
+    // Check exact sibling bytes before the only publication that permits old
+    // main. Copy the original core afresh: never patch its SQLite file bytes.
+    for entry in &manifest.files {
+        if entry.source != core
+            && !entry.name.ends_with("-shm")
+            && !entry.name.ends_with("-wal")
+            && digest(&entry.source)? != entry.sha256
+        {
+            return Err(invalid("restored sibling bytes do not match backup"));
+        }
+    }
+    let entry = manifest
+        .files
+        .iter()
+        .find(|entry| entry.source == core)
+        .unwrap();
+    let final_core = &staged_paths[0].1;
+    copy_sync(&dir.join(&entry.name), final_core)?;
+    for suffix in ["-wal", "-shm"] {
+        let side = PathBuf::from(format!("{}{suffix}", core.display()));
+        if side.exists() {
+            fs::remove_file(side)?;
+        }
+    }
+    fs::rename(final_core, core)?;
+    sync_dir(core.parent().unwrap())?;
+    if digest(core)? != entry.sha256 {
+        return Err(invalid("restored core bytes do not match backup"));
     }
     fs::remove_file(marker(core))?;
     let staged = marker(core).with_extension("json.next");
@@ -1026,7 +1239,7 @@ pub async fn activate_before_runtime(
     if options.get_filename() == Path::new(":memory:") {
         return Ok(());
     }
-    let result = (|| -> Result<()> {
+    let result = async {
         let requested = sqlite_core(&url)?;
         let core = if requested.exists() {
             requested.canonicalize()?
@@ -1051,8 +1264,15 @@ pub async fn activate_before_runtime(
                 ));
             }
             match state.phase.as_str() {
-                "activated" => {}
+                "activated" => {
+                    let paths = family(&core)?;
+                    inspect_handles(&paths, true)?;
+                    ensure_cutover_fence(&paths).await?;
+                }
                 "complete" => {
+                    let paths = family(&core)?;
+                    inspect_handles(&paths, true)?;
+                    ensure_cutover_fence(&paths).await?;
                     state.phase = "activated".into();
                     save_state(&core, &state)?;
                 }
@@ -1063,8 +1283,8 @@ pub async fn activate_before_runtime(
                 }
             }
         }
-        Ok(())
-    })();
+        Ok::<(), Box<dyn Error>>(())
+    }.await;
     result.map_err(|e| KernelError::Invalid(e.to_string()))
 }
 
@@ -1204,6 +1424,157 @@ mod tests {
         }
         result
     }
+    async fn schema_version(core: &Path) -> String {
+        let mut conn = connect(core).await;
+        let version = sqlx::query_scalar(
+            "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key='schema_version'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        conn.close().await.unwrap();
+        version
+    }
+    fn assert_restored_bytes(core: &Path, backup: &Path) {
+        let manifest: Backup =
+            serde_json::from_slice(&fs::read(backup.join("manifest.json")).unwrap()).unwrap();
+        for entry in manifest.files {
+            if !entry.name.ends_with("-wal") && !entry.name.ends_with("-shm") {
+                assert_eq!(
+                    digest(&entry.source).unwrap(),
+                    entry.sha256,
+                    "{}",
+                    entry.name
+                );
+            }
+        }
+        assert!(!marker(core).exists());
+    }
+    #[tokio::test]
+    async fn version_fence_commits_before_business_conversion_and_restore_publishes_original_bytes_last()
+     {
+        let (_temp, core, backup) = fixture(3).await;
+        let error = FAIL_AFTER_VERSION_FENCE
+            .scope(true, run_owned(&core, "run", &backup, Some("small")))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("before business conversion"));
+        assert_eq!(schema_version(&core).await, FENCED_VERSION);
+        assert_eq!(read_state(&core).unwrap().unwrap().phase, "preparing");
+        assert!(
+            activate_before_runtime(Some(&format!("sqlite://{}", core.display())), "small")
+                .await
+                .is_err()
+        );
+        let mut conn = connect(&core).await;
+        assert!(!exists(&mut conn, "ordinary_messages").await.unwrap());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sender_submit_status WHERE model='message'"
+            )
+            .fetch_one(&mut conn)
+            .await
+            .unwrap(),
+            3
+        );
+        conn.close().await.unwrap();
+        let error = FAIL_DURING_RESTORE
+            .scope(true, run_owned(&core, "restore", &backup, None))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("during guarded restore"));
+        assert_eq!(schema_version(&core).await, FENCED_VERSION);
+        assert_eq!(read_state(&core).unwrap().unwrap().phase, "restoring");
+        run_owned(&core, "restore", &backup, None).await.unwrap();
+        assert_restored_bytes(&core, &backup);
+        assert_eq!(schema_version(&core).await, SOURCE_VERSION);
+    }
+    #[tokio::test]
+    async fn legacy_complete_restore_fences_before_closing_original_family() {
+        let (_temp, core, backup) = fixture(1).await;
+        run_owned(&core, "run", &backup, Some("small"))
+            .await
+            .unwrap();
+        // Explicit test injection of the real C15/C16 pre-fence header shape.
+        exec(&core, "UPDATE pushgo_schema_meta SET meta_value='2026-08-20-gateway-v12' WHERE meta_key='schema_version'").await;
+        assert_eq!(schema_version(&core).await, SOURCE_VERSION);
+        let error = FAIL_BEFORE_RESTORE_STAGE
+            .scope(true, run_owned(&core, "restore", &backup, None))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("before restore staging"));
+        assert_eq!(read_state(&core).unwrap().unwrap().phase, "restoring");
+        assert_eq!(schema_version(&core).await, FENCED_VERSION);
+        run_owned(&core, "restore", &backup, None).await.unwrap();
+        assert_restored_bytes(&core, &backup);
+        assert_eq!(schema_version(&core).await, SOURCE_VERSION);
+    }
+    #[tokio::test]
+    async fn preparing_pristine_v12_intent_restores_but_never_activates() {
+        let (_temp, core, backup_dir) = fixture(1).await;
+        let paths = family(&core).unwrap();
+        let members = open_locked(&paths).await.unwrap();
+        backup(&members, &backup_dir, "small").unwrap();
+        for member in members {
+            member.conn.close().await.unwrap();
+        }
+        let state = State {
+            format: FORMAT.into(),
+            phase: "preparing".into(),
+            backup: backup_dir.canonicalize().unwrap(),
+            source_profile: "small".into(),
+        };
+        save_state(&core, &state).unwrap();
+        assert_eq!(schema_version(&core).await, SOURCE_VERSION);
+        let url = format!("sqlite://{}", core.display());
+        assert!(activate_before_runtime(Some(&url), "small").await.is_err());
+        exec(&core, "CREATE TABLE not_pristine(value TEXT)").await;
+        let error = run_owned(&core, "restore", &backup_dir, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("schema"), "{error}");
+        assert_eq!(read_state(&core).unwrap().unwrap().phase, "preparing");
+        exec(&core, "DROP TABLE not_pristine").await;
+        // A torn prepared-state write must fall back to the stable intent.
+        fs::write(marker(&core).with_extension("json.next"), b"{\"format\":").unwrap();
+        run_owned(&core, "restore", &backup_dir, None)
+            .await
+            .unwrap();
+        assert_restored_bytes(&core, &backup_dir);
+        assert_eq!(schema_version(&core).await, SOURCE_VERSION);
+    }
+    #[tokio::test]
+    async fn complete_and_activated_legacy_markers_require_canonical_identity_before_version_upgrade()
+     {
+        let (_temp, core, backup) = fixture(3).await;
+        run_owned(&core, "run", &backup, Some("small"))
+            .await
+            .unwrap();
+        let url = format!("sqlite://{}", core.display());
+        assert_eq!(schema_version(&core).await, FENCED_VERSION);
+        // C15/C16 complete datasets used the same marker format and v12 header.
+        exec(&core, "UPDATE pushgo_schema_meta SET meta_value='2026-08-20-gateway-v12' WHERE meta_key='schema_version'").await;
+        activate_before_runtime(Some(&url), "small").await.unwrap();
+        assert_eq!(schema_version(&core).await, FENCED_VERSION);
+        activate_before_runtime(Some(&url), "small").await.unwrap();
+        assert_eq!(schema_version(&core).await, FENCED_VERSION);
+        exec(&core, "DROP TABLE ordinary_messages").await;
+        assert!(activate_before_runtime(Some(&url), "small").await.is_err());
+        let (_temp, core, backup) = fixture(0).await;
+        let state = State {
+            format: FORMAT.into(),
+            phase: "complete".into(),
+            backup,
+            source_profile: "small".into(),
+        };
+        save_state(&core, &state).unwrap();
+        assert!(
+            activate_before_runtime(Some(&format!("sqlite://{}", core.display())), "small")
+                .await
+                .is_err()
+        );
+        assert_eq!(schema_version(&core).await, SOURCE_VERSION);
+    }
     #[tokio::test]
     async fn paged_identity_cutover_preserves_scope_times_shared_history_and_restores_all_four_files()
      {
@@ -1284,6 +1655,7 @@ mod tests {
             );
         }
         run_owned(&core, "restore", &backup, None).await.unwrap();
+        assert_restored_bytes(&core, &backup);
         assert_eq!(shared_snapshot(&core).await, shared_before);
         let mut c = connect(&core).await;
         assert!(!exists(&mut c, "ordinary_messages").await.unwrap());
@@ -1624,6 +1996,7 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("after core COMMIT"));
         assert_eq!(read_state(&core).unwrap().unwrap().phase, "prepared");
+        assert_eq!(schema_version(&core).await, FENCED_VERSION);
         let url = format!("sqlite://{}", core.display());
         assert!(activate_before_runtime(Some(&url), "small").await.is_err());
         let mut c = connect(&core).await;
@@ -1648,6 +2021,7 @@ mod tests {
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM semantic_id_registry WHERE dedupe_key LIKE 'semantic:%:message:%'").fetch_one(&mut c).await.unwrap(),260);
         c.close().await.unwrap();
         run_owned(&core, "restore", &backup, None).await.unwrap();
+        assert_restored_bytes(&core, &backup);
         assert_eq!(shared_snapshot(&core).await, shared_before);
         let second_backup = core.parent().unwrap().join("after-restored-backup");
         run_owned(&core, "run", &second_backup, Some("small"))
@@ -1701,7 +2075,7 @@ mod tests {
                 assert!(!marker(&core).exists());
             }
         }
-        // Interrupt the initial prepared write: the complete backup exists but
+        // Interrupt the initial preparing write: the complete backup exists but
         // no main DB conversion was committed, and no stable state exists yet.
         let (_temp, core, backup_dir) = fixture(1).await;
         let paths = family(&core).unwrap();
