@@ -1,6 +1,6 @@
 # Gateway managed database upgrade
 
-The C ordinary-ledger cutover is a separate, narrowly supported offline operation. See [C15 SQLite historical cutover](c15-sqlite-historical-cutover.md) for the fixed-main/v12, globally drained SQLite subset, explicit source-retention provenance, full database-family backup, and activation/restore boundary. `--db-upgrade run` alone does not perform that cutover. Directly starting the old binary is **not** blocked by the new marker; universal downgrade protection remains unverified and unsupported.
+The C ordinary-ledger cutover is a separate, narrowly supported offline operation. See [C15 SQLite historical cutover](c15-sqlite-historical-cutover.md) and [C16 native PostgreSQL/MySQL cutover](c16-native-historical-cutover.md) for the fixed-main/v12, globally drained zero-target-history subset, explicit source-retention provenance, native backup/recovery and activation/restore boundary. `--db-upgrade run` alone does not perform that cutover. Directly starting the old binary is **not** blocked by the new marker; universal downgrade protection remains unverified and unsupported. The following managed-upgrade procedure is not a substitute for the separate cutover's backup and restore commands.
 
 The managed upgrade path is `pushgo-gateway --db-upgrade plan|run`. Run it with exactly one gateway process against the target database. Do not mix beta and stable gateway processes while applying the 1.3.0 database semantics.
 
