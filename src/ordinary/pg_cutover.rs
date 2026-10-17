@@ -706,8 +706,6 @@ async fn run_owned(
     let status = native("pg_dump", url)?
         .args([
             "--format=custom",
-            "--no-owner",
-            "--no-privileges",
             "--exclude-table=public.pushgo_product_owner",
             "--exclude-table=public.pushgo_ordinary_cutover",
         ])
@@ -830,8 +828,6 @@ async fn restore(
             "--if-exists",
             "--single-transaction",
             "--exit-on-error",
-            "--no-owner",
-            "--no-privileges",
             "--dbname",
         ])
         .arg(database)
