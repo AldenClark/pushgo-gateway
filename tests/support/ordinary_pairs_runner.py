@@ -117,11 +117,15 @@ def main():
     parser.add_argument("--mode", choices=("preflight", "formal"), required=True)
     parser.add_argument("--campaign", required=True)
     parser.add_argument("--preflight-report", type=Path)
+    parser.add_argument("--blocked-versions", choices=("M",))
+    parser.add_argument("--blocked-reason", type=Path)
     args = parser.parse_args()
     assert args.campaign.replace("-", "").isalnum(), "simple fresh campaign label required"
     out = args.output.resolve(strict=True)
     audit = out / "audit"
     ids = json.loads(args.manifest.read_text())
+    blocked = {args.blocked_versions} if args.blocked_versions else set()
+    assert not blocked or (args.mode == "formal" and args.blocked_reason and args.blocked_reason.is_file())
     for version in ("M", "P", "C", "harness"):
         binary = Path(ids[version]["path"])
         assert binary.is_absolute() and binary.is_file() and os.access(binary, os.X_OK)
@@ -149,11 +153,12 @@ def main():
     assert shutil.disk_usage(out).free >= RESERVE, "resource STOP before launch"
     plan_path = audit / f"{args.campaign}-plan.json"
     write_new(plan_path, plan)
+    selected = [spec for spec in plan if spec["version"] not in blocked]
     env = {k:v for k,v in os.environ.items() if not k.startswith(("PUSHGO_", "C12_", "C13_"))}
     env["C12_TEST_SECRET"] = uuid.uuid4().hex
     env["C13_RUN_MODE"] = args.mode
     completed = []
-    for spec in plan:
+    for spec in selected:
         name = f"g{spec['group']}-{spec['version']}"
         free = shutil.disk_usage(out).free
         if free < RESERVE:
@@ -207,13 +212,18 @@ def main():
         if code != 0 or stop or not valid or not receipt["binary_unchanged"]:
             break
         time.sleep(3)
+    selected_pass = len(completed) == len(selected) and all(passed_receipt(r) for r in completed)
     result = {"mode":args.mode,"campaign":args.campaign,"planned":len(plan),
+              "selected":len(selected),"all_selected_pass":selected_pass,
+              "blocked":[spec for spec in plan if spec["version"] in blocked],
+              "blocked_reason":str(args.blocked_reason) if args.blocked_reason else None,
+              "blocked_reason_sha256":digest(args.blocked_reason) if args.blocked_reason else None,
               "manifest_sha256":digest(args.manifest),"runner_sha256":digest(Path(__file__)),
-              "completed":completed,"not_run":plan[len(completed):],
+              "completed":completed,"not_run":[spec for spec in plan if not Path(spec["receipt"]).exists()],
               "all_pass":len(completed) == len(plan) and all(passed_receipt(r) for r in completed)}
     write_new(audit/f"{args.campaign}-result.json", result)
-    print(json.dumps({k:result[k] for k in ("mode","planned","all_pass")}), flush=True)
-    return 0 if result["all_pass"] else 1
+    print(json.dumps({k:result[k] for k in ("mode","planned","selected","all_selected_pass","all_pass")}), flush=True)
+    return 0 if selected_pass else 1
 
 
 if __name__ == "__main__":
