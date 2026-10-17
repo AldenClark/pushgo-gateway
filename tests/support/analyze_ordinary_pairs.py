@@ -309,6 +309,10 @@ def summarize_run(spec):
 
     passed = passed and not negative
     state = "complete_pass" if passed else ("failed_or_incomplete" if rows else "not_run")
+    if not rows and spec.get("blocked_reason"):
+        state = "blocked"
+    elif rows and not passed and spec.get("outcome_classification") == "valid_failed_product":
+        state = "valid_failed_product"
 
     phase_rows = events["phase_resources"]
     resource_rows = events["resources"]
@@ -422,6 +426,7 @@ def summarize_run(spec):
         "mode": run_mode,
         "state": state,
         "performance_comparison_eligible": passed and not negative,
+        "execution_annotation": spec.get("blocked_reason", spec.get("outcome_classification")),
         "journey_sha256": sha256(journey) if journey.is_file() else None,
         "receipt": str(receipt_path) if receipt_path else None,
         "receipt_sha256": sha256(receipt_path) if receipt_path and receipt_path.is_file() else None,
@@ -464,7 +469,8 @@ def summarize_run(spec):
 def compact(run):
     gateway = run["resources"]["gateway"]
     admission = run["admission_ms"]["all"]
-    return {
+    complete_targets = run["counts"]["missing_terminal_targets"] == 0
+    row = {
         "group": run["group"],
         "version": run["version"],
         "state": run["state"],
@@ -476,9 +482,9 @@ def compact(run):
         "offer_to_success_p50_ms": admission["planned_to_success"]["p50"],
         "offer_to_success_p95_ms": admission["planned_to_success"]["p95"],
         "offer_to_success_p99_ms": admission["planned_to_success"]["p99"],
-        "offer_to_commit_p95_ms": run["target_ms"]["all"]["all"]["planned_to_commit_visible"]["p95"],
-        "offer_to_commit_p99_ms": run["target_ms"]["all"]["all"]["planned_to_commit_visible"]["p99"],
-        "ack_to_commit_p95_ms": run["target_ms"]["all"]["all"]["ack_sent_to_commit_visible"]["p95"],
+        "offer_to_commit_p95_ms": run["target_ms"]["all"]["all"]["planned_to_commit_visible"]["p95"] if complete_targets else None,
+        "offer_to_commit_p99_ms": run["target_ms"]["all"]["all"]["planned_to_commit_visible"]["p99"] if complete_targets else None,
+        "ack_to_commit_p95_ms": run["target_ms"]["all"]["all"]["ack_sent_to_commit_visible"]["p95"] if complete_targets else None,
         "active_cpu_seconds": gateway["active"]["cpu_seconds"] if gateway["active"] else None,
         "warm_idle_cpu_seconds": gateway["warm_idle"]["cpu_seconds"] if gateway["warm_idle"] else None,
         "idle_cpu_seconds": gateway["post_drain_idle"]["cpu_seconds"] if gateway["post_drain_idle"] else None,
@@ -488,6 +494,11 @@ def compact(run):
         "input_end_pending_targets": run["input_end_backlog"]["pending_targets"] if run["input_end_backlog"] else None,
         "drain_seconds": run["rates"]["drain_after_last_scheduled_offer_seconds"],
     }
+    if run["state"] in ("blocked", "not_run"):
+        # Missing planned coverage is not an actual queue or rejected send.
+        for key in ("messages_accepted", "persisted_messages", "targets_committed", "unfinished"):
+            row[key] = None
+    return row
 
 
 def paired_results(runs):
@@ -531,7 +542,7 @@ def markdown(report):
     lines = [
         "# C13 fixed normal-product paired results", "",
         "Latency percentiles use completed samples and retain the fixed 136-message / 272-target denominators and missing counts.", "",
-        "|Group|Version|State|Accepted / persisted|Committed / unfinished|Start→success p95 ms|Offer→success p50 / p95 / p99 ms|Offer→commit p95 / p99 ms|Active CPU s|Peak / idle RSS MiB|Peak / input-end backlog|Drain s|",
+        "|Group|Version|State|Accepted / persisted|Committed / missing expected coverage|Start→success p95 ms|Offer→success p50 / p95 / p99 ms|Offer→commit p95 / p99 ms|Active CPU s|Peak / idle RSS MiB|Peak / input-end backlog|Drain s|",
         "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in report["nine_run_table"]:
