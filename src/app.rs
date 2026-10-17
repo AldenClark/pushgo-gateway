@@ -541,6 +541,11 @@ pub async fn build_app(
         ordinary_health.clone(),
     )
     .await?;
+    // A migrated SQLite dataset crosses the conservative rollback boundary
+    // before Storage initialization, maintenance, ACK or any network work.
+    crate::ordinary::sqlite_cutover::activate_before_runtime(
+        args.db_url.as_deref(), runtime_tuning.profile.as_str(),
+    ).await?;
     let store = Storage::new_with_config(StorageInitConfig {
         db_url: args.db_url.clone(),
         runtime_profile: runtime_tuning.profile,

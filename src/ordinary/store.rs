@@ -255,6 +255,7 @@ pub struct DeliveryStore {
 #[cfg(test)]
 #[derive(Default)]
 pub(super) struct TestHooks {
+    pub delivery_candidates: std::sync::Mutex<std::collections::VecDeque<String>>,
     pub claim_after_commit: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
     pub accept_after_commit: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
     pub receipt_with_gate: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
@@ -309,8 +310,14 @@ pub(super) const RECOVER_RUNNING_SQL: &str = "UPDATE ordinary_targets SET state=
 // never scans every retained target; the existing index bounds each token probe.
 // Matching retirement work and its ORDER BY remain data dependent.
 pub(super) const RETIRE_TOKEN_TARGETS_SQL: &str = "SELECT t.delivery_id,t.device_key FROM ordinary_retired_provider_tokens r CROSS JOIN ordinary_targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.delivery_mode='provider' AND t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256";
+// Historical identities share the ordinary authority but have no invented wire
+// identity, fingerprint or delivery TTL. A nullable UNIQUE delivery key remains
+// the parent key of live targets; no target can reference a historical NULL.
+pub(crate) const MESSAGE_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS ordinary_messages(delivery_id TEXT UNIQUE,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,thing_id TEXT,fingerprint TEXT,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER,dedupe_until INTEGER NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,pending_targets INTEGER NOT NULL DEFAULT 0,provider_accepted_count INTEGER NOT NULL DEFAULT 0,provider_failed_count INTEGER NOT NULL DEFAULT 0,provider_target_count INTEGER NOT NULL DEFAULT 0,private_enqueued_count INTEGER NOT NULL DEFAULT 0,private_rejected_count INTEGER NOT NULL DEFAULT 0,identity_state TEXT NOT NULL DEFAULT 'live',CHECK((identity_state='live' AND delivery_id IS NOT NULL AND fingerprint IS NOT NULL AND expires_at IS NOT NULL) OR (identity_state='legacy_unverifiable' AND delivery_id IS NULL AND fingerprint IS NULL AND expires_at IS NULL AND payload_bytes=0 AND length(payload_blob)=0 AND status='historical_unverifiable' AND pending_targets=0 AND provider_target_count=0 AND private_enqueued_count=0 AND provider_accepted_count=0 AND provider_failed_count=0 AND private_rejected_count=0)));
+";
 const SCHEMA:&str="
-CREATE TABLE IF NOT EXISTS ordinary_messages(delivery_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,thing_id TEXT,fingerprint TEXT NOT NULL,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,dedupe_until INTEGER NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,pending_targets INTEGER NOT NULL DEFAULT 0,provider_accepted_count INTEGER NOT NULL DEFAULT 0,provider_failed_count INTEGER NOT NULL DEFAULT 0,provider_target_count INTEGER NOT NULL DEFAULT 0,private_enqueued_count INTEGER NOT NULL DEFAULT 0,private_rejected_count INTEGER NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX IF NOT EXISTS ordinary_historical_op ON ordinary_messages(lower(op_id)) WHERE identity_state='legacy_unverifiable';
 CREATE TABLE IF NOT EXISTS ordinary_widget_refresh(delivery_id TEXT PRIMARY KEY,channel_id BLOB NOT NULL UNIQUE CHECK(length(channel_id)=16),coalesce_order INTEGER NOT NULL UNIQUE,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS ordinary_widget_refresh_expiry ON ordinary_widget_refresh(expires_at,delivery_id);
 CREATE TABLE IF NOT EXISTS ordinary_targets(delivery_id TEXT NOT NULL REFERENCES ordinary_messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,pull_owner TEXT NOT NULL DEFAULT '',owner_generation INTEGER NOT NULL DEFAULT 0,control_epoch INTEGER NOT NULL DEFAULT 0,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,route_generation INTEGER NOT NULL DEFAULT 0,accepted_at INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,delivery_mode TEXT NOT NULL DEFAULT 'provider',delivery_epoch INTEGER NOT NULL DEFAULT 0,private_claim TEXT,private_group TEXT,watch_alert_deadline_at INTEGER,PRIMARY KEY(delivery_id,device_key));
@@ -536,8 +543,8 @@ impl DeliveryStore {
                 "ordinary budgets and full 30-day identity retention required".into(),
             ));
         }
-        // This release has no old-ledger migration. Refuse a partial cutover
-        // rather than retain two ordinary identity owners or lose an identity.
+        // Only the explicit offline cutover may transfer supported drained
+        // histories. Never silently retain a second ordinary identity owner.
         let old: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sender_submit_status WHERE model='message' AND expires_at>?) OR EXISTS(SELECT 1 FROM semantic_id_registry WHERE dedupe_key LIKE 'semantic:%:message:%' AND (expires_at IS NULL OR expires_at>?))")
             .bind(now()).bind(now()).fetch_one(&pool).await?;
         if old {
@@ -560,6 +567,12 @@ impl DeliveryStore {
     }
     async fn initialize(&self) -> Result<()> {
         let mut connection = SqliteWriteConnection::acquire(&self.pool).await?;
+        sqlx::raw_sql(MESSAGE_SCHEMA).execute(&mut *connection).await?;
+        let has_identity_state: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pragma_table_info('ordinary_messages') WHERE name='identity_state')")
+            .fetch_one(&mut *connection).await?;
+        if !has_identity_state {
+            return Err(KernelError::Invalid("ordinary identity schema requires an explicit offline upgrade; prior C candidate databases are not a fixed-main migration source".into()));
+        }
         sqlx::raw_sql(SCHEMA).execute(&mut *connection).await?;
         let channel_unique: bool = sqlx::query_scalar(r#"SELECT EXISTS(SELECT 1 FROM pragma_index_list('ordinary_widget_refresh') idx WHERE idx."unique"=1 AND idx.partial=0 AND (SELECT COUNT(*) FROM pragma_index_info(idx.name))=1 AND EXISTS(SELECT 1 FROM pragma_index_info(idx.name) col WHERE col.name='channel_id'))"#)
             .fetch_one(&mut *connection).await?;
@@ -628,6 +641,26 @@ impl DeliveryStore {
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceTargets, sqlx::query("DELETE FROM ordinary_retired_provider_tokens WHERE rowid IN (SELECT r.rowid FROM ordinary_retired_provider_tokens r WHERE NOT EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.delivery_mode='provider' AND t.platform=r.platform AND t.provider_token=r.provider_token AND t.control_epoch<r.control_epoch) LIMIT 256)").execute(&mut **tx)).await?;
         Ok(())
     }
+    async fn allocate_delivery_id(&self) -> Result<String> {
+        for _ in 0..4 {
+            #[cfg(test)]
+            let candidate = self.hooks.delivery_candidates.lock().expect("test candidates").pop_front().unwrap_or_else(generate_hex_id_128);
+            #[cfg(not(test))]
+            let candidate = generate_hex_id_128();
+            let collision: bool = if let Some(pool) = self.legacy_dispatch_pool.get() {
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dispatch_delivery_dedupe WHERE dedupe_key=?)")
+                    .bind(format!("delivery:{candidate}"))
+                    .fetch_one(pool).await?
+            } else {
+                false
+            };
+            if !collision {
+                return Ok(candidate);
+            }
+        }
+        Err(KernelError::Unavailable)
+    }
+
     pub async fn accept(&self, request: AcceptRequest) -> Result<Accepted> {
         let authorized_channel = request.authorized_channel;
         let admission_started = std::time::Instant::now();
@@ -709,7 +742,10 @@ impl DeliveryStore {
         if other_scope {
             return Err(KernelError::ScopeConflict);
         }
-        if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,thing_id,fingerprint,status,provider_target_count,private_enqueued_count FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
+        if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,thing_id,fingerprint,status,provider_target_count,private_enqueued_count,identity_state FROM ordinary_messages WHERE (op_id=? OR (identity_state='legacy_unverifiable' AND lower(op_id)=lower(?))) AND dedupe_until>?").bind(&request.op_id).bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
+            if row.get::<String,_>("identity_state")=="legacy_unverifiable" {
+                return Err(KernelError::Control { status:409, code:"historical_identity_unverifiable", message:"historical message identity is retained, but its original request cannot be verified; use a new op_id".into() });
+            }
             if row.get::<String,_>("channel_id")!=request.channel_id {return Err(KernelError::ScopeConflict)}
             if row.get::<Option<String>,_>("thing_id")!=request.thing_id {return Err(KernelError::ScopeConflict)}
             if row.get::<String,_>("fingerprint")!=request.fingerprint {return Err(KernelError::Conflict)}
@@ -730,6 +766,10 @@ impl DeliveryStore {
             .await?;
         let at = now();
         let legacy_provider = self.legacy_active_provider_count().await?;
+        // Do not hold the core write transaction while reading the dispatch
+        // sidecar. Existing independent collision reservations remain effective
+        // even when the original operation-to-delivery relation was lost.
+        let delivery_id = self.allocate_delivery_id().await?;
         let mut tx = self
             .counters
             .profile
@@ -743,7 +783,6 @@ impl DeliveryStore {
         // An exact expired identity can be replaced even if bounded GC has backlog.
         self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("DELETE FROM ordinary_messages WHERE op_id=? AND dedupe_until<=? AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running')").bind(&request.op_id).bind(at).execute(&mut *tx)).await?;
         let _compute = self.counters.profile.timer(Path::Accept, Phase::Compute);
-        let delivery_id = generate_hex_id_128();
         let message_id = generate_hex_id_128();
         let expires = request
             .ttl
@@ -971,7 +1010,7 @@ impl DeliveryStore {
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryStatus, sqlx::query("UPDATE ordinary_messages SET status=CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=? WHERE status='provider_queued' AND provider_failed_count>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets outstanding WHERE outstanding.delivery_id=ordinary_messages.delivery_id AND outstanding.provider IN ('FCM','APNS','WNS') AND (outstanding.state='running' OR (outstanding.delivery_mode='provider' AND outstanding.acked_at IS NULL AND outstanding.state IN ('pending','retry_wait')))) AND delivery_id IN (SELECT delivery_id FROM ordinary_messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).bind(at).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryDelete, sqlx::query("DELETE FROM ordinary_targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id IN (SELECT delivery_id FROM ordinary_messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryPayload, sqlx::query("UPDATE ordinary_messages SET payload_blob=X'',payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND acked_at IS NULL) AND delivery_id IN (SELECT delivery_id FROM ordinary_messages WHERE expires_at<=? AND payload_bytes>0 ORDER BY expires_at LIMIT 256)").bind(at).execute(&mut **tx)).await?;
-        let removed=self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceRetention, sqlx::query("DELETE FROM ordinary_messages WHERE delivery_id IN (SELECT delivery_id FROM ordinary_messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)").bind(at).execute(&mut **tx)).await?.rows_affected();
+        let removed=self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceRetention, sqlx::query("DELETE FROM ordinary_messages WHERE op_id IN (SELECT op_id FROM ordinary_messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running') ORDER BY dedupe_until,op_id LIMIT 256)").bind(at).execute(&mut **tx)).await?.rows_affected();
         Ok(removed as usize)
     }
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
@@ -1560,7 +1599,10 @@ impl DeliveryStore {
     pub async fn status(&self, op: &str) -> Result<Value> {
         self.health.ensure()?;
         let op = crate::ordinary::sender::op_id(op)?;
-        let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.pool.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
+        let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.pool.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until,identity_state,channel_id,thing_id FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
+        if row.get::<String,_>("identity_state")=="legacy_unverifiable" {
+            return Ok(json!({"op_id":row.get::<String,_>("op_id"),"status":"historical_unverifiable","identity_state":"legacy_unverifiable","model":"message","entity_id":row.get::<String,_>("message_id"),"channel_id":row.get::<String,_>("channel_id"),"thing_id":row.get::<Option<String>,_>("thing_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until"),"delivery_id":null,"delivery_expires_at":null,"dispatch_status":"not_attempted"}));
+        }
         Ok(
             json!({"op_id":row.get::<String,_>("op_id"),"status":row.get::<String,_>("status"),"model":"message","entity_id":row.get::<String,_>("message_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until")}),
         )

@@ -82,6 +82,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     init_native_tracing(observability.log_level);
     pushgo_gateway::util::set_sandbox_mode(args.sandbox_mode);
     pushgo_gateway::util::install_panic_trace_hook();
+    if let Some(mode) = args.ordinary_cutover.as_deref() {
+        let database = args.db_url.as_deref().ok_or("--db-url is required for offline cutover")?;
+        let backup = args.ordinary_cutover_backup.as_deref().ok_or("--ordinary-cutover-backup is required")?;
+        pushgo_gateway::ordinary::sqlite_cutover::run(database, mode, backup, args.ordinary_source_profile.as_deref()).await?;
+        return Ok(());
+    }
     if let Some(mode) = args.db_upgrade.as_deref() {
         run_db_upgrade_subpath(&args, mode).await?;
         return Ok(());

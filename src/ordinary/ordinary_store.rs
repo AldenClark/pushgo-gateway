@@ -114,6 +114,14 @@ impl OrdinaryStore {
 
 impl OrdinaryStore {
     #[cfg(test)]
+    pub(crate) fn sqlite_for_test(&self) -> &DeliveryStore {
+        match &self.backend {
+            Backend::Sqlite(store) => store,
+            _ => panic!("SQLite-only test"),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) async fn next_widget_refresh(
         &self,
     ) -> Result<Option<super::widget_refresh::WidgetRefresh>> {

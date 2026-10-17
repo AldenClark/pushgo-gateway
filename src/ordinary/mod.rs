@@ -24,6 +24,7 @@ pub use store::{
 };
 
 pub(crate) mod legacy;
+pub mod sqlite_cutover;
 
 pub mod ingress;
 #[cfg(test)]

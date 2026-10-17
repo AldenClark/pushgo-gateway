@@ -286,6 +286,18 @@ pub struct Args {
     #[arg(env = "PUSHGO_DB_UPGRADE", long = "db-upgrade")]
     pub db_upgrade: Option<String>,
 
+    /// Offline fixed-main SQLite history cutover only: plan, run or restore.
+    #[arg(long, value_parser = ["plan", "run", "restore"], conflicts_with = "db_upgrade")]
+    pub ordinary_cutover: Option<String>,
+
+    /// Fresh verified SQLite family backup directory for the offline cutover.
+    #[arg(long, requires = "ordinary_cutover")]
+    pub ordinary_cutover_backup: Option<std::path::PathBuf>,
+
+    /// Explicit source configuration provenance; never inferred from the DB.
+    #[arg(long, value_parser = ["small", "public"], requires = "ordinary_cutover")]
+    pub ordinary_source_profile: Option<String>,
+
     /// QUIC bind address for the private transport listener.
     #[arg(
         env = "PUSHGO_PRIVATE_QUIC_BIND",
