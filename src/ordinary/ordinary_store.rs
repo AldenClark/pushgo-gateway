@@ -114,6 +114,14 @@ impl OrdinaryStore {
 
 impl OrdinaryStore {
     #[cfg(test)]
+    pub(crate) fn pg_test_store(&self) -> &PgDeliveryStore {
+        match &self.backend {
+            Backend::Postgres(store) => store,
+            _ => panic!("PostgreSQL-only test"),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn sqlite_for_test(&self) -> &DeliveryStore {
         match &self.backend {
             Backend::Sqlite(store) => store,

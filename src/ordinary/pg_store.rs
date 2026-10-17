@@ -20,6 +20,8 @@ pub struct PgDeliveryStore {
     pub counters: Arc<Counters>,
     pub(super) wake: [Arc<Notify>; 3],
     pub(super) health: Arc<Health>,
+    #[cfg(test)]
+    pub(super) delivery_candidates: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
 }
 struct AdmissionWake(PgDeliveryStore);
 impl Drop for AdmissionWake {
@@ -34,6 +36,8 @@ pub(super) const RECOVER_RUNNING_SQL: &str = "UPDATE ordinary_targets SET state=
 // never scans every retained target; the existing index bounds each token probe.
 // Matching retirement work and its ORDER BY remain data dependent.
 pub(super) const RETIRE_TOKEN_TARGETS_SQL: &str = "SELECT t.delivery_id,t.device_key FROM ordinary_retired_provider_tokens r JOIN ordinary_targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.delivery_mode='provider' AND t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256";
+
+pub(crate) const MESSAGE_SCHEMA: &str = include_str!("pg_message_schema.sql");
 
 impl PgDeliveryStore {
     pub(crate) fn fail_closed(&self, reason: &str) {
@@ -103,6 +107,8 @@ impl PgDeliveryStore {
             health,
             counters,
             wake: std::array::from_fn(|_| Arc::new(Notify::new())),
+            #[cfg(test)]
+            delivery_candidates: Arc::new(std::sync::Mutex::new(Default::default())),
         };
         store.initialize().await?;
         Ok(store)
@@ -112,6 +118,12 @@ impl PgDeliveryStore {
     async fn initialize(&self) -> Result<()> {
         let mut connection = self.acquire().await?;
         let mut tx = Self::begin_ordinary(&mut connection).await?;
+        let prior_identity_schema: bool = sqlx::query_scalar("SELECT to_regclass('ordinary_messages') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('ordinary_messages') AND attname='identity_state' AND NOT attisdropped)")
+            .fetch_one(&mut *tx).await?;
+        if prior_identity_schema {
+            return Err(KernelError::Invalid("ordinary identity schema requires an explicit offline upgrade; prior C candidate databases are not a fixed-main migration source".into()));
+        }
+        sqlx::raw_sql(MESSAGE_SCHEMA).execute(&mut *tx).await?;
         sqlx::raw_sql(include_str!("pg_schema.sql"))
             .execute(&mut *tx)
             .await?;
@@ -140,6 +152,31 @@ impl PgDeliveryStore {
         self.maintenance().await?;
         Ok(())
     }
+    // The fixed-main independent collision reservations have no trustworthy
+    // operation relationship. Preserve them and probe their primary key even
+    // after all ordinary legacy operations have been converted offline.
+    async fn allocate_delivery_id_tx(&self, tx: &mut Transaction<'_, Postgres>) -> Result<String> {
+        for _ in 0..4 {
+            #[cfg(test)]
+            let candidate = self
+                .delivery_candidates
+                .lock()
+                .expect("test candidates")
+                .pop_front()
+                .unwrap_or_else(generate_hex_id_128);
+            #[cfg(not(test))]
+            let candidate = generate_hex_id_128();
+            let collision: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dispatch_delivery_dedupe WHERE dedupe_key=$1) OR EXISTS(SELECT 1 FROM ordinary_messages WHERE delivery_id=$2)")
+                .bind(format!("delivery:{candidate}"))
+                .bind(&candidate)
+                .fetch_one(&mut **tx).await?;
+            if !collision {
+                return Ok(candidate);
+            }
+        }
+        Err(KernelError::Unavailable)
+    }
+
     pub async fn accept(&self, request: AcceptRequest) -> Result<Accepted> {
         let admission_started = std::time::Instant::now();
         let authorized_channel = request.authorized_channel;
@@ -216,6 +253,13 @@ impl PgDeliveryStore {
         if occupied {
             return Err(KernelError::ScopeConflict);
         }
+        // The historical alias probe has its own partial expression index.
+        // It precedes scope/fingerprint decoding and leaves new live op IDs
+        // case-sensitive, including when the caller changes channel or Thing.
+        let historical: bool = self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_messages WHERE identity_state='legacy_unverifiable' AND lower(op_id)=lower($1) AND dedupe_until>$2)").bind(&request.op_id).bind(at).fetch_one(&mut *tx)).await?;
+        if historical {
+            return Err(KernelError::Control { status:409, code:"historical_identity_unverifiable", message:"historical message identity is retained, but its original request cannot be verified; use a new op_id".into() });
+        }
         // Reclaim expired delivery bodies independently of their identity history.
         self.maintain_tx(&mut tx, at).await?;
         if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,thing_id,fingerprint,status,provider_target_count,private_enqueued_count FROM ordinary_messages WHERE op_id=$1 AND dedupe_until>$2").bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
@@ -227,7 +271,7 @@ impl PgDeliveryStore {
         // An exact expired identity can be replaced even if bounded GC has backlog.
         self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("DELETE FROM ordinary_messages WHERE op_id=$1 AND dedupe_until<=$2 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running')").bind(&request.op_id).bind(at).execute(&mut *tx)).await?;
         let _compute = self.counters.profile.timer(Path::Accept, Phase::Compute);
-        let delivery_id = generate_hex_id_128();
+        let delivery_id = self.allocate_delivery_id_tx(&mut tx).await?;
         let message_id = generate_hex_id_128();
         let expires = request
             .ttl
@@ -654,7 +698,7 @@ impl PgDeliveryStore {
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryStatus, sqlx::query("UPDATE ordinary_messages SET status=CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END,updated_at=$1 WHERE status='provider_queued' AND provider_failed_count>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets outstanding WHERE outstanding.delivery_id=ordinary_messages.delivery_id AND outstanding.provider IN ('FCM','APNS','WNS') AND (outstanding.state='running' OR (outstanding.delivery_mode='provider' AND outstanding.acked_at IS NULL AND outstanding.state IN ('pending','retry_wait')))) AND delivery_id=ANY($2)").bind(at).bind(&expiring).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryDelete, sqlx::query("DELETE FROM ordinary_targets WHERE acked_at IS NOT NULL AND state!='running' AND delivery_id=ANY($1)").bind(&expiring).execute(&mut **tx)).await?;
         self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceExpiryPayload, sqlx::query("UPDATE ordinary_messages SET payload_blob=''::bytea,payload_bytes=0 WHERE payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND acked_at IS NULL) AND delivery_id=ANY($1)").bind(&expiring).execute(&mut **tx)).await?;
-        let removed=self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceRetention, sqlx::query("DELETE FROM ordinary_messages WHERE delivery_id IN (SELECT delivery_id FROM ordinary_messages WHERE dedupe_until<=$1 AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running') ORDER BY dedupe_until LIMIT 256)").bind(at).execute(&mut **tx)).await?.rows_affected();
+        let removed=self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceRetention, sqlx::query("DELETE FROM ordinary_messages WHERE op_id IN (SELECT op_id FROM ordinary_messages WHERE dedupe_until<=$1 AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running') ORDER BY dedupe_until,op_id LIMIT 256)").bind(at).execute(&mut **tx)).await?.rows_affected();
         Ok(removed as usize)
     }
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
@@ -1107,7 +1151,12 @@ impl PgDeliveryStore {
     }
     pub async fn status(&self, op: &str) -> Result<Value> {
         let op = crate::ordinary::sender::op_id(op)?;
-        let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until FROM ordinary_messages WHERE op_id=$1 AND dedupe_until>$2").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
+        let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until,identity_state,channel_id,thing_id FROM ordinary_messages WHERE op_id=$1 AND dedupe_until>$2").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
+        if row.get::<String, _>("identity_state") == "legacy_unverifiable" {
+            return Ok(
+                json!({"op_id":row.get::<String,_>("op_id"),"status":"historical_unverifiable","identity_state":"legacy_unverifiable","model":"message","entity_id":row.get::<String,_>("message_id"),"channel_id":row.get::<String,_>("channel_id"),"thing_id":row.get::<Option<String>,_>("thing_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until"),"delivery_id":null,"delivery_expires_at":null,"dispatch_status":"not_attempted"}),
+            );
+        }
         Ok(
             json!({"op_id":row.get::<String,_>("op_id"),"status":row.get::<String,_>("status"),"model":"message","entity_id":row.get::<String,_>("message_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until")}),
         )

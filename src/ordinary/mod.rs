@@ -25,10 +25,14 @@ pub use store::{
 
 pub(crate) mod legacy;
 pub mod sqlite_cutover;
+pub mod pg_cutover;
+pub mod cutover;
 
 pub mod ingress;
 #[cfg(test)]
 mod product_pg_tests;
+#[cfg(test)]
+mod pg_history_tests;
 #[cfg(test)]
 mod product_sqlite_tests;
 #[cfg(test)]

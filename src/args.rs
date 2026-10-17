@@ -286,11 +286,11 @@ pub struct Args {
     #[arg(env = "PUSHGO_DB_UPGRADE", long = "db-upgrade")]
     pub db_upgrade: Option<String>,
 
-    /// Offline fixed-main SQLite history cutover only: plan, run or restore.
+    /// Offline fixed-main history cutover only: plan, run or restore.
     #[arg(long, value_parser = ["plan", "run", "restore"], conflicts_with = "db_upgrade")]
     pub ordinary_cutover: Option<String>,
 
-    /// Fresh verified SQLite family backup directory for the offline cutover.
+    /// Fresh verified native backup directory for the offline cutover.
     #[arg(long, requires = "ordinary_cutover")]
     pub ordinary_cutover_backup: Option<std::path::PathBuf>,
 
