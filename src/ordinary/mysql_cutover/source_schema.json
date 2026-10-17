@@ -1,0 +1,1977 @@
+[
+  [
+    "column",
+    "channel_subscriptions.000001",
+    "[\"channel_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "channel_subscriptions.000002",
+    "[\"device_id\", \"binary(32)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "channel_subscriptions.000003",
+    "[\"status\", \"varchar(32)\", \"NO\", \"active\", \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "channel_subscriptions.000004",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "channel_subscriptions.000005",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "channels.000001",
+    "[\"channel_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "channels.000002",
+    "[\"password_hash\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "channels.000003",
+    "[\"alias\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "channels.000004",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "channels.000005",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "devices.000001",
+    "[\"device_id\", \"binary(32)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "devices.000002",
+    "[\"token_raw\", \"blob\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "devices.000003",
+    "[\"platform_code\", \"smallint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "devices.000004",
+    "[\"device_key\", \"varchar(255)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "devices.000005",
+    "[\"platform\", \"varchar(32)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "devices.000006",
+    "[\"channel_type\", \"varchar(32)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "devices.000007",
+    "[\"provider_token\", \"varchar(4096)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "devices.000008",
+    "[\"route_updated_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "devices.000009",
+    "[\"route_revision\", \"bigint\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "devices.000010",
+    "[\"watch_alert_window_minutes\", \"bigint\", \"NO\", \"30\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_acceptance_sequence.000001",
+    "[\"singleton\", \"tinyint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_acceptance_sequence.000002",
+    "[\"current_value\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_delivery_dedupe.000001",
+    "[\"dedupe_key\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_delivery_dedupe.000002",
+    "[\"delivery_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_delivery_dedupe.000003",
+    "[\"state\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_delivery_dedupe.000004",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_delivery_dedupe.000005",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_delivery_dedupe.000006",
+    "[\"expires_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000001",
+    "[\"dedupe_key\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000002",
+    "[\"delivery_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000003",
+    "[\"request_fingerprint\", \"varchar(64)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000004",
+    "[\"state\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000005",
+    "[\"provider_run_token\", \"varchar(64)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000006",
+    "[\"provider_owner\", \"varchar(128)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000007",
+    "[\"provider_lease_until\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000008",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000009",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000010",
+    "[\"sent_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_op_dedupe.000011",
+    "[\"expires_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000001",
+    "[\"dedupe_key\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000002",
+    "[\"delivery_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000003",
+    "[\"op_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000004",
+    "[\"payload_version\", \"int\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000005",
+    "[\"payload_blob\", \"longblob\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000006",
+    "[\"acceptance_order\", \"bigint\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000007",
+    "[\"accepted_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "dispatch_submission.000008",
+    "[\"expires_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000001",
+    "[\"activity_key\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000002",
+    "[\"token\", \"varchar(512)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000003",
+    "[\"channel_id\", \"binary(16)\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000004",
+    "[\"platform\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000005",
+    "[\"schema_version\", \"int\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000006",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000007",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "live_activity_tokens.000008",
+    "[\"expires_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "mcp_state.000001",
+    "[\"state_key\", \"varchar(64)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "mcp_state.000002",
+    "[\"state_json\", \"longtext\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "mcp_state.000003",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_bindings.000001",
+    "[\"platform\", \"smallint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_bindings.000002",
+    "[\"token_hash\", \"binary(32)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_bindings.000003",
+    "[\"device_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_bindings.000004",
+    "[\"provider_token\", \"varchar(4096)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "private_bindings.000005",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_bindings.000006",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_device_keys.000001",
+    "[\"device_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_device_keys.000002",
+    "[\"key_id\", \"int\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_device_keys.000003",
+    "[\"key_hash\", \"blob\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_device_keys.000004",
+    "[\"issued_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_device_keys.000005",
+    "[\"valid_until\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000001",
+    "[\"device_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000002",
+    "[\"delivery_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000003",
+    "[\"status\", \"varchar(16)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000004",
+    "[\"attempts\", \"int\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000005",
+    "[\"occurred_at\", \"bigint\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000006",
+    "[\"created_at\", \"bigint\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000007",
+    "[\"claimed_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000008",
+    "[\"claimed_by\", \"varchar(128)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000009",
+    "[\"claim_generation\", \"bigint\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000010",
+    "[\"first_sent_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000011",
+    "[\"last_attempt_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000012",
+    "[\"acked_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000013",
+    "[\"fallback_sent_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000014",
+    "[\"next_attempt_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000015",
+    "[\"last_error_code\", \"varchar(64)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000016",
+    "[\"last_error_detail\", \"text\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "private_outbox.000017",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_payloads.000001",
+    "[\"delivery_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "private_payloads.000002",
+    "[\"payload_blob\", \"blob\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_payloads.000003",
+    "[\"payload_size\", \"int\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_payloads.000004",
+    "[\"sent_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_payloads.000005",
+    "[\"expires_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_payloads.000006",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_payloads.000007",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_sessions.000001",
+    "[\"session_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "private_sessions.000002",
+    "[\"device_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "private_sessions.000003",
+    "[\"expires_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000001",
+    "[\"job_id\", \"varchar(160)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000002",
+    "[\"provider\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000003",
+    "[\"delivery_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000004",
+    "[\"op_id\", \"varchar(128)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000005",
+    "[\"dedupe_key\", \"varchar(512)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000006",
+    "[\"device_key\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000007",
+    "[\"payload_blob\", \"longblob\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000008",
+    "[\"state\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000009",
+    "[\"attempt_count\", \"int\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000010",
+    "[\"next_attempt_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000011",
+    "[\"lease_owner\", \"varchar(128)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000012",
+    "[\"lease_until\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000013",
+    "[\"lease_generation\", \"bigint\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000014",
+    "[\"provider_status\", \"int\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000015",
+    "[\"provider_error_code\", \"varchar(128)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000016",
+    "[\"accepted_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000017",
+    "[\"expires_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000018",
+    "[\"coalesce_order\", \"bigint\", \"NO\", \"0\", \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000019",
+    "[\"completed_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_dispatch_outbox.000020",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000001",
+    "[\"device_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000002",
+    "[\"delivery_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000003",
+    "[\"payload_blob\", \"longblob\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000004",
+    "[\"payload_size\", \"int\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000005",
+    "[\"sent_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000006",
+    "[\"expires_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000007",
+    "[\"platform\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000008",
+    "[\"provider_token\", \"varchar(4096)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000009",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "provider_pull_queue.000010",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_meta.000001",
+    "[\"meta_key\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_meta.000002",
+    "[\"meta_value\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000001",
+    "[\"migration_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000002",
+    "[\"description\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000003",
+    "[\"checksum\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000004",
+    "[\"target_schema_version\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000005",
+    "[\"started_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000006",
+    "[\"finished_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000007",
+    "[\"execution_ms\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000008",
+    "[\"success\", \"tinyint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_schema_migrations.000009",
+    "[\"error\", \"text\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000001",
+    "[\"run_id\", \"varchar(64)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000002",
+    "[\"gateway_version\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000003",
+    "[\"driver\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000004",
+    "[\"from_schema_version\", \"text\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000005",
+    "[\"target_schema_version\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000006",
+    "[\"status\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000007",
+    "[\"backup_uri\", \"text\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000008",
+    "[\"backup_sha256\", \"text\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000009",
+    "[\"started_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000010",
+    "[\"finished_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_runs.000011",
+    "[\"error\", \"text\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000001",
+    "[\"run_id\", \"varchar(64)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000002",
+    "[\"step_order\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000003",
+    "[\"migration_id\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000004",
+    "[\"step_id\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000005",
+    "[\"description\", \"text\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000006",
+    "[\"status\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000007",
+    "[\"started_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000008",
+    "[\"finished_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "pushgo_upgrade_steps.000009",
+    "[\"error\", \"text\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "semantic_id_registry.000001",
+    "[\"dedupe_key\", \"varchar(255)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "semantic_id_registry.000002",
+    "[\"semantic_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "semantic_id_registry.000003",
+    "[\"source\", \"varchar(64)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "semantic_id_registry.000004",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "semantic_id_registry.000005",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "semantic_id_registry.000006",
+    "[\"last_seen_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "semantic_id_registry.000007",
+    "[\"expires_at\", \"bigint\", \"YES\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000001",
+    "[\"op_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000002",
+    "[\"channel_id\", \"binary(16)\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000003",
+    "[\"model\", \"varchar(16)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000004",
+    "[\"entity_id\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000005",
+    "[\"status\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000006",
+    "[\"dispatch_status\", \"varchar(64)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000007",
+    "[\"provider_run_token\", \"varchar(64)\", \"YES\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000008",
+    "[\"accepted_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000009",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "sender_submit_status.000010",
+    "[\"expires_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000001",
+    "[\"device_key\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_bin\", \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000002",
+    "[\"platform\", \"varchar(32)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000003",
+    "[\"token\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000004",
+    "[\"widget_kind\", \"varchar(128)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000005",
+    "[\"family\", \"varchar(64)\", \"NO\", null, \"\", \"\", \"utf8mb4\", \"utf8mb4_0900_ai_ci\", \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000006",
+    "[\"schema_version\", \"int\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000007",
+    "[\"created_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "column",
+    "widget_push_subscriptions.000008",
+    "[\"updated_at\", \"bigint\", \"NO\", null, \"\", \"\", null, null, \"\"]"
+  ],
+  [
+    "constraint",
+    "channel_subscriptions.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "channels.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "devices.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "devices.devices_device_key_uidx",
+    "[\"UNIQUE\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "dispatch_acceptance_sequence.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "dispatch_delivery_dedupe.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "dispatch_op_dedupe.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "dispatch_submission.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "dispatch_submission.dispatch_submission_delivery_uidx",
+    "[\"UNIQUE\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "live_activity_tokens.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "mcp_state.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "private_bindings.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "private_bindings.private_bindings_platform_token_uidx",
+    "[\"UNIQUE\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "private_device_keys.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "private_outbox.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "private_payloads.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "private_sessions.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "provider_dispatch_outbox.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "provider_pull_queue.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "provider_pull_queue.provider_pull_queue_device_delivery_uidx",
+    "[\"UNIQUE\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "pushgo_schema_meta.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "pushgo_schema_migrations.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "pushgo_upgrade_runs.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "pushgo_upgrade_steps.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "semantic_id_registry.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "semantic_id_registry.semantic_id_registry_semantic_idx",
+    "[\"UNIQUE\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "sender_submit_status.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "constraint",
+    "widget_push_subscriptions.PRIMARY",
+    "[\"PRIMARY KEY\", \"YES\"]"
+  ],
+  [
+    "index",
+    "channel_subscriptions.PRIMARY.000001",
+    "[0, \"channel_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "channel_subscriptions.PRIMARY.000002",
+    "[0, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "channel_subscriptions.channel_subscriptions_device_idx.000001",
+    "[1, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "channel_subscriptions.channel_subscriptions_dispatch_idx.000001",
+    "[1, \"channel_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "channel_subscriptions.channel_subscriptions_dispatch_idx.000002",
+    "[1, \"status\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "channel_subscriptions.channel_subscriptions_dispatch_idx.000003",
+    "[1, \"created_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "channels.PRIMARY.000001",
+    "[0, \"channel_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "devices.PRIMARY.000001",
+    "[0, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "devices.devices_device_key_uidx.000001",
+    "[0, \"device_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "devices.devices_route_platform_type_updated_idx.000001",
+    "[1, \"platform\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "devices.devices_route_platform_type_updated_idx.000002",
+    "[1, \"channel_type\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "devices.devices_route_platform_type_updated_idx.000003",
+    "[1, \"route_updated_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "devices.devices_route_provider_token_idx.000001",
+    "[1, \"provider_token\", 191, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_acceptance_sequence.PRIMARY.000001",
+    "[0, \"singleton\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_delivery_dedupe.PRIMARY.000001",
+    "[0, \"dedupe_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_delivery_dedupe.dispatch_delivery_dedupe_created_idx.000001",
+    "[1, \"created_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_delivery_dedupe.dispatch_delivery_dedupe_expires_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_op_dedupe.PRIMARY.000001",
+    "[0, \"dedupe_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_op_dedupe.dispatch_op_dedupe_created_idx.000001",
+    "[1, \"created_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_op_dedupe.dispatch_op_dedupe_expires_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_op_dedupe.dispatch_op_dedupe_provider_lease_idx.000001",
+    "[1, \"state\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_op_dedupe.dispatch_op_dedupe_provider_lease_idx.000002",
+    "[1, \"provider_lease_until\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_submission.PRIMARY.000001",
+    "[0, \"dedupe_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_submission.dispatch_submission_delivery_uidx.000001",
+    "[0, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "dispatch_submission.dispatch_submission_expires_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "live_activity_tokens.PRIMARY.000001",
+    "[0, \"activity_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "live_activity_tokens.PRIMARY.000002",
+    "[0, \"token\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "live_activity_tokens.live_activity_tokens_channel_idx.000001",
+    "[1, \"channel_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "live_activity_tokens.live_activity_tokens_channel_idx.000002",
+    "[1, \"updated_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "live_activity_tokens.live_activity_tokens_expires_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "mcp_state.PRIMARY.000001",
+    "[0, \"state_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_bindings.PRIMARY.000001",
+    "[0, \"platform\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_bindings.PRIMARY.000002",
+    "[0, \"token_hash\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_bindings.private_bindings_device_idx.000001",
+    "[1, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_bindings.private_bindings_platform_token_uidx.000001",
+    "[0, \"platform\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_bindings.private_bindings_platform_token_uidx.000002",
+    "[0, \"token_hash\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_bindings.private_bindings_token_idx.000001",
+    "[1, \"platform\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_bindings.private_bindings_token_idx.000002",
+    "[1, \"token_hash\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_device_keys.PRIMARY.000001",
+    "[0, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_device_keys.PRIMARY.000002",
+    "[0, \"key_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.PRIMARY.000001",
+    "[0, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.PRIMARY.000002",
+    "[0, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_delivery_idx.000001",
+    "[1, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_device_status_order_idx.000001",
+    "[1, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_device_status_order_idx.000002",
+    "[1, \"status\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_device_status_order_idx.000003",
+    "[1, \"occurred_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_device_status_order_idx.000004",
+    "[1, \"created_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_device_status_order_idx.000005",
+    "[1, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_due_idx.000001",
+    "[1, \"status\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_due_idx.000002",
+    "[1, \"next_attempt_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_outbox.private_outbox_due_idx.000003",
+    "[1, \"attempts\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_payloads.PRIMARY.000001",
+    "[0, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_payloads.private_payloads_expires_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_sessions.PRIMARY.000001",
+    "[0, \"session_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "private_sessions.private_sessions_exp_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.PRIMARY.000001",
+    "[0, \"job_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_delivery_idx.000001",
+    "[1, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_due_idx.000001",
+    "[1, \"provider\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_due_idx.000002",
+    "[1, \"state\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_due_idx.000003",
+    "[1, \"next_attempt_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_due_idx.000004",
+    "[1, \"accepted_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_lease_idx.000001",
+    "[1, \"state\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_lease_idx.000002",
+    "[1, \"lease_until\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_retry_expiry_idx.000001",
+    "[1, \"provider\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_retry_expiry_idx.000002",
+    "[1, \"state\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_retry_expiry_idx.000003",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_retry_expiry_idx.000004",
+    "[1, \"next_attempt_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_dispatch_outbox.provider_dispatch_outbox_retry_expiry_idx.000005",
+    "[1, \"accepted_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.PRIMARY.000001",
+    "[0, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.PRIMARY.000002",
+    "[0, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.provider_pull_queue_device_created_idx.000001",
+    "[1, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.provider_pull_queue_device_created_idx.000002",
+    "[1, \"created_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.provider_pull_queue_device_delivery_uidx.000001",
+    "[0, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.provider_pull_queue_device_delivery_uidx.000002",
+    "[0, \"delivery_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.provider_pull_queue_device_expires_idx.000001",
+    "[1, \"device_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "provider_pull_queue.provider_pull_queue_device_expires_idx.000002",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "pushgo_schema_meta.PRIMARY.000001",
+    "[0, \"meta_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "pushgo_schema_migrations.PRIMARY.000001",
+    "[0, \"migration_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "pushgo_upgrade_runs.PRIMARY.000001",
+    "[0, \"run_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "pushgo_upgrade_steps.PRIMARY.000001",
+    "[0, \"run_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "pushgo_upgrade_steps.PRIMARY.000002",
+    "[0, \"step_order\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "semantic_id_registry.PRIMARY.000001",
+    "[0, \"dedupe_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "semantic_id_registry.semantic_id_registry_created_idx.000001",
+    "[1, \"created_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "semantic_id_registry.semantic_id_registry_expires_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "semantic_id_registry.semantic_id_registry_semantic_idx.000001",
+    "[0, \"semantic_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "sender_submit_status.PRIMARY.000001",
+    "[0, \"op_id\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "sender_submit_status.sender_submit_status_expires_idx.000001",
+    "[1, \"expires_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.PRIMARY.000001",
+    "[0, \"device_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.PRIMARY.000002",
+    "[0, \"platform\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.PRIMARY.000003",
+    "[0, \"token\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.PRIMARY.000004",
+    "[0, \"widget_kind\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.PRIMARY.000005",
+    "[0, \"family\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.widget_push_subscriptions_channel_lookup_idx.000001",
+    "[1, \"device_key\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.widget_push_subscriptions_channel_lookup_idx.000002",
+    "[1, \"widget_kind\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.widget_push_subscriptions_channel_lookup_idx.000003",
+    "[1, \"updated_at\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.widget_push_subscriptions_token_idx.000001",
+    "[1, \"platform\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "index",
+    "widget_push_subscriptions.widget_push_subscriptions_token_idx.000002",
+    "[1, \"token\", null, \"A\", \"BTREE\", \"YES\", null, \"\"]"
+  ],
+  [
+    "key",
+    "channel_subscriptions.PRIMARY.000001",
+    "[\"channel_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "channel_subscriptions.PRIMARY.000002",
+    "[\"device_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "channels.PRIMARY.000001",
+    "[\"channel_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "devices.PRIMARY.000001",
+    "[\"device_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "devices.devices_device_key_uidx.000001",
+    "[\"device_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "dispatch_acceptance_sequence.PRIMARY.000001",
+    "[\"singleton\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "dispatch_delivery_dedupe.PRIMARY.000001",
+    "[\"dedupe_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "dispatch_op_dedupe.PRIMARY.000001",
+    "[\"dedupe_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "dispatch_submission.PRIMARY.000001",
+    "[\"dedupe_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "dispatch_submission.dispatch_submission_delivery_uidx.000001",
+    "[\"delivery_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "live_activity_tokens.PRIMARY.000001",
+    "[\"activity_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "live_activity_tokens.PRIMARY.000002",
+    "[\"token\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "mcp_state.PRIMARY.000001",
+    "[\"state_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_bindings.PRIMARY.000001",
+    "[\"platform\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_bindings.PRIMARY.000002",
+    "[\"token_hash\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_bindings.private_bindings_platform_token_uidx.000001",
+    "[\"platform\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_bindings.private_bindings_platform_token_uidx.000002",
+    "[\"token_hash\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_device_keys.PRIMARY.000001",
+    "[\"device_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_device_keys.PRIMARY.000002",
+    "[\"key_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_outbox.PRIMARY.000001",
+    "[\"device_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_outbox.PRIMARY.000002",
+    "[\"delivery_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_payloads.PRIMARY.000001",
+    "[\"delivery_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "private_sessions.PRIMARY.000001",
+    "[\"session_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "provider_dispatch_outbox.PRIMARY.000001",
+    "[\"job_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "provider_pull_queue.PRIMARY.000001",
+    "[\"device_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "provider_pull_queue.PRIMARY.000002",
+    "[\"delivery_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "provider_pull_queue.provider_pull_queue_device_delivery_uidx.000001",
+    "[\"device_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "provider_pull_queue.provider_pull_queue_device_delivery_uidx.000002",
+    "[\"delivery_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "pushgo_schema_meta.PRIMARY.000001",
+    "[\"meta_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "pushgo_schema_migrations.PRIMARY.000001",
+    "[\"migration_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "pushgo_upgrade_runs.PRIMARY.000001",
+    "[\"run_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "pushgo_upgrade_steps.PRIMARY.000001",
+    "[\"run_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "pushgo_upgrade_steps.PRIMARY.000002",
+    "[\"step_order\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "semantic_id_registry.PRIMARY.000001",
+    "[\"dedupe_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "semantic_id_registry.semantic_id_registry_semantic_idx.000001",
+    "[\"semantic_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "sender_submit_status.PRIMARY.000001",
+    "[\"op_id\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "widget_push_subscriptions.PRIMARY.000001",
+    "[\"device_key\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "widget_push_subscriptions.PRIMARY.000002",
+    "[\"platform\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "widget_push_subscriptions.PRIMARY.000003",
+    "[\"token\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "widget_push_subscriptions.PRIMARY.000004",
+    "[\"widget_kind\", null, null, null, null]"
+  ],
+  [
+    "key",
+    "widget_push_subscriptions.PRIMARY.000005",
+    "[\"family\", null, null, null, null]"
+  ],
+  [
+    "partition",
+    "channel_subscriptions..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "channels..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "devices..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "dispatch_acceptance_sequence..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "dispatch_delivery_dedupe..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "dispatch_op_dedupe..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "dispatch_submission..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "live_activity_tokens..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "mcp_state..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "private_bindings..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "private_device_keys..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "private_outbox..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "private_payloads..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "private_sessions..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "provider_dispatch_outbox..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "provider_pull_queue..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "pushgo_schema_meta..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "pushgo_schema_migrations..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "pushgo_upgrade_runs..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "pushgo_upgrade_steps..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "semantic_id_registry..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "sender_submit_status..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "partition",
+    "widget_push_subscriptions..",
+    "[null, null, null, null, null, null]"
+  ],
+  [
+    "schema",
+    "database",
+    "[\"utf8mb4\", \"utf8mb4_0900_ai_ci\"]"
+  ],
+  [
+    "table",
+    "channel_subscriptions",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "channels",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "devices",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "dispatch_acceptance_sequence",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "dispatch_delivery_dedupe",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "dispatch_op_dedupe",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "dispatch_submission",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "live_activity_tokens",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "mcp_state",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "private_bindings",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "private_device_keys",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "private_outbox",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "private_payloads",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "private_sessions",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "provider_dispatch_outbox",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "provider_pull_queue",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "pushgo_schema_meta",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "pushgo_schema_migrations",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "pushgo_upgrade_runs",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "pushgo_upgrade_steps",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "semantic_id_registry",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "sender_submit_status",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ],
+  [
+    "table",
+    "widget_push_subscriptions",
+    "[\"BASE TABLE\", \"InnoDB\", \"Dynamic\", \"utf8mb4_0900_ai_ci\", \"\", \"\"]"
+  ]
+]

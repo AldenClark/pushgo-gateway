@@ -33,6 +33,8 @@ pub struct MySqlDeliveryStore {
     pub counters: Arc<Counters>,
     pub(super) wake: [Arc<Notify>; 3],
     pub(super) health: Arc<Health>,
+    #[cfg(test)]
+    pub(super) delivery_candidates: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
 }
 pub(super) struct MySqlDataGuard<'a>(
     MutexGuard<'a, Option<sqlx::pool::PoolConnection<MySql>>>,
@@ -97,6 +99,8 @@ pub(super) const CLAIM_ONE_SQL: &str = "SELECT STRAIGHT_JOIN t.*,m.payload_blob,
 // MIN over both state ranges scans the pending backlog on MySQL. Each ordered
 // range needs only its first matching row; residual mode/ACK filters still apply.
 pub(super) const NEXT_DUE_SQL: &str = "SELECT MIN(next_attempt_at) FROM ((SELECT next_attempt_at FROM ordinary_targets FORCE INDEX(targets_due) WHERE provider=? AND delivery_mode='provider' AND state='pending' AND acked_at IS NULL ORDER BY next_attempt_at,delivery_id,device_key LIMIT 1) UNION ALL (SELECT next_attempt_at FROM ordinary_targets FORCE INDEX(targets_due) WHERE provider=? AND delivery_mode='provider' AND state='retry_wait' AND acked_at IS NULL ORDER BY next_attempt_at,delivery_id,device_key LIMIT 1)) AS first_due";
+
+pub(crate) const MESSAGE_SCHEMA: &str = include_str!("mysql_message_schema.sql");
 
 impl MySqlDeliveryStore {
     pub(super) async fn acquire(&self) -> Result<MySqlDataGuard<'_>> {
@@ -245,6 +249,8 @@ impl MySqlDeliveryStore {
             health,
             counters,
             wake: std::array::from_fn(|_| Arc::new(Notify::new())),
+            #[cfg(test)]
+            delivery_candidates: Arc::new(std::sync::Mutex::new(Default::default())),
         };
         store.ensure_no_legacy_ordinary().await?;
         store.initialize().await?;
@@ -342,6 +348,14 @@ impl MySqlDeliveryStore {
 
     async fn initialize(&self) -> Result<()> {
         let mut connection = self.acquire().await?;
+        let prior_identity_schema: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ordinary_messages') AND NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ordinary_messages' AND COLUMN_NAME='identity_state')")
+            .fetch_one(&mut *connection).await?;
+        if prior_identity_schema != 0 {
+            return Err(KernelError::Invalid("ordinary identity schema requires an explicit offline upgrade; prior C candidate databases are not a fixed-main migration source".into()));
+        }
+        sqlx::raw_sql(MESSAGE_SCHEMA)
+            .execute(&mut *connection)
+            .await?;
         sqlx::raw_sql(include_str!("mysql_schema.sql"))
             .execute(&mut *connection)
             .await?;
@@ -403,6 +417,44 @@ impl MySqlDeliveryStore {
         self.maintenance().await?;
         Ok(())
     }
+    // Independent fixed-main reservations retain their original primary keys;
+    // neither expiry timestamps nor a missing operation relationship free them.
+    async fn allocate_delivery_id_tx(&self, tx: &mut Transaction<'_, MySql>) -> Result<String> {
+        for _ in 0..4 {
+            #[cfg(test)]
+            let candidate = self
+                .delivery_candidates
+                .lock()
+                .expect("test candidates")
+                .pop_front()
+                .unwrap_or_else(generate_hex_id_128);
+            #[cfg(not(test))]
+            let candidate = generate_hex_id_128();
+            let collision: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dispatch_delivery_dedupe WHERE dedupe_key=?) OR EXISTS(SELECT 1 FROM ordinary_messages WHERE delivery_id=?)")
+                .bind(format!("delivery:{candidate}")).bind(&candidate).fetch_one(&mut **tx).await?;
+            if collision == 0 {
+                return Ok(candidate);
+            }
+        }
+        Err(KernelError::Unavailable)
+    }
+
+    // Live deletion keeps the existing application-owned counter deltas. A
+    // historical NULL delivery has no targets or usage and is removed by op.
+    async fn delete_identity_tx(tx: &mut Transaction<'_, MySql>, op: &str) -> Result<()> {
+        let delivery: Option<Option<String>> = sqlx::query_scalar("SELECT CAST(delivery_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE op_id=?")
+            .bind(op).fetch_optional(&mut **tx).await?;
+        match delivery {
+            Some(Some(id)) => Self::delete_message_tx(tx, &id).await?,
+            Some(None) => {
+                sqlx::query("DELETE FROM ordinary_messages WHERE op_id=? AND identity_state='legacy_unverifiable'")
+                    .bind(op).execute(&mut **tx).await?;
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
     pub async fn accept(&self, request: AcceptRequest) -> Result<Accepted> {
         let authorized_channel = request.authorized_channel;
         let admission_started = std::time::Instant::now();
@@ -479,6 +531,13 @@ impl MySqlDeliveryStore {
             if existing_scope != 0 {
                 return Err(KernelError::ScopeConflict);
             }
+            // Probe the generated binary alias key directly, so live op IDs
+            // keep their exact VARBINARY behavior and historical scope changes
+            // cannot reach NULL delivery/fingerprint decoding.
+            let historical: i64 = self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_messages WHERE historical_op=CAST(LOWER(CONVERT(? USING utf8mb4)) AS BINARY) AND dedupe_until>?)").bind(&request.op_id).bind(at).fetch_one(&mut *tx)).await?;
+            if historical != 0 {
+                return Err(KernelError::Control { status:409, code:"historical_identity_unverifiable", message:"historical message identity is retained, but its original request cannot be verified; use a new op_id".into() });
+            }
             // Reclaim expired delivery bodies independently of their identity history.
             self.maintain_tx(&mut tx, at).await?;
             if let Some(row)=self.counters.profile.sql(Path::Accept, Statement::Dedupe, sqlx::query("SELECT delivery_id,message_id,channel_id,thing_id,fingerprint,status,provider_target_count,private_enqueued_count FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(&request.op_id).bind(at).fetch_optional(&mut *tx)).await? {
@@ -488,12 +547,12 @@ impl MySqlDeliveryStore {
                 return Ok((Accepted{delivery_id:row.get_unchecked("delivery_id"),message_id:row.get_unchecked("message_id"),op_id:request.op_id,acceptance:"duplicate_completed",dispatch_status:crate::ordinary::application::accepted_dispatch_status(&row.get_unchecked::<String,_>("status"),row.get("provider_target_count"),row.get("private_enqueued_count"))?}, false))
             }
             // An exact expired identity can be replaced even if bounded GC has backlog.
-            if let Some(id) = sqlx::query_scalar::<_,String>("SELECT CAST(delivery_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE op_id=? AND dedupe_until<=? AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running')")
+            if let Some(id) = sqlx::query_scalar::<_,String>("SELECT CAST(op_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE op_id=? AND dedupe_until<=? AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running')")
                 .bind(&request.op_id).bind(at).fetch_optional(&mut *tx).await? {
-                Self::delete_message_tx(&mut tx,&id).await?;
+                Self::delete_identity_tx(&mut tx,&id).await?;
             }
             let _compute = self.counters.profile.timer(Path::Accept, Phase::Compute);
-            let delivery_id = generate_hex_id_128();
+            let delivery_id = self.allocate_delivery_id_tx(&mut tx).await?;
             let message_id = generate_hex_id_128();
             let expires = request
                 .ttl
@@ -775,10 +834,10 @@ impl MySqlDeliveryStore {
             self.release_acked_tx(tx, "", &id, Path::Maintenance)
                 .await?;
         }
-        let retained: Vec<String> = sqlx::query_scalar("SELECT CAST(delivery_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running') ORDER BY dedupe_until,delivery_id LIMIT 256")
+        let retained: Vec<String> = sqlx::query_scalar("SELECT CAST(op_id AS CHAR CHARACTER SET utf8mb4) FROM ordinary_messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running') ORDER BY dedupe_until,op_id LIMIT 256")
             .bind(at).fetch_all(&mut **tx).await?;
         for id in &retained {
-            Self::delete_message_tx(tx, id).await?;
+            Self::delete_identity_tx(tx, id).await?;
         }
         Ok(retained.len())
     }
@@ -1423,7 +1482,12 @@ impl MySqlDeliveryStore {
 
     pub async fn status(&self, op: &str) -> Result<Value> {
         let op = crate::ordinary::sender::op_id(op)?;
-        let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
+        let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until,identity_state,channel_id,thing_id FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
+        if row.get_unchecked::<String, _>("identity_state") == "legacy_unverifiable" {
+            return Ok(
+                json!({"op_id":row.get_unchecked::<String,_>("op_id"),"status":"historical_unverifiable","identity_state":"legacy_unverifiable","model":"message","entity_id":row.get_unchecked::<String,_>("message_id"),"channel_id":row.get_unchecked::<String,_>("channel_id"),"thing_id":row.get_unchecked::<Option<String>,_>("thing_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until"),"delivery_id":null,"delivery_expires_at":null,"dispatch_status":"not_attempted"}),
+            );
+        }
         Ok(
             json!({"op_id":row.get_unchecked::<String,_>("op_id"),"status":row.get_unchecked::<String,_>("status"),"model":"message","entity_id":row.get_unchecked::<String,_>("message_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until")}),
         )

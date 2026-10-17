@@ -114,6 +114,14 @@ impl OrdinaryStore {
 
 impl OrdinaryStore {
     #[cfg(test)]
+    pub(crate) fn mysql_test_store(&self) -> &MySqlDeliveryStore {
+        match &self.backend {
+            Backend::MySql(store) => store,
+            _ => panic!("MySQL-only test"),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn pg_test_store(&self) -> &PgDeliveryStore {
         match &self.backend {
             Backend::Postgres(store) => store,

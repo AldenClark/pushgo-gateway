@@ -26,6 +26,7 @@ pub use store::{
 pub(crate) mod legacy;
 pub mod sqlite_cutover;
 pub mod pg_cutover;
+pub mod mysql_cutover;
 pub mod cutover;
 
 pub mod ingress;
@@ -33,6 +34,8 @@ pub mod ingress;
 mod product_pg_tests;
 #[cfg(test)]
 mod pg_history_tests;
+#[cfg(test)]
+mod mysql_history_tests;
 #[cfg(test)]
 mod product_sqlite_tests;
 #[cfg(test)]
