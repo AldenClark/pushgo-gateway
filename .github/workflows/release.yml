@@ -43,7 +43,9 @@ jobs:
           persist-credentials: false
 
       - name: Reject release workflow drift
-        run: .github/scripts/static_release_audit.sh
+        run: |
+          # Includes the host ordinary-ledger/rollback contract regressions once.
+          .github/scripts/static_release_audit.sh
 
       - name: Read exact Rust toolchain contract
         id: rust
@@ -130,10 +132,10 @@ jobs:
           REQUIRE_CLEAN_WORKTREE: "1"
         run: scripts/preflight_release_audit.sh all
 
-      - name: Run exact v11/v12 rollback and restore-clone drill
+      - name: Run historical exact v11/v12 rollback and restore-clone drill
         env:
           V11_SOURCE_COMMIT: 6c26f420114823a827caa0274a0bbc3739d91211
-          V12_BIN: target/release/pushgo-gateway
+          V12_SOURCE_COMMIT: dfb6b7c2cfd1b2f8e6d7fe7c95d8bf59473ed0b6
           EVIDENCE_FILE: evidence/rollback/v12-single-instance.json
         run: scripts/v12_single_instance_rollback_drill.sh
 

@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 V11_BIN="${V11_BIN:-}"
-V12_BIN="${V12_BIN:-$ROOT_DIR/target/release/pushgo-gateway}"
+V12_BIN="${V12_BIN:-}"
+V12_SOURCE_COMMIT="${V12_SOURCE_COMMIT:-dfb6b7c2cfd1b2f8e6d7fe7c95d8bf59473ed0b6}"
 V11_SOURCE_COMMIT="${V11_SOURCE_COMMIT:-6c26f420114823a827caa0274a0bbc3739d91211}"
 EVIDENCE_FILE="${EVIDENCE_FILE:-}"
 KEEP_FIXTURE="${KEEP_FIXTURE:-0}"
@@ -11,12 +12,13 @@ KEEP_FIXTURE="${KEEP_FIXTURE:-0}"
 usage() {
   cat <<'EOF'
 Usage:
-  V12_BIN=/path/to/candidate-v12/pushgo-gateway \
+  V12_BIN=/path/to/historical-v12/pushgo-gateway \
     scripts/v12_single_instance_rollback_drill.sh
 
 Optional:
   V11_BIN=/path/to/audited-v11/pushgo-gateway
   V11_SOURCE_COMMIT=<audited-v11-commit>
+  V12_SOURCE_COMMIT=<audited-v12-commit>
   EVIDENCE_FILE=/path/to/rollback-evidence.json
 
 The drill creates only temporary SQLite databases. It proves that:
@@ -29,7 +31,9 @@ The drill creates only temporary SQLite databases. It proves that:
 
 This is not a production migration command. Set KEEP_FIXTURE=1 to retain the
 temporary fixture for inspection. When V11_BIN is omitted, the script builds
-the audited v11 source commit in the temporary fixture.
+the audited v11 source commit in the temporary fixture. When V12_BIN is omitted,
+the script independently builds the pinned historical v12 source, never current
+HEAD. This drill does not validate v13 cutover or expand supported legacy inputs.
 EOF
 }
 
@@ -83,11 +87,6 @@ for command_name in sqlite3 mktemp git cargo tar jq; do
   fi
 done
 
-if [[ ! -x "$V12_BIN" ]]; then
-  usage >&2
-  exit 2
-fi
-
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/pushgo-v12-rollback-drill.XXXXXX")"
 cleanup() {
   if [[ "$KEEP_FIXTURE" == "1" ]]; then
@@ -101,26 +100,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -z "$V11_BIN" ]]; then
-  v11_source_dir="$fixture_dir/v11-source"
-  v11_target_dir="$fixture_dir/v11-target"
-  mkdir -p "$v11_source_dir" "$v11_target_dir"
-  resolved_v11_commit="$(git -C "$ROOT_DIR" rev-parse "$V11_SOURCE_COMMIT^{commit}")"
-  if [[ "$resolved_v11_commit" != "$V11_SOURCE_COMMIT" ]]; then
-    echo "v11 source commit did not resolve exactly: expected=$V11_SOURCE_COMMIT actual=$resolved_v11_commit" >&2
-    exit 1
+build_historical_binary() {
+  local version="$1" source_commit="$2"
+  local source_dir="$fixture_dir/$version-source"
+  local target_dir="$fixture_dir/$version-target"
+  local resolved
+  resolved="$(git -C "$ROOT_DIR" rev-parse "$source_commit^{commit}")" || return 1
+  if [[ "$resolved" != "$source_commit" ]]; then
+    echo "$version source commit did not resolve exactly: expected=$source_commit actual=$resolved" >&2
+    return 1
   fi
-  git -C "$ROOT_DIR" archive "$resolved_v11_commit" | tar -x -C "$v11_source_dir"
-  CARGO_TARGET_DIR="$v11_target_dir" \
-    cargo build \
-      --manifest-path "$v11_source_dir/Cargo.toml" \
-      --locked \
-      --release \
-      --bin pushgo-gateway
-  V11_BIN="$v11_target_dir/release/pushgo-gateway"
-fi
+  mkdir -p "$source_dir" "$target_dir"
+  git -C "$ROOT_DIR" archive "$resolved" | tar -x -C "$source_dir" || return 1
+  CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path "$source_dir/Cargo.toml" \
+    --locked --release --bin pushgo-gateway || return 1
+}
 
-if [[ ! -x "$V11_BIN" ]]; then
+if [[ -z "$V11_BIN" ]]; then
+  build_historical_binary v11 "$V11_SOURCE_COMMIT"
+  V11_BIN="$fixture_dir/v11-target/release/pushgo-gateway"
+fi
+v12_built_from_source=false
+if [[ -z "$V12_BIN" ]]; then
+  build_historical_binary v12 "$V12_SOURCE_COMMIT"
+  V12_BIN="$fixture_dir/v12-target/release/pushgo-gateway"
+  v12_built_from_source=true
+fi
+if [[ ! -x "$V11_BIN" || ! -x "$V12_BIN" ]]; then
   usage >&2
   exit 2
 fi
@@ -159,6 +165,10 @@ fi
 
 # This migration executes only against the temporary fixture created above.
 "$V12_BIN" --db-url "$db_url" --db-upgrade run >"$fixture_dir/v12-create.log" 2>&1
+if [[ "$(sqlite3 "$core_db" "SELECT meta_value FROM pushgo_schema_meta WHERE meta_key='schema_version';")" != "2026-08-20-gateway-v12" ]]; then
+  echo "historical v12 artifact required; current v13 is not a v12 emergency artifact" >&2
+  exit 1
+fi
 sqlite3 "$dispatch_db" <<'SQL'
 INSERT INTO provider_dispatch_outbox
   (job_id, provider, delivery_id, op_id, dedupe_key, device_key, payload_blob,
@@ -215,6 +225,8 @@ if [[ -n "$EVIDENCE_FILE" ]]; then
   jq -n \
     --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg v11_source_commit "$V11_SOURCE_COMMIT" \
+    --arg v12_source_commit "$V12_SOURCE_COMMIT" \
+    --argjson v12_built_from_source "$v12_built_from_source" \
     --arg v11_binary_sha256 "$v11_binary_sha256" \
     --arg v12_binary_sha256 "$v12_binary_sha256" \
     --arg restored_v11_family_sha256 "$restored_v11_after" \
@@ -223,6 +235,8 @@ if [[ -n "$EVIDENCE_FILE" ]]; then
       synthetic_database: true,
       production_validation: false,
       v11_source_commit: $v11_source_commit,
+      v12_source_commit: (if $v12_built_from_source then $v12_source_commit else null end),
+      v12_built_from_source: $v12_built_from_source,
       v11_schema: "2026-08-08-gateway-v11",
       v12_schema: "2026-08-20-gateway-v12",
       v11_binary_sha256: $v11_binary_sha256,

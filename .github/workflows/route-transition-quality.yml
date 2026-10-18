@@ -31,9 +31,10 @@ jobs:
           toolchain: "1.97.1"
           components: rustfmt
 
-      - name: Check formatting and release workflow contract
+      - name: Check formatting, release workflow and host CI contracts
         run: |
           cargo fmt --all -- --check
+          # Includes the host ordinary-ledger/rollback contract regressions once.
           .github/scripts/static_release_audit.sh
 
       - name: Test library behavior outside external database fixtures
@@ -92,10 +93,10 @@ jobs:
           RECEIPT_FILE: /tmp/pushgo-pr-preflight/gateway-release-smoke.json
         run: scripts/release_smoke.sh
 
-      - name: Run exact v11/v12 rollback and restore-clone drill
+      - name: Run historical exact v11/v12 rollback and restore-clone drill
         env:
           V11_SOURCE_COMMIT: 6c26f420114823a827caa0274a0bbc3739d91211
-          V12_BIN: target/release/pushgo-gateway
+          V12_SOURCE_COMMIT: dfb6b7c2cfd1b2f8e6d7fe7c95d8bf59473ed0b6
           EVIDENCE_FILE: /tmp/pushgo-pr-compatibility/rollback/v12-single-instance.json
         run: scripts/v12_single_instance_rollback_drill.sh
 
