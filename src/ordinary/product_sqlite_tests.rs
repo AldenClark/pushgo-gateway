@@ -134,11 +134,14 @@ fn route(key: &str, platform: &str, kind: &str, token: Option<&str>) -> DeviceRo
 
 // These rows are explicit unit-test injections, not old-main migration evidence.
 #[tokio::test]
-async fn sqlite_product_historical_identity_rejects_aliases_scopes_and_cleans_by_original_deadline() {
+async fn sqlite_product_historical_identity_rejects_aliases_scopes_and_cleans_by_original_deadline()
+{
     let product = Product::open().await;
     let channel = product.channel().await;
     let path = product.directory.path().join("product.db");
-    let mut write = SqliteConnection::connect(&format!("sqlite://{}", path.display())).await.unwrap();
+    let mut write = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
     let accepted_at = now() - 86_400_000;
     sqlx::query("INSERT INTO ordinary_messages(delivery_id,message_id,op_id,channel_id,thing_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at,identity_state) VALUES(NULL,?,?,?,NULL,NULL,x'',0,?,NULL,?,'historical_unverifiable',?,'legacy_unverifiable')")
         .bind("0123456789abcdef0123456789abcdef").bind("Historic:Mixed")
@@ -146,27 +149,78 @@ async fn sqlite_product_historical_identity_rejects_aliases_scopes_and_cleans_by
         .bind(accepted_at).bind(now()+60_000).bind(accepted_at).execute(&mut write).await.unwrap();
     for op in ["Historic:Mixed", "historic:mixed", "HISTORIC:MIXED"] {
         let request = product.request(channel, op); // Different Thing scope is deliberately valid input.
-        assert!(matches!(product.ordinary.accept(request).await, Err(KernelError::Control{status:409,code:"historical_identity_unverifiable",..})));
+        assert!(matches!(
+            product.ordinary.accept(request).await,
+            Err(KernelError::Control {
+                status: 409,
+                code: "historical_identity_unverifiable",
+                ..
+            })
+        ));
     }
     let status = product.ordinary.status("Historic:Mixed").await.unwrap();
     assert_eq!(status["identity_state"], "legacy_unverifiable");
     assert_eq!(status["accepted_at"], accepted_at);
     assert!(status["delivery_id"].is_null());
     assert!(status["delivery_expires_at"].is_null());
-    assert_eq!(product.ordinary.target_status("Historic:Mixed").await.unwrap()["targets"], serde_json::json!([]));
+    assert_eq!(
+        product
+            .ordinary
+            .target_status("Historic:Mixed")
+            .await
+            .unwrap()["targets"],
+        serde_json::json!([])
+    );
     let plan=sqlx::query("EXPLAIN QUERY PLAN SELECT op_id FROM ordinary_messages WHERE (op_id=? OR (identity_state='legacy_unverifiable' AND lower(op_id)=lower(?))) AND dedupe_until>?")
         .bind("historic:mixed").bind("historic:mixed").bind(now()).fetch_all(&mut write).await.unwrap();
-    assert!(plan.iter().any(|r|r.get::<String,_>("detail").contains("ordinary_historical_op")));
-    assert!(!plan.iter().any(|r|r.get::<String,_>("detail").contains("SCAN ordinary_messages")));
+    assert!(plan.iter().any(|r| {
+        r.get::<String, _>("detail")
+            .contains("ordinary_historical_op")
+    }));
+    assert!(!plan.iter().any(|r| {
+        r.get::<String, _>("detail")
+            .contains("SCAN ordinary_messages")
+    }));
     // A live identity cannot hide a missing delivery/fingerprint/TTL behind NULL.
-    assert!(sqlx::query("UPDATE ordinary_messages SET identity_state='live' WHERE op_id='Historic:Mixed'").execute(&mut write).await.is_err());
-    sqlx::query("UPDATE ordinary_messages SET dedupe_until=? WHERE op_id='Historic:Mixed'").bind(now()-1).execute(&mut write).await.unwrap();
+    assert!(
+        sqlx::query(
+            "UPDATE ordinary_messages SET identity_state='live' WHERE op_id='Historic:Mixed'"
+        )
+        .execute(&mut write)
+        .await
+        .is_err()
+    );
+    sqlx::query("UPDATE ordinary_messages SET dedupe_until=? WHERE op_id='Historic:Mixed'")
+        .bind(now() - 1)
+        .execute(&mut write)
+        .await
+        .unwrap();
     product.ordinary.maintenance().await.unwrap();
-    assert!(matches!(product.ordinary.status("Historic:Mixed").await, Err(KernelError::NotFound)));
-    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM ordinary_messages").fetch_one(&mut write).await.unwrap(),0);
-    let first = product.ordinary.accept(product.request(channel,"New:Case")).await.unwrap();
-    let second = product.ordinary.accept(product.request(channel,"new:case")).await.unwrap();
-    assert_ne!(first.message_id,second.message_id,"live op case semantics remain unchanged");
+    assert!(matches!(
+        product.ordinary.status("Historic:Mixed").await,
+        Err(KernelError::NotFound)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM ordinary_messages")
+            .fetch_one(&mut write)
+            .await
+            .unwrap(),
+        0
+    );
+    let first = product
+        .ordinary
+        .accept(product.request(channel, "New:Case"))
+        .await
+        .unwrap();
+    let second = product
+        .ordinary
+        .accept(product.request(channel, "new:case"))
+        .await
+        .unwrap();
+    assert_ne!(
+        first.message_id, second.message_id,
+        "live op case semantics remain unchanged"
+    );
     write.close().await.unwrap();
     product.stop().await;
 }
@@ -176,9 +230,11 @@ async fn sqlite_product_historical_retention_batches_do_not_skip_null_delivery_i
     let product = Product::open().await;
     let channel = product.channel().await;
     let path = product.directory.path().join("product.db");
-    let mut write = SqliteConnection::connect(&format!("sqlite://{}", path.display())).await.unwrap();
-    let cutoff=now()-1;
-    let mut tx=write.begin().await.unwrap();
+    let mut write = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    let cutoff = now() - 1;
+    let mut tx = write.begin().await.unwrap();
     for index in 0..260 {
         sqlx::query("INSERT INTO ordinary_messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at,identity_state) VALUES(NULL,?,?,?,NULL,x'',0,?,NULL,?,'historical_unverifiable',?,'legacy_unverifiable')")
             .bind(format!("{index:032x}")).bind(format!("same-expiry-{index}"))
@@ -186,10 +242,16 @@ async fn sqlite_product_historical_retention_batches_do_not_skip_null_delivery_i
             .bind(cutoff-7*86_400_000).bind(cutoff).bind(cutoff-1).execute(&mut *tx).await.unwrap();
     }
     tx.commit().await.unwrap();
-    assert_eq!(product.ordinary.maintenance().await.unwrap(),256);
-    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM ordinary_messages").fetch_one(&mut write).await.unwrap(),4);
-    assert_eq!(product.ordinary.maintenance().await.unwrap(),4);
-    assert_eq!(product.ordinary.maintenance().await.unwrap(),0);
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 256);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM ordinary_messages")
+            .fetch_one(&mut write)
+            .await
+            .unwrap(),
+        4
+    );
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 4);
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 0);
     write.close().await.unwrap();
     product.stop().await;
 }
@@ -201,16 +263,54 @@ async fn sqlite_product_new_delivery_allocation_respects_independent_legacy_rese
     let reserved = "0123456789abcdef0123456789abcdef";
     let chosen = "fedcba9876543210fedcba9876543210";
     let dispatch = product.directory.path().join("product.dispatch.db");
-    let mut write = SqliteConnection::connect(&format!("sqlite://{}",dispatch.display())).await.unwrap();
+    let mut write = SqliteConnection::connect(&format!("sqlite://{}", dispatch.display()))
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO dispatch_delivery_dedupe(dedupe_key,delivery_id,state,created_at,updated_at) VALUES(?,?,'sent',?,?)")
         .bind(format!("delivery:{reserved}")).bind(reserved).bind(now()).bind(now()).execute(&mut write).await.unwrap();
-    product.ordinary.sqlite_for_test().hooks.delivery_candidates.lock().unwrap().extend([reserved.to_owned(), chosen.to_owned()]);
-    let accepted = product.ordinary.accept(product.request(channel,"new-after-historical-collision")).await.unwrap();
-    assert_eq!(accepted.delivery_id,chosen);
-    assert_eq!(sqlx::query_scalar::<_,String>("SELECT delivery_id FROM dispatch_delivery_dedupe WHERE dedupe_key=?").bind(format!("delivery:{reserved}")).fetch_one(&mut write).await.unwrap(),reserved);
-    product.ordinary.sqlite_for_test().hooks.delivery_candidates.lock().unwrap().extend(std::iter::repeat_n(reserved.to_owned(),4));
-    assert!(matches!(product.ordinary.accept(product.request(channel,"collision-budget-exhausted")).await,Err(KernelError::Unavailable)));
-    assert!(matches!(product.ordinary.status("collision-budget-exhausted").await,Err(KernelError::NotFound)));
+    product
+        .ordinary
+        .sqlite_for_test()
+        .hooks
+        .delivery_candidates
+        .lock()
+        .unwrap()
+        .extend([reserved.to_owned(), chosen.to_owned()]);
+    let accepted = product
+        .ordinary
+        .accept(product.request(channel, "new-after-historical-collision"))
+        .await
+        .unwrap();
+    assert_eq!(accepted.delivery_id, chosen);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT delivery_id FROM dispatch_delivery_dedupe WHERE dedupe_key=?"
+        )
+        .bind(format!("delivery:{reserved}"))
+        .fetch_one(&mut write)
+        .await
+        .unwrap(),
+        reserved
+    );
+    product
+        .ordinary
+        .sqlite_for_test()
+        .hooks
+        .delivery_candidates
+        .lock()
+        .unwrap()
+        .extend(std::iter::repeat_n(reserved.to_owned(), 4));
+    assert!(matches!(
+        product
+            .ordinary
+            .accept(product.request(channel, "collision-budget-exhausted"))
+            .await,
+        Err(KernelError::Unavailable)
+    ));
+    assert!(matches!(
+        product.ordinary.status("collision-budget-exhausted").await,
+        Err(KernelError::NotFound)
+    ));
     write.close().await.unwrap();
     product.stop().await;
 }

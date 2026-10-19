@@ -99,9 +99,7 @@ impl RunMode {
     fn planned_offset(self, index: usize) -> Duration {
         match self {
             Self::Formal if index < 8 => Duration::from_millis(index as u64 * 500),
-            Self::Formal if index < 24 => {
-                Duration::from_millis(4000 + (index as u64 - 8) * 125)
-            }
+            Self::Formal if index < 24 => Duration::from_millis(4000 + (index as u64 - 8) * 125),
             Self::Formal => Duration::from_millis(6000 + (index as u64 - 24) * 10),
             Self::Preflight => Duration::from_millis(index as u64 * 250),
         }
@@ -126,7 +124,10 @@ fn validate_fresh_run_directory(directory: &Path) -> Result<(), String> {
     if directory.parent().is_none() {
         return Err("run directory must have a parent".into());
     }
-    if directory.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
+    if directory
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
         return Err("run directory must not contain parent traversal".into());
     }
     Ok(())
@@ -282,8 +283,15 @@ impl Shared {
         op
     }
     fn ack(&self, peer: &str, device: &str, op: &str, delivery: &str) {
-        let first = self.ack_sent.lock().unwrap().insert((op.into(), device.into()));
-        assert!(first || self.mode == RunMode::Formal, "unexpected duplicate PUBACK in tiny preflight");
+        let first = self
+            .ack_sent
+            .lock()
+            .unwrap()
+            .insert((op.into(), device.into()));
+        assert!(
+            first || self.mode == RunMode::Formal,
+            "unexpected duplicate PUBACK in tiny preflight"
+        );
         self.evidence.record("ack_sent",json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"semantics":"PUBACK write completed; not durable proof"}));
     }
 }
@@ -778,13 +786,20 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                 // Old MQTT PUBACK writes an actual acked row. Empty/nonexistent
                 // outboxes cannot make a target complete in this oracle.
                 let rows=sqlx::query("SELECT device_id,delivery_id,status,created_at,acked_at FROM private_outbox ORDER BY delivery_id,device_id LIMIT 273").fetch_all(&mut connection).await.unwrap();
-                assert!(rows.len() <= shared.mode.targets(), "fresh cohort outbox bound");
+                assert!(
+                    rows.len() <= shared.mode.targets(),
+                    "fresh cohort outbox bound"
+                );
                 let delivery_pairs: Vec<_> = expected
                     .iter()
                     .filter_map(|(op, e)| e.delivery_id.as_ref().map(|id| (id.clone(), op.clone())))
                     .collect();
                 let by_delivery: BTreeMap<_, _> = delivery_pairs.iter().cloned().collect();
-                assert_eq!(by_delivery.len(), delivery_pairs.len(), "duplicate actual MQTT delivery identity");
+                assert_eq!(
+                    by_delivery.len(),
+                    delivery_pairs.len(),
+                    "duplicate actual MQTT delivery identity"
+                );
                 let all_delivery_ids_known = by_delivery.len() == expected.len();
                 let mut outbox_pairs = BTreeSet::new();
                 for row in rows {
@@ -792,7 +807,10 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                     let delivery: String = row.get("delivery_id");
                     let state: String = row.get("status");
                     let Some(op) = by_delivery.get(&delivery) else {
-                        assert!(!all_delivery_ids_known, "unexpected persisted outbox delivery outside accepted cohort");
+                        assert!(
+                            !all_delivery_ids_known,
+                            "unexpected persisted outbox delivery outside accepted cohort"
+                        );
                         if state != "acked" {
                             let created: i64 = row.get("created_at");
                             oldest = Some(oldest.map_or(created, |old| old.min(created)));
@@ -805,7 +823,10 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                         .position(|id| *id == device_id)
                         .expect("unexpected persisted outbox target device");
                     let pair = (op.clone(), keys[index].clone());
-                    assert!(outbox_pairs.insert(pair.clone()), "duplicate persisted outbox target");
+                    assert!(
+                        outbox_pairs.insert(pair.clone()),
+                        "duplicate persisted outbox target"
+                    );
                     shared.persisted.lock().unwrap().insert(op.clone());
                     *state_counts.entry(state.clone()).or_default() += 1;
                     if state != "acked" {
@@ -828,7 +849,10 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                 let body_ids: BTreeSet<String> =
                     rows.iter().map(|r| r.get("delivery_id")).collect();
                 if all_delivery_ids_known {
-                    assert!(body_ids.iter().all(|id| by_delivery.contains_key(id)), "unexpected persisted payload outside accepted cohort");
+                    assert!(
+                        body_ids.iter().all(|id| by_delivery.contains_key(id)),
+                        "unexpected persisted payload outside accepted cohort"
+                    );
                 }
                 expired = rows
                     .iter()
@@ -859,14 +883,21 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                     let item = expected
                         .get(&op)
                         .expect("unexpected persisted message outside accepted cohort");
-                    assert!(message_ops.insert(op.clone()), "duplicate persisted ordinary message");
-                    if let (Some(delivery), Some(message)) =
-                        (&item.delivery_id, &item.message_id)
-                    {
-                        assert_eq!(row.get::<String, _>("delivery_id"), *delivery,
-                            "durable and actual MQTT delivery identities match");
-                        assert_eq!(row.get::<String, _>("message_id"), *message,
-                            "durable and actual HTTP/MQTT message identities match");
+                    assert!(
+                        message_ops.insert(op.clone()),
+                        "duplicate persisted ordinary message"
+                    );
+                    if let (Some(delivery), Some(message)) = (&item.delivery_id, &item.message_id) {
+                        assert_eq!(
+                            row.get::<String, _>("delivery_id"),
+                            *delivery,
+                            "durable and actual MQTT delivery identities match"
+                        );
+                        assert_eq!(
+                            row.get::<String, _>("message_id"),
+                            *message,
+                            "durable and actual HTTP/MQTT message identities match"
+                        );
                         if accepted.contains(&op) {
                             message_ids.insert(op.clone());
                             shared.persisted.lock().unwrap().insert(op);
@@ -876,7 +907,11 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                 if accepted.len() == shared.mode.messages()
                     && expected.values().all(|item| item.delivery_id.is_some())
                 {
-                    assert_eq!(message_ids.len(), shared.mode.messages(), "all accepted messages must be persisted with matching identities");
+                    assert_eq!(
+                        message_ids.len(),
+                        shared.mode.messages(),
+                        "all accepted messages must be persisted with matching identities"
+                    );
                 }
                 let rows=sqlx::query("SELECT m.op_id,t.device_key,t.state,t.accepted_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id LIMIT 273").fetch_all(&mut connection).await.unwrap();
                 assert!(rows.len() <= shared.mode.targets());
@@ -886,7 +921,10 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                     let key: String = row.get("device_key");
                     let state: String = row.get("state");
                     *state_counts.entry(state).or_default() += 1;
-                    assert!(expected.contains_key(&op), "unexpected persisted target outside accepted cohort");
+                    assert!(
+                        expected.contains_key(&op),
+                        "unexpected persisted target outside accepted cohort"
+                    );
                     assert!(keys.contains(&key), "unexpected persisted target device");
                     assert!(existing.insert((op, key)), "duplicate persisted target row");
                     let accepted: i64 = row.get("accepted_at");
@@ -932,7 +970,9 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                 .filter(|(state, _)| state.as_str() != "acked")
                 .map(|(_, count)| *count)
                 .sum();
-            shared.residual_targets.store(pending as u64, Ordering::Relaxed);
+            shared
+                .residual_targets
+                .store(pending as u64, Ordering::Relaxed);
             shared.evidence.record("database_sample",json!({"states":state_counts,"pending_targets":pending,"payload_count":payloads,"expired_payload_count":expired,"oldest_pending_age_ms":oldest.map(|ts|(now-ts).max(0)),"durable_targets_observed":shared.committed.lock().unwrap().len()}));
             if tick % 10 == 0 {
                 guard_disk(database.parent().unwrap());
@@ -1091,9 +1131,10 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     let load_start_us = shared.evidence.us();
     let burst_us = load_start_us + mode.hold_delay().as_micros() as u64;
     shared.hold_from_us.store(burst_us, Ordering::Relaxed);
-    shared
-        .hold_until_us
-        .store(burst_us + mode.hold_duration().as_micros() as u64, Ordering::Relaxed);
+    shared.hold_until_us.store(
+        burst_us + mode.hold_duration().as_micros() as u64,
+        Ordering::Relaxed,
+    );
     let hold_until_us = burst_us + mode.hold_duration().as_micros() as u64;
     shared.evidence.record("load_started",json!({"mode":mode.name(),"planned_offer_start_us":load_start_us,"burst_start_us":burst_us,"held_ack_release_us":hold_until_us}));
     resource_boundary(product.child.id(), &shared.evidence, "low_started", false);
@@ -1115,14 +1156,50 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
         })
     };
     let ttl = chrono::Utc::now().timestamp_millis() + 3_600_000;
-    let schedule:Vec<_>=(0..mode.messages()).map(|index| {
-        let offset=mode.planned_offset(index);
-        let op=match mode {RunMode::Formal=>format!("c12-pair-{index:03}"),RunMode::Preflight=>format!("c13-preflight-{index:03}")};let input=request(product,&channel,&op,ttl);let body=input["body"].as_str().unwrap();
-        assert!(shared.expected.lock().unwrap().insert(op.clone(),Expected{body_hash:blake3::hash(body.as_bytes()).to_hex().to_string(),body_bytes:body.len(),metadata:input["metadata"].clone(),message_id:None,delivery_id:None}).is_none(), "duplicate planned operation id");
-        let planned=load_start_us+offset.as_micros() as u64;shared.evidence.record("planned_offer",json!({"op_id":op,"planned_offer_us":planned,"stage":mode.stage(index)}));(offset,planned,input)
-    }).collect();
-    assert_eq!(schedule.len(), mode.messages(), "nonzero planned cohort required");
-    assert!(mode.messages() > 0 && mode.targets() > 0, "zero-target runs are invalid evidence");
+    let schedule: Vec<_> = (0..mode.messages())
+        .map(|index| {
+            let offset = mode.planned_offset(index);
+            let op = match mode {
+                RunMode::Formal => format!("c12-pair-{index:03}"),
+                RunMode::Preflight => format!("c13-preflight-{index:03}"),
+            };
+            let input = request(product, &channel, &op, ttl);
+            let body = input["body"].as_str().unwrap();
+            assert!(
+                shared
+                    .expected
+                    .lock()
+                    .unwrap()
+                    .insert(
+                        op.clone(),
+                        Expected {
+                            body_hash: blake3::hash(body.as_bytes()).to_hex().to_string(),
+                            body_bytes: body.len(),
+                            metadata: input["metadata"].clone(),
+                            message_id: None,
+                            delivery_id: None
+                        }
+                    )
+                    .is_none(),
+                "duplicate planned operation id"
+            );
+            let planned = load_start_us + offset.as_micros() as u64;
+            shared.evidence.record(
+                "planned_offer",
+                json!({"op_id":op,"planned_offer_us":planned,"stage":mode.stage(index)}),
+            );
+            (offset, planned, input)
+        })
+        .collect();
+    assert_eq!(
+        schedule.len(),
+        mode.messages(),
+        "nonzero planned cohort required"
+    );
+    assert!(
+        mode.messages() > 0 && mode.targets() > 0,
+        "zero-target runs are invalid evidence"
+    );
     let last_offset = schedule.last().expect("nonempty schedule").0;
     let product_ref: &Product = product;
     stream::iter(schedule)
@@ -1138,7 +1215,11 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
         .collect::<Vec<_>>()
         .await;
     shared.check();
-    assert_eq!(shared.accepted.lock().unwrap().len(), mode.messages(), "all planned HTTP offers must be accepted");
+    assert_eq!(
+        shared.accepted.lock().unwrap().len(),
+        mode.messages(),
+        "all planned HTTP offers must be accepted"
+    );
     shared.evidence.record("all_http_complete",json!({"mode":mode.name(),"accepted":mode.messages(),"planned":mode.messages(),"fixed_schedule_end_us":load_start_us+last_offset.as_micros() as u64}));
     resource_boundary(
         product.child.id(),
@@ -1175,8 +1256,16 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
         Instant::now() < drain_deadline,
         "completed cohort observed after fixed last-offer+30s deadline"
     );
-    assert_eq!(shared.received.lock().unwrap().len(), mode.targets(), "missing or duplicate MQTT peer receive");
-    assert_eq!(shared.ack_sent.lock().unwrap().len(), mode.targets(), "missing or duplicate PUBACK");
+    assert_eq!(
+        shared.received.lock().unwrap().len(),
+        mode.targets(),
+        "missing or duplicate MQTT peer receive"
+    );
+    assert_eq!(
+        shared.ack_sent.lock().unwrap().len(),
+        mode.targets(),
+        "missing or duplicate PUBACK"
+    );
     shared.evidence.record("drained",json!({"mode":mode.name(),"accepted":mode.messages(),"received_targets":mode.targets(),"ack_sent_targets":mode.targets(),"durable_terminal_targets":mode.targets(),"body_released":mode.messages()}));
     resource_boundary(
         product.child.id(),
@@ -1221,9 +1310,14 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     validate_executable_binary(&binary).unwrap_or_else(|error| panic!("{error}"));
     let parent = directory.parent().expect("absolute run directory parent");
     std::fs::create_dir_all(parent).unwrap_or_else(|error| {
-        panic!("cannot prepare explicit run-directory parent {}: {error}", parent.display())
+        panic!(
+            "cannot prepare explicit run-directory parent {}: {error}",
+            parent.display()
+        )
     });
-    let canonical_parent = parent.canonicalize().expect("canonical run-directory parent");
+    let canonical_parent = parent
+        .canonicalize()
+        .expect("canonical run-directory parent");
     let leaf = directory.file_name().expect("fresh run directory leaf");
     let directory = canonical_parent.join(leaf);
     validate_fresh_run_directory(&directory).unwrap_or_else(|error| panic!("{error}"));
@@ -1263,5 +1357,9 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
         let committed = shared.committed.lock().unwrap().len();
         evidence.record("result",json!({"passed":false,"reason":"fixed mode hard deadline","mode":mode.name(),"accepted":shared.accepted.lock().unwrap().len(),"durable_terminal_targets":committed,"unfinished":mode.targets().saturating_sub(committed)}));
     }
-    assert!(outcome.is_ok(), "fixed mode hard deadline exceeded: {:?}", mode.hard_limit());
+    assert!(
+        outcome.is_ok(),
+        "fixed mode hard deadline exceeded: {:?}",
+        mode.hard_limit()
+    );
 }

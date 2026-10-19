@@ -545,8 +545,10 @@ pub async fn build_app(
     // before Storage initialization, maintenance, ACK or any network work.
     ordinary_health.ensure()?;
     crate::ordinary::cutover::activate_before_runtime(
-        args.db_url.as_deref(), runtime_tuning.profile.as_str(),
-    ).await?;
+        args.db_url.as_deref(),
+        runtime_tuning.profile.as_str(),
+    )
+    .await?;
     ordinary_health.ensure()?;
     let store = Storage::new_with_config(StorageInitConfig {
         db_url: args.db_url.clone(),

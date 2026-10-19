@@ -23,23 +23,23 @@ pub use store::{
     AcceptRequest, Accepted, Config, Counters, KernelError, MESSAGE_SUBMISSION_BODY_BYTES,
 };
 
-pub(crate) mod legacy;
-pub mod sqlite_cutover;
-pub mod pg_cutover;
-pub mod mysql_cutover;
 pub mod cutover;
+pub(crate) mod legacy;
+pub mod mysql_cutover;
+pub mod pg_cutover;
+pub mod sqlite_cutover;
 
 pub mod ingress;
 #[cfg(test)]
-mod product_pg_tests;
+mod mysql_history_tests;
 #[cfg(test)]
 mod pg_history_tests;
 #[cfg(test)]
-mod mysql_history_tests;
+mod product_maintenance_tests;
+#[cfg(test)]
+mod product_pg_tests;
 #[cfg(test)]
 mod product_sqlite_tests;
-#[cfg(test)]
-mod product_maintenance_tests;
 pub mod server;
 #[cfg(test)]
 mod widget_provider_tests;

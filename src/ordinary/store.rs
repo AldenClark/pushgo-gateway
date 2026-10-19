@@ -567,7 +567,9 @@ impl DeliveryStore {
     }
     async fn initialize(&self) -> Result<()> {
         let mut connection = SqliteWriteConnection::acquire(&self.pool).await?;
-        sqlx::raw_sql(MESSAGE_SCHEMA).execute(&mut *connection).await?;
+        sqlx::raw_sql(MESSAGE_SCHEMA)
+            .execute(&mut *connection)
+            .await?;
         let has_identity_state: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pragma_table_info('ordinary_messages') WHERE name='identity_state')")
             .fetch_one(&mut *connection).await?;
         if !has_identity_state {
@@ -644,13 +646,22 @@ impl DeliveryStore {
     async fn allocate_delivery_id(&self) -> Result<String> {
         for _ in 0..4 {
             #[cfg(test)]
-            let candidate = self.hooks.delivery_candidates.lock().expect("test candidates").pop_front().unwrap_or_else(generate_hex_id_128);
+            let candidate = self
+                .hooks
+                .delivery_candidates
+                .lock()
+                .expect("test candidates")
+                .pop_front()
+                .unwrap_or_else(generate_hex_id_128);
             #[cfg(not(test))]
             let candidate = generate_hex_id_128();
             let collision: bool = if let Some(pool) = self.legacy_dispatch_pool.get() {
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dispatch_delivery_dedupe WHERE dedupe_key=?)")
-                    .bind(format!("delivery:{candidate}"))
-                    .fetch_one(pool).await?
+                sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM dispatch_delivery_dedupe WHERE dedupe_key=?)",
+                )
+                .bind(format!("delivery:{candidate}"))
+                .fetch_one(pool)
+                .await?
             } else {
                 false
             };
@@ -1600,8 +1611,10 @@ impl DeliveryStore {
         self.health.ensure()?;
         let op = crate::ordinary::sender::op_id(op)?;
         let row={ let mut profile_read_connection = self.counters.profile.phase(Path::Read, Phase::PoolAcquire, self.pool.acquire()).await?; self.counters.profile.sql(Path::Read, Statement::Read, sqlx::query("SELECT op_id,status,message_id,accepted_at,updated_at,dedupe_until,identity_state,channel_id,thing_id FROM ordinary_messages WHERE op_id=? AND dedupe_until>?").bind(op).bind(now()).fetch_optional(&mut *profile_read_connection)).await }?.ok_or(KernelError::NotFound)?;
-        if row.get::<String,_>("identity_state")=="legacy_unverifiable" {
-            return Ok(json!({"op_id":row.get::<String,_>("op_id"),"status":"historical_unverifiable","identity_state":"legacy_unverifiable","model":"message","entity_id":row.get::<String,_>("message_id"),"channel_id":row.get::<String,_>("channel_id"),"thing_id":row.get::<Option<String>,_>("thing_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until"),"delivery_id":null,"delivery_expires_at":null,"dispatch_status":"not_attempted"}));
+        if row.get::<String, _>("identity_state") == "legacy_unverifiable" {
+            return Ok(
+                json!({"op_id":row.get::<String,_>("op_id"),"status":"historical_unverifiable","identity_state":"legacy_unverifiable","model":"message","entity_id":row.get::<String,_>("message_id"),"channel_id":row.get::<String,_>("channel_id"),"thing_id":row.get::<Option<String>,_>("thing_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until"),"delivery_id":null,"delivery_expires_at":null,"dispatch_status":"not_attempted"}),
+            );
         }
         Ok(
             json!({"op_id":row.get::<String,_>("op_id"),"status":row.get::<String,_>("status"),"model":"message","entity_id":row.get::<String,_>("message_id"),"accepted_at":row.get::<i64,_>("accepted_at"),"updated_at":row.get::<i64,_>("updated_at"),"expires_at":row.get::<i64,_>("dedupe_until")}),

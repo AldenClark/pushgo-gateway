@@ -9,7 +9,9 @@ pub async fn run(
 ) -> Result<(), Box<dyn Error>> {
     use crate::storage::DatabaseKind;
     match DatabaseKind::from_url(url)? {
-        DatabaseKind::Sqlite => super::sqlite_cutover::run(url, action, backup, source_profile).await,
+        DatabaseKind::Sqlite => {
+            super::sqlite_cutover::run(url, action, backup, source_profile).await
+        }
         DatabaseKind::Postgres => super::pg_cutover::run(url, action, backup, source_profile).await,
         DatabaseKind::Mysql => super::mysql_cutover::run(url, action, backup, source_profile).await,
     }
