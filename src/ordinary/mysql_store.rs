@@ -1035,15 +1035,6 @@ impl MySqlDeliveryStore {
         self.notify();
         Ok(removed)
     }
-    #[cfg(test)]
-    pub(super) async fn claim(
-        &self,
-        provider: &str,
-        limit: usize,
-        retry_first: bool,
-    ) -> Result<ClaimBatch> {
-        self.claim_reserved(provider, limit, retry_first).await
-    }
     pub(super) async fn claim_reserved(
         &self,
         provider: &str,
@@ -1465,6 +1456,7 @@ impl MySqlDeliveryStore {
         Ok(executing.max(0))
     }
 
+    #[cfg(test)]
     pub(crate) async fn private_pending_count(&self, device: Option<&str>) -> Result<i64> {
         let mut connection = self.acquire().await?;
         let count: i64 = if let Some(key) = device {

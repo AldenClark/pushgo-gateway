@@ -54,6 +54,17 @@ pub fn remote_apns_token_provider(
     ))
 }
 
+/// Construct the existing WNS Remote owner with the same injected client.
+pub fn remote_wns_token_provider(
+    token_service_url: &str,
+    client: reqwest::Client,
+) -> std::sync::Arc<dyn providers::WnsTokenProvider> {
+    std::sync::Arc::new(token_providers::remote::wns::WnsTokenProvider::new(
+        token_service_url,
+        client,
+    ))
+}
+
 pub mod ordinary;
 
 /// Synthetic local Provider substitutes; not compiled into normal builds.

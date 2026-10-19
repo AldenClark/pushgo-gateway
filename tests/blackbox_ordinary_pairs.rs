@@ -26,7 +26,6 @@ mod product_mqtt;
 use product_mqtt::ProductMqttClient;
 
 const MESSAGES: usize = 136;
-const TARGETS: usize = MESSAGES * 2;
 const HARD_LIMIT: Duration = Duration::from_secs(100);
 const DRAIN_LIMIT: Duration = Duration::from_secs(30);
 
@@ -833,10 +832,12 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                         let created: i64 = row.get("created_at");
                         oldest = Some(oldest.map_or(created, |old| old.min(created)));
                     }
-                    if state == "acked" && row.get::<Option<i64>, _>("acked_at").is_some() {
-                        if ack_sent.contains(&pair) && received.contains(&pair) {
-                            terminal.insert(pair);
-                        }
+                    if state == "acked"
+                        && row.get::<Option<i64>, _>("acked_at").is_some()
+                        && ack_sent.contains(&pair)
+                        && received.contains(&pair)
+                    {
+                        terminal.insert(pair);
                     }
                 }
                 let rows =
@@ -859,16 +860,15 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                     .filter(|r| r.get::<i64, _>("expires_at") <= now)
                     .count();
                 for (op, item) in &expected {
-                    if let Some(delivery) = &item.delivery_id {
-                        if !body_ids.contains(delivery)
-                            && terminal.iter().filter(|(id, _)| id == op).count() == 2
-                            && shared.body_released.lock().unwrap().insert(op.clone())
-                        {
-                            shared.evidence.record(
-                                "body_release_commit_visible_upper_bound",
-                                json!({"op_id":op}),
-                            );
-                        }
+                    if let Some(delivery) = &item.delivery_id
+                        && !body_ids.contains(delivery)
+                        && terminal.iter().filter(|(id, _)| id == op).count() == 2
+                        && shared.body_released.lock().unwrap().insert(op.clone())
+                    {
+                        shared.evidence.record(
+                            "body_release_commit_visible_upper_bound",
+                            json!({"op_id":op}),
+                        );
                     }
                 }
             } else {
@@ -974,7 +974,7 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                 .residual_targets
                 .store(pending as u64, Ordering::Relaxed);
             shared.evidence.record("database_sample",json!({"states":state_counts,"pending_targets":pending,"payload_count":payloads,"expired_payload_count":expired,"oldest_pending_age_ms":oldest.map(|ts|(now-ts).max(0)),"durable_targets_observed":shared.committed.lock().unwrap().len()}));
-            if tick % 10 == 0 {
+            if tick.is_multiple_of(10) {
                 guard_disk(database.parent().unwrap());
                 let files:Vec<_>=std::fs::read_dir(database.parent().unwrap()).unwrap().map(|entry|entry.unwrap()).filter(|entry|entry.file_name().to_string_lossy().contains(".sqlite")).map(|entry|json!({"name":entry.file_name(),"logical_bytes":entry.metadata().unwrap().len()})).collect();
                 shared.evidence.record("resources",json!({"gateway":process_usage(pid),"harness_including_peers_and_observer":process_usage(std::process::id()),"database":"embedded; included in Gateway CPU/RSS","database_files":files}));

@@ -1778,30 +1778,30 @@ async fn watch_alert_all_models_freeze_deadlines_and_preserve_phone_ttl() {
                 )
                 .await;
                 assert!(result.success);
-                let calls = observed.0.lock().unwrap();
-                let data = &calls.last().unwrap().1;
-                let expirations = observed.1.lock().unwrap();
-                let expiration = *expirations.last().unwrap();
-                if platform == crate::ordinary::types::Platform::Watchos {
-                    saw_watch = true;
-                    let deadline = ticket.accepted_at + minutes * 60_000;
-                    assert_eq!(ticket.watch_alert_deadline, Some(deadline));
-                    assert_eq!(data["watch_alert_deadline_at"], deadline.to_string());
-                    assert_eq!(data["sent_at"], ticket.accepted_at.to_string());
-                    assert_eq!(expiration, Some(deadline / 1_000));
-                    assert_eq!(data["watch_light_kind"], "message");
-                } else {
-                    saw_phone = true;
-                    assert!(ticket.watch_alert_deadline.is_none());
-                    assert!(data.get("watch_alert_deadline_at").is_none());
-                    assert_eq!(
-                        expiration,
-                        request["ttl"].as_i64().map(|expiry| expiry / 1_000)
-                    );
+                {
+                    let calls = observed.0.lock().unwrap();
+                    let data = &calls.last().unwrap().1;
+                    let expirations = observed.1.lock().unwrap();
+                    let expiration = *expirations.last().unwrap();
+                    if platform == crate::ordinary::types::Platform::Watchos {
+                        saw_watch = true;
+                        let deadline = ticket.accepted_at + minutes * 60_000;
+                        assert_eq!(ticket.watch_alert_deadline, Some(deadline));
+                        assert_eq!(data["watch_alert_deadline_at"], deadline.to_string());
+                        assert_eq!(data["sent_at"], ticket.accepted_at.to_string());
+                        assert_eq!(expiration, Some(deadline / 1_000));
+                        assert_eq!(data["watch_light_kind"], "message");
+                    } else {
+                        saw_phone = true;
+                        assert!(ticket.watch_alert_deadline.is_none());
+                        assert!(data.get("watch_alert_deadline_at").is_none());
+                        assert_eq!(
+                            expiration,
+                            request["ttl"].as_i64().map(|expiry| expiry / 1_000)
+                        );
+                    }
+                    assert_ne!(ticket.accepted_at, 1_700_000_000_000);
                 }
-                assert_ne!(ticket.accepted_at, 1_700_000_000_000);
-                drop(expirations);
-                drop(calls);
                 ordinary
                     .settle(
                         &ticket,
@@ -1912,7 +1912,7 @@ async fn watch_alert_existing_v12_database_adds_setting_without_changing_route()
         .await
         .unwrap();
     let before = legacy
-        .active_device_route_snapshot(&key)
+        .active_device_route_snapshot(key)
         .await
         .unwrap()
         .unwrap();
@@ -1936,24 +1936,24 @@ async fn watch_alert_existing_v12_database_adds_setting_without_changing_route()
         .initialize_ordinary(crate::ordinary::Config::default(), Arc::default())
         .await
         .unwrap();
-    assert_eq!(reopened.watch_alert_window_minutes(&key).await.unwrap(), 30);
+    assert_eq!(reopened.watch_alert_window_minutes(key).await.unwrap(), 30);
     assert_eq!(
         reopened
-            .active_device_route_snapshot(&key)
+            .active_device_route_snapshot(key)
             .await
             .unwrap()
             .unwrap(),
         before
     );
     reopened
-        .set_watch_alert_window_minutes(&key, 15)
+        .set_watch_alert_window_minutes(key, 15)
         .await
         .unwrap();
     reopened.close_ordinary_storage().await.unwrap();
     let reopened_again = Storage::new(Some(&db_url)).await.unwrap();
     assert_eq!(
         reopened_again
-            .watch_alert_window_minutes(&key)
+            .watch_alert_window_minutes(key)
             .await
             .unwrap(),
         15

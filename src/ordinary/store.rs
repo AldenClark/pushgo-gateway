@@ -260,7 +260,6 @@ pub(super) struct TestHooks {
     pub accept_after_commit: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
     pub receipt_with_gate: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
     pub claim_before_gate: std::sync::Mutex<Option<Arc<Notify>>>,
-    pub control_before_write: std::sync::Mutex<Option<Arc<CommitBarrier>>>,
 }
 #[cfg(test)]
 #[derive(Default)]
@@ -1223,15 +1222,6 @@ impl DeliveryStore {
         self.notify();
         Ok(removed)
     }
-    #[cfg(test)]
-    pub(super) async fn claim(
-        &self,
-        provider: &str,
-        limit: usize,
-        retry_first: bool,
-    ) -> Result<ClaimBatch> {
-        self.claim_reserved(provider, limit, retry_first).await
-    }
     pub(super) async fn claim_reserved(
         &self,
         provider: &str,
@@ -1487,12 +1477,6 @@ impl DeliveryStore {
             .receipt_commits
             .fetch_add(1, Ordering::Relaxed);
         Ok(())
-    }
-    #[cfg(test)]
-    pub(crate) async fn next_widget_refresh(
-        &self,
-    ) -> Result<Option<crate::ordinary::widget_refresh::WidgetRefresh>> {
-        self.widget_refresh_after(0, i64::MAX).await
     }
 
     pub(crate) async fn widget_refresh_ceiling(&self) -> Result<Option<i64>> {

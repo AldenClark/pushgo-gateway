@@ -419,31 +419,6 @@ impl PgDeliveryStore {
         Ok(())
     }
 
-    /// Fence every logical capability before the caller transfers Pull owners.
-    pub(crate) async fn fence_private_coalesce_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        winner: &str,
-        platform: &str,
-        token: &str,
-    ) -> Result<()> {
-        if !self.config.private.enabled {
-            let retained: bool = self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.delivery_mode='private' AND t.acked_at IS NULL AND (t.pull_owner IN (SELECT device_key FROM ordinary_device_routes WHERE platform=$1 AND provider_token=$2 AND device_key<>$3 AND retired_at IS NULL) OR (t.pull_owner=$4 AND t.delivery_id IN (SELECT x.delivery_id FROM ordinary_targets x JOIN ordinary_device_routes d ON d.device_key=x.pull_owner WHERE d.platform=$5 AND d.provider_token=$6 AND d.device_key<>$7 AND d.retired_at IS NULL AND x.acked_at IS NULL))))").bind(platform).bind(token).bind(winner).bind(winner).bind(platform).bind(token).bind(winner).fetch_one(&mut **tx)).await?;
-            if !retained {
-                return Ok(());
-            }
-        }
-        let exhausted: bool = self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.acked_at IS NULL AND t.delivery_epoch=$1 AND (t.pull_owner IN (SELECT device_key FROM ordinary_device_routes WHERE platform=$2 AND provider_token=$3 AND device_key<>$4 AND retired_at IS NULL) OR (t.pull_owner=$5 AND t.delivery_id IN (SELECT x.delivery_id FROM ordinary_targets x JOIN ordinary_device_routes d ON d.device_key=x.pull_owner WHERE d.platform=$6 AND d.provider_token=$7 AND d.device_key<>$8 AND d.retired_at IS NULL AND x.acked_at IS NULL))))").bind(i64::MAX).bind(platform).bind(token).bind(winner).bind(winner).bind(platform).bind(token).bind(winner).fetch_one(&mut **tx)).await?;
-        if exhausted {
-            return Err(KernelError::Invalid(
-                "private delivery epoch exhausted".into(),
-            ));
-        }
-        self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE ordinary_targets SET delivery_epoch=delivery_epoch+1,private_claim=NULL,private_group=NULL WHERE pull_owner=$1 AND acked_at IS NULL AND delivery_id IN (SELECT x.delivery_id FROM ordinary_targets x JOIN ordinary_device_routes d ON d.device_key=x.pull_owner WHERE d.platform=$2 AND d.provider_token=$3 AND d.device_key<>$4 AND d.retired_at IS NULL AND x.acked_at IS NULL)").bind(winner).bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
-        self.counters.profile.sql(Path::Control, Statement::Control, sqlx::query("UPDATE ordinary_targets SET state=CASE WHEN delivery_mode='private' AND state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END,delivery_mode='provider',delivery_epoch=delivery_epoch+1,private_claim=NULL,private_group=NULL WHERE acked_at IS NULL AND pull_owner IN (SELECT device_key FROM ordinary_device_routes WHERE platform=$1 AND provider_token=$2 AND device_key<>$3 AND retired_at IS NULL)").bind(platform).bind(token).bind(winner).execute(&mut **tx)).await?;
-        Ok(())
-    }
-
     /// Startup only: no live runtime owner exists until all bounded batches finish.
     pub(super) async fn recover_private_claims_tx(
         &self,

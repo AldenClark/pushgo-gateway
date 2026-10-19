@@ -340,16 +340,14 @@ impl Storage {
         self.ensure_ordinary_health()?;
         if previous_channel_type != RouteChannelType::Private
             && route.channel_type.eq_ignore_ascii_case("private")
+            && let Some(ordinary) = self.ordinary_handle()
         {
-            if let Some(ordinary) = self.ordinary_handle() {
-                let (pending, capacity) =
-                    ordinary.private_route_capacity(&route.device_key).await?;
-                if pending > capacity {
-                    return Err(StoreError::RouteMigrationCapacityExceeded {
-                        pending: pending as usize,
-                        capacity: capacity as usize,
-                    });
-                }
+            let (pending, capacity) = ordinary.private_route_capacity(&route.device_key).await?;
+            if pending > capacity {
+                return Err(StoreError::RouteMigrationCapacityExceeded {
+                    pending: pending as usize,
+                    capacity: capacity as usize,
+                });
             }
         }
         let migrated = self

@@ -114,7 +114,6 @@ impl PgDeliveryStore {
         Ok(store)
     }
     /// Storage closes its shared pool after every consumer has drained.
-    pub(super) async fn close(&self) {}
     async fn initialize(&self) -> Result<()> {
         let mut connection = self.acquire().await?;
         let mut tx = Self::begin_ordinary(&mut connection).await?;
@@ -456,11 +455,6 @@ impl PgDeliveryStore {
         .execute(&mut **tx)
         .await?;
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn next_widget_refresh(&self) -> Result<Option<WidgetRefresh>> {
-        self.widget_refresh_after(0, i64::MAX).await
     }
 
     pub(crate) async fn widget_refresh_ceiling(&self) -> Result<Option<i64>> {
@@ -892,15 +886,6 @@ impl PgDeliveryStore {
         self.counters.ack_commits.fetch_add(1, Ordering::Relaxed);
         self.notify();
         Ok(removed)
-    }
-    #[cfg(test)]
-    pub(super) async fn claim(
-        &self,
-        provider: &str,
-        limit: usize,
-        retry_first: bool,
-    ) -> Result<ClaimBatch> {
-        self.claim_reserved(provider, limit, retry_first).await
     }
     pub(super) async fn claim_reserved(
         &self,
@@ -1433,6 +1418,7 @@ impl PgDeliveryStore {
             .fetch_one(&mut *connection).await?;
         Ok(count.max(0))
     }
+    #[cfg(test)]
     pub(crate) async fn private_pending_count(&self, device: Option<&str>) -> Result<i64> {
         let mut connection = self.acquire().await?;
         let count: i64 = match device {

@@ -685,12 +685,13 @@ pub(crate) mod tests {
                 .await
                 .success
         );
-        let calls = clients.0.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, ProductPlatform::WATCHOS);
-        assert_eq!(calls[0].1["watch_light_kind"], "message");
-        assert_eq!(calls[0].1["watch_alert_deadline_at"], deadline.to_string());
-        drop(calls);
+        {
+            let calls = clients.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, ProductPlatform::WATCHOS);
+            assert_eq!(calls[0].1["watch_light_kind"], "message");
+            assert_eq!(calls[0].1["watch_alert_deadline_at"], deadline.to_string());
+        }
         let result = transport
             .send(
                 "APNS",

@@ -322,10 +322,11 @@ impl OrdinaryStore {
                     .await
             }
         };
-        if result.is_ok() && error == "invalid_token" {
-            if let Some(invalidate) = &self.post_control {
-                invalidate();
-            }
+        if result.is_ok()
+            && error == "invalid_token"
+            && let Some(invalidate) = &self.post_control
+        {
+            invalidate();
         }
         if result.is_ok() && self.config.private.enabled {
             self.private_wake.notify_one();
@@ -430,9 +431,6 @@ impl OrdinaryStore {
         self.health.fail(reason);
         self.notify();
     }
-    pub(crate) async fn private_changed(&self) {
-        self.private_wake.notified().await;
-    }
     pub(crate) fn private_notifier(&self) -> Arc<Notify> {
         self.private_wake.clone()
     }
@@ -464,6 +462,7 @@ impl OrdinaryStore {
         };
         self.checked(result)
     }
+    #[cfg(test)]
     pub(crate) async fn private_pending_count(&self, device: Option<&str>) -> Result<i64> {
         let result = match &self.backend {
             Backend::Sqlite(s) => s.private_pending_count(device).await,

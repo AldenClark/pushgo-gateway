@@ -122,10 +122,10 @@ fn family(core: &Path) -> Result<Vec<(&'static str, PathBuf)>> {
         }
         for suffix in ["-wal", "-shm"] {
             let side = PathBuf::from(format!("{}{suffix}", path.display()));
-            if let Ok(m) = fs::symlink_metadata(side) {
-                if !m.is_file() || m.file_type().is_symlink() {
-                    return Err(invalid("invalid SQLite companion file"));
-                }
+            if let Ok(m) = fs::symlink_metadata(side)
+                && (!m.is_file() || m.file_type().is_symlink())
+            {
+                return Err(invalid("invalid SQLite companion file"));
             }
         }
     }
@@ -982,12 +982,10 @@ async fn run_owned(
         .execute(&mut members[0].conn)
         .await?;
     visit_history(&mut members, retention, true).await?;
-    for index in 0..members.len() {
-        sqlx::query("COMMIT")
-            .execute(&mut members[index].conn)
-            .await?;
+    for member in &mut members {
+        sqlx::query("COMMIT").execute(&mut member.conn).await?;
         #[cfg(test)]
-        if index == 0
+        if member.kind == "core"
             && FAIL_AFTER_CORE_COMMIT
                 .try_with(|enabled| *enabled)
                 .unwrap_or(false)

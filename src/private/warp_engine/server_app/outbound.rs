@@ -355,16 +355,16 @@ impl OutboundContext {
             return None;
         }
         let bootstrap_inflight = self.bootstrap_inflight.lock().pop_front();
-        if let Some((seq, envelope)) = bootstrap_inflight {
-            if let Some(prepared) = self.authorized_retransmit(seq, envelope).await {
-                return Some(prepared);
-            }
+        if let Some((seq, envelope)) = bootstrap_inflight
+            && let Some(prepared) = self.authorized_retransmit(seq, envelope).await
+        {
+            return Some(prepared);
         }
         let bootstrap_pending = self.bootstrap_pending.lock().pop_front();
-        if let Some(envelope) = bootstrap_pending {
-            if let Some(prepared) = self.authorized_new_outbound(envelope).await {
-                return Some(prepared);
-            }
+        if let Some(envelope) = bootstrap_pending
+            && let Some(prepared) = self.authorized_new_outbound(envelope).await
+        {
+            return Some(prepared);
         }
         let retransmit = self
             .state
@@ -375,10 +375,10 @@ impl OutboundContext {
                 .metrics
                 .mark_retransmit_exhausted(retransmit.exhausted_count);
         }
-        if let Some((seq, envelope)) = retransmit.outbound {
-            if let Some(prepared) = self.authorized_retransmit(seq, envelope).await {
-                return Some(prepared);
-            }
+        if let Some((seq, envelope)) = retransmit.outbound
+            && let Some(prepared) = self.authorized_retransmit(seq, envelope).await
+        {
+            return Some(prepared);
         }
         // A single preference bit alternates successful fresh handoffs. A
         // source with no work or execution budget never blocks the other one.
@@ -403,10 +403,10 @@ impl OutboundContext {
                         return None;
                     }
                 }
-            } else if let Ok(envelope) = self.receiver.try_recv() {
-                if let Some(prepared) = self.authorized_new_outbound(envelope).await {
-                    return Some(prepared);
-                }
+            } else if let Ok(envelope) = self.receiver.try_recv()
+                && let Some(prepared) = self.authorized_new_outbound(envelope).await
+            {
+                return Some(prepared);
             }
         }
         None

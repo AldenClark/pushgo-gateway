@@ -545,11 +545,11 @@ fn database_observer(product: &Product, shared: Arc<Shared>) -> JoinHandle<()> {
             }
             let usage:(i64,i64,i64,i64)=sqlx::query_as("SELECT messages,targets,bytes,private_pending FROM ordinary_ledger_usage WHERE singleton=1").fetch_one(&mut db).await.unwrap();
             shared.evidence.record("database_sample",json!({"states":states,"running_targets":running,"private_issued_claims":claims,"private_unclaimed_waiting":waiting,"identity_count":messages.len(),"usage":{"messages":usage.0,"targets":usage.1,"bytes":usage.2,"private_pending":usage.3}}));
-            if tick % 10 == 0 {
+            if tick.is_multiple_of(10) {
                 let files:Vec<_>=std::fs::read_dir(database.parent().unwrap()).unwrap().map(|x|x.unwrap()).filter(|x|x.file_name().to_string_lossy().contains(".sqlite")).map(|x|json!({"name":x.file_name(),"logical_bytes":x.metadata().unwrap().len()})).collect();
                 shared.evidence.record("resources",json!({"gateway":process_usage(pid),"harness_including_peers_observer":process_usage(std::process::id()),"database_process":"not separate: embedded SQLite","database_files":files}));
             }
-            if tick % 100 == 0 {
+            if tick.is_multiple_of(100) {
                 guard_disk(database.parent().unwrap());
             }
             tick += 1;

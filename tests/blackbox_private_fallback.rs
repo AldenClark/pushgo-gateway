@@ -177,10 +177,10 @@ impl Drop for GatewayProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        if std::env::var_os("C10_PRODUCT_EVIDENCE_DIR").is_some() {
-            if let Some(dir) = self._dir.take() {
-                eprintln!("C10_PRODUCT_EVIDENCE={}", dir.keep().display());
-            }
+        if std::env::var_os("C10_PRODUCT_EVIDENCE_DIR").is_some()
+            && let Some(dir) = self._dir.take()
+        {
+            eprintln!("C10_PRODUCT_EVIDENCE={}", dir.keep().display());
         }
     }
 }

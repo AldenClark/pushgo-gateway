@@ -523,10 +523,10 @@ impl MqttSession {
                         if retransmit.exhausted_count > 0 {
                             shutdown.metrics.mark_retransmit_exhausted(retransmit.exhausted_count);
                         }
-                        if let Some((_, envelope)) = retransmit.outbound {
-                            if self.write_delivery(client.device_id, envelope, false).await.is_err() {
-                                break;
-                            }
+                        if let Some((_, envelope)) = retransmit.outbound
+                            && self.write_delivery(client.device_id, envelope, false).await.is_err()
+                        {
+                            break;
                         }
                     }
                 }

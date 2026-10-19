@@ -206,7 +206,7 @@ impl PrivateState {
                 Ok(None) => break,
                 Err(_) => {
                     sessions.abort_all();
-                    while let Some(_) = sessions.join_next().await {
+                    while sessions.join_next().await.is_some() {
                         report.aborted = report.aborted.saturating_add(1);
                     }
                     break;

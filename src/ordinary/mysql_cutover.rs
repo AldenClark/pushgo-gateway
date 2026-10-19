@@ -414,14 +414,14 @@ async fn metadata_digest_with_header(
     for r in rows {
         let k: String = r.get_unchecked("k");
         let mut v: String = r.get_unchecked("v");
-        if k == "736368656D615F76657273696F6E" {
-            if let Some(header) = header {
-                v = header
-                    .as_bytes()
-                    .iter()
-                    .map(|b| format!("{b:02X}"))
-                    .collect();
-            }
+        if k == "736368656D615F76657273696F6E"
+            && let Some(header) = header
+        {
+            v = header
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect();
         }
         h.update(format!("{k}:{v}\n"));
     }

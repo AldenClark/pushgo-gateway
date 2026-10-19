@@ -62,6 +62,8 @@ impl MessageInput {
     }
 }
 
+type ProjectedMessageContent = (AlertHint, HashMap<String, String>, HashMap<String, String>);
+
 impl MessageSend {
     pub(crate) const SPEC: ActionSpec = ActionSpec {
         model: DomainModelKind::Message,
@@ -147,7 +149,7 @@ impl MessageSend {
     fn project_content(
         &self,
         thing_id: Option<&str>,
-    ) -> Result<(AlertHint, HashMap<String, String>, HashMap<String, String>), CoreError> {
+    ) -> Result<ProjectedMessageContent, CoreError> {
         let normalized_body = OptionalText::normalize_owned(self.input.body.clone());
         let normalized_url = OptionalText::normalize_owned(self.input.url.clone());
         let normalized_images =

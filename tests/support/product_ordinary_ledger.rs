@@ -6,8 +6,19 @@ use sqlx::{Connection, MySqlConnection, PgConnection, SqliteConnection};
 
 #[derive(Clone)]
 pub enum ProductLedger {
-    Sqlite { core: String, sidecars: Vec<String> },
+    Sqlite {
+        core: String,
+        sidecars: Vec<String>,
+    },
+    #[allow(
+        dead_code,
+        reason = "Shared test oracle; external backends are exercised by provider, fallback and fault test crates"
+    )]
     Postgres(String),
+    #[allow(
+        dead_code,
+        reason = "Shared test oracle; external backends are exercised by provider, fallback and fault test crates"
+    )]
     Mysql(String),
 }
 
@@ -59,6 +70,10 @@ impl ProductLedger {
 
     /// Credentials remain inside the explicitly supplied isolated URL file.
     /// No existing database is reset, reused, dropped, or migrated by this helper.
+    #[allow(
+        dead_code,
+        reason = "Shared test oracle; external backends are exercised by provider, fallback and fault test crates"
+    )]
     pub async fn external_from_file(backend: &str, variable: &str) -> Self {
         let file =
             PathBuf::from(std::env::var_os(variable).unwrap_or_else(|| {

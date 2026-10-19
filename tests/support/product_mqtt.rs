@@ -77,6 +77,10 @@ impl ProductMqttClient {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "Shared integration-test client; expiry assertions are used by blackbox_private_fallback"
+    )]
     pub async fn assert_no_delivery(&mut self, wait: Duration) {
         assert!(
             self.receive(wait).await.is_none(),

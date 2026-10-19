@@ -114,10 +114,6 @@ impl DeliveryRuntime {
     pub(crate) fn stop_requester(&self) -> watch::Sender<bool> {
         self.stop.clone()
     }
-    #[cfg(test)]
-    pub(super) fn stop_probe(&self) -> watch::Receiver<bool> {
-        self.stop.subscribe()
-    }
     /// The product owner first closes ingress, then drains this bounded runtime.
     /// Storage and its exclusive lock remain owned by normal product lifecycle.
     pub async fn shutdown(mut self) -> ShutdownReport {

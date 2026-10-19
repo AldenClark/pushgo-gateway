@@ -20,14 +20,6 @@ use pushgo_gateway::{
     },
 };
 
-use crate::token_providers::remote::{
-    apns::ApnsTokenProvider as RemoteApnsTokenProvider,
-    fcm::FcmTokenProvider as RemoteFcmTokenProvider, gateway::build_token_service_http_client,
-    wns::WnsTokenProvider as RemoteWnsTokenProvider,
-};
-
-mod token_providers;
-
 const APNS_PRODUCTION_ENDPOINT: &str = "https://api.push.apple.com";
 const APNS_SANDBOX_ENDPOINT: &str = "https://api.sandbox.push.apple.com";
 const FCM_SEND_BASE_URL: &str = "https://fcm.googleapis.com";
@@ -242,16 +234,10 @@ fn provider_clients(
     }
     #[cfg(not(feature = "qa"))]
     let _ = args;
-    let client = build_token_service_http_client()?;
-    let apns_tokens = Arc::new(RemoteApnsTokenProvider::new(
-        token_service_url,
-        client.clone(),
-    ));
-    let fcm_tokens = Arc::new(RemoteFcmTokenProvider::new(
-        token_service_url,
-        client.clone(),
-    ));
-    let wns_tokens = Arc::new(RemoteWnsTokenProvider::new(token_service_url, client));
+    let client = pushgo_gateway::token_service_http_client()?;
+    let apns_tokens = pushgo_gateway::remote_apns_token_provider(token_service_url, client.clone());
+    let fcm_tokens = pushgo_gateway::remote_fcm_token_provider(token_service_url, client.clone());
+    let wns_tokens = pushgo_gateway::remote_wns_token_provider(token_service_url, client);
     Ok((
         Arc::new(ApnsService::new_with_connection_budget(
             apns_tokens,

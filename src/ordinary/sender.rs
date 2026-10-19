@@ -108,7 +108,6 @@ pub(crate) fn password(raw: &str) -> Result<&str> {
 }
 pub(crate) struct NormalizedMessage {
     pub channel_id: String,
-    pub authorized_channel: Option<[u8; 16]>,
     pub thing_id: Option<String>,
     pub password: String,
     pub op_id: String,
@@ -160,7 +159,6 @@ impl AcceptRequest {
         })?;
         Ok(NormalizedMessage {
             channel_id,
-            authorized_channel: self.authorized_channel,
             thing_id: prepared.thing_id,
             password,
             op_id: prepared.op_id,
@@ -227,7 +225,11 @@ mod tests {
             .metadata
             .insert("amount".into(), serde_json::json!(-12.5));
         let output = input.normalize().unwrap();
-        assert_eq!(output.authorized_channel, Some([7; 16]));
+        assert_eq!(
+            output.channel_id,
+            crate::value::ChannelId::from([7; 16]).to_string()
+        );
+        assert!(output.password.is_empty());
         assert_eq!(output.occurred_at, Some(456));
         assert_eq!(
             output.fields.get("thing_id").map(String::as_str),

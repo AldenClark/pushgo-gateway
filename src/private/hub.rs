@@ -8,3 +8,4 @@ include!("hub/outbox.rs");
 include!("hub/cache.rs");
 include!("hub/memory.rs");
 include!("hub/transports.rs");
+include!("hub/ordinary_tests.rs");

@@ -382,6 +382,22 @@ fn owner_backend(url: &str) -> Result<crate::storage::DatabaseKind> {
         .map_err(|error| KernelError::Invalid(error.to_string()))
 }
 
+/// The existing explicit schema-upgrade command must share product ownership.
+/// A successful upgrade has completed its durable SQL before releasing the lock;
+/// errors retain the abnormal-drop lock until this command process exits.
+pub async fn run_exclusive_upgrade(
+    config: crate::storage::StorageInitConfig,
+    mode: crate::storage::database::upgrade::UpgradeMode,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let owner =
+        ProductOwner::acquire(config.db_url.as_deref(), Arc::new(Health::default())).await?;
+    crate::storage::database::upgrade::UpgradeManager::new(config)
+        .run(mode)
+        .await?;
+    owner.shutdown().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,20 +546,4 @@ mod tests {
         });
         assert!(health.ensure().is_ok());
     }
-}
-
-/// The existing explicit schema-upgrade command must share product ownership.
-/// A successful upgrade has completed its durable SQL before releasing the lock;
-/// errors retain the abnormal-drop lock until this command process exits.
-pub async fn run_exclusive_upgrade(
-    config: crate::storage::StorageInitConfig,
-    mode: crate::storage::database::upgrade::UpgradeMode,
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let owner =
-        ProductOwner::acquire(config.db_url.as_deref(), Arc::new(Health::default())).await?;
-    crate::storage::database::upgrade::UpgradeManager::new(config)
-        .run(mode)
-        .await?;
-    owner.shutdown().await?;
-    Ok(())
 }
