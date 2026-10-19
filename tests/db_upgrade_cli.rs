@@ -2,7 +2,8 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-const STORAGE_SCHEMA_VERSION: &str = "2026-08-20-gateway-v12";
+const STORAGE_SCHEMA_VERSION: &str = "2026-10-17-gateway-v13";
+const STORAGE_SCHEMA_VERSION_DURABLE_V12: &str = "2026-08-20-gateway-v12";
 const STORAGE_SCHEMA_VERSION_BETA1: &str = "2026-04-22-gateway-v9";
 const STORAGE_SCHEMA_VERSION_MIGRATABLE: &str = "2026-04-17-gateway-v8";
 const STORAGE_SCHEMA_VERSION_PREVIOUS: &str = "2026-04-16-gateway-v7";
@@ -21,6 +22,11 @@ const FORMAL_RELEASE_V10_CHECKSUM: &str =
 const CONCURRENCY_FENCING_V11_MIGRATION_ID: &str = "20260808_001_concurrency_fencing_v11";
 const CONCURRENCY_FENCING_V11_CHECKSUM: &str =
     "sha256:5ac8609854a01918f99f837fb1240aa74c8543f17fa777cf786520884271296e";
+const DURABLE_PROVIDER_DISPATCH_V12_MIGRATION_ID: &str =
+    "20260820_001_durable_provider_dispatch_v12";
+const WATCH_ALERT_WINDOW_MIGRATION_ID: &str = "20261013_001_watch_alert_window";
+const WATCH_ALERT_WINDOW_CHECKSUM: &str =
+    "sha256:c5b40a382602a196f2c7dbb7e328cbe6c0a2ce9ea361dc8df9b7d6b1d14e6b0c";
 const BETA1_TAG: &str = "v1.3.0-beta.1";
 const BETA1_COMMIT: &str = "a84a937ccc7cbcce99c5a0e37f35ed2d0fe55906";
 
@@ -223,10 +229,28 @@ fn db_upgrade_run_migrates_beta1_v9_to_current_schema() {
     let plan = run_gateway(&["--db-url", db_url.as_str(), "--db-upgrade", "plan"]);
     assert!(plan.status.success());
     let plan_stdout = String::from_utf8_lossy(&plan.stdout);
-    assert!(
+    assert_eq!(
         plan_stdout
-            .contains("current schema=2026-04-22-gateway-v9 action=backfill_current pending=3"),
-        "beta1 must expose the formal, fencing, and durable-dispatch migrations: {plan_stdout}"
+            .lines()
+            .find(|line| line.starts_with("[upgrade] current schema=")),
+        Some("[upgrade] current schema=2026-04-22-gateway-v9 action=backfill_current pending=4"),
+        "beta1 must expose exactly four existing migrations: {plan_stdout}"
+    );
+
+    let planned_migrations: Vec<_> = plan_stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("[upgrade] migration="))
+        .map(|line| line.split_whitespace().next().expect("migration ID"))
+        .collect();
+    assert_eq!(
+        planned_migrations,
+        [
+            FORMAL_RELEASE_V10_MIGRATION_ID,
+            CONCURRENCY_FENCING_V11_MIGRATION_ID,
+            DURABLE_PROVIDER_DISPATCH_V12_MIGRATION_ID,
+            WATCH_ALERT_WINDOW_MIGRATION_ID,
+        ],
+        "beta1 plan must list exactly the existing migrations in order"
     );
 
     let run = run_gateway(&["--db-url", db_url.as_str(), "--db-upgrade", "run"]);
@@ -413,6 +437,18 @@ fn assert_upgraded_sqlite(path: &str) {
             .as_str(),
         ),
         CONCURRENCY_FENCING_V11_CHECKSUM
+    );
+    assert_eq!(migration_count(path, WATCH_ALERT_WINDOW_MIGRATION_ID), 1);
+    assert_eq!(
+        sqlite3_scalar(
+            path,
+            format!(
+                "SELECT checksum || '|' || target_schema_version || '|' || success FROM pushgo_schema_migrations WHERE migration_id='{WATCH_ALERT_WINDOW_MIGRATION_ID}';"
+            )
+            .as_str(),
+        ),
+        format!("{WATCH_ALERT_WINDOW_CHECKSUM}|{STORAGE_SCHEMA_VERSION_DURABLE_V12}|1"),
+        "watch migration must retain its own v12 target and successful checksum record while the dataset advances to v13"
     );
     assert_eq!(
         completed_upgrade_runs(path),
