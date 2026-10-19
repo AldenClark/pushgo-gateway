@@ -251,6 +251,70 @@ async fn post_json(app: axum::Router, path: &str, payload: Value) -> (StatusCode
     post_json_with_accept_language(app, path, payload, None).await
 }
 
+fn parse_mcp_reply(
+    content_type: &str,
+    body: &[u8],
+    request_id: &Value,
+) -> Result<(Value, Vec<Value>), String> {
+    let media_type = content_type.split(';').next().unwrap_or_default().trim();
+    let messages: Vec<Value> = if media_type.eq_ignore_ascii_case("application/json") {
+        vec![serde_json::from_slice(body).map_err(|err| err.to_string())?]
+    } else if media_type.eq_ignore_ascii_case("text/event-stream") {
+        let text = std::str::from_utf8(body).map_err(|err| err.to_string())?;
+        let normalized = text.replace("\r\n", "\n");
+        let mut messages = Vec::new();
+        for event in normalized.split("\n\n") {
+            let data: Vec<_> = event
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("data:")
+                        .map(|value| value.strip_prefix(' ').unwrap_or(value))
+                })
+                .collect();
+            if !data.is_empty() {
+                messages.push(
+                    serde_json::from_str(&data.join("\n"))
+                        .map_err(|err| format!("invalid MCP SSE data: {err}"))?,
+                );
+            }
+        }
+        messages
+    } else {
+        return Err(format!("unsupported MCP content type: {content_type}"));
+    };
+
+    let mut response = None;
+    let mut notifications = Vec::new();
+    for message in messages {
+        if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+            return Err("invalid MCP JSON-RPC message".into());
+        }
+        if let Some(id) = message.get("id") {
+            if id != request_id {
+                return Err(format!("unexpected MCP response id: {id}"));
+            }
+            if message.get("result").is_some() == message.get("error").is_some()
+                || message.get("method").is_some()
+            {
+                return Err("invalid MCP response shape".into());
+            }
+            if response.replace(message).is_some() {
+                return Err("duplicate MCP response id".into());
+            }
+        } else if message.get("method").and_then(Value::as_str).is_some()
+            && message.get("result").is_none()
+            && message.get("error").is_none()
+        {
+            notifications.push(message);
+        } else {
+            return Err("MCP response is missing its id".into());
+        }
+    }
+    response
+        .map(|response| (response, notifications))
+        .ok_or_else(|| "missing MCP response for request id".into())
+}
+
 async fn post_json_with_accept_language(
     app: axum::Router,
     path: &str,
@@ -278,10 +342,26 @@ async fn post_json_with_accept_language(
         .await
         .expect("router should handle request");
     let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("response body should be readable");
-    let value = serde_json::from_slice::<Value>(&body).expect("response should be valid JSON");
+    let value = if path == "/mcp" && status == StatusCode::OK {
+        parse_mcp_reply(
+            &content_type,
+            &body,
+            payload.get("id").expect("MCP request should have an id"),
+        )
+        .expect("MCP response should match the request")
+        .0
+    } else {
+        serde_json::from_slice::<Value>(&body).expect("response should be valid JSON")
+    };
     (status, value)
 }
 
@@ -291,6 +371,16 @@ async fn post_json_with_auth(
     payload: Value,
     bearer: &str,
 ) -> (StatusCode, Value) {
+    let (status, value, _) = post_json_with_auth_events(app, path, payload, bearer).await;
+    (status, value)
+}
+
+async fn post_json_with_auth_events(
+    app: axum::Router,
+    path: &str,
+    payload: Value,
+    bearer: &str,
+) -> (StatusCode, Value, Vec<Value>) {
     let response = app
         .oneshot(
             Request::builder()
@@ -307,9 +397,29 @@ async fn post_json_with_auth(
         .await
         .expect("router should handle request");
     let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("response body should be readable");
+    if path == "/mcp" && status == StatusCode::OK {
+        let (value, notifications) = parse_mcp_reply(
+            &content_type,
+            &body,
+            payload.get("id").expect("MCP request should have an id"),
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "MCP response should match request: {err} | body={}",
+                String::from_utf8_lossy(&body)
+            )
+        });
+        return (status, value, notifications);
+    }
     let value = serde_json::from_slice::<Value>(&body).unwrap_or_else(|err| {
         panic!(
             "response should be valid JSON (status={}): {} | body={}",
@@ -318,7 +428,7 @@ async fn post_json_with_auth(
             String::from_utf8_lossy(&body)
         )
     });
-    (status, value)
+    (status, value, Vec::new())
 }
 
 async fn post_form(
