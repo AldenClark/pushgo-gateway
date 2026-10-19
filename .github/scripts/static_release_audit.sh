@@ -19,8 +19,15 @@ for file in "$workflow" "$dockerfile" "$local_dockerfile" "$preflight" "$rollbac
   fi
 done
 
-grep -Fq 'ignore = ["RUSTSEC-2023-0071"]' "$ROOT_DIR/.cargo/audit.toml"
-grep -Fq 'SQLx MySQL uses rsa 0.9.x only to encrypt credentials' "$ROOT_DIR/.cargo/audit.toml"
+python3 - "$ROOT_DIR/.cargo/audit.toml" <<'PY_AUDIT'
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as config_file:
+    config = tomllib.load(config_file)
+if config.get("advisories", {}).get("ignore") != []:
+    raise SystemExit("advisory policy must explicitly set advisories.ignore = []")
+PY_AUDIT
 
 bash -n "$rollback_drill"
 grep -Fq '2026-08-20-gateway-v12' "$rollback_runbook"

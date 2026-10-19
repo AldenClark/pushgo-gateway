@@ -20,6 +20,33 @@ def function(path, name, following):
 
 SNAPSHOT = function(PREFLIGHT, "private_ledger_snapshot", "run_private_flow() {")
 BUILD = function(DRILL, "build_historical_binary", 'if [[ -z "$V11_BIN" ]]')
+AUDIT_CHECK = (ROOT / ".github/scripts/static_release_audit.sh").read_text().split(
+    "<<'PY_AUDIT'\n", 1
+)[1].split("\nPY_AUDIT", 1)[0]
+
+
+class AdvisoryPolicyTests(unittest.TestCase):
+    def check_policy(self, contents):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "audit.toml"
+            path.write_text(contents)
+            return subprocess.run([sys.executable, "-", str(path)], input=AUDIT_CHECK,
+                                  text=True, capture_output=True)
+
+    def test_explicit_empty_advisory_ignore_list_passes(self):
+        self.assertEqual(self.check_policy("[advisories]\nignore = []\n").returncode, 0)
+
+    def test_any_advisory_ignore_is_rejected(self):
+        for advisory in ("RUSTSEC-2023-0071", "RUSTSEC-2099-0001"):
+            with self.subTest(advisory=advisory):
+                result = self.check_policy(f'[advisories]\nignore = ["{advisory}"]\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("advisories.ignore = []", result.stderr)
+
+    def test_empty_list_in_another_section_cannot_mask_an_exception(self):
+        result = self.check_policy('[output]\nignore = []\n[advisories]\n'
+                                   'ignore = ["RUSTSEC-2023-0071"]\n')
+        self.assertNotEqual(result.returncode, 0)
 
 
 class OrdinaryPreflightTests(unittest.TestCase):
