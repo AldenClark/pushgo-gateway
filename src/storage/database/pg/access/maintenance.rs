@@ -597,7 +597,7 @@ impl PostgresDb {
 
     async fn cleanup_devices_by_query(
         &self,
-        select_sql: &str,
+        select_sql: &'static str,
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
@@ -1092,10 +1092,10 @@ impl PostgresDb {
         ];
         let mut tx = self.pool.begin().await?;
         for table in tables {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "TRUNCATE TABLE {} RESTART IDENTITY CASCADE",
                 table
-            ))
+            )))
             .execute(&mut *tx)
             .await?;
         }

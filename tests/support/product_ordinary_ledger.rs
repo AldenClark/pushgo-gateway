@@ -235,11 +235,12 @@ impl ProductLedger {
                         if exists == 0 {
                             continue;
                         }
-                        let count: i64 =
-                            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                                .fetch_one(&mut c)
-                                .await
-                                .expect("legacy writer oracle should read");
+                        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                            "SELECT COUNT(*) FROM {table}"
+                        )))
+                        .fetch_one(&mut c)
+                        .await
+                        .expect("legacy writer oracle should read");
                         assert_eq!(count, 0, "ordinary path wrote legacy {table}");
                     }
                 }
@@ -249,10 +250,12 @@ impl ProductLedger {
                     .await
                     .expect("open PG legacy oracle");
                 for table in TABLES {
-                    let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                        .fetch_one(&mut c)
-                        .await
-                        .expect("PG legacy writer oracle should read");
+                    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                        "SELECT COUNT(*) FROM {table}"
+                    )))
+                    .fetch_one(&mut c)
+                    .await
+                    .expect("PG legacy writer oracle should read");
                     assert_eq!(count, 0, "ordinary path wrote legacy {table}");
                 }
             }
@@ -261,9 +264,9 @@ impl ProductLedger {
                     .await
                     .expect("open MySQL legacy oracle");
                 for table in TABLES {
-                    let count: i64 = sqlx::query_scalar(&format!(
+                    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                         "SELECT CAST(COUNT(*) AS SIGNED) FROM {table}"
-                    ))
+                    )))
                     .fetch_one(&mut c)
                     .await
                     .expect("MySQL legacy writer oracle should read");

@@ -99,9 +99,9 @@ async fn drained(c: &mut MySqlConnection) -> Result<()> {
         "dispatch_delivery_dedupe",
         "dispatch_op_dedupe",
     ] {
-        if sqlx::query_scalar::<_, i64>(&format!(
+        if sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
             "SELECT EXISTS(SELECT 1 FROM {table} WHERE dedupe_key IS NULL OR dedupe_key='')"
-        ))
+        )))
         .fetch_one(&mut *c)
         .await?
             != 0
@@ -116,9 +116,11 @@ async fn drained(c: &mut MySqlConnection) -> Result<()> {
         "private_outbox",
         "provider_pull_queue",
     ] {
-        if sqlx::query_scalar::<_, i64>(&format!("SELECT EXISTS(SELECT 1 FROM {table})"))
-            .fetch_one(&mut *c)
-            .await?
+        if sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS(SELECT 1 FROM {table})"
+        )))
+        .fetch_one(&mut *c)
+        .await?
             != 0
         {
             return Err(invalid(
@@ -690,7 +692,7 @@ async fn schema_inner(
         .map(|(_, _, definition)| definition.len())
         .max()
         .unwrap_or(0) as i64;
-    let rows = sqlx::query(&format!("SELECT kind,name,CASE WHEN OCTET_LENGTH(definition)<=? THEN definition END AS definition FROM ({catalog}) source_catalog ORDER BY BINARY kind,BINARY name LIMIT ?"))
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT kind,name,CASE WHEN OCTET_LENGTH(definition)<=? THEN definition END AS definition FROM ({catalog}) source_catalog ORDER BY BINARY kind,BINARY name LIMIT ?")))
         .bind(max_definition)
         .bind(expected.len() as i64 + 1)
         .fetch_all(&mut *c)
@@ -757,9 +759,12 @@ async fn lock_source(c: &mut MySqlConnection, write: bool, ordinary: bool) -> Re
     }
     // MySQL does not support LOCK/UNLOCK TABLES through COM_STMT_PREPARE.
     // This fixed catalog-derived statement has no input parameters.
-    sqlx::raw_sql(&format!("LOCK TABLES {}", tables.join(",")))
-        .execute(c)
-        .await?;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "LOCK TABLES {}",
+        tables.join(",")
+    )))
+    .execute(c)
+    .await?;
     Ok(())
 }
 async fn phase(c: &mut MySqlConnection, health: &Health, value: &str) -> Result<()> {

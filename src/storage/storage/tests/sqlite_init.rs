@@ -1036,9 +1036,9 @@ async fn sqlite_existing_v12_self_heals_total_order_schema_additions() {
         ("dispatch_submission", "acceptance_order"),
         ("provider_dispatch_outbox", "coalesce_order"),
     ] {
-        let present: i64 = sqlx::query_scalar(&format!(
+        let present: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(1) FROM pragma_table_info('{table}') WHERE name='{column}'"
-        ))
+        )))
         .fetch_one(&mut dispatch)
         .await
         .expect("healed column should be queryable");

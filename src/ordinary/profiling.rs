@@ -134,12 +134,14 @@ const STATEMENTS: [&str; 33] = [
     "read",
 ];
 
+#[cfg_attr(not(any(test, feature = "qa")), derive(Default))]
 pub struct Profile {
     #[cfg(any(test, feature = "qa"))]
     phases: [[Histogram; PHASES.len()]; PATHS.len()],
     #[cfg(any(test, feature = "qa"))]
     statements: [[Histogram; STATEMENTS.len()]; PATHS.len()],
 }
+#[cfg(any(test, feature = "qa"))]
 impl Default for Profile {
     fn default() -> Self {
         Self {

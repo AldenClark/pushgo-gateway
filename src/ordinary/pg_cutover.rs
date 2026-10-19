@@ -237,7 +237,7 @@ async fn schema(c: &mut PgConnection, expected_version: &str) -> Result<()> {
         .map(|(_, _, definition)| definition.len())
         .max()
         .unwrap_or(0) as i64;
-    let rows = sqlx::query(&format!("SELECT kind,name,CASE WHEN octet_length(definition)<=$2 THEN definition END AS definition FROM ({CATALOG}) source_catalog ORDER BY kind COLLATE \"C\",name COLLATE \"C\" LIMIT $1"))
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT kind,name,CASE WHEN octet_length(definition)<=$2 THEN definition END AS definition FROM ({CATALOG}) source_catalog ORDER BY kind COLLATE \"C\",name COLLATE \"C\" LIMIT $1")))
         .bind(expected.len() as i64 + 1)
         .bind(max_definition)
         .fetch_all(&mut *c)
@@ -286,9 +286,12 @@ async fn lock_source(c: &mut PgConnection) -> Result<()> {
     if tables.is_empty() {
         return Err(invalid("empty source catalog"));
     }
-    sqlx::query(&format!("LOCK TABLE {} IN SHARE MODE", tables.join(",")))
-        .execute(c)
-        .await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "LOCK TABLE {} IN SHARE MODE",
+        tables.join(",")
+    )))
+    .execute(c)
+    .await?;
     Ok(())
 }
 fn scope(key: &str, prefix: &str) -> Result<(String, String, Option<String>, String)> {
@@ -319,9 +322,9 @@ async fn drained(c: &mut PgConnection) -> Result<()> {
         "dispatch_delivery_dedupe",
         "dispatch_op_dedupe",
     ] {
-        if sqlx::query_scalar::<_, bool>(&format!(
+        if sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(format!(
             "SELECT EXISTS(SELECT 1 FROM {table} WHERE dedupe_key IS NULL OR dedupe_key='')"
-        ))
+        )))
         .fetch_one(&mut *c)
         .await?
         {
@@ -335,9 +338,11 @@ async fn drained(c: &mut PgConnection) -> Result<()> {
         "private_outbox",
         "provider_pull_queue",
     ] {
-        if sqlx::query_scalar::<_, bool>(&format!("SELECT EXISTS(SELECT 1 FROM {table})"))
-            .fetch_one(&mut *c)
-            .await?
+        if sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS(SELECT 1 FROM {table})"
+        )))
+        .fetch_one(&mut *c)
+        .await?
         {
             return Err(invalid(
                 "all target-bearing tables must be empty across every model, including terminal/ACK rows",

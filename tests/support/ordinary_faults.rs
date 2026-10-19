@@ -534,7 +534,7 @@ pub async fn terminate_fixed_owner_session(ledger: &ProductLedger) {
                 .unwrap();
             let owner = owner.expect("fresh synthetic DB must have a fixed MySQL owner");
             assert!(owner > 0);
-            sqlx::raw_sql(&format!("KILL CONNECTION {owner}"))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("KILL CONNECTION {owner}")))
                 .execute(&mut connection)
                 .await
                 .unwrap();

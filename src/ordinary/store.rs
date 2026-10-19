@@ -114,10 +114,10 @@ impl SqliteWriteConnection {
     }
 
     pub(super) async fn restore(mut self) -> Result<()> {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "PRAGMA busy_timeout = {}",
             self.previous_busy_timeout
-        ))
+        )))
         .execute(&mut *self.connection)
         .await?;
         self.restored = true;
@@ -1681,7 +1681,7 @@ async fn product_ledger_exists(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     schema: &'static str,
 ) -> std::result::Result<bool, sqlx::Error> {
-    sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {}.sqlite_master WHERE type='table' AND name='ordinary_targets')",core_schema(schema)))
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM {}.sqlite_master WHERE type='table' AND name='ordinary_targets')",core_schema(schema))))
         .fetch_one(&mut **tx).await
 }
 
@@ -1698,33 +1698,33 @@ pub(crate) async fn sqlite_coalesce_ordinary(
     if !product_ledger_exists(tx, schema).await? {
         return Ok(());
     }
-    let source: Option<String> = sqlx::query_scalar(&format!(
+    let source: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COALESCE(device_key,lower(hex(device_id))) FROM {schema}.devices WHERE device_id=?"
-    ))
+    )))
     .bind(source_id)
     .fetch_optional(&mut **tx)
     .await?;
-    let winner: Option<String> = sqlx::query_scalar(&format!(
+    let winner: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COALESCE(device_key,lower(hex(device_id))) FROM {schema}.devices WHERE device_id=?"
-    ))
+    )))
     .bind(winner_id)
     .fetch_optional(&mut **tx)
     .await?;
     let (Some(source), Some(winner)) = (source, winner) else {
         return Ok(());
     };
-    let exhausted:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {schema}.ordinary_targets WHERE acked_at IS NULL AND delivery_epoch=9223372036854775807 AND (pull_owner=? OR (pull_owner=? AND delivery_id IN (SELECT delivery_id FROM {schema}.ordinary_targets WHERE pull_owner=? AND acked_at IS NULL))))"))
+    let exhausted:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM {schema}.ordinary_targets WHERE acked_at IS NULL AND delivery_epoch=9223372036854775807 AND (pull_owner=? OR (pull_owner=? AND delivery_id IN (SELECT delivery_id FROM {schema}.ordinary_targets WHERE pull_owner=? AND acked_at IS NULL))))")))
         .bind(&source).bind(&winner).bind(&source).fetch_one(&mut **tx).await?;
     if exhausted {
         return Err(sqlx::Error::Protocol(
             "ordinary private epoch exhausted".into(),
         ));
     }
-    sqlx::query(&format!("UPDATE {schema}.ordinary_targets SET delivery_epoch=delivery_epoch+1,private_claim=NULL,private_group=NULL WHERE pull_owner=? AND acked_at IS NULL AND delivery_id IN (SELECT delivery_id FROM {schema}.ordinary_targets WHERE pull_owner=? AND acked_at IS NULL)"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {schema}.ordinary_targets SET delivery_epoch=delivery_epoch+1,private_claim=NULL,private_group=NULL WHERE pull_owner=? AND acked_at IS NULL AND delivery_id IN (SELECT delivery_id FROM {schema}.ordinary_targets WHERE pull_owner=? AND acked_at IS NULL)")))
         .bind(&winner).bind(&source).execute(&mut **tx).await?;
-    sqlx::query(&format!("UPDATE {schema}.ordinary_targets SET pull_owner=?,owner_generation=-1,delivery_mode='provider',delivery_epoch=delivery_epoch+1,private_claim=NULL,private_group=NULL,state=CASE WHEN state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END WHERE pull_owner=? AND acked_at IS NULL"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {schema}.ordinary_targets SET pull_owner=?,owner_generation=-1,delivery_mode='provider',delivery_epoch=delivery_epoch+1,private_claim=NULL,private_group=NULL,state=CASE WHEN state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END WHERE pull_owner=? AND acked_at IS NULL")))
         .bind(&winner).bind(&source).execute(&mut **tx).await?;
-    sqlx::query(&format!("UPDATE {schema}.ordinary_messages SET status=CASE WHEN EXISTS(SELECT 1 FROM {schema}.ordinary_targets t WHERE t.delivery_id=ordinary_messages.delivery_id AND t.provider IN ('FCM','APNS','WNS') AND (t.state='running' OR (t.delivery_mode='provider' AND t.acked_at IS NULL AND t.state IN ('pending','retry_wait')))) THEN 'provider_queued' WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=? WHERE status='provider_queued' AND delivery_id IN (SELECT delivery_id FROM {schema}.ordinary_targets WHERE pull_owner=?)"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {schema}.ordinary_messages SET status=CASE WHEN EXISTS(SELECT 1 FROM {schema}.ordinary_targets t WHERE t.delivery_id=ordinary_messages.delivery_id AND t.provider IN ('FCM','APNS','WNS') AND (t.state='running' OR (t.delivery_mode='provider' AND t.acked_at IS NULL AND t.state IN ('pending','retry_wait')))) THEN 'provider_queued' WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=? WHERE status='provider_queued' AND delivery_id IN (SELECT delivery_id FROM {schema}.ordinary_targets WHERE pull_owner=?)")))
         .bind(now()).bind(&winner).execute(&mut **tx).await?;
     Ok(())
 }
@@ -1768,9 +1768,9 @@ pub(crate) async fn sqlite_route_control_error(
     }
     let schema = core_schema(schema);
     let measured: std::result::Result<(i64,i64),sqlx::Error>=async {
-        let pending:i64=sqlx::query_scalar(&format!("SELECT COUNT(DISTINCT t.delivery_id) FROM {schema}.ordinary_targets t JOIN {schema}.ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.pull_owner=? AND t.acked_at IS NULL AND m.expires_at>?"))
+        let pending:i64=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(DISTINCT t.delivery_id) FROM {schema}.ordinary_targets t JOIN {schema}.ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.pull_owner=? AND t.acked_at IS NULL AND m.expires_at>?")))
             .bind(device_key).bind(now()).fetch_one(&mut **tx).await?;
-        let limits=sqlx::query(&format!("SELECT l.max_private_per_device,l.max_private-u.private_pending+COALESCE((SELECT pending FROM {schema}.ordinary_private_usage WHERE device_key=?),0) AS available FROM {schema}.ordinary_limits l JOIN {schema}.ordinary_ledger_usage u ON u.singleton=l.singleton"))
+        let limits=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT l.max_private_per_device,l.max_private-u.private_pending+COALESCE((SELECT pending FROM {schema}.ordinary_private_usage WHERE device_key=?),0) AS available FROM {schema}.ordinary_limits l JOIN {schema}.ordinary_ledger_usage u ON u.singleton=l.singleton")))
             .bind(device_key).fetch_one(&mut **tx).await?;
         Ok((pending,limits.get::<i64,_>("max_private_per_device").min(limits.get("available")).max(0)))
     }.await;

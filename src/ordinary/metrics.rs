@@ -28,6 +28,7 @@ impl Histogram {
         self.total_us.fetch_add(us, Ordering::Relaxed);
         self.max_us.fetch_max(us, Ordering::Relaxed);
     }
+    #[cfg(any(test, feature = "qa"))]
     pub(crate) fn has_samples(&self) -> bool {
         self.buckets
             .iter()

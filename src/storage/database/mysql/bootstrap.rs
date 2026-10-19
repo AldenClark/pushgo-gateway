@@ -189,7 +189,7 @@ impl MySqlDb {
             .iter()
             .chain(MYSQL_RUNTIME_TABLE_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         self.ensure_mysql_column(
@@ -519,7 +519,7 @@ impl MySqlDb {
             self.ensure_mysql_index(index_stmt).await?;
         }
         for stmt in MYSQL_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
@@ -643,7 +643,7 @@ impl MySqlDb {
                      SET {column} = {column} * 1000 \
                      WHERE {column} IS NOT NULL AND ABS({column}) < ?"
                 );
-                sqlx::query(&sql)
+                sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                     .bind(EPOCH_MILLIS_THRESHOLD)
                     .execute(&mut *tx)
                     .await?;
@@ -876,7 +876,7 @@ impl MySqlDb {
         Ok(count > 0)
     }
 
-    async fn ensure_mysql_index(&self, create_sql: &str) -> StoreResult<()> {
+    async fn ensure_mysql_index(&self, create_sql: &'static str) -> StoreResult<()> {
         let index_name = create_sql
             .split("INDEX")
             .nth(1)
@@ -895,7 +895,12 @@ impl MySqlDb {
         Ok(())
     }
 
-    async fn ensure_mysql_column(&self, table: &str, column: &str, ddl: &str) -> StoreResult<()> {
+    async fn ensure_mysql_column(
+        &self,
+        table: &str,
+        column: &str,
+        ddl: &'static str,
+    ) -> StoreResult<()> {
         let exists: Option<i32> = sqlx::query_scalar(
             "SELECT 1 FROM information_schema.columns \
              WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1",
@@ -1093,7 +1098,9 @@ impl MySqlDb {
         let ddl = format!(
             "ALTER TABLE `{table}` MODIFY COLUMN `{column}` VARCHAR({length}) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin {nullability}"
         );
-        sqlx::query(&ddl).execute(&self.pool).await?;
+        sqlx::query(sqlx::AssertSqlSafe(ddl.as_str()))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1131,17 +1138,19 @@ impl MySqlDb {
         }
         clauses.push("ADD PRIMARY KEY (device_id, delivery_id)");
         let ddl = format!("ALTER TABLE provider_pull_queue {}", clauses.join(", "));
-        sqlx::query(ddl.as_str()).execute(&self.pool).await?;
+        sqlx::query(sqlx::AssertSqlSafe(ddl.as_str()))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
     async fn hard_reset_mysql_runtime_tables(&self) -> StoreResult<()> {
         for stmt in MYSQL_RUNTIME_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in MYSQL_RUNTIME_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in MYSQL_RUNTIME_INDEX_STATEMENTS {

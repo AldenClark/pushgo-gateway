@@ -233,13 +233,14 @@ async fn validate_source_schema(members: &mut [Member], expected_version: &str) 
             if kind == "table" {
                 // SQLite permits NULL in several historical TEXT PRIMARY KEYs;
                 // keyset pagination must not silently skip damaged identities.
-                let columns = sqlx::query(&format!("PRAGMA table_info({name})"))
-                    .fetch_all(&mut member.conn)
-                    .await?;
+                let columns =
+                    sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({name})")))
+                        .fetch_all(&mut member.conn)
+                        .await?;
                 for column in columns {
                     if column.get::<i64, _>("pk") > 0 {
                         let column: String = column.get("name");
-                        if sqlx::query_scalar::<_,i64>(&format!("SELECT EXISTS(SELECT 1 FROM {name} WHERE {column} IS NULL OR length({column})=0)")).fetch_one(&mut member.conn).await?!=0 {return Err(invalid("NULL or empty source primary identity"));}
+                        if sqlx::query_scalar::<_,i64>(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM {name} WHERE {column} IS NULL OR length({column})=0)"))).fetch_one(&mut member.conn).await?!=0 {return Err(invalid("NULL or empty source primary identity"));}
                     }
                 }
             }
@@ -439,9 +440,11 @@ async fn check_drained(members: &mut [Member]) -> Result<()> {
             "provider_pull_queue",
         ] {
             if exists(&mut member.conn, table).await?
-                && sqlx::query_scalar::<_, i64>(&format!("SELECT EXISTS(SELECT 1 FROM {table})"))
-                    .fetch_one(&mut member.conn)
-                    .await?
+                && sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                    "SELECT EXISTS(SELECT 1 FROM {table})"
+                )))
+                .fetch_one(&mut member.conn)
+                .await?
                     != 0
             {
                 return Err(invalid(
@@ -1314,7 +1317,7 @@ mod tests {
             for object in ["table", "index"] {
                 for (ty, _, statement) in &schema[kind] {
                     if ty == object {
-                        sqlx::query(statement)
+                        sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
                             .execute(&mut connection)
                             .await
                             .unwrap();
@@ -1386,7 +1389,10 @@ mod tests {
     }
     async fn exec(path: &Path, sql: &str) {
         let mut c = connect(path).await;
-        sqlx::query(sql).execute(&mut c).await.unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&mut c)
+            .await
+            .unwrap();
         c.close().await.unwrap();
     }
     async fn shared_snapshot(core: &Path) -> Vec<(String, Vec<String>)> {
@@ -1407,7 +1413,7 @@ mod tests {
             (related(core, "dispatch"), "dispatch_op_dedupe", "1"),
         ] {
             let mut c = connect(&path).await;
-            let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            let columns = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})")))
                 .fetch_all(&mut c)
                 .await
                 .unwrap();
@@ -1416,7 +1422,7 @@ mod tests {
                 .map(|column| format!("quote({})", column.get::<String, _>("name")))
                 .collect::<Vec<_>>()
                 .join(",");
-            let rows=sqlx::query_scalar::<_,String>(&format!("SELECT json_array({projection}) AS row_value FROM {table} WHERE {filter} ORDER BY row_value LIMIT 256")).fetch_all(&mut c).await.unwrap();
+            let rows=sqlx::query_scalar::<_,String>(sqlx::AssertSqlSafe(format!("SELECT json_array({projection}) AS row_value FROM {table} WHERE {filter} ORDER BY row_value LIMIT 256"))).fetch_all(&mut c).await.unwrap();
             result.push((table.into(), rows));
             c.close().await.unwrap();
         }

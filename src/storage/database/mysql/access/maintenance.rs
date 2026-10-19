@@ -626,7 +626,7 @@ impl MySqlDb {
 
     async fn cleanup_devices_by_query(
         &self,
-        select_sql: &str,
+        select_sql: &'static str,
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
@@ -1137,7 +1137,7 @@ impl MySqlDb {
             .execute(&mut *tx)
             .await?;
         for table in tables {
-            sqlx::query(&format!("TRUNCATE TABLE {}", table))
+            sqlx::query(sqlx::AssertSqlSafe(format!("TRUNCATE TABLE {}", table)))
                 .execute(&mut *tx)
                 .await?;
         }

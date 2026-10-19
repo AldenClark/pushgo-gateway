@@ -135,9 +135,9 @@ async fn mysql_c16_synthetic_historical_runtime_contract() {
         "usage_payload_bytes=1",
         "identity_state='live'",
     ] {
-        let result = sqlx::query(&format!(
+        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE ordinary_messages SET {assignment} WHERE op_id='C16-History'"
-        ))
+        )))
         .execute(&mut inspect)
         .await;
         let error = result.expect_err(assignment);
@@ -268,9 +268,9 @@ async fn mysql_c16_synthetic_historical_runtime_contract() {
         Err(KernelError::Conflict)
     ));
     for assignment in ["delivery_id=NULL", "fingerprint=NULL", "expires_at=NULL"] {
-        let error = sqlx::query(&format!(
+        let error = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE ordinary_messages SET {assignment} WHERE op_id='C16-Live'"
-        ))
+        )))
         .execute(&mut inspect)
         .await
         .expect_err(assignment);

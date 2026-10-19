@@ -71,4 +71,10 @@ impl From<argon2::password_hash::Error> for StoreError {
     }
 }
 
+impl From<argon2::password_hash::phc::Error> for StoreError {
+    fn from(err: argon2::password_hash::phc::Error) -> Self {
+        StoreError::PasswordHash(err.to_string())
+    }
+}
+
 pub type StoreResult<T> = Result<T, StoreError>;

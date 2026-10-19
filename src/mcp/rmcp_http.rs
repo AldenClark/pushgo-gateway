@@ -9,9 +9,9 @@ use axum::{
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ErrorCode, Implementation, ListResourcesResult,
-        ListToolsResult, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-        ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ErrorCode, Implementation,
+        ListResourcesResult, ListToolsResult, ReadResourceRequestParams, ReadResourceResponse,
+        ReadResourceResult, ServerCapabilities, ServerConfig, Tool,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -121,7 +121,7 @@ fn rmcp_http_service(
         move || Ok(PushgoRmcpServer::new(state.clone())),
         Arc::new(NeverSessionManager::default()),
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true)
             .with_sse_keep_alive(None),
     )
@@ -238,8 +238,8 @@ impl PushgoRmcpServer {
 }
 
 impl ServerHandler for PushgoRmcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
@@ -261,8 +261,7 @@ impl ServerHandler for PushgoRmcpServer {
         let tools = self.tool_definitions()?;
         Ok(ListToolsResult {
             tools,
-            next_cursor: None,
-            meta: None,
+            ..Default::default()
         })
     }
 
@@ -277,7 +276,7 @@ impl ServerHandler for PushgoRmcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let auth = self.auth_from_context(&context)?;
         let service = self.rpc_service(&auth)?;
         let tool_name = request.name.to_string();
@@ -316,7 +315,7 @@ impl ServerHandler for PushgoRmcpServer {
                 .in_current_span(),
             );
         }
-        Ok(CallToolResult::structured(value))
+        Ok(CallToolResult::structured(value).into())
     }
 
     async fn list_resources(
@@ -344,7 +343,7 @@ impl ServerHandler for PushgoRmcpServer {
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let auth = self.auth_from_context(&context)?;
         let service = self.rpc_service(&auth)?;
         let value = service
@@ -360,9 +359,11 @@ impl ServerHandler for PushgoRmcpServer {
                 );
                 map_resource_error(err)
             })?;
-        serde_json::from_value(value).map_err(|err| {
-            McpError::internal_error(format!("invalid resource content: {err}"), None)
-        })
+        serde_json::from_value::<ReadResourceResult>(value)
+            .map(Into::into)
+            .map_err(|err| {
+                McpError::internal_error(format!("invalid resource content: {err}"), None)
+            })
     }
 }
 

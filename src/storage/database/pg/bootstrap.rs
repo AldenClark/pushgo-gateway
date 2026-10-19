@@ -184,7 +184,7 @@ impl PostgresDb {
             .iter()
             .chain(PG_RUNTIME_TABLE_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         self.ensure_pg_column(
@@ -482,10 +482,10 @@ impl PostgresDb {
             .iter()
             .chain(PG_RUNTIME_INDEX_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         for stmt in PG_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
@@ -623,7 +623,7 @@ impl PostgresDb {
                      SET {column} = {column} * 1000 \
                      WHERE {column} IS NOT NULL AND ABS({column}) < $1"
                 );
-                sqlx::query(&sql)
+                sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                     .bind(EPOCH_MILLIS_THRESHOLD)
                     .execute(&mut *tx)
                     .await?;
@@ -865,7 +865,12 @@ impl PostgresDb {
         Ok(count > 0)
     }
 
-    async fn ensure_pg_column(&self, table: &str, column: &str, ddl: &str) -> StoreResult<()> {
+    async fn ensure_pg_column(
+        &self,
+        table: &str,
+        column: &str,
+        ddl: &'static str,
+    ) -> StoreResult<()> {
         let exists: Option<i32> = sqlx::query_scalar(
             "SELECT 1 FROM information_schema.columns \
              WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
@@ -913,7 +918,9 @@ impl PostgresDb {
         if let Some(name) = pk_constraint {
             let escaped = name.replace('"', "\"\"");
             let ddl = format!("ALTER TABLE provider_pull_queue DROP CONSTRAINT \"{escaped}\"");
-            sqlx::query(ddl.as_str()).execute(&mut *tx).await?;
+            sqlx::query(sqlx::AssertSqlSafe(ddl.as_str()))
+                .execute(&mut *tx)
+                .await?;
         }
         sqlx::query("ALTER TABLE provider_pull_queue ALTER COLUMN device_id SET NOT NULL")
             .execute(&mut *tx)
@@ -930,15 +937,15 @@ impl PostgresDb {
 
     async fn hard_reset_pg_runtime_tables(&self) -> StoreResult<()> {
         for stmt in PG_RUNTIME_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in PG_RUNTIME_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in PG_RUNTIME_INDEX_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         Ok(())

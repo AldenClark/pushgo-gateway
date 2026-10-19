@@ -120,7 +120,7 @@ async fn seed_exact_beta1_postgres(conn: &mut PgConnection) {
         "PG_RUNTIME_INDEX_STATEMENTS",
     ] {
         for statement in rust_string_array(&source, array) {
-            sqlx::query(&statement)
+            sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
                 .execute(&mut *conn)
                 .await
                 .unwrap_or_else(|err| panic!("beta1 PostgreSQL statement failed: {err}"));
@@ -164,7 +164,7 @@ async fn seed_exact_beta1_mysql(conn: &mut MySqlConnection) {
         "MYSQL_RUNTIME_INDEX_STATEMENTS",
     ] {
         for statement in rust_string_array(&source, array) {
-            sqlx::query(&statement)
+            sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
                 .execute(&mut *conn)
                 .await
                 .unwrap_or_else(|err| panic!("beta1 MySQL statement failed: {err}"));
