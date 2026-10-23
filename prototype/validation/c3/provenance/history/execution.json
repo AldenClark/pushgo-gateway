@@ -1,0 +1,155 @@
+{
+  "status": "PASSED",
+  "started_at": "2026-10-15T03:45:03.977180+00:00",
+  "source_commit": "10e59ec97230550216bc00aa3fe8c924b02510e1",
+  "source_tree": "22be0da2ad792bea35a2a67dbe61d12e3f7d9695",
+  "source_root": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/frozen-matched-candidate-source",
+  "source_archive_sha256": "1071a520c70ecf238fdda47fe62d99095bd2a803db5d8ccb3bc0bbc4c2790a1f",
+  "source_store_sha256": "2c1539a481375d7acd8530828de4134c8cf4683d1703739b6424febed2b11488",
+  "native_binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-final",
+  "native_binary_sha256": "52e1102109523365d006dbb94c885afdbfca0341b166a78579931858ad454202",
+  "build_receipt": "../build-final-tests.json",
+  "available_filesystem_bytes_start": 16350793728,
+  "runs": [
+    {
+      "test": "history_tests::measure_compact_history_query_admission_gc_and_disk_space",
+      "command": [
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-final",
+        "--ignored",
+        "--exact",
+        "history_tests::measure_compact_history_query_admission_gc_and_disk_space",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "environment": {
+        "C2_HISTORY_OUT": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/history/native-scale"
+      },
+      "exit_code": 0,
+      "elapsed_s": 6.676850792,
+      "first_log": "native-scale-first.log",
+      "finished_at": "2026-10-15T03:45:22.004239+00:00",
+      "available_filesystem_bytes_after": 15909969920,
+      "sqlx_sqlite_version": "3.46.0",
+      "stages_disk": [
+        {
+          "db_bytes": 4096000,
+          "shm_bytes": 32768,
+          "wal_bytes": 0
+        },
+        {
+          "db_bytes": 39997440,
+          "shm_bytes": 32768,
+          "wal_bytes": 0
+        },
+        {
+          "db_bytes": 400183296,
+          "shm_bytes": 32768,
+          "wal_bytes": 0
+        }
+      ]
+    },
+    {
+      "test": "history_tests::measure_op_widths_16_46_128_and_actual_freepage_reuse",
+      "command": [
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-final",
+        "--ignored",
+        "--exact",
+        "history_tests::measure_op_widths_16_46_128_and_actual_freepage_reuse",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "environment": {
+        "C2_HISTORY_WIDTH_OUT": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/history/native-width"
+      },
+      "exit_code": 0,
+      "elapsed_s": 23.874376166,
+      "first_log": "native-width-first.log",
+      "finished_at": "2026-10-15T03:45:55.782744+00:00",
+      "available_filesystem_bytes_after": 15666589696,
+      "sqlx_sqlite_versions": [
+        "3.46.0"
+      ],
+      "case_db_bytes": [
+        36777984,
+        43069440,
+        61136896,
+        36491264,
+        42770432,
+        61292544
+      ]
+    },
+    {
+      "name": "supplemental-fixed-schema-layout",
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/harness/c3_history_probe.py",
+        "--source",
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/frozen-matched-candidate-source",
+        "--source-identity",
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/frozen-matched-candidate-source-identity.json",
+        "--out",
+        "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/history/layout"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.62948825,
+      "first_log": "layout-first.log",
+      "finished_at": "2026-10-15T03:46:04.795347+00:00",
+      "available_filesystem_bytes_after": 15642693632,
+      "python_sqlite_version": "3.54.0",
+      "cases": [
+        {
+          "fanout": 1,
+          "body_bytes": 448,
+          "messages": 256,
+          "targets": 256,
+          "target_bytes_per_row": 864.0
+        },
+        {
+          "fanout": 16,
+          "body_bytes": 448,
+          "messages": 256,
+          "targets": 4096,
+          "target_bytes_per_row": 903.0
+        },
+        {
+          "fanout": 32,
+          "body_bytes": 448,
+          "messages": 256,
+          "targets": 8192,
+          "target_bytes_per_row": 897.0
+        },
+        {
+          "fanout": 16,
+          "body_bytes": 1024,
+          "messages": 256,
+          "targets": 4096,
+          "target_bytes_per_row": 903.0
+        },
+        {
+          "fanout": 16,
+          "body_bytes": 4096,
+          "messages": 256,
+          "targets": 4096,
+          "target_bytes_per_row": 903.0
+        }
+      ]
+    }
+  ],
+  "finished_at": "2026-10-15T03:46:04.795347+00:00",
+  "final_readonly_verification": {
+    "at": "2026-10-15T03:46:50.306728+00:00",
+    "binary_hash_unchanged": true,
+    "ack_zero_targets_body_at_all_native_stages": true,
+    "gc_remaining_identity_rows": 990150,
+    "active_fanout_legal_cases": [
+      1,
+      16,
+      32
+    ],
+    "available_filesystem_bytes": 15615799296,
+    "harness_sha256": {
+      "c3_history_analyze.py": "05bf60bb0ce968e1f3e1d1b7d7afd44fe3530e41d4b92bd5da988ab52d67a577",
+      "c3_history_probe.py": "9ac042161aaa7c9654d903e290ce6b124a403a717a4073eafd66e2bbaaef828f"
+    }
+  }
+}

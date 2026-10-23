@@ -1,8 +1,9 @@
 use crate::storage::{
     STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1, STORAGE_SCHEMA_VERSION_CONCURRENCY_V11,
-    STORAGE_SCHEMA_VERSION_FORMAL_RELEASE, STORAGE_SCHEMA_VERSION_LEGACY,
-    STORAGE_SCHEMA_VERSION_MIGRATABLE, STORAGE_SCHEMA_VERSION_OLDER_LEGACY,
-    STORAGE_SCHEMA_VERSION_OLDEST_LEGACY, STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
+    STORAGE_SCHEMA_VERSION_DURABLE_V12, STORAGE_SCHEMA_VERSION_FORMAL_RELEASE,
+    STORAGE_SCHEMA_VERSION_LEGACY, STORAGE_SCHEMA_VERSION_MIGRATABLE,
+    STORAGE_SCHEMA_VERSION_OLDER_LEGACY, STORAGE_SCHEMA_VERSION_OLDEST_LEGACY,
+    STORAGE_SCHEMA_VERSION_PREVIOUS, StoreError, StoreResult,
 };
 
 pub(crate) const DEVICE_IDENTITY_V8_MIGRATION: SchemaMigrationDefinition =
@@ -102,7 +103,7 @@ pub(crate) const DURABLE_PROVIDER_DISPATCH_V12_MIGRATION: SchemaMigrationDefinit
         id: "20260820_001_durable_provider_dispatch_v12",
         description: "Add frozen dispatch submissions, durable provider outbox, and fenced retry leases",
         checksum: "sha256:4ac6e216c2391120ae30ee711bf9c9252f9f0e2478e67327cd257f20ed061c72",
-        target_schema_version: STORAGE_SCHEMA_VERSION,
+        target_schema_version: STORAGE_SCHEMA_VERSION_DURABLE_V12,
         risk: MigrationRisk::AdditiveSchema,
         backup_policy: BackupPolicy::Required,
         rollback_policy: RollbackPolicy::RestoreBackup,
@@ -126,12 +127,34 @@ pub(crate) const DURABLE_PROVIDER_DISPATCH_V12_MIGRATION: SchemaMigrationDefinit
         ],
     };
 
+pub(crate) const WATCH_ALERT_WINDOW_MIGRATION: SchemaMigrationDefinition =
+    SchemaMigrationDefinition {
+        id: "20261013_001_watch_alert_window",
+        description: "Add per-Watch reminder age without changing routes or business retention",
+        checksum: "sha256:c5b40a382602a196f2c7dbb7e328cbe6c0a2ce9ea361dc8df9b7d6b1d14e6b0c",
+        target_schema_version: STORAGE_SCHEMA_VERSION_DURABLE_V12,
+        risk: MigrationRisk::AdditiveSchema,
+        backup_policy: BackupPolicy::Required,
+        rollback_policy: RollbackPolicy::RestoreBackup,
+        steps: &[
+            MigrationStepDefinition {
+                id: "add_watch_alert_window",
+                description: "Add devices.watch_alert_window_minutes with default 30",
+            },
+            MigrationStepDefinition {
+                id: "verify_watch_alert_window",
+                description: "Verify the Watch setting column without changing provider route revisions",
+            },
+        ],
+    };
+
 pub(crate) const SCHEMA_MIGRATIONS: &[SchemaMigrationDefinition] = &[
     DEVICE_IDENTITY_V8_MIGRATION,
     OBSERVABILITY_V9_MIGRATION,
     FORMAL_RELEASE_V10_MIGRATION,
     CONCURRENCY_FENCING_V11_MIGRATION,
     DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
+    WATCH_ALERT_WINDOW_MIGRATION,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,27 +448,46 @@ mod tests {
         AppliedSchemaMigration, CONCURRENCY_FENCING_V11_MIGRATION, DEVICE_IDENTITY_V8_MIGRATION,
         DURABLE_PROVIDER_DISPATCH_V12_MIGRATION, FORMAL_RELEASE_V10_MIGRATION,
         OBSERVABILITY_V9_MIGRATION, SCHEMA_MIGRATIONS, SchemaMigrationAction, SchemaMigrationPlan,
-        latest_schema_migration, pending_schema_migrations, validate_applied_schema_migrations,
+        WATCH_ALERT_WINDOW_MIGRATION, latest_schema_migration, pending_schema_migrations,
+        validate_applied_schema_migrations,
     };
     use crate::storage::{
-        STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1,
+        STORAGE_SCHEMA_VERSION, STORAGE_SCHEMA_VERSION_BETA1, STORAGE_SCHEMA_VERSION_DURABLE_V12,
         STORAGE_SCHEMA_VERSION_FORMAL_RELEASE, STORAGE_SCHEMA_VERSION_MIGRATABLE,
         STORAGE_SCHEMA_VERSION_PREVIOUS,
     };
 
     #[test]
-    fn migration_catalog_exposes_latest_schema_version() {
-        assert_eq!(
-            latest_schema_migration(),
-            DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
-        );
+    fn shared_ddl_catalog_keeps_original_v12_targets() {
+        assert_eq!(latest_schema_migration(), WATCH_ALERT_WINDOW_MIGRATION);
         assert_eq!(
             latest_schema_migration().target_schema_version,
-            STORAGE_SCHEMA_VERSION
+            STORAGE_SCHEMA_VERSION_DURABLE_V12
         );
         assert_eq!(
             SCHEMA_MIGRATIONS.last(),
-            Some(&DURABLE_PROVIDER_DISPATCH_V12_MIGRATION)
+            Some(&WATCH_ALERT_WINDOW_MIGRATION)
+        );
+    }
+
+    #[test]
+    fn ordinary_ownership_version_requires_explicit_cutover_from_v12() {
+        assert_eq!(STORAGE_SCHEMA_VERSION, "2026-10-17-gateway-v13");
+        assert!(
+            SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION_DURABLE_V12), true, &[])
+                .is_err(),
+            "shared bootstrap must not silently take ordinary ownership"
+        );
+        let current =
+            SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION), true, &[]).unwrap();
+        assert!(matches!(
+            current.action,
+            SchemaMigrationAction::BackfillCurrent
+        ));
+        assert_eq!(current.target_version, STORAGE_SCHEMA_VERSION);
+        assert!(
+            SchemaMigrationPlan::for_state(Some("2026-10-18-gateway-v14"), true, &[]).is_err(),
+            "unknown future ownership remains fail-closed"
         );
     }
 
@@ -479,7 +521,7 @@ mod tests {
             plan.action,
             SchemaMigrationAction::HardResetRuntime {
                 reason: "legacy_runtime_without_schema_meta",
-                migration: DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
+                migration: WATCH_ALERT_WINDOW_MIGRATION,
             }
         );
         assert_eq!(
@@ -489,7 +531,8 @@ mod tests {
                 OBSERVABILITY_V9_MIGRATION,
                 FORMAL_RELEASE_V10_MIGRATION,
                 CONCURRENCY_FENCING_V11_MIGRATION,
-                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
+                WATCH_ALERT_WINDOW_MIGRATION
             ]
         );
     }
@@ -534,7 +577,7 @@ mod tests {
         let plan = SchemaMigrationPlan::for_state(Some(STORAGE_SCHEMA_VERSION), true, &applied)
             .expect("plan should resolve");
         assert_eq!(plan.action, SchemaMigrationAction::BackfillCurrent);
-        assert!(plan.pending_migrations.is_empty());
+        assert_eq!(plan.pending_migrations, vec![WATCH_ALERT_WINDOW_MIGRATION]);
     }
 
     #[test]
@@ -554,7 +597,8 @@ mod tests {
                 OBSERVABILITY_V9_MIGRATION,
                 FORMAL_RELEASE_V10_MIGRATION,
                 CONCURRENCY_FENCING_V11_MIGRATION,
-                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
+                WATCH_ALERT_WINDOW_MIGRATION
             ]
         );
     }
@@ -582,7 +626,8 @@ mod tests {
             vec![
                 FORMAL_RELEASE_V10_MIGRATION,
                 CONCURRENCY_FENCING_V11_MIGRATION,
-                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
+                WATCH_ALERT_WINDOW_MIGRATION
             ]
         );
     }
@@ -617,7 +662,8 @@ mod tests {
             plan.pending_migrations,
             vec![
                 CONCURRENCY_FENCING_V11_MIGRATION,
-                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION
+                DURABLE_PROVIDER_DISPATCH_V12_MIGRATION,
+                WATCH_ALERT_WINDOW_MIGRATION
             ]
         );
     }
@@ -665,6 +711,6 @@ mod tests {
                 success: true,
             },
         ]);
-        assert!(pending.is_empty());
+        assert_eq!(pending, vec![WATCH_ALERT_WINDOW_MIGRATION]);
     }
 }

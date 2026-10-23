@@ -1,0 +1,9 @@
+{
+  "source_commit": "19cc5c686419255739776611d1fae25b8ed7b6fa",
+  "binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/binaries/tests-writer-final",
+  "binary_sha256": "d75b836eb3651607b1aeff9e0557c80830e1991d8f9f6650f1ba6ec43f769694",
+  "test_log": "rust-tests-writer-final.log",
+  "passed": 82,
+  "failed": 0,
+  "ignored": 2
+}

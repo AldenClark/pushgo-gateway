@@ -1,0 +1,7 @@
+op_bytes,order,rows,table_B_per_message,index_B_per_message,total_B_per_message,free_pages_after_delete,free_pages_consumed_by_reinsert,db_growth_on_reinsert_B
+16,lexical,100000,228.1472,138.36288,366.51008,881,879,0
+46,lexical,100000,256.6144,172.81024,429.42463999999995,1035,1018,0
+128,lexical,100000,342.2208,267.8784,610.0992,1476,1451,0
+16,deterministic-random,100000,228.1472,135.49568,363.64288,594,594,40960
+46,deterministic-random,100000,256.6144,169.82016,426.43456,663,663,24576
+128,deterministic-random,100000,342.2208,269.43488,611.6556800000001,875,875,8192

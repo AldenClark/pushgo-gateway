@@ -1,0 +1,28 @@
+--- a/crates/warp-link-transport/src/lib.rs
++++ b/crates/warp-link-transport/src/lib.rs
+@@ -235,6 +235,12 @@
+ pub async fn connect_quic(config: &ClientConfig) -> Result<ClientIo, WarpLinkError> {
+     let mut roots = rustls::RootCertStore::empty();
+     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
++    // C8 ISOLATED QA ONLY: additive public synthetic CA, never product trust.
++    roots
++        .add(rustls::pki_types::CertificateDer::from(
++            include_bytes!(env!("PUSHGO_C8_TEST_CA_DER")).to_vec(),
++        ))
++        .map_err(|error| WarpLinkError::Transport(format!("C8 synthetic CA rejected: {error}")))?;
+     let mut crypto = rustls::ClientConfig::builder()
+         .with_root_certificates(roots)
+         .with_no_client_auth();
+@@ -375,6 +381,12 @@
+ 
+     let mut roots = rustls::RootCertStore::empty();
+     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
++    // C8 ISOLATED QA ONLY: additive public synthetic CA, never product trust.
++    roots
++        .add(rustls::pki_types::CertificateDer::from(
++            include_bytes!(env!("PUSHGO_C8_TEST_CA_DER")).to_vec(),
++        ))
++        .map_err(|error| WarpLinkError::Transport(format!("C8 synthetic CA rejected: {error}")))?;
+     let mut tls_config = rustls::ClientConfig::builder()
+         .with_root_certificates(roots)
+         .with_no_client_auth();

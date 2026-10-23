@@ -57,6 +57,9 @@ pub struct PrivateHubMemorySnapshot {
     pub presence_draining_conn_count: usize,
     pub presence_queue_depth: usize,
     pub presence_queue_capacity: usize,
+    pub ordinary_owned_work: usize,
+    pub ordinary_owned_limit: usize,
+    pub ordinary_active_payload_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]

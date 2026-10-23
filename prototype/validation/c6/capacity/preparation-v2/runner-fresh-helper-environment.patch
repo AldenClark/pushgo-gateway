@@ -1,0 +1,17 @@
+--- early/run_c6_capacity.py
++++ fresh2/run_c6_capacity.py
+@@ -138,12 +138,12 @@
+         assert a.source_commit=='651bf7e7e4691bd5a78b36625ff34b693be83590'
+         assert plan['binary_sha256']=='52731d4a4599a379984e16734c9b9f304593aefe64b86563c6e7032e2a16e4af'
+     (out/'plan.json').write_text(json.dumps(plan,indent=2)+'\n')
+-    def bounded_db_run(arguments,stdin=None):
++    def bounded_db_run(arguments,stdin=None,environment=None):
+         remaining=deadline-time.monotonic() if enforce_deadline else 10
+         if remaining<=0:raise TimeoutError('fixed lane deadline before DB observation')
+         budget=min(10,remaining)
+         try:
+-            process=subprocess.run(helper.D+scoped_db_arguments(a.engine,arguments),input=stdin,text=True,capture_output=True,timeout=budget)
++            process=subprocess.run(helper.D+scoped_db_arguments(a.engine,arguments),input=stdin,text=True,capture_output=True,timeout=budget,env=environment)
+         except subprocess.TimeoutExpired:
+             raise safe_subprocess_timeout(budget) from None
+         if process.returncode:raise RuntimeError('Docker observation failed: '+process.stderr.strip())

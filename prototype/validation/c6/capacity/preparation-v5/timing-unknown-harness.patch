@@ -1,0 +1,20 @@
+--- frozen-v3/run_c6_capacity.py
++++ preparation-v5/run_c6_capacity.py
+@@ -47,6 +47,7 @@
+             row=by_identity.get((offer['op_id'],key));req=requests.get(offer['op_id'],{});state=row['state'] if row else None
+             ticks=accepted_ticks.get((row['delivery_id'],key)) if row else None
+             if state in ('provider_accepted','permanent_failed','expired','cancelled') and ticks is not None and cutoff is not None and ticks>cutoff:outcome='unfinished'
++            elif state=='provider_accepted' and ticks is None:outcome='unfinished'
+             elif state=='provider_accepted':outcome='accepted'
+             elif state in ('permanent_failed','expired','cancelled'):outcome='provider_failed'
+             elif row:outcome='unfinished'
+@@ -55,7 +56,8 @@
+             else:outcome='unfinished'
+             yield {'op_id':offer['op_id'],'device_key':key,'delivery_id':row['delivery_id'] if row else None,
+                 'offer_mach_ticks':offer['offer_mach_ticks'],'final_outcome':outcome,
+-                'durable_state_at_final_witness':state,'post_cutoff_success_censored':outcome=='unfinished' and state=='provider_accepted'}
++                'durable_state_at_final_witness':state,'post_cutoff_success_censored':state=='provider_accepted' and ticks is not None and cutoff is not None and ticks>cutoff,
++                'callback_timing_unknown':state=='provider_accepted' and ticks is None}
+ 
+ def main(a):
+     out=a.out.resolve();out.mkdir(parents=True,exist_ok=False)

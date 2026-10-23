@@ -1,0 +1,27 @@
+
+CREATE TABLE IF NOT EXISTS messages(delivery_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,op_id TEXT NOT NULL UNIQUE,channel_id TEXT NOT NULL,fingerprint TEXT NOT NULL,payload_blob BLOB NOT NULL,payload_bytes INTEGER NOT NULL,accepted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,dedupe_until INTEGER NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,pending_targets INTEGER NOT NULL DEFAULT 0,provider_accepted_count INTEGER NOT NULL DEFAULT 0,provider_failed_count INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS targets(delivery_id TEXT NOT NULL REFERENCES messages(delivery_id) ON DELETE CASCADE,device_key TEXT NOT NULL,pull_owner TEXT NOT NULL DEFAULT '',owner_generation INTEGER NOT NULL DEFAULT 0,control_epoch INTEGER NOT NULL DEFAULT 0,platform TEXT NOT NULL,provider TEXT NOT NULL,provider_token TEXT NOT NULL,route_generation INTEGER NOT NULL DEFAULT 0,accepted_at INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,next_attempt_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,attempt_id INTEGER NOT NULL DEFAULT 0,provider_status INTEGER,provider_error TEXT,receipt_at INTEGER,acked_at INTEGER,PRIMARY KEY(delivery_id,device_key));
+CREATE INDEX IF NOT EXISTS targets_due ON targets(provider,state,next_attempt_at,delivery_id);
+CREATE INDEX IF NOT EXISTS targets_device ON targets(pull_owner,accepted_at,delivery_id) WHERE acked_at IS NULL;
+CREATE INDEX IF NOT EXISTS messages_retention ON messages(dedupe_until);
+CREATE INDEX IF NOT EXISTS messages_expiry ON messages(expires_at,delivery_id) WHERE payload_bytes>0;
+CREATE TABLE IF NOT EXISTS ledger_usage(singleton INTEGER PRIMARY KEY CHECK(singleton=1),messages INTEGER NOT NULL,targets INTEGER NOT NULL,bytes INTEGER NOT NULL,control_epoch INTEGER NOT NULL DEFAULT 0);
+INSERT OR IGNORE INTO ledger_usage(singleton,messages,targets,bytes) VALUES(1,0,0,0);
+CREATE TRIGGER IF NOT EXISTS messages_usage_insert AFTER INSERT ON messages BEGIN UPDATE ledger_usage SET messages=messages+(NEW.pending_targets>0),bytes=bytes+NEW.payload_bytes WHERE singleton=1; END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_update AFTER UPDATE OF payload_bytes,pending_targets ON messages BEGIN UPDATE ledger_usage SET messages=messages+(NEW.pending_targets>0)-(OLD.pending_targets>0),bytes=bytes+NEW.payload_bytes-OLD.payload_bytes WHERE singleton=1; END;
+CREATE TRIGGER IF NOT EXISTS messages_usage_delete AFTER DELETE ON messages BEGIN UPDATE ledger_usage SET messages=messages-(OLD.pending_targets>0),bytes=bytes-OLD.payload_bytes WHERE singleton=1; END;
+CREATE TRIGGER IF NOT EXISTS targets_usage_insert AFTER INSERT ON targets WHEN NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait') BEGIN UPDATE ledger_usage SET targets=targets+1 WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets+1 WHERE delivery_id=NEW.delivery_id; END;
+CREATE TRIGGER IF NOT EXISTS targets_usage_update AFTER UPDATE OF acked_at,state ON targets BEGIN UPDATE ledger_usage SET targets=targets+(NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait'))-(OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait')) WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets+(NEW.acked_at IS NULL AND NEW.state IN ('pending','running','retry_wait'))-(OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait')) WHERE delivery_id=NEW.delivery_id; END;
+CREATE TRIGGER IF NOT EXISTS targets_usage_delete AFTER DELETE ON targets WHEN OLD.acked_at IS NULL AND OLD.state IN ('pending','running','retry_wait') BEGIN UPDATE ledger_usage SET targets=targets-1 WHERE singleton=1; UPDATE messages SET pending_targets=pending_targets-1 WHERE delivery_id=OLD.delivery_id; END;
+CREATE TABLE IF NOT EXISTS devices(device_key TEXT PRIMARY KEY,platform TEXT NOT NULL,provider TEXT,provider_token TEXT,route_generation INTEGER NOT NULL DEFAULT 0,route_revision INTEGER NOT NULL DEFAULT 1,retired_at INTEGER,coalesced_to TEXT);
+CREATE INDEX IF NOT EXISTS devices_retired ON devices(retired_at,device_key) WHERE retired_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS registration_aliases(old_key TEXT PRIMARY KEY,new_key TEXT NOT NULL,platform TEXT NOT NULL,expires_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS registration_alias_expiry ON registration_aliases(expires_at);
+CREATE TABLE IF NOT EXISTS channels(channel_id TEXT PRIMARY KEY,channel_name TEXT NOT NULL,password_hash TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS channel_subscriptions(channel_id TEXT NOT NULL REFERENCES channels(channel_id),device_key TEXT NOT NULL REFERENCES devices(device_key),PRIMARY KEY(channel_id,device_key));
+CREATE INDEX IF NOT EXISTS subscriptions_device ON channel_subscriptions(device_key,channel_id);
+CREATE TABLE IF NOT EXISTS retired_provider_tokens(platform TEXT NOT NULL,provider_token TEXT NOT NULL,control_epoch INTEGER NOT NULL,PRIMARY KEY(platform,provider_token));
+CREATE INDEX IF NOT EXISTS targets_owner_delivery ON targets(pull_owner,delivery_id,device_key) WHERE acked_at IS NULL;
+CREATE INDEX IF NOT EXISTS targets_token_retirement ON targets(platform,provider_token,control_epoch);
+CREATE TRIGGER IF NOT EXISTS targets_owner_insert AFTER INSERT ON targets WHEN NEW.pull_owner='' BEGIN UPDATE targets SET pull_owner=NEW.device_key,owner_generation=NEW.route_generation,control_epoch=(SELECT control_epoch FROM ledger_usage WHERE singleton=1) WHERE delivery_id=NEW.delivery_id AND device_key=NEW.device_key; END;
+CREATE TABLE IF NOT EXISTS provider_cooldowns(provider TEXT PRIMARY KEY,next_attempt_at INTEGER NOT NULL);

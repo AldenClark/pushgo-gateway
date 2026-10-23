@@ -1,0 +1,79 @@
+{
+  "product_implementation_commit": "753a1836b134915b2c6af2ef9fa6d075f52125a3",
+  "binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/binaries/c5-ordinary-sqlite-pg-mysql",
+  "sha256": "7324bc7ac546a2825c749b9f339c410dbeb6560129786b856a904873b39d0161",
+  "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "build_flags": [
+    "release",
+    "offline",
+    "locked"
+  ],
+  "measurement_overlay": false,
+  "scope": "normal candidate fixture, no release/deploy acceptance; test-only sources qualified separately",
+  "source_identity_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/binaries/c5-ordinary-identity.json",
+  "source_identity_original_sha256": "ece0e42ec6add6e12c8232734a678d45485d9d064d6e07e8c6fc99be7f2a1d33",
+  "not_included": [
+    "binary",
+    "build log",
+    "target directory",
+    "full product source hash inventory"
+  ],
+  "product_source_hashes": {
+    "Cargo.lock": "7a74b6d62772fa67d58b958a2a1c8010284ae9fae94c7a4a2c508f4c655b4dee",
+    "Cargo.toml": "11ca24938ac6d18e10023f84c89d02e242e7276e6ead044e4cdad03f165a5e99",
+    "prototype/Cargo.lock": "a18fe536ca64253dc935dfd7a69ec3f808376498fc5033e4a6ecb6a6ba6edbd6",
+    "prototype/Cargo.toml": "42bf4fc21d085d47bc4437d03a6cfee5e4f360309a9ae599b0e5d59460f03054",
+    "prototype/src/bin/free_architecture_fixture.rs": "dcf6b104672320cc817022fbd07e6bb5360f3c5ec98bb696944d0b7f85169649",
+    "prototype/src/mysql_control.rs": "a8866aea9eb749b76a2b8175ff05f1a180b3253bfcd7d46a69bcfef1d61c407e",
+    "prototype/src/mysql_schema.sql": "63bf2040aa02cb59d62ce282289d4e30d7d93cf51862073bc16214490e4735fa",
+    "prototype/src/mysql_store.rs": "ffe3272f8d2e382d4fbf86273627ee80b58a991276fad03d75a263eeffa10793",
+    "prototype/src/ordinary_store.rs": "f8c6fda411d1b25453b32b7116eddb1c0cb0738df7e9761091c72374b8d763a5"
+  },
+  "identity_is_historical_artifact_receipt": true,
+  "packaging_does_not_rebuild_or_rerun_artifact": true,
+  "rust_test_executable": {
+    "sha256": "055fde93d44abde498bd47248650433bb76eb1c84d1fac18e7583e82f9a0866d",
+    "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/binaries/c5-shared-native-tests",
+    "source_receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/final-rust-direct-results.json",
+    "source_receipt_sha256": "06d28e4a4d0045ce0755786abd34584a9ca44a82892233f221d36e72dfc895d6",
+    "binary_included": false,
+    "execution_at_packaged_location": false
+  },
+  "native_historical_execution": {
+    "summary_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/summary.json",
+    "summary_original_sha256": "d9e73d6b494aee455a881253953a62ced0925f038f76a481ea097c7c69a0a555",
+    "quiet_original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/quiet.json",
+    "quiet_original_sha256": "339b6d9705cb826c29a59632b5f59108e92d9d4d9fef1fd934c58895a4c3b89f",
+    "original_status": "PASSED final native execution",
+    "original_quiet": "QUIET",
+    "product_commit": "753a1836b134915b2c6af2ef9fa6d075f52125a3",
+    "normal_binary_sha256": "7324bc7ac546a2825c749b9f339c410dbeb6560129786b856a904873b39d0161",
+    "native_builds": "Apple NOT RUN cached bundle; Android isolated test APK offline build45s; production Kotlin dependency tasks recompiled due cloned path, cached installed main APK/JNI unchanged",
+    "production_main_APK_sha256": "148b254d1fdef70c8cbe5a842f54551b8aedb601fdb1c46d7bf25a6bf9ba62fa",
+    "C5_test_APK_sha256": "c95c2dda1bcdf16461636e9af8fc04613044fde9809a3ffee4f98febbccb31e2",
+    "C5_test_source_sha256": "7edf7e400585c6a5e6058648b730f728d6d1118626bc1c8e445581cc075fc786",
+    "product_assertion_retries": 0,
+    "first_product_failures": [],
+    "test_system_history": [
+      "Initial PG observer parameter calibration expected implicit integer but PG inferred TEXT; explicit synthetic CAST fixed; original observer-pg-first-failure.json preserved.",
+      "Offline Android Gradle build exit0/45s; after-hash wrapper exit1 due relative cwd path, fixed absolute observer paths and rechecked hashes without rebuilding. Original build wrapper receipt preserved.",
+      "Runtime run-01 FAILED observer42P01 due public search_path; 0 native invocations/no emulator. Product PG schema fixed pushgo_c. Original run/console/manifest/result/closed-error preserved.",
+      "Corrected read-only observer calibrated against exact frozen candidate pushgo_c; run-02 completed all six loops with no native assertion retries."
+    ],
+    "limitations": [
+      "Apple macOS host controllers/GRDB; no iOS/Watch/OS background/UI",
+      "Android API37 emulator, explicit ACK drain; no real FCM/WorkManager scheduling",
+      "cached JNI exact source revision UNVERIFIED; private channel journey unused",
+      "synthetic providers only; no release/deploy/production/physical acceptance",
+      "Room exports prove exact rows in closed copied main files, not arbitrary live-WAL snapshot completeness.",
+      "Gateway-control restart uses synthetic HTTP clients; separate native owner coalescing is proven by Apple and Android actual controller/repository storage/ACK evidence."
+    ],
+    "quiet_summary": {
+      "case_databases_dropped": 6,
+      "lease_released": true,
+      "outside_scope": "root-owned isolated PG/MySQL environment/core worker lifecycle and shared adb server are not this lane owned processes"
+    },
+    "relocated_sources_executed": false,
+    "binary_APK_JNI_included": false
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "base_head": "4b80d8e4e82dddec3144c9d86e468c7b5b3764d5",
+  "implementation_commit": "f8ed62f94ce44e285414f1a0f6894878763f4dbe",
+  "toolchain": "rustc 1.97.1",
+  "profile": "release opt3 fatLTO codegen-units1 panicabort",
+  "binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/binaries/c4-ordinary-sqlite-pg",
+  "sha256": "8d458bbf23e0306f4a78ee26a1735fa2795bee02f39a30a52acb11634559f80e",
+  "tests_note": "d925b97 final suite86passed/3ignored; targeted writer1passed. f8ed62f PG aggregate1passed on prior retained test binary773b9559; later change only SQLite writer test coordination. 2historical scale experiments not rerun. Preserve tests-final-verified.log85pass/1unlabelled deadline and original PG planner assertion failures.",
+  "production_sources_unchanged_since_freeze": true,
+  "test_binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/binaries/c4-native-tests",
+  "test_sha256": "773b95596c33578b067c01030bfdd283b80d437e6da2702d61faa7c69c1576af",
+  "actual_toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "test_oracle_commit": "d925b97fe30068b66aefb66e33284831df6d8e4f",
+  "final_test_binary": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c4-sqlite-postgres-20261015/binaries/c4-native-tests-writer-probe",
+  "final_test_sha256": "783d9a9b94b8bca6c7f732ff9517ce1c775c71ee1087c2d014511d81d2b12793",
+  "note": "Identity metadata only. Full source-hash manifests and raw evidence remain in OUT; no binary is packaged."
+}

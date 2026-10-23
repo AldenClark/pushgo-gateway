@@ -1,7 +1,7 @@
 use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordVerifier};
 #[cfg(test)]
-use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
+use argon2::password_hash::PasswordHasher;
+use argon2::password_hash::{PasswordVerifier, phc::PasswordHash};
 #[cfg(test)]
 use argon2::{Algorithm, Params, Version};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{StoreError, StoreResult};
 
-pub const STORAGE_SCHEMA_VERSION: &str = "2026-08-20-gateway-v12";
+// The v13 dataset owns ordinary delivery exclusively in the C ledger. Its
+// offline ownership cutover is separate from the shared-table DDL catalog.
+pub const STORAGE_SCHEMA_VERSION: &str = "2026-10-17-gateway-v13";
+pub const STORAGE_SCHEMA_VERSION_DURABLE_V12: &str = "2026-08-20-gateway-v12";
 pub const STORAGE_SCHEMA_VERSION_CONCURRENCY_V11: &str = "2026-08-08-gateway-v11";
 pub const STORAGE_SCHEMA_VERSION_FORMAL_RELEASE: &str = "2026-08-05-gateway-v10";
 pub const STORAGE_SCHEMA_VERSION_BETA1: &str = "2026-04-22-gateway-v9";
@@ -109,8 +112,8 @@ pub fn hash_channel_password(password: &str) -> StoreResult<String> {
 
 #[cfg(test)]
 pub(crate) fn hash_channel_password_argon2(password: &str) -> StoreResult<String> {
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default().hash_password(password.as_bytes(), &salt)?;
+    let salt: [u8; 16] = rand::random();
+    let hash = Argon2::default().hash_password_with_salt(password.as_bytes(), &salt)?;
     Ok(hash.to_string())
 }
 
@@ -216,13 +219,33 @@ mod tests {
     }
 
     #[test]
+    fn argon2_05_reference_phc_remains_compatible() {
+        // Official argon2 0.5.3 PHC reference vector, independent of 0.6 hashing:
+        // https://docs.rs/crate/argon2/0.5.3/source/tests/phc_strings.rs
+        const LEGACY_PHC: &str = "$argon2id$v=19$m=65536,t=2,p=1$c29tZXNhbHQ$CTFhFdXPJO1aFaMaO6Mm5c8y7cJHAph8ArZWb2GRPPc";
+        assert_eq!(
+            verify_channel_password(LEGACY_PHC, "password").expect("verify old PHC vector"),
+            ChannelPasswordVerifyOutcome::VerifiedNeedsUpgrade
+        );
+        assert!(matches!(
+            verify_channel_password(LEGACY_PHC, "sassword"),
+            Err(StoreError::ChannelPasswordMismatch)
+        ));
+        // These are the official 0.5.3 defaults; the upgrade must preserve cost.
+        assert_eq!(Params::DEFAULT_M_COST, 19 * 1024);
+        assert_eq!(Params::DEFAULT_T_COST, 2);
+        assert_eq!(Params::DEFAULT_P_COST, 1);
+        assert_eq!(Params::DEFAULT_OUTPUT_LEN, 32);
+    }
+
+    #[test]
     fn weaker_argon2id_parameters_request_upgrade() {
         let password = "pass-weak-argon2";
         let weak_params = Params::new(4_096, 1, 1, None).expect("weak test params");
         let weak_hasher = Argon2::new(Algorithm::Argon2id, Version::V0x13, weak_params);
-        let salt = SaltString::generate(&mut OsRng);
+        let salt: [u8; 16] = rand::random();
         let hash = weak_hasher
-            .hash_password(password.as_bytes(), &salt)
+            .hash_password_with_salt(password.as_bytes(), &salt)
             .expect("weak test hash")
             .to_string();
 

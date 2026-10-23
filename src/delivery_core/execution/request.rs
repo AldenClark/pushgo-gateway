@@ -5,22 +5,6 @@ use crate::{
     domain_model::projection::DomainDeliveryPolicy,
 };
 
-pub(crate) struct DispatchMessageInput {
-    pub(crate) authorized_channel: AuthorizedSubmitChannel,
-    pub(crate) op_id: Option<String>,
-    pub(crate) thing_id: Option<String>,
-    pub(crate) occurred_at: Option<i64>,
-    pub(crate) fingerprint_occurred_at: Option<i64>,
-    pub(crate) title: String,
-    pub(crate) body: Option<String>,
-    pub(crate) severity: Option<String>,
-    pub(crate) ttl: Option<i64>,
-    pub(crate) custom_data: HashMap<String, String>,
-    pub(crate) extra_fields: HashMap<String, String>,
-    pub(crate) delivery_policy: DomainDeliveryPolicy,
-    pub(crate) message_id: String,
-}
-
 pub(crate) struct DispatchEventInput {
     pub(crate) authorized_channel: AuthorizedSubmitChannel,
     pub(crate) op_id: String,
@@ -133,59 +117,6 @@ impl DispatchRequest {
         self.live_activity = value;
         self
     }
-}
-
-impl DispatchMessageInput {
-    pub(crate) fn idempotency_fingerprint(&self) -> String {
-        let mut hasher = blake3::Hasher::new();
-        fingerprint_part(&mut hasher, self.thing_id.as_deref().unwrap_or(""));
-        fingerprint_part(
-            &mut hasher,
-            self.fingerprint_occurred_at
-                .map(|value| value.to_string())
-                .as_deref()
-                .unwrap_or(""),
-        );
-        fingerprint_part(&mut hasher, self.title.trim());
-        fingerprint_part(&mut hasher, self.body.as_deref().unwrap_or(""));
-        fingerprint_part(&mut hasher, self.severity.as_deref().unwrap_or(""));
-        fingerprint_part(
-            &mut hasher,
-            self.ttl
-                .map(|value| value.to_string())
-                .as_deref()
-                .unwrap_or(""),
-        );
-        fingerprint_sorted_map(&mut hasher, &self.custom_data);
-        fingerprint_sorted_map_excluding(&mut hasher, &self.extra_fields, Some("message_id"));
-        fingerprint_part(&mut hasher, &format!("{:?}", self.delivery_policy));
-        hasher.finalize().to_hex().to_string()
-    }
-}
-
-fn fingerprint_sorted_map(hasher: &mut blake3::Hasher, values: &HashMap<String, String>) {
-    fingerprint_sorted_map_excluding(hasher, values, None);
-}
-
-fn fingerprint_sorted_map_excluding(
-    hasher: &mut blake3::Hasher,
-    values: &HashMap<String, String>,
-    excluded_key: Option<&str>,
-) {
-    let mut entries = values.iter().collect::<Vec<_>>();
-    entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
-    for (key, value) in entries {
-        if excluded_key == Some(key.as_str()) {
-            continue;
-        }
-        fingerprint_part(hasher, key);
-        fingerprint_part(hasher, value);
-    }
-}
-
-fn fingerprint_part(hasher: &mut blake3::Hasher, value: &str) {
-    hasher.update(&(value.len() as u64).to_be_bytes());
-    hasher.update(value.as_bytes());
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -1,0 +1,1041 @@
+{
+  "scope": "Local source archive only; execute from original OUT harness paths, not this relocated archive. No binaries/pycache/bulk logs/DB copied.",
+  "out": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015",
+  "core_commit": "ff314261eab7dd5409b5f113ff1fa08f9cf17d19",
+  "final_commit": "f57357c42900dbf06c4b27271b6962ad4c47a1c5",
+  "core_artifacts": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/artifacts.json",
+  "final_artifacts": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/artifacts-final.json",
+  "core_results": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/core69-status.json",
+  "final8_results": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/final8-comparison.json",
+  "boundary2_results": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/final-boundary2-comparison.json",
+  "all_final10_results": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/final10-full-summary.json",
+  "initial_smoke_source_limit": "Three original smoke runs retain actual SHA and raw receipts, but original runner bytes were not archived. No reconstructed source is represented as historical. Some early matrix coordinator versions are also hash-only and explicitly listed.",
+  "guard_before_boundary2": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/final-boundary-source-identity-first.json",
+  "readme_dirty_diff": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/final-boundary-readme-documentation-diff.patch",
+  "copied_files_sha256": {
+    "summarize_core.py": "52489f0fbe6ff12db8b77af220fc50b7703c4616ae29b90c5a9f1482b7679d1c",
+    "summarize_final.py": "8c34eb189963d14d9f3cee1742bfda28c51319199322cba139c37915500cc87d",
+    "summarize_boundary.py": "315fe1640b4ee7d926a38f848cfac7fe870a8d568f78e2fafcdd8276df3659df",
+    "reduce_time_windows.py": "eb63909e062ac9313aa6a2b19c17d2ab188be2352ad12dfa6627b9ee0ec11c2f",
+    "run_c2_matrix.py": "cd4530c98e3790bd8ee220e5e54e1f8d1aeb7c72d31897b212748a48c3e180f4",
+    "c2_pid_rusage.c": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+    "run_compare.py": "a8589840c3945e2156a1dd6ee01b10b5775e1249f1cbe30fc372cde3ff52c020",
+    "analyse_c2.py": "4c7dd1145d79118b8b17f5cf608f7ce6b50a21e4ed1e96b435fb8d4a982db333",
+    "analyse_c1_base.py": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+    "revisions/20261015-101046-final10-complete/summarize_core.py": "52489f0fbe6ff12db8b77af220fc50b7703c4616ae29b90c5a9f1482b7679d1c",
+    "revisions/20261015-101046-final10-complete/summarize_final.py": "8c34eb189963d14d9f3cee1742bfda28c51319199322cba139c37915500cc87d",
+    "revisions/20261015-101046-final10-complete/summarize_boundary.py": "315fe1640b4ee7d926a38f848cfac7fe870a8d568f78e2fafcdd8276df3659df",
+    "revisions/20261015-101046-final10-complete/reduce_time_windows.py": "eb63909e062ac9313aa6a2b19c17d2ab188be2352ad12dfa6627b9ee0ec11c2f",
+    "revisions/20261015-101046-final10-complete/run_c2_matrix.py": "cd4530c98e3790bd8ee220e5e54e1f8d1aeb7c72d31897b212748a48c3e180f4",
+    "revisions/20261015-101046-final10-complete/archive-manifest.json": "bd1d976859319035157825ddac2ef83a59b4a3f43cf82e13062d2e1b9513e1ab",
+    "revisions/20261015-101046-final10-complete/c2_pid_rusage.c": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+    "revisions/20261015-101046-final10-complete/run_compare.py": "a8589840c3945e2156a1dd6ee01b10b5775e1249f1cbe30fc372cde3ff52c020",
+    "revisions/20261015-101046-final10-complete/analyse_c2.py": "4c7dd1145d79118b8b17f5cf608f7ce6b50a21e4ed1e96b435fb8d4a982db333",
+    "revisions/20261015-101046-final10-complete/analyse_c1_base.py": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+    "revisions/20261015-095229-core69-completed/run_c2_matrix.py": "b73c8976c91855a80ae4ba192a3759fab32d09fea548256c04d57896551e1366",
+    "revisions/20261015-095229-core69-completed/archive-manifest.json": "d31671a48190df0dccd94a73281e8681d5b9f18df21edb7fcd82aa2079921502",
+    "revisions/20261015-095229-core69-completed/run_compare.py": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+    "revisions/20261015-095229-core69-completed/analyse_c2.py": "fc71ad2f49f24572711586f7137da39c24f41bfac27b5e7a4395902d0a30b3d5",
+    "revisions/20261015-095229-core69-completed/analyse_c1_base.py": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+    "revisions/20261015-100231-before-falloff-count-reduction/summarize_core.py": "52489f0fbe6ff12db8b77af220fc50b7703c4616ae29b90c5a9f1482b7679d1c",
+    "revisions/20261015-100231-before-falloff-count-reduction/summarize_final.py": "8c34eb189963d14d9f3cee1742bfda28c51319199322cba139c37915500cc87d",
+    "revisions/20261015-100231-before-falloff-count-reduction/analyse_c2.py": "9596ff383af10aed858f2c46f761b3328a47a451108c9fec91ba3a76009b9a36",
+    "revisions/20261015-093309-current/run_c2_matrix.py": "b73c8976c91855a80ae4ba192a3759fab32d09fea548256c04d57896551e1366",
+    "revisions/20261015-093309-current/archive-manifest.json": "77927da6a0d84f1bd473fc62e61531f6513c88f8717e0e4e77f78bac80d4a06b",
+    "revisions/20261015-093309-current/run_compare.py": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+    "revisions/20261015-093309-current/analyse_c2.py": "fc71ad2f49f24572711586f7137da39c24f41bfac27b5e7a4395902d0a30b3d5",
+    "revisions/20261015-093309-current/analyse_c1_base.py": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+    "revisions/20261015-100444-boundary2-readme-identity-executing/run_c2_matrix.py": "cd4530c98e3790bd8ee220e5e54e1f8d1aeb7c72d31897b212748a48c3e180f4",
+    "revisions/20261015-100444-boundary2-readme-identity-executing/archive-manifest.json": "352603001fc567e2b35f329db7161b72cd636eee09d5f5d989ebaf6c9e0a661a",
+    "revisions/20261015-100444-boundary2-readme-identity-executing/run_compare.py": "a8589840c3945e2156a1dd6ee01b10b5775e1249f1cbe30fc372cde3ff52c020",
+    "revisions/20261015-100444-boundary2-readme-identity-executing/custom-plan.json": "bc8a63e526f202a8203f86c58b87c1e87d9d3b50c08243c01904db76a5841088",
+    "revisions/20261015-100343-final8-executed-before-boundary2/summarize_final.py": "8c34eb189963d14d9f3cee1742bfda28c51319199322cba139c37915500cc87d",
+    "revisions/20261015-100343-final8-executed-before-boundary2/run_c2_matrix.py": "5ce28a74d7bfff4978bc9f0c0f4f2dfb8f90c6456ee25f483bc59b72136905ea",
+    "revisions/20261015-100343-final8-executed-before-boundary2/archive-manifest.json": "61cee35e8b8bd7b62720d45f606677e8c17f8df4365bfce9f9469647bc545ddd",
+    "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+    "revisions/20261015-100343-final8-executed-before-boundary2/analyse_c2.py": "4c7dd1145d79118b8b17f5cf608f7ce6b50a21e4ed1e96b435fb8d4a982db333",
+    "revisions/20261015-100343-final8-executed-before-boundary2/analyse_c1_base.py": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1",
+    "revisions/20261015-100343-final-boundary2-executing/run_c2_matrix.py": "e0b8368e92111d1690f45d789ddc60c96502a28359946c6ea0b66de59a7853e7",
+    "revisions/20261015-100343-final-boundary2-executing/archive-manifest.json": "e081f46de0194b3cdcb7009f6107161d3e6078d2dcd1a845fc2b5205d66a0062",
+    "revisions/20261015-100343-final-boundary2-executing/run_compare.py": "a8589840c3945e2156a1dd6ee01b10b5775e1249f1cbe30fc372cde3ff52c020",
+    "revisions/20261015-100343-final-boundary2-executing/custom-plan.json": "bc8a63e526f202a8203f86c58b87c1e87d9d3b50c08243c01904db76a5841088",
+    "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58"
+  },
+  "run_source_receipts": [
+    {
+      "run": "burst64-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/burst64-r1-c2/plan.json",
+      "plan_sha256": "ae83672a7d1d3a43757bd1076eadc6465c86a7690124945d913fe30f496146c1",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "burst64-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/burst64-r1-c32/plan.json",
+      "plan_sha256": "70f63d168fbc20d3f507c1944c0b30be70f0eab18640cbcd6d686401d207c3d7",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "burst64-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/burst64-r1-current/plan.json",
+      "plan_sha256": "1700084c0f3399cb205f63f15e4115e4c53aa8170a3e6bcaf69bf35b7a05a17c",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "burst64-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/burst64-r2-c2/plan.json",
+      "plan_sha256": "44c41fa7c4efe3fa794946200aa92f85b1d68f1bd3b506c2276182df14f372a6",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "burst64-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/burst64-r2-c32/plan.json",
+      "plan_sha256": "e7f51d7f38388014f22dca3f5dc6773901ba72214c6447fe5865f023625642b4",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "burst64-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/burst64-r2-current/plan.json",
+      "plan_sha256": "ad1d100e98c15302d1328850650403f8824ce8042b16c31dfe40f4ffb84c9c50",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "ceiling128-offer128-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/ceiling128-offer128-r1-c2/plan.json",
+      "plan_sha256": "d4153380b6dc936ba8a2a35eeeb50c421b4e465a21dfe417d1f22d94203e1b70",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "ceiling32-offer128-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/ceiling32-offer128-r1-c2/plan.json",
+      "plan_sha256": "77f7c3e395bbcd2b12bef9a74c765c4375f96e324dab5bcaae612ae4cbb82ae2",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "ceiling32-offer128-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/ceiling32-offer128-r2-c2/plan.json",
+      "plan_sha256": "a8a70f5ec230f11b83a4203578f8cc7d4228ed6d6771dbd8a7533b4bca3637af",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "ceiling64-offer128-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/ceiling64-offer128-r1-c2/plan.json",
+      "plan_sha256": "2e9a38a74267b4fbaf1fe153ec9c85dacd10e88ddf40b46a1ec5947f8c0f10d3",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "ceiling64-offer128-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/ceiling64-offer128-r2-c2/plan.json",
+      "plan_sha256": "cbd3f9ee56abe71c64608d09e9e65c8649311c72cd17a1d7b697958a2de3cf60",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "ceiling8-offer128-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/ceiling8-offer128-r1-c2/plan.json",
+      "plan_sha256": "7bae7b4983990b0f4bc74b2ccc9984ef75a08d96f4b8989e3ae9574577081ba1",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "cold-long-idle-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/cold-long-idle-r1-c2/plan.json",
+      "plan_sha256": "5d00d45e9b4168e7ccfd0b6d4647c30e55b894629a09f36a6a310adf339b504e",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "cold-long-idle-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/cold-long-idle-r1-c32/plan.json",
+      "plan_sha256": "6b60445c122f36037af2e92593d0c267117ba8106aa066d2fe9ee32862716c9c",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "cold-long-idle-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/cold-long-idle-r1-current/plan.json",
+      "plan_sha256": "db6cfc7eec2172ef784d0e9b45b8b9fbd6c35dbc5db38b3f62a91c17dbc71aba",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "db-block-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/db-block-r1-c2/plan.json",
+      "plan_sha256": "b4037d6fb7caa5aba6701999e5a4d3500629cc562dc9c21a7302da69540ddd58",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "db-block-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/db-block-r1-c32/plan.json",
+      "plan_sha256": "01341d6a346797a7097bc156bc2bdad0a63af2a5bf9511420706884163a5c444",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "db-block-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/db-block-r1-current/plan.json",
+      "plan_sha256": "655829ddaae433ec72f2148c017afe1609814fb8c0fc23c18e91b19a039352ac",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "falloff-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/falloff-r1-c2/plan.json",
+      "plan_sha256": "866636f2d05b2c5e5ca5b4782a86fe39f150628ea99c90a4b6ea438b86fe3cd2",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "falloff-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/falloff-r1-c32/plan.json",
+      "plan_sha256": "ff939a4c27606f372b3bd6c316fa11160d466c612da28a008e939c1f214d6870",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "falloff-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/falloff-r1-current/plan.json",
+      "plan_sha256": "f2cc1d652738bceb239c9f191a35821261d477d56bf2aaf4d0f4dd1cb48ef5d2",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "falloff-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/falloff-r2-c2/plan.json",
+      "plan_sha256": "9b6741f09705da81c3557a276b857e9fe2569e7fad25bd726ad7c8cf260f700b",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "falloff-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/falloff-r2-c32/plan.json",
+      "plan_sha256": "3c8acf400462c89b28e442f9234cd34a3f8b49bc7d818d9e76e9784944d79f7b",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "falloff-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/falloff-r2-current/plan.json",
+      "plan_sha256": "cbe90c203045d80be2267316b7e9683a4922ff281ddec2dd4d5b6c9dd9dff477",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "fanout32-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/fanout32-r1-c2/plan.json",
+      "plan_sha256": "2f0cc6c6957cdb5f29949ddea0d99145386a0a0f5c1c821deeb3d5fe2e716011",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "fanout32-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/fanout32-r1-c32/plan.json",
+      "plan_sha256": "99982ff27a43ec919e4eb2fc2eca9c4786e1dab1188c9ad78b4c2423ca13e26e",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "fanout32-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/fanout32-r1-current/plan.json",
+      "plan_sha256": "eaea469d1ec1d3a79e2776c974dc52a8703425bbaa5769ac655b14d6097f9b46",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "fanout32-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/fanout32-r2-c2/plan.json",
+      "plan_sha256": "c2ca4a537a21a496bbc17f52d6938be57985a8550d17b24c06f2e94e7b358dce",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "fanout32-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/fanout32-r2-c32/plan.json",
+      "plan_sha256": "46656b70ba9b046ed39fb495790e6ea3f5d041debe05575faaf0bb93098e64b3",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "fanout32-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/fanout32-r2-current/plan.json",
+      "plan_sha256": "a9f60e553d265960d1dadf71186785250c37e0808b63d5ecc422287317943003",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-bound32x60",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-bound32x60/plan.json",
+      "plan_sha256": "872baf0bdbe5d2138c323a49f84b4676b3eff101079b6574bebe97fd9a0d6201",
+      "runner_sha256": "a8589840c3945e2156a1dd6ee01b10b5775e1249f1cbe30fc372cde3ff52c020",
+      "archived_runner_paths": [
+        "revisions/20261015-101046-final10-complete/run_compare.py",
+        "revisions/20261015-100444-boundary2-readme-identity-executing/run_compare.py",
+        "revisions/20261015-100343-final-boundary2-executing/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-bound64x30",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-bound64x30/plan.json",
+      "plan_sha256": "cebabe24498b5ced418a032b1780bcb401f3f31d6438131fb44d255a4a3f235e",
+      "runner_sha256": "a8589840c3945e2156a1dd6ee01b10b5775e1249f1cbe30fc372cde3ff52c020",
+      "archived_runner_paths": [
+        "revisions/20261015-101046-final10-complete/run_compare.py",
+        "revisions/20261015-100444-boundary2-readme-identity-executing/run_compare.py",
+        "revisions/20261015-100343-final-boundary2-executing/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-falloff-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-falloff-r1-c2/plan.json",
+      "plan_sha256": "15caba49136ebd5d95c3242389f70164fd5817fc80f99f043b1d5524a92c7b90",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-h32-offer128-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-h32-offer128-r1-c2/plan.json",
+      "plan_sha256": "47a0d67fee0034ff4ab463d147a3503b7e7d3e4593ebc6a24f912edc73fcaaca",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-h32-offer128-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-h32-offer128-r2-c2/plan.json",
+      "plan_sha256": "ed779a6e6448f90c0d2578379aa62220d0972c974bb4b70ccfa67ce28089fe2b",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-h32-offer256-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-h32-offer256-r1-c2/plan.json",
+      "plan_sha256": "46e26014259374142a6ea09f4a5b23032acfda745394cda66173b2a2a24a0a23",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-h32-offer256-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-h32-offer256-r2-c2/plan.json",
+      "plan_sha256": "c10d8abb8012950bee4b5e67e479638da3de2c986917d51659d52cb13bd25492",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-h64-offer128-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-h64-offer128-r1-c2/plan.json",
+      "plan_sha256": "db5c9e759a984a55f15bfeb693ec7f7df236a676f8f45be95ed58cc9e5fd6e4d",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-h64-offer256-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-h64-offer256-r1-c2/plan.json",
+      "plan_sha256": "3a32cec652e01ca41c9abb6f1dbf1d1affc80e5ae0a9a7b100e3bd994e18c4ce",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "final-short-idle-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/final-short-idle-r1-c2/plan.json",
+      "plan_sha256": "600ae693370d06cbce2a9354257ec560df76cd3e89c52a8c9c0830a94ff0dadb",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer128-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer128-r1-c2/plan.json",
+      "plan_sha256": "e6e54094d3d6a9d10afce4cbd20a965a2fae0e7a35b6dd7704eb5d04b2670a9a",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer128-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer128-r1-c32/plan.json",
+      "plan_sha256": "90a0e521b5103f360bc841ff0ffb65c988c6dcffb9347c30b5a0c03088556d33",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer128-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer128-r1-current/plan.json",
+      "plan_sha256": "07c10c347672244634839d0335deae87d8c4291fe116dc9f7ec34cc3c91f991c",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer128-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer128-r2-c2/plan.json",
+      "plan_sha256": "a4fe01951d841e06445004e412788be7737424fa4d4079106aa51500e446f907",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer128-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer128-r2-c32/plan.json",
+      "plan_sha256": "c329d7453bc174867d98cf75c3d23e4afec807b4b21eb8f5b4062e19ef3cd9d0",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer128-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer128-r2-current/plan.json",
+      "plan_sha256": "3eab16ea4f1d2a252425694ed1015ee5e16e4b9836b1c1e83b23fc727a539ec1",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer256-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer256-r1-c2/plan.json",
+      "plan_sha256": "8f2c48144731b9016cdfce924be36d3f51b1ec442946c8a1389073dc36e4244f",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer256-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer256-r1-c32/plan.json",
+      "plan_sha256": "67200b44d736b5429673445425fe55f0925029365028395bb9c91a41ee14fc1c",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer256-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer256-r1-current/plan.json",
+      "plan_sha256": "3bf704871f2dd25ada0bbd0592466ad054c4350147c9aa2dc2d48c280740ca14",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer256-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer256-r2-c2/plan.json",
+      "plan_sha256": "7f597f6d239c1012f7d48a8e2f427bbadb82d18b29504c6247f14662cd9fa005",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer256-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer256-r2-c32/plan.json",
+      "plan_sha256": "22952d385589dc2b1e388b78b70fe62a094d173811fe71e1eedfa9527d27fa03",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer256-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer256-r2-current/plan.json",
+      "plan_sha256": "17c90a1136e98f382fc821dac75fe3e9a939be65312b315d3f916762ce761eda",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer64-long-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer64-long-r1-c2/plan.json",
+      "plan_sha256": "0636c0b45ce32d884005c52ea7f2d607af5d625518cf7ab08a1d284b9d28b10a",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer64-long-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer64-long-r1-c32/plan.json",
+      "plan_sha256": "0e13f472c8937167ae5905516ccb2eb94398a5a5ff5060fac87d46de6e0c9dea",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "offer64-long-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/offer64-long-r1-current/plan.json",
+      "plan_sha256": "adac713fadf57ac717f00ce5b940916ca88b3d24a3fb78336df0c3c429746283",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "provider429503-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/provider429503-r1-c2/plan.json",
+      "plan_sha256": "c1a7db343fd7bb703191c383b78df74b86dac84d761015b4a071e09424e6edd6",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "provider429503-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/provider429503-r1-c32/plan.json",
+      "plan_sha256": "c37469a7f7a262721b6eddc81e0d9f4471cc75f610e77b268e663ea5fe068484",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "provider429503-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/provider429503-r1-current/plan.json",
+      "plan_sha256": "7d4b12fe74cef905116dc4e2eaf1d2188222dbe872dc494171c3b632407da0a5",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "recovery-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/recovery-r1-c2/plan.json",
+      "plan_sha256": "95de995625a132bc9abecbb80418ef7de13c5e7c861f00e4d94b31db135d42bf",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "recovery-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/recovery-r1-c32/plan.json",
+      "plan_sha256": "5e83df66fed9708d186a2c1c31dccdd067263b658db443f01cbb3befd589fd47",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "recovery-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/recovery-r1-current/plan.json",
+      "plan_sha256": "14bfd16499bda6d782f54e9b1107ab5ca02a1ee2f591fd438372498f4402e2dc",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "short-idle-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/short-idle-r1-c2/plan.json",
+      "plan_sha256": "5dbe9358c9a3fd8de4552c64876b3ded3776f4fa4361e0712b84f0446384db38",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "short-idle-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/short-idle-r1-c32/plan.json",
+      "plan_sha256": "d9f610b769c777f33181c9cc12847b0487b925cfd12aacfc99b15f52830b5c9d",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "short-idle-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/short-idle-r1-current/plan.json",
+      "plan_sha256": "489884bc45750aeb8ccb128fd8e4f8d26eea80c4a4deda34451991349de9e2c5",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "short-idle-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/short-idle-r2-c2/plan.json",
+      "plan_sha256": "2cf383bddf4779246d1f9696b4c58074aaf9d3c5c44c8ecab57f7e7877b2f726",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "short-idle-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/short-idle-r2-c32/plan.json",
+      "plan_sha256": "b2ef98906b5ed3daa043d0c2a3a00ad85557ccf2dc31ee51c2afef2f076ad2f9",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "short-idle-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/short-idle-r2-current/plan.json",
+      "plan_sha256": "d4a6cf253e6aeec102250fa8cc9c1a36560cfe8798b0f2a34e464f502ddde2bf",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "slow-fcm200ms-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/slow-fcm200ms-r1-c2/plan.json",
+      "plan_sha256": "d2a9963890e0f1570535b081bbe5e984beebf1dedd517963dab757af1f76be56",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "slow-fcm200ms-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/slow-fcm200ms-r1-c32/plan.json",
+      "plan_sha256": "7b061ba43396b6bb68d8c7b7fe81ad39af837a9992febb9b361540251c9517db",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "slow-fcm200ms-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/slow-fcm200ms-r1-current/plan.json",
+      "plan_sha256": "9aa19212dfd25ca64450e4b0151476fea054beda6d539a7632231ab3b523ca6f",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "slow-fcm200ms-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/slow-fcm200ms-r2-c2/plan.json",
+      "plan_sha256": "141ee4de3aee3ac4c269c41bd73266f6db42de2019e6e2f435c0b0754a7f6029",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "slow-fcm200ms-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/slow-fcm200ms-r2-c32/plan.json",
+      "plan_sha256": "6175e5126302a2d9ec3b9ac140d73c484b8a706433bdf0d6791e3fa289419eb7",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "slow-fcm200ms-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/slow-fcm200ms-r2-current/plan.json",
+      "plan_sha256": "9e1184dfaab9273b859d8e25490bd9348cff44a455225e30dfe33cdace433498",
+      "runner_sha256": "1de5e245a76ee327958ec6f0c6ae520da2c96d30a477403ff1558f232bb05e43",
+      "archived_runner_paths": [
+        "revisions/20261015-095229-core69-completed/run_compare.py",
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "smoke-burst64-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/smoke-burst64-c2/plan.json",
+      "plan_sha256": "f2aa4d2a0e7de03e60230798a1923cd2c3c4cafd418c084c1687e9b6823990d9",
+      "runner_sha256": "65a43a6b703ff547bfe50128cf11955a33b50a22d9ea2c0d28b14b4b596289e9",
+      "archived_runner_paths": [],
+      "source_status": "historical hash only; original source not archived; never reconstructed"
+    },
+    {
+      "run": "smoke-burst64-c2-after-observer-fix",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/smoke-burst64-c2-after-observer-fix/plan.json",
+      "plan_sha256": "ae83672a7d1d3a43757bd1076eadc6465c86a7690124945d913fe30f496146c1",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "smoke-burst64-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/smoke-burst64-c32/plan.json",
+      "plan_sha256": "ed799ae5468eefbbec98abe046de784c270cda273cbc601e24a36791439c758b",
+      "runner_sha256": "65a43a6b703ff547bfe50128cf11955a33b50a22d9ea2c0d28b14b4b596289e9",
+      "archived_runner_paths": [],
+      "source_status": "historical hash only; original source not archived; never reconstructed"
+    },
+    {
+      "run": "smoke-burst64-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/smoke-burst64-current/plan.json",
+      "plan_sha256": "061d2f489278cd3926116c03812c860224ef874b042ba1d4ec3100e7fd0b72ad",
+      "runner_sha256": "65a43a6b703ff547bfe50128cf11955a33b50a22d9ea2c0d28b14b4b596289e9",
+      "archived_runner_paths": [],
+      "source_status": "historical hash only; original source not archived; never reconstructed"
+    },
+    {
+      "run": "very-low-r1-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/very-low-r1-c2/plan.json",
+      "plan_sha256": "1049a029f68a6106ba784413bee3497dfbd7ac0f44efcbf69f55d359522ada69",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "very-low-r1-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/very-low-r1-c32/plan.json",
+      "plan_sha256": "f663e31d7ce07a045e09afc4c2127c3d7017aaf0e0a1815761342156b9b007ec",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "very-low-r1-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/very-low-r1-current/plan.json",
+      "plan_sha256": "574e61e81b1195473fb368fcd5729aa8252626740886e7d13aeb253246caadaa",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "very-low-r2-c2",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/very-low-r2-c2/plan.json",
+      "plan_sha256": "27c4a42bada2bcda4b044585106423c9acd4588904b0670a48a5a6da0a517a61",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "very-low-r2-c32",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/very-low-r2-c32/plan.json",
+      "plan_sha256": "5f3a678e9b100d79e42563fbb40ada4321e2331c99d166b9c913fe63cba9e259",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "run": "very-low-r2-current",
+      "plan": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/runs/very-low-r2-current/plan.json",
+      "plan_sha256": "7cf3f53c597dbd9e80df9d1a7a11e26e054f744bc563c17bcc0bb1201c57bc34",
+      "runner_sha256": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+      "archived_runner_paths": [
+        "revisions/20261015-093309-current/run_compare.py",
+        "revisions/20261015-093602-before-warmup-ack-bind/run_compare.py"
+      ],
+      "source_status": "exact archived bytes"
+    }
+  ],
+  "matrix_source_receipts": [
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-ceiling32-offer128-r2-c2.json",
+      "receipt_sha256": "f83e16c2f7a2d049452313dc62896105b3cd4b38489362de3236839453b31d8b",
+      "coordinator_sha256": "b73c8976c91855a80ae4ba192a3759fab32d09fea548256c04d57896551e1366",
+      "archived_source_paths": [
+        "revisions/20261015-095229-core69-completed/run_c2_matrix.py",
+        "revisions/20261015-093309-current/run_c2_matrix.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-cold-long-idle-r1-current.json",
+      "receipt_sha256": "39cafc3d33d64a0b06f3d880e31d4f40a0157a7731648ade9870a8b8f8c7f3c7",
+      "coordinator_sha256": "173bd469d5d9524ab5cbe7e92a08136ee37b30b412221b7dbd90aa656dfe366c",
+      "archived_source_paths": [],
+      "source_status": "historical hash only; coordinator source not archived; never reconstructed"
+    },
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-final-bound32x60.json",
+      "receipt_sha256": "ea29591c0ea2a924b835913f96e443e8b5d63387f9be799794b848efcbafedca",
+      "coordinator_sha256": "cd4530c98e3790bd8ee220e5e54e1f8d1aeb7c72d31897b212748a48c3e180f4",
+      "archived_source_paths": [
+        "revisions/20261015-101046-final10-complete/run_c2_matrix.py",
+        "revisions/20261015-100444-boundary2-readme-identity-executing/run_c2_matrix.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-final-short-idle-r1-c2.json",
+      "receipt_sha256": "8478c0f9448f3ec24f86663e476be497f9c3cdb42da9c1c11e0bc58c60567d51",
+      "coordinator_sha256": "5ce28a74d7bfff4978bc9f0c0f4f2dfb8f90c6456ee25f483bc59b72136905ea",
+      "archived_source_paths": [
+        "revisions/20261015-100343-final8-executed-before-boundary2/run_c2_matrix.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-offer128-r1-c32.json",
+      "receipt_sha256": "d64ff4f7e1352d51bf6756c81a92cf0feed73d88113afa676f46deba36256b26",
+      "coordinator_sha256": "173bd469d5d9524ab5cbe7e92a08136ee37b30b412221b7dbd90aa656dfe366c",
+      "archived_source_paths": [],
+      "source_status": "historical hash only; coordinator source not archived; never reconstructed"
+    },
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-offer256-r1-current.json",
+      "receipt_sha256": "91346ca095faf1bf3ae9b05aa3566fe4b8649a740decf1a1b99132075b69c20b",
+      "coordinator_sha256": "b73c8976c91855a80ae4ba192a3759fab32d09fea548256c04d57896551e1366",
+      "archived_source_paths": [
+        "revisions/20261015-095229-core69-completed/run_c2_matrix.py",
+        "revisions/20261015-093309-current/run_c2_matrix.py"
+      ],
+      "source_status": "exact archived bytes"
+    },
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-smoke-burst64-c2-after-observer-fix.json",
+      "receipt_sha256": "7a0b502d659dbcbba9d5f696b911bb4a2b676326c24bdf4543c5f3216515b5d9",
+      "coordinator_sha256": "173bd469d5d9524ab5cbe7e92a08136ee37b30b412221b7dbd90aa656dfe366c",
+      "archived_source_paths": [],
+      "source_status": "historical hash only; coordinator source not archived; never reconstructed"
+    },
+    {
+      "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/matrix-smoke-burst64-current.json",
+      "receipt_sha256": "732a2d1b91c07f4ba12847c1ba5629f1a6764b4a1f0b696ff0e644f82d426ac4",
+      "coordinator_sha256": "3cdb95fdb95e841f989136de42bf4c63fd629c694a100b5f9a3f6cb4609ac7d8",
+      "archived_source_paths": [],
+      "source_status": "historical hash only; coordinator source not archived; never reconstructed"
+    }
+  ]
+}

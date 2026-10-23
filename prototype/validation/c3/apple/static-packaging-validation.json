@@ -1,0 +1,23 @@
+{
+  "status": "PASSED static packaging validation",
+  "python_ast_files": [
+    "run-loop.py",
+    "stage.py",
+    "executed/run-loop.py"
+  ],
+  "exact_copied_inputs": 7,
+  "portable_modified_inputs": 2,
+  "production_shared_file_metadata_count": 111,
+  "production_shared_body_count": 0,
+  "file_count_before_this_receipt": 12,
+  "bytes_before_this_receipt": 87425,
+  "stage_executed": false,
+  "build_executed": false,
+  "tests_executed": false,
+  "services_started": false,
+  "portable_variants": "NOT RUN",
+  "zsh_syntax_files": {
+    "run-native.sh": "PASSED",
+    "executed/run-native.sh": "PASSED"
+  }
+}

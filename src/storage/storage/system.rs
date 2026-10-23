@@ -16,6 +16,21 @@ const PROVIDER_FINALIZE_RETRY_DELAYS: [Duration; 7] = [
 ];
 
 impl Storage {
+    pub(crate) async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
+        self.db.watch_alert_window_minutes(device_key).await
+    }
+    pub(crate) async fn set_watch_alert_window_minutes(
+        &self,
+        device_key: &str,
+        minutes: i64,
+    ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        self.db
+            .set_watch_alert_window_minutes(device_key, minutes)
+            .await
+    }
+
     pub async fn automation_counts(&self) -> StoreResult<AutomationCounts> {
         self.db.automation_counts().await
     }
@@ -100,6 +115,16 @@ impl Storage {
         &self,
         record: &SenderSubmitStatusRecord,
     ) -> StoreResult<bool> {
+        let _scope_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        if let Some(ordinary) = self.ordinary_handle() {
+            match ordinary.status(&record.op_id).await {
+                Ok(_) => return Err(StoreError::OperationScopeConflict),
+                Err(crate::ordinary::KernelError::NotFound) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+
         self.db.insert_sender_submit_status_if_absent(record).await
     }
 
@@ -257,9 +282,12 @@ impl Storage {
     }
 
     pub async fn upsert_device_route(&self, route: &DeviceRouteRecordRow) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db.upsert_device_route(route).await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -292,9 +320,12 @@ impl Storage {
         &self,
         route: &DeviceRouteRecordRow,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db.persist_device_route_change(route).await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -305,6 +336,20 @@ impl Storage {
         ack_timeout_secs: u64,
         max_pending_per_device: usize,
     ) -> StoreResult<usize> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        if previous_channel_type != RouteChannelType::Private
+            && route.channel_type.eq_ignore_ascii_case("private")
+            && let Some(ordinary) = self.ordinary_handle()
+        {
+            let (pending, capacity) = ordinary.private_route_capacity(&route.device_key).await?;
+            if pending > capacity {
+                return Err(StoreError::RouteMigrationCapacityExceeded {
+                    pending: pending as usize,
+                    capacity: capacity as usize,
+                });
+            }
+        }
         let migrated = self
             .db
             .transition_device_route(
@@ -316,6 +361,7 @@ impl Storage {
             .await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(migrated)
     }
 
@@ -331,18 +377,24 @@ impl Storage {
         route: &DeviceRouteRecordRow,
         old_device_key: Option<&str>,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db
             .replace_device_identity(route, old_device_key)
             .await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
     pub async fn revoke_device_identity(&self, device_key: &str) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db.revoke_device_identity(device_key).await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -351,6 +403,8 @@ impl Storage {
         platform: Platform,
         provider_token: &str,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         let provider_token = ProviderTokenRef::canonicalize_for_platform(provider_token, platform)
             .map_err(|_| StoreError::InvalidDeviceToken)?;
         self.db
@@ -358,6 +412,7 @@ impl Storage {
             .await?;
         self.cache.clear_devices();
         self.cache.invalidate_all_channel_devices();
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -396,6 +451,16 @@ impl Storage {
             );
             return Ok(MaintenanceCleanupStats::default());
         }
+        // Ordinary content and identities have one ledger, but share this
+        // existing maintenance owner. One native bounded turn also services
+        // a quiet ledger; no new timer or drain-until-empty loop is needed.
+        let ordinary_started = Instant::now();
+        let ordinary_identities_pruned = if let Some(ordinary) = self.ordinary_handle() {
+            ordinary.maintenance().await.map_err(StoreError::from)?
+        } else {
+            0
+        };
+        let ordinary_maintenance_elapsed_ms = ordinary_started.elapsed().as_millis() as u64;
         let mut phase_started = Instant::now();
         let private_sessions_pruned = self.db.cleanup_private_sessions(now).await?;
         let private_sessions_elapsed_ms = phase_started.elapsed().as_millis() as u64;
@@ -512,6 +577,8 @@ impl Storage {
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "storage.maintenance_cleanup_finished",
+            ordinary_identities_pruned = (ordinary_identities_pruned as u64),
+            ordinary_maintenance_elapsed_ms = (ordinary_maintenance_elapsed_ms),
             private_sessions_pruned = (private_sessions_pruned as u64),
             private_outbox_pruned = (private_outbox_pruned as u64),
             provider_pull_pruned = (provider_pull_pruned as u64),

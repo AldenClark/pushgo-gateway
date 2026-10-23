@@ -946,8 +946,24 @@ pub enum Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        emit_api_error_observation(&self);
-        match self {
+        // Preserve native ordinary control/capacity errors when they cross a
+        // normal Storage control transaction; do not turn them into a generic
+        // database HTTP 500.
+        let error = match self {
+            Error::StoreError(StoreError::Ordinary(error)) => {
+                return Error::from(error).into_response();
+            }
+            Error::StoreError(StoreError::OperationScopeConflict) => {
+                return Error::Conflict {
+                    message: "op_id is already used by a different operation".into(),
+                    code: "op_id_scope_conflict".into(),
+                }
+                .into_response();
+            }
+            error => error,
+        };
+        emit_api_error_observation(&error);
+        match error {
             Error::Validation { message, code } => match code {
                 Some(code) => {
                     StatusResponse::error_with_status(StatusCode::BAD_REQUEST, message, Some(code))

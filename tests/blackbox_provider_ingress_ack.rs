@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -14,7 +13,7 @@ use tempfile::TempDir;
 struct GatewayProcess {
     child: Child,
     _dir: TempDir,
-    delivery_db_url: String,
+    db_url: String,
     log_path: PathBuf,
     http_port: u16,
     token: String,
@@ -26,12 +25,6 @@ impl GatewayProcess {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let db_path = dir.path().join("gateway-provider-ingress.sqlite");
         let db_url = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
-        let delivery_db_url = format!(
-            "sqlite://{}?mode=rwc",
-            dir.path()
-                .join("gateway-provider-ingress.delivery.sqlite")
-                .to_string_lossy()
-        );
         let log_path = dir.path().join("gateway-provider-ingress.log");
         let token = "blackbox-provider-token".to_string();
 
@@ -53,7 +46,7 @@ impl GatewayProcess {
         let gateway = Self {
             child,
             _dir: dir,
-            delivery_db_url,
+            db_url,
             log_path,
             http_port,
             token,
@@ -137,14 +130,14 @@ async fn run_provider_ingress_journey(client: Client, expected_version: reqwest:
 
     let _ = pull_messages(&client, &gateway, &device_key, None).await;
 
-    send_message(&client, &gateway, &channel_id, "op-provider-ack-001").await;
-    let mut known_delivery_ids = HashSet::new();
-    let first_delivery_id = wait_for_delivery_id(&gateway, &known_delivery_ids).await;
-    known_delivery_ids.insert(first_delivery_id.clone());
+    let first_message = send_message(&client, &gateway, &channel_id, "op-provider-ack-001").await;
+    let first_delivery_id = wait_for_delivery_id(&gateway, &device_key, &first_message).await;
 
     assert!(ack_message_with_retry(&client, &gateway, &device_key, &first_delivery_id).await);
     let ack_again = ack_message(&client, &gateway, &device_key, &first_delivery_id).await;
     assert_eq!(ack_again, Some(false), "ack should be idempotent");
+
+    assert_body_released(&gateway, &first_message).await;
 
     let single_after_ack = pull_messages(
         &client,
@@ -158,12 +151,13 @@ async fn run_provider_ingress_journey(client: Client, expected_version: reqwest:
         "acked delivery should not be pullable"
     );
 
-    send_message(&client, &gateway, &channel_id, "op-provider-pull-all-001").await;
-    send_message(&client, &gateway, &channel_id, "op-provider-pull-all-002").await;
-    let second_delivery_id = wait_for_delivery_id(&gateway, &known_delivery_ids).await;
-    known_delivery_ids.insert(second_delivery_id.clone());
-    let third_delivery_id = wait_for_delivery_id(&gateway, &known_delivery_ids).await;
-    known_delivery_ids.insert(third_delivery_id.clone());
+    let second_message =
+        send_message(&client, &gateway, &channel_id, "op-provider-pull-all-001").await;
+    let third_message =
+        send_message(&client, &gateway, &channel_id, "op-provider-pull-all-002").await;
+    let second_delivery_id = wait_for_delivery_id(&gateway, &device_key, &second_message).await;
+    let third_delivery_id = wait_for_delivery_id(&gateway, &device_key, &third_message).await;
+    assert_ne!(second_delivery_id, third_delivery_id);
 
     let single_pull = pull_messages(
         &client,
@@ -187,6 +181,8 @@ async fn run_provider_ingress_journey(client: Client, expected_version: reqwest:
 
     let drain_pull = pull_messages(&client, &gateway, &device_key, None).await;
     assert!(drain_pull.is_empty(), "queue should be drained");
+    assert_body_released(&gateway, &second_message).await;
+    assert_body_released(&gateway, &third_message).await;
 }
 
 fn free_port() -> u16 {
@@ -252,7 +248,12 @@ async fn subscribe_channel(client: &Client, gateway: &GatewayProcess, device_key
         .to_string()
 }
 
-async fn send_message(client: &Client, gateway: &GatewayProcess, channel_id: &str, label: &str) {
+async fn send_message(
+    client: &Client,
+    gateway: &GatewayProcess,
+    channel_id: &str,
+    label: &str,
+) -> String {
     let response = client
         .post(format!("{}/message", gateway.base_url()))
         .bearer_auth(&gateway.token)
@@ -265,40 +266,121 @@ async fn send_message(client: &Client, gateway: &GatewayProcess, channel_id: &st
         .send()
         .await
         .expect("message request should succeed");
-    assert!(
-        response.status().as_u16() == 200 || response.status().as_u16() == 503,
-        "unexpected message status: {}\n{}",
-        response.status(),
-        gateway.logs()
-    );
-    let _: Value = response.json().await.expect("response json should parse");
+    assert_eq!(response.status(), 200, "{}", gateway.logs());
+    let body: Value = response.json().await.expect("response json should parse");
+    body["data"]["message_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .expect("accepted message should have an identity")
+        .to_string()
 }
 
-async fn wait_for_delivery_id(gateway: &GatewayProcess, excluded: &HashSet<String>) -> String {
-    let pool = sqlx::SqlitePool::connect(&gateway.delivery_db_url)
+async fn assert_body_released(gateway: &GatewayProcess, message_id: &str) {
+    let pool = sqlx::SqlitePool::connect(&gateway.db_url).await.unwrap();
+    let row = sqlx::query("SELECT payload_bytes,length(payload_blob) AS body_length,(SELECT COUNT(*) FROM ordinary_targets t WHERE t.delivery_id=m.delivery_id AND t.acked_at IS NULL) AS pending FROM ordinary_messages m WHERE message_id=?")
+        .bind(message_id).fetch_one(&pool).await.expect("accepted identity should remain after ACK");
+    assert_eq!(row.get::<i64, _>("payload_bytes"), 0);
+    assert_eq!(row.get::<i64, _>("body_length"), 0);
+    assert_eq!(row.get::<i64, _>("pending"), 0);
+}
+
+// Observe the current ordinary authority without consuming the legacy pull API.
+// Correlation to the HTTP acceptance and device prevents an unrelated target from
+// making the ACK/pull journey pass.
+async fn pending_delivery_id(
+    pool: &sqlx::SqlitePool,
+    device_key: &str,
+    message_id: &str,
+) -> Option<String> {
+    let rows = sqlx::query(
+        "SELECT t.delivery_id FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE m.message_id=? AND t.pull_owner=? AND t.device_key=? AND m.expires_at>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) AND length(t.delivery_id)>0 AND t.delivery_mode='provider' AND t.acked_at IS NULL AND m.payload_bytes>0",
+    )
+    .bind(message_id)
+    .bind(device_key)
+    .bind(device_key)
+    .fetch_all(pool)
+    .await
+    .expect("ordinary target query should succeed");
+    assert!(
+        rows.len() <= 1,
+        "accepted message should have one pull target"
+    );
+    rows.first().map(|row| row.get("delivery_id"))
+}
+
+async fn wait_for_delivery_id(
+    gateway: &GatewayProcess,
+    device_key: &str,
+    message_id: &str,
+) -> String {
+    let pool = sqlx::SqlitePool::connect(&gateway.db_url)
         .await
         .expect("sqlite pool should connect");
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let rows = sqlx::query(
-            "SELECT delivery_id FROM provider_pull_queue ORDER BY created_at ASC, delivery_id ASC",
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("provider_pull_queue query should succeed");
-        for row in rows {
-            let delivery_id: String = row.get("delivery_id");
-            if !delivery_id.trim().is_empty() && !excluded.contains(delivery_id.as_str()) {
-                return delivery_id;
-            }
+        if let Some(delivery_id) = pending_delivery_id(&pool, device_key, message_id).await {
+            assert!(!delivery_id.is_empty());
+            return delivery_id;
         }
         assert!(
             Instant::now() < deadline,
-            "delivery id not found in provider_pull_queue\n{}",
+            "ordinary target not found for accepted message_id={message_id} device={device_key}\n{}",
             gateway.logs()
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+#[tokio::test]
+async fn provider_observer_requires_correlated_pending_ordinary_target() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    for statement in [
+        "CREATE TABLE ordinary_messages(delivery_id TEXT,message_id TEXT,payload_bytes INTEGER,expires_at INTEGER)",
+        "CREATE TABLE ordinary_targets(delivery_id TEXT,pull_owner TEXT,device_key TEXT,delivery_mode TEXT,acked_at INTEGER)",
+        "CREATE TABLE provider_pull_queue(delivery_id TEXT)",
+        "INSERT INTO provider_pull_queue VALUES('legacy-only')",
+        "INSERT INTO ordinary_messages VALUES('delivery','accepted',64,9999999999999)",
+        "INSERT INTO ordinary_targets VALUES('delivery','device','device','provider',NULL)",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+    assert_eq!(
+        pending_delivery_id(&pool, "device", "accepted")
+            .await
+            .as_deref(),
+        Some("delivery")
+    );
+    assert_eq!(
+        pending_delivery_id(&pool, "other-device", "accepted").await,
+        None
+    );
+    assert_eq!(
+        pending_delivery_id(&pool, "device", "other-message").await,
+        None
+    );
+    assert_eq!(
+        pending_delivery_id(&pool, "device", "legacy-only").await,
+        None
+    );
+    sqlx::query("UPDATE ordinary_targets SET delivery_mode='private'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pending_delivery_id(&pool, "device", "accepted").await, None);
+    sqlx::query("UPDATE ordinary_targets SET delivery_mode='provider',acked_at=1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pending_delivery_id(&pool, "device", "accepted").await, None);
+    sqlx::query("UPDATE ordinary_targets SET acked_at=NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE ordinary_messages SET payload_bytes=0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pending_delivery_id(&pool, "device", "accepted").await, None);
 }
 
 async fn ack_message_with_retry(
@@ -369,6 +451,11 @@ async fn pull_messages(
         .as_array()
         .expect("items should be array")
         .iter()
-        .filter_map(|item| item["delivery_id"].as_str().map(ToString::to_string))
+        .map(|item| {
+            item["delivery_id"]
+                .as_str()
+                .expect("pulled item should have delivery_id")
+                .to_string()
+        })
         .collect()
 }

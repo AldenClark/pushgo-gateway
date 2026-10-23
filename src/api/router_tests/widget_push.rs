@@ -40,6 +40,7 @@ async fn widget_push_subscription_registers_current_widgets() {
 async fn message_dispatch_queues_widget_push_for_matching_widgets() {
     let (state, receivers) = build_test_state_with_receivers().await;
     let storage = state.store.clone();
+    let dispatch = state.dispatch.clone();
     let channel_id = seed_provider_channel_for_router_test(
         &state,
         "widget-message-device",
@@ -85,6 +86,16 @@ async fn message_dispatch_queues_widget_push_for_matching_widgets() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "message body: {body:?}");
+
+    // This Router-only helper does not spawn the App recovery worker. Drive
+    // that same production projection explicitly, after durable acceptance;
+    // the normal build_app worker is covered by widget_provider_tests.
+    assert_eq!(
+        crate::ordinary::widget_refresh::project_pending(&storage, &dispatch, 1)
+            .await
+            .expect("committed Widget invalidation should project"),
+        1
+    );
 
     let job = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         receivers

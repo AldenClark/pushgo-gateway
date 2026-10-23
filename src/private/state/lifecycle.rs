@@ -1,5 +1,7 @@
 use super::*;
 use crate::routing::derive_private_device_id;
+use futures_util::FutureExt;
+use std::panic::AssertUnwindSafe;
 
 impl PrivateState {
     pub fn new(
@@ -32,6 +34,8 @@ impl PrivateState {
                 (max_sessions / 16).clamp(32, 512),
             )),
             runtime_tasks: Mutex::new(Vec::new()),
+            session_tasks: Mutex::new(tokio::task::JoinSet::new()),
+            session_task_failures: AtomicUsize::new(0),
             shutting_down: AtomicBool::new(false),
             shutdown_notify: tokio::sync::Notify::new(),
         };
@@ -108,16 +112,62 @@ impl PrivateState {
         if self.is_shutting_down() {
             return false;
         }
-        let handle = tokio::spawn(future);
+        let owner = self.clone();
+        let handle = tokio::spawn(async move {
+            if AssertUnwindSafe(future).catch_unwind().await.is_err() {
+                owner.record_session_task_failure("Private runtime task panicked");
+                tracing::error!(task = name, "Private runtime task panicked");
+            }
+        });
         tasks.push(PrivateRuntimeTask { name, handle });
         true
+    }
+
+    /// HTTP upgrades hand their socket to this existing Private owner before
+    /// returning 101. Completed handles are reaped on admission, so connection
+    /// history does not grow the shutdown registry.
+    pub(crate) fn spawn_session_task<F>(self: &Arc<Self>, future: F) -> bool
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let mut sessions = self.session_tasks.lock();
+        if self.is_shutting_down() {
+            return false;
+        }
+        while let Some(result) = sessions.try_join_next() {
+            if result.is_err() {
+                self.record_session_task_failure(
+                    "Private session task failed before joined shutdown",
+                );
+                return false;
+            }
+        }
+        let owner = self.clone();
+        sessions.spawn(async move {
+            if AssertUnwindSafe(future).catch_unwind().await.is_err() {
+                owner.record_session_task_failure("Private session task panicked");
+                tracing::error!("Private session task panicked");
+            }
+        });
+        true
+    }
+
+    pub(crate) fn record_session_task_failure(&self, reason: &str) {
+        self.session_task_failures.fetch_add(1, Ordering::Relaxed);
+        if let Some(store) = self.hub.store().ordinary_handle() {
+            store.fail(reason);
+        }
+        self.begin_shutdown();
     }
 
     pub async fn shutdown_runtime(&self, grace: Duration) -> PrivateShutdownReport {
         self.begin_shutdown();
         let mut tasks = std::mem::take(&mut *self.runtime_tasks.lock());
         let deadline = TokioInstant::now() + grace;
-        let mut report = PrivateShutdownReport::default();
+        let mut report = PrivateShutdownReport {
+            failed: self.session_task_failures.swap(0, Ordering::Relaxed),
+            ..PrivateShutdownReport::default()
+        };
 
         for task in &mut tasks {
             match tokio::time::timeout_at(deadline, &mut task.handle).await {
@@ -147,13 +197,58 @@ impl PrivateState {
             }
         }
 
+        let mut sessions =
+            { std::mem::replace(&mut *self.session_tasks.lock(), tokio::task::JoinSet::new()) };
+        while !sessions.is_empty() {
+            match tokio::time::timeout_at(deadline, sessions.join_next()).await {
+                Ok(Some(Ok(()))) => report.joined = report.joined.saturating_add(1),
+                Ok(Some(Err(_))) => report.panicked = report.panicked.saturating_add(1),
+                Ok(None) => break,
+                Err(_) => {
+                    sessions.abort_all();
+                    while sessions.join_next().await.is_some() {
+                        report.aborted = report.aborted.saturating_add(1);
+                    }
+                    break;
+                }
+            }
+        }
+        report.failed = report
+            .failed
+            .saturating_add(self.session_task_failures.swap(0, Ordering::Relaxed));
+
+        // The canonical ledger and its exclusive owner outlive all transport
+        // children and their pending ACK writes. An abnormal drain keeps its
+        // reservations fenced for restart instead of pretending they released.
+        if let Some(store) = self.hub.store().ordinary_handle() {
+            if report.panicked > 0 || report.aborted > 0 || report.failed > 0 {
+                store.fail("Private transport shutdown did not join cleanly");
+                report.failed = report.failed.saturating_add(1);
+            } else {
+                match tokio::time::timeout_at(deadline, self.hub.shutdown_ordinary()).await {
+                    Ok(Ok(())) => report.joined = report.joined.saturating_add(1),
+                    Ok(Err(error)) => {
+                        store.fail("ordinary Private shutdown release failed");
+                        report.failed = report.failed.saturating_add(1);
+                        tracing::error!(error = %error, "ordinary Private shutdown release failed");
+                    }
+                    Err(_) => {
+                        store.fail("ordinary Private shutdown deadline expired");
+                        report.aborted = report.aborted.saturating_add(1);
+                        report.failed = report.failed.saturating_add(1);
+                    }
+                }
+            }
+        }
+
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "private.runtime_shutdown_finished",
             joined = (report.joined as u64),
             panicked = (report.panicked as u64),
-            aborted = (report.aborted as u64)
+            aborted = (report.aborted as u64),
+            failed = (report.failed as u64)
         );
         report
     }
@@ -179,6 +274,9 @@ impl PrivateState {
         device_id: DeviceId,
         control: SessionControl,
     ) {
+        if self.is_shutting_down() {
+            control.expire_now();
+        }
         self.session_controls
             .write()
             .insert(session_id.to_string(), control);

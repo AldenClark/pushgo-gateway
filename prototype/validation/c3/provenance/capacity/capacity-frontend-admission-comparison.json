@@ -1,0 +1,134 @@
+[
+  {
+    "run": "matched-observerfix-candidate-offer256-r1",
+    "messages": 2560,
+    "http_admission_latency_ms": {
+      "count": 2560,
+      "mean": 40.94009160156251,
+      "p50": 41.814500000000976,
+      "p95": 76.27983299999919,
+      "p99": 87.22916600000019,
+      "max": 106.08337500000076,
+      "min": 4.120916999999835
+    },
+    "producer_offer_event_to_http_start_ms": {
+      "count": 2560,
+      "mean": 1133.09296875,
+      "p50": 484,
+      "p95": 4007,
+      "p99": 4481,
+      "max": 4609,
+      "min": 0
+    },
+    "offer_event_to_http_response_event_ms": {
+      "count": 2560,
+      "mean": 1174.0453125,
+      "p50": 523,
+      "p95": 4074,
+      "p99": 4559,
+      "max": 4645,
+      "min": 4
+    },
+    "semantics": "one-to-one op_id/label all requests, no warmup; producer/response use retained Unix-ms event timestamps (1ms resolution), HTTP uses original monotonic latency; excludes targetCOMMIT; E2Eaccepted_toCOMMIT excludes these frontend waits; quantiles must not be added",
+    "offer_to_exact_target_COMMIT_p95": "not collected; receipt_at intent cannot substitute durableCOMMIT"
+  },
+  {
+    "run": "matched-observerfix-candidate-offer256-r2",
+    "messages": 2560,
+    "http_admission_latency_ms": {
+      "count": 2560,
+      "mean": 34.683257272656206,
+      "p50": 35.289208000000016,
+      "p95": 70.16054199999999,
+      "p99": 90.36099999999969,
+      "max": 176.76812500000062,
+      "min": 4.075417000000137
+    },
+    "producer_offer_event_to_http_start_ms": {
+      "count": 2560,
+      "mean": 771.72265625,
+      "p50": 147,
+      "p95": 3028,
+      "p99": 3435,
+      "max": 3549,
+      "min": 0
+    },
+    "offer_event_to_http_response_event_ms": {
+      "count": 2560,
+      "mean": 806.41640625,
+      "p50": 186,
+      "p95": 3084,
+      "p99": 3495,
+      "max": 3602,
+      "min": 4
+    },
+    "semantics": "one-to-one op_id/label all requests, no warmup; producer/response use retained Unix-ms event timestamps (1ms resolution), HTTP uses original monotonic latency; excludes targetCOMMIT; E2Eaccepted_toCOMMIT excludes these frontend waits; quantiles must not be added",
+    "offer_to_exact_target_COMMIT_p95": "not collected; receipt_at intent cannot substitute durableCOMMIT"
+  },
+  {
+    "run": "writerfix-candidate-offer128-r1",
+    "messages": 1280,
+    "http_admission_latency_ms": {
+      "count": 1280,
+      "mean": 11.837693974218759,
+      "p50": 9.639415999999734,
+      "p95": 20.4320409999994,
+      "p99": 70.39725000000097,
+      "max": 86.30966700000009,
+      "min": 3.008125000000028
+    },
+    "producer_offer_event_to_http_start_ms": {
+      "count": 1280,
+      "mean": 0.571875,
+      "p50": 0,
+      "p95": 1,
+      "p99": 16,
+      "max": 35,
+      "min": 0
+    },
+    "offer_event_to_http_response_event_ms": {
+      "count": 1280,
+      "mean": 12.43203125,
+      "p50": 10,
+      "p95": 21,
+      "p99": 80,
+      "max": 97,
+      "min": 3
+    },
+    "semantics": "one-to-one op_id/label all requests, no warmup; producer/response use retained Unix-ms event timestamps (1ms resolution), HTTP uses original monotonic latency; excludes targetCOMMIT; E2Eaccepted_toCOMMIT excludes these frontend waits; quantiles must not be added",
+    "offer_to_exact_target_COMMIT_p95": "not collected; receipt_at intent cannot substitute durableCOMMIT"
+  },
+  {
+    "run": "writerfix-candidate-offer256-r1",
+    "messages": 2560,
+    "http_admission_latency_ms": {
+      "count": 2560,
+      "mean": 62.35353709062516,
+      "p50": 62.40108299999925,
+      "p95": 91.48970900000108,
+      "p99": 117.10141700000065,
+      "max": 164.6819999999991,
+      "min": 12.303874999999742
+    },
+    "producer_offer_event_to_http_start_ms": {
+      "count": 2560,
+      "mean": 4251.1296875,
+      "p50": 3790,
+      "p95": 9500,
+      "p99": 9919,
+      "max": 10034,
+      "min": 0
+    },
+    "offer_event_to_http_response_event_ms": {
+      "count": 2560,
+      "mean": 4313.4875,
+      "p50": 3851,
+      "p95": 9571,
+      "p99": 9990,
+      "max": 10079,
+      "min": 21
+    },
+    "semantics": "one-to-one op_id/label all requests, no warmup; producer/response use retained Unix-ms event timestamps (1ms resolution), HTTP uses original monotonic latency; excludes targetCOMMIT; E2Eaccepted_toCOMMIT excludes these frontend waits; quantiles must not be added",
+    "offer_to_exact_target_COMMIT_p95": "not collected; receipt_at intent cannot substitute durableCOMMIT"
+  }
+]

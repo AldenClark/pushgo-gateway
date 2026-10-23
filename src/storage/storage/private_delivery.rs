@@ -83,12 +83,17 @@ impl Storage {
             return Ok(0);
         }
         let _delivery_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        let (ordinary_per_device, ordinary_global) =
+            self.ordinary_private_batch_usage(entries).await?;
         self.db
-            .enqueue_private_outbox_batch(
+            .enqueue_private_outbox_batch_with_ordinary_capacity(
                 entries,
                 max_pending_per_device,
                 global_max_pending,
                 protected_delivery_id,
+                &ordinary_per_device,
+                ordinary_global,
             )
             .await
     }
@@ -108,13 +113,18 @@ impl Storage {
             return Ok((0, hashbrown::HashSet::new()));
         }
         let _delivery_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
+        let (ordinary_per_device, ordinary_global) =
+            self.ordinary_private_batch_usage(entries).await?;
         let pruned = self
             .db
-            .enqueue_private_outbox_batch(
+            .enqueue_private_outbox_batch_with_ordinary_capacity(
                 entries,
                 max_pending_per_device,
                 global_max_pending,
                 protected_delivery_id,
+                &ordinary_per_device,
+                ordinary_global,
             )
             .await?;
         let terminal = self
@@ -124,6 +134,45 @@ impl Storage {
             .into_iter()
             .collect();
         Ok((pruned, terminal))
+    }
+
+    /// Caller holds the common durable write gate until the native batch has
+    /// committed. Counts are metadata only, proportional to this existing input
+    /// batch; no payload or retained history is copied into memory.
+    async fn ordinary_private_batch_usage(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+    ) -> StoreResult<(hashbrown::HashMap<DeviceId, usize>, usize)> {
+        let mut per_device = hashbrown::HashMap::new();
+        let Some(ordinary) = self.ordinary_handle() else {
+            return Ok((per_device, 0));
+        };
+        // Persisted waiting targets already consume ordinary admission capacity;
+        // only issued claims occupy the retained transport's execution window.
+        let global = ordinary_private_usage_count(ordinary.private_executing_count(None).await)?;
+        if global == 0 {
+            return Ok((per_device, 0));
+        }
+        let devices = entries
+            .iter()
+            .map(|entry| entry.device_id)
+            .collect::<hashbrown::HashSet<_>>();
+        for device in devices {
+            let key = self
+                .db
+                .ordinary_private_device_key(device)
+                .await
+                .map_err(|error| StoreError::UnsafeDurabilityConfiguration(error.to_string()))?;
+            if let Some(key) = key {
+                let count = ordinary_private_usage_count(
+                    ordinary.private_executing_count(Some(&key)).await,
+                )?;
+                if count != 0 {
+                    per_device.insert(device, count);
+                }
+            }
+        }
+        Ok((per_device, global))
     }
 
     pub async fn list_private_outbox(
@@ -732,4 +781,149 @@ fn emit_capacity_recovery_signal_failure(err: &StoreError) {
         event = "dispatch.private_capacity_recovery_signal_failed",
         error = %(err.to_string())
     );
+}
+
+fn ordinary_private_usage_count(
+    count: Result<i64, crate::ordinary::KernelError>,
+) -> StoreResult<usize> {
+    let count =
+        count.map_err(|error| StoreError::UnsafeDurabilityConfiguration(error.to_string()))?;
+    usize::try_from(count).map_err(|_| {
+        StoreError::UnsafeDurabilityConfiguration("invalid ordinary Private usage".into())
+    })
+}
+
+#[cfg(test)]
+mod shared_capacity_tests {
+    use super::*;
+
+    fn entry(device_id: DeviceId, delivery_id: &str) -> PrivateOutboxBatchEntry {
+        PrivateOutboxBatchEntry {
+            device_id,
+            entry: PrivateOutboxEntry {
+                delivery_id: delivery_id.into(),
+                status: OUTBOX_STATUS_PENDING.into(),
+                ..PrivateOutboxEntry::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn native_batch_keeps_individual_allowances_and_rolls_back_overflow() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new_with_config(StorageInitConfig {
+            db_url: Some(format!(
+                "sqlite://{}?mode=rwc",
+                directory.path().join("capacity.db").display()
+            )),
+            managed_upgrade: false,
+            ..StorageInitConfig::default()
+        })
+        .await
+        .unwrap();
+        let first = [1_u8; 16];
+        let second = [2_u8; 16];
+        let third = [3_u8; 16];
+        let ordinary = hashbrown::HashMap::from_iter([(first, 2_usize)]);
+        // Device A has one remaining slot while B has three. Reducing both to
+        // a common minimum would incorrectly reject this legal whole batch.
+        storage
+            .db
+            .enqueue_private_outbox_batch_with_ordinary_capacity(
+                &[
+                    entry(first, "a1"),
+                    entry(second, "b1"),
+                    entry(second, "b2"),
+                    entry(second, "b3"),
+                ],
+                3,
+                6,
+                None,
+                &ordinary,
+                2,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .db
+                .count_private_outbox_for_device(first)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            storage
+                .db
+                .count_private_outbox_for_device(second)
+                .await
+                .unwrap(),
+            3
+        );
+
+        let per_device_error = storage
+            .db
+            .enqueue_private_outbox_batch_with_ordinary_capacity(
+                &[entry(first, "a2"), entry(third, "c1")],
+                3,
+                100,
+                None,
+                &ordinary,
+                2,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            per_device_error,
+            StoreError::PrivateOutboxCapacityExceeded {
+                pending: 4,
+                capacity: 3
+            }
+        ));
+        assert!(
+            storage
+                .db
+                .load_private_outbox_entry(first, "a2")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .db
+                .load_private_outbox_entry(third, "c1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let global_error = storage
+            .db
+            .enqueue_private_outbox_batch_with_ordinary_capacity(
+                &[entry(third, "c2")],
+                3,
+                6,
+                None,
+                &ordinary,
+                2,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            global_error,
+            StoreError::PrivateOutboxCapacityExceeded {
+                pending: 7,
+                capacity: 6
+            }
+        ));
+        assert!(
+            storage
+                .db
+                .load_private_outbox_entry(third, "c2")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        storage.close_ordinary_storage().await.unwrap();
+    }
 }

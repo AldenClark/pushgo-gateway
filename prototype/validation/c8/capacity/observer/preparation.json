@@ -1,0 +1,37 @@
+{
+  "status": "SOURCE_ONLY_NOT_BUILT_NOT_RUN",
+  "source_root": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/workspace-final",
+  "source_commit_at_preparation": "be3bc95c58500ee9913dbc2d9b442d5eb6a74227",
+  "dirty_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "source_before_sha256": {
+    "prototype/Cargo.toml": "9476b3c3d88ee7bebd17d68096a1887181574a238859633c57d2bdcb375eef2b",
+    "prototype/src/lib.rs": "95bbec9ca2efbced7f8d8584a35018dccd6cdbfc1a14e3bef27e2f5fd84a224f",
+    "prototype/src/store.rs": "9f14dbc10c9c99868bffb00de0ec08dbde2fce7fd55d0359b0908c63d68872b2",
+    "prototype/src/pg_store.rs": "51aaa2b0370ac548f74fcc0bc6777352998bb4e386e4940a1a714a651e385824",
+    "prototype/src/mysql_store.rs": "2b4db40ffe9c9e8bc4078e0bcafafacd9e74d5bd51d066923affbdee0ee0d437",
+    "prototype/src/bin/free_architecture_fixture.rs": "4e8778981562c72164550637a649bc788607517595b28b6775e4d8f4b8b69639"
+  },
+  "overlay_sha256": {
+    "prototype/Cargo.toml": "9f8f6eb9184bafc072571c7063871447ca499db4e1c01aeb3c814227a25ba45f",
+    "prototype/src/lib.rs": "45d204c635a9ace166446fd6227048c28ab74906478b03ecf58078d56f6407de",
+    "prototype/src/store.rs": "06e2b5621001c38725b7df153289b5914b9d0e7ad4e73e6a4df968e1da1bcdb5",
+    "prototype/src/pg_store.rs": "d28fbf0c574257de8a5650b9c98eae84fccb07b39aa662231188a828e3fb974b",
+    "prototype/src/mysql_store.rs": "f82cf964698262094319b8dbd9aeb86fc22c1cfd627bb7858fa3204eb6bc913d",
+    "prototype/src/bin/free_architecture_fixture.rs": "ad79276e38d4af3ee92eedaa7b3487c4f34cd49e6b23b1e695137a194355ee85",
+    "prototype/src/commit_observer.rs": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+    "prototype/src/bin/support/commit_observer_fixture.rs": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+  },
+  "patch_sha256": "e647fd10866062265b7209d3667074bb04c1eab61df3ae591f8bd5f54dbc78ef",
+  "seam": "all 3 backends: successful receipt COMMIT await returned AND changed > 0",
+  "bounded": {
+    "channel_records": 4096,
+    "record_bytes": 96,
+    "writer_buffer_bytes": 65536,
+    "os_writer_threads": 1
+  },
+  "unsafe_scope": "fixture-only zero-argument Mach clock FFI; library forbid unchanged",
+  "candidate_modified": false,
+  "builds": 0,
+  "database_runtime_calls": 0,
+  "must_regenerate_after_final_commit": true
+}

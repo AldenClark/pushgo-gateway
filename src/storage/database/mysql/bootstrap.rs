@@ -22,7 +22,7 @@ const MYSQL_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const MYSQL_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BINARY(32) PRIMARY KEY, token_raw BLOB NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, platform VARCHAR(32) NULL, channel_type VARCHAR(32) NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, route_updated_at BIGINT NULL, route_revision BIGINT NOT NULL DEFAULT 0) ENGINE=InnoDB",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BINARY(32) PRIMARY KEY, token_raw BLOB NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, platform VARCHAR(32) NULL, channel_type VARCHAR(32) NULL, provider_token VARCHAR(4096) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL, route_updated_at BIGINT NULL, route_revision BIGINT NOT NULL DEFAULT 0, ordinary_route_generation BIGINT NOT NULL DEFAULT 0, watch_alert_window_minutes BIGINT NOT NULL DEFAULT 30) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BINARY(16) NOT NULL, key_id INT NOT NULL, key_hash BLOB NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT NULL, PRIMARY KEY (device_id, key_id)) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BINARY(16) NOT NULL, expires_at BIGINT NOT NULL) ENGINE=InnoDB",
     "CREATE TABLE IF NOT EXISTS private_outbox (device_id BINARY(16) NOT NULL, delivery_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, status VARCHAR(16) NOT NULL, attempts INT NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT NULL, claimed_by VARCHAR(128) NULL, claim_generation BIGINT NOT NULL DEFAULT 0, first_sent_at BIGINT NULL, last_attempt_at BIGINT NULL, acked_at BIGINT NULL, fallback_sent_at BIGINT NULL, next_attempt_at BIGINT NOT NULL, last_error_code VARCHAR(64) NULL, last_error_detail TEXT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id)) ENGINE=InnoDB",
@@ -108,7 +108,10 @@ impl MySqlDb {
             .connect(db_url)
             .await?;
         validate_mysql_durability(&pool).await?;
-        let this = Self { pool };
+        let this = Self {
+            pool,
+            ordinary_store: std::sync::Arc::new(std::sync::OnceLock::new()),
+        };
         this.init_schema().await?;
         Ok(this)
     }
@@ -126,7 +129,10 @@ impl MySqlDb {
             .max_lifetime(tuning.max_lifetime)
             .connect(db_url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            ordinary_store: std::sync::Arc::new(std::sync::OnceLock::new()),
+        })
     }
 
     async fn init_schema(&self) -> StoreResult<()> {
@@ -183,7 +189,7 @@ impl MySqlDb {
             .iter()
             .chain(MYSQL_RUNTIME_TABLE_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         self.ensure_mysql_column(
@@ -310,8 +316,20 @@ impl MySqlDb {
         .await?;
         self.ensure_mysql_column(
             "devices",
+            "watch_alert_window_minutes",
+            "ALTER TABLE devices ADD COLUMN watch_alert_window_minutes BIGINT NOT NULL DEFAULT 30",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "devices",
             "route_revision",
             "ALTER TABLE devices ADD COLUMN route_revision BIGINT NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_mysql_column(
+            "devices",
+            "ordinary_route_generation",
+            "ALTER TABLE devices ADD COLUMN ordinary_route_generation BIGINT NOT NULL DEFAULT 0",
         )
         .await?;
         self.ensure_mysql_column(
@@ -501,7 +519,7 @@ impl MySqlDb {
             self.ensure_mysql_index(index_stmt).await?;
         }
         for stmt in MYSQL_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
@@ -625,7 +643,7 @@ impl MySqlDb {
                      SET {column} = {column} * 1000 \
                      WHERE {column} IS NOT NULL AND ABS({column}) < ?"
                 );
-                sqlx::query(&sql)
+                sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                     .bind(EPOCH_MILLIS_THRESHOLD)
                     .execute(&mut *tx)
                     .await?;
@@ -858,7 +876,7 @@ impl MySqlDb {
         Ok(count > 0)
     }
 
-    async fn ensure_mysql_index(&self, create_sql: &str) -> StoreResult<()> {
+    async fn ensure_mysql_index(&self, create_sql: &'static str) -> StoreResult<()> {
         let index_name = create_sql
             .split("INDEX")
             .nth(1)
@@ -877,7 +895,12 @@ impl MySqlDb {
         Ok(())
     }
 
-    async fn ensure_mysql_column(&self, table: &str, column: &str, ddl: &str) -> StoreResult<()> {
+    async fn ensure_mysql_column(
+        &self,
+        table: &str,
+        column: &str,
+        ddl: &'static str,
+    ) -> StoreResult<()> {
         let exists: Option<i32> = sqlx::query_scalar(
             "SELECT 1 FROM information_schema.columns \
              WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1",
@@ -1075,7 +1098,9 @@ impl MySqlDb {
         let ddl = format!(
             "ALTER TABLE `{table}` MODIFY COLUMN `{column}` VARCHAR({length}) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin {nullability}"
         );
-        sqlx::query(&ddl).execute(&self.pool).await?;
+        sqlx::query(sqlx::AssertSqlSafe(ddl.as_str()))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1113,17 +1138,19 @@ impl MySqlDb {
         }
         clauses.push("ADD PRIMARY KEY (device_id, delivery_id)");
         let ddl = format!("ALTER TABLE provider_pull_queue {}", clauses.join(", "));
-        sqlx::query(ddl.as_str()).execute(&self.pool).await?;
+        sqlx::query(sqlx::AssertSqlSafe(ddl.as_str()))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
     async fn hard_reset_mysql_runtime_tables(&self) -> StoreResult<()> {
         for stmt in MYSQL_RUNTIME_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in MYSQL_RUNTIME_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in MYSQL_RUNTIME_INDEX_STATEMENTS {
@@ -1500,6 +1527,7 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for MySqlDb 
             ("dispatch_op_dedupe", "provider_lease_until"),
             ("sender_submit_status", "provider_run_token"),
             ("devices", "route_revision"),
+            ("devices", "watch_alert_window_minutes"),
         ] {
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT 1 FROM information_schema.columns \

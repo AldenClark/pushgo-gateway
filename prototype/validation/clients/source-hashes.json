@@ -1,0 +1,1562 @@
+{
+  "purpose": "execution-source archive only; no dependencies/production copies/artifacts",
+  "original_core_binary_sha256": "7969c61d1e9fcb7587e884c69792076a77ad56077ead50d759d12bd1b3f4515f",
+  "files": [
+    {
+      "archive_path": "client-evidence/apple-package/Package.swift",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Package.swift",
+      "sha256": "94038fb24773e7c8fb5639c3126ac35b3ab952247e217cc061804c3be73954f6"
+    },
+    {
+      "archive_path": "client-evidence/apple-package/Tests/PushGoAppleCoreTests/C2WakeupApplicationEntryTests.swift",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Tests/PushGoAppleCoreTests/C2WakeupApplicationEntryTests.swift",
+      "sha256": "8609317b38fd00ee0d9e032eb1e2831c63b190538856b2ac1b12f4638719f36a"
+    },
+    {
+      "archive_path": "client-evidence/run-apple-native-oracle.sh",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/run-apple-native-oracle.sh",
+      "sha256": "2961a5a1af4eeb05949e0ded9353da7990ba4cdfa3db90b6fe43d1157fea1b56"
+    },
+    {
+      "archive_path": "harness/run_apple_wakeup.py",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/harness/run_apple_wakeup.py",
+      "sha256": "d4a0c4020b39d476b4244489630dc5ff2fef988578fe4f5d23a315667e60c495"
+    },
+    {
+      "archive_path": "harness/verify_apple_receipt.py",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/harness/verify_apple_receipt.py",
+      "sha256": "8d7746977e43e704812ef1f171c696c65608828f745d8a163363c1f6a6dd7f8b"
+    },
+    {
+      "archive_path": "client-evidence/android/source/ProviderWakeupC2DeviceTest.kt",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/android/source/ProviderWakeupC2DeviceTest.kt",
+      "sha256": "37f5b42f0c5c3da5d79b4433f30085cd5db3367327e4849a78af17773248037e"
+    },
+    {
+      "archive_path": "client-evidence/android/stage-native.sh",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/android/stage-native.sh",
+      "sha256": "cabfd7c8816a58f6233e8ca73182dcb11cd5ce90bb8975b0469c90f94cf17622"
+    },
+    {
+      "archive_path": "client-evidence/android/run-native.sh",
+      "original_execution_source": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/android/run-native.sh",
+      "sha256": "0ce9d989324470c4892003c5851ba8ae15971abfd1fa85ca08680042d14e9e9c"
+    }
+  ],
+  "production_source_reference": {
+    "apple": {
+      "original_manifest": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-production-source-manifest.json",
+      "manifest_sha256": "94c75ec36e63595c6d4b2d15c24bfa53a2210f1dcc4c0f4ea4ef1c4c15587e85",
+      "unchanged_production_source_manifest": {
+        "files": [
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/.DS_Store",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/.DS_Store",
+            "sha256": "4239025af250dfedb8bc5c724fd12eb3ca052fdede6bb24fa15a69e43d2d3ce7",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/AppNavigationState.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/AppNavigationState.swift",
+            "sha256": "6ec60391b9a4abf0d0be40c33234e17b3a6e7a445930706e1c0ca1a609cb499c",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/ChannelSubscriptionController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/ChannelSubscriptionController.swift",
+            "sha256": "0b9495dafe4fe6aa07a965f8af94178e0e5478b5fd805a1785c44bf461a38b73",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/ChannelSyncController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/ChannelSyncController.swift",
+            "sha256": "35c431a1944d66788eec5864c9dac1f9ee063d10e895621082722d63b47d7f93",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/DataPageVisibilityController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/DataPageVisibilityController.swift",
+            "sha256": "5dcc3ca3d4c1c8a35dc371780b999449959517c2a5b56106b8686232edee49b5",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/FeedbackPresentationPolicy.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/FeedbackPresentationPolicy.swift",
+            "sha256": "460fba67fb628d2a4fcea6dfaa21c72fd99bc6a624951284557dd836ce453b63",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/LocalDeletionConfirmationController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/LocalDeletionConfirmationController.swift",
+            "sha256": "1cd75010e78d22b2063da38a2d1393d9f53cb0f51389b237c0e64787b4d34e7a",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/LocalStoreRecoveryController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/LocalStoreRecoveryController.swift",
+            "sha256": "6a80381e7a3c29bfc558d7c26ba04584b99a9ee6cb49ea07c9939e56917a88ec",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/LocalStoreRecoveryState.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/LocalStoreRecoveryState.swift",
+            "sha256": "be090f6ab427d21aaae02feef9490c22300022204f67e2827a973ed1b354da4c",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/MacMainWindowPresenter.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/MacMainWindowPresenter.swift",
+            "sha256": "3e0b5f8b00085ffdee06971cc0c248ce83b105c35d07cba4d7f541b50a20f311",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/MainTab.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/MainTab.swift",
+            "sha256": "8a9226e141b414edb7ef0cb23b0735bf16472b7c9f29e0db98c0a701798cb53d",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/NotificationIngressController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/NotificationIngressController.swift",
+            "sha256": "726240dc02550a92b46debae49ca71c77ac3ffec9cf23587891de72f5bbb4b84",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/NotificationOpenController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/NotificationOpenController.swift",
+            "sha256": "b1ec2778676a06211e03bed6b5586ffcc05d9445d5c8f23cdb64977ef755b10e",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/PendingLocalDeletionController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/PendingLocalDeletionController.swift",
+            "sha256": "7a35b77d7becbac399d2a876ab6dd75f8a40f56713d40daa292a9fa2083d941f",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Application/ProviderRouteController.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Application/ProviderRouteController.swift",
+            "sha256": "7d69763e201bf31d61666a2eb255fa6b420ce9eee30606248421e5c81a575817",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/AppError.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/AppError.swift",
+            "sha256": "efb81b9b050111b222741a7ab2e3d03126809c2c4088c41056b0ae35e7a01de7",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/EntityProjectionDetail.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/EntityProjectionDetail.swift",
+            "sha256": "2feb27e88477565230f289620ab1b09be8b5acae6831424f8aec941b89f94757",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/MessageFilter.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/MessageFilter.swift",
+            "sha256": "ba007d3ab5601c706b8ebbaca7e5a0721e13d84bf1b6055953060f1bae0f7b18",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/NotificationSoundSettings.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/NotificationSoundSettings.swift",
+            "sha256": "d47755f953de6aa0d914f145163ddbd61d2662007630c44bf16128a1267dc795",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/PushMessage.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/PushMessage.swift",
+            "sha256": "b4fa4eef3bb6ccb2d4457f6992dae7bc714ae8d13dc7f169360125fc6f15de82",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/PushMessageSummary.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/PushMessageSummary.swift",
+            "sha256": "0194be4e550bb2f9692c76fbb3c1c94956cf2c0ce14d31bdba254e12786c290f",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/ServerConfig.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/ServerConfig.swift",
+            "sha256": "201cb7229c5f0577c8b0093c5a728cc729dac0e033c132f8eafbc42f63778695",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/SystemIntegrationSettings.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/SystemIntegrationSettings.swift",
+            "sha256": "5d1f7a932d9fb3a42eb2a7d2ec39bee41c7f19d8e0418925984b7e6a201551b2",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Models/WatchLightModels.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Models/WatchLightModels.swift",
+            "sha256": "2c95b2ff6929ab4d09957eb4b315a7421fdcfca1ec613dedafa2a066e25abb30",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Repositories/ChannelSubscriptionStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Repositories/ChannelSubscriptionStore.swift",
+            "sha256": "dda9b75f64b106eb544de201f599122d75abc483c5b156bba6c05c0f956dbc3c",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Repositories/LocalDataStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Repositories/LocalDataStore.swift",
+            "sha256": "20b4906792fa41e92570ee9d6700f17cba9e7a722a29e295326ad679d22d00be",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Repositories/MessageSearchIndex.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Repositories/MessageSearchIndex.swift",
+            "sha256": "cd9a3fbe15515227b740ad1e8330df5311909dfc74816cc9623d89f9e90fdadc",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Repositories/SwiftDataModels.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Repositories/SwiftDataModels.swift",
+            "sha256": "29d607fd083d675b0b4494e78ae0140ec7f2d583ccd8222a55393216d8098912",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/BadgeManager.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/BadgeManager.swift",
+            "sha256": "f896c86585a4c0bafb048d3b3f189cef3cf47695430679782f2dc39b49da9471",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/ChannelSubscriptionService.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/ChannelSubscriptionService.swift",
+            "sha256": "ea216509fee41117e06fb0f081d5f95a9c303d14222456be8e09799095b4f3ac",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/ChannelSubscriptionSyncStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/ChannelSubscriptionSyncStore.swift",
+            "sha256": "dda9b75f64b106eb544de201f599122d75abc483c5b156bba6c05c0f956dbc3c",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/DurableIngressJournal.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/DurableIngressJournal.swift",
+            "sha256": "2965f1822afcf2c576a02e4a2c78911f6207aa1e73413920206abdde9543b737",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/MessageStateCoordinator.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/MessageStateCoordinator.swift",
+            "sha256": "97dfe6778be156e0a3d7ce667c42e87414a6bcb589a5519ac4942edf07a5ea97",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/NotificationContentPreparer.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/NotificationContentPreparer.swift",
+            "sha256": "06d5ef7d917e3e5f051b8081d516fc6dce9ea5ce0ea910a1989090d935bb6ff3",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/NotificationHandling.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/NotificationHandling.swift",
+            "sha256": "fd4e0213404472f32165b44ab66fa8a7daf612274bcac75dab541319598a7836",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/NotificationIngressInbox.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/NotificationIngressInbox.swift",
+            "sha256": "7dce5e5ed12f0f0670eb0cf3bd7e4b4b68128836514d4b2eebf600be3947bcd0",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/NotificationServiceProcessor.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/NotificationServiceProcessor.swift",
+            "sha256": "2f4d5d978535a26bf360d3c038bb48774bbc8d6b1faf5f658a82f264376a7139",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/NotificationSoundManager.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/NotificationSoundManager.swift",
+            "sha256": "84e0b581c556a0a55725a2e4cfe000f912bba9fa9ba2dcb7424ca3c670f46566",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/NotificationSoundPreviewPlayer.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/NotificationSoundPreviewPlayer.swift",
+            "sha256": "44da002d9e6bc9890ad026f552d5e59714ac7f900b3c32aebb097341dcae969e",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/ProviderDeliveryAckFailureStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/ProviderDeliveryAckFailureStore.swift",
+            "sha256": "6937afab57057ffea51932d662a0bb7caae8f32c5a2976c9db86f41b63ae1fd2",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/ProviderIngressCoordinator.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/ProviderIngressCoordinator.swift",
+            "sha256": "834991db19f66a4b7793abf786722957941adbb35bda4ba0dac17ee47d332067",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Services/PushRegistrationService.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Services/PushRegistrationService.swift",
+            "sha256": "982be6777b28f33150d7de0259d8dae7dbb09c7f234dd573a0e9afcd3f8a48d3",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoAccessibilitySummaryBuilder.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoAccessibilitySummaryBuilder.swift",
+            "sha256": "5aede3fc1612d14739e7f21b1ff3a46ee2335d6b9fb0b38ef7417e8a7b087ae4",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoAdvancedSiriIntents.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoAdvancedSiriIntents.swift",
+            "sha256": "d8dfc570dc2dbc773ebbee766ae392d7aec6d3db832f2eea02839bf5afc5a4c8",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoAppEntities.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoAppEntities.swift",
+            "sha256": "0511b6824b350bea5eadc637fc456429257dde24fafa60981ff25b28a3796432",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoAppEntityQueries.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoAppEntityQueries.swift",
+            "sha256": "a81671a83deb6d90c51cc025d21c6cb29e52fab02831f568bc0f6ebc4b6c1c04",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoAppIntents.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoAppIntents.swift",
+            "sha256": "056338c96429ae3fd78216d0474a2d26270ab8800e6462779ce28dcc508959f3",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoAppShortcuts.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoAppShortcuts.swift",
+            "sha256": "8eba7cb30dbb112554d373591dbe29c772ab95bf39b1d99915edc9bee7ecc4a7",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoDeepLink.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoDeepLink.swift",
+            "sha256": "8cae702e9eb7dc0cd960fb482d0358e094b15e5a81ec23c4456d75bb88e3a3fc",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoFocusStateStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoFocusStateStore.swift",
+            "sha256": "e638dae557124020ea5ffe50146bb19d4b2a440f322e77f62234ce455762a9e2",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoLiveActivityCoordinator.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoLiveActivityCoordinator.swift",
+            "sha256": "b1ca7ade5a9cef55a64202003a76a0c31ce7f464e6d728f47cf93f542b1a9e5d",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoLiveActivityModels.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoLiveActivityModels.swift",
+            "sha256": "c83200056c6910c367ed6ebd8a25cb7011d81421e69735416f7148e42ea8b7bd",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoLiveActivityTokenRegistrationService.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoLiveActivityTokenRegistrationService.swift",
+            "sha256": "eaea42aa1a1db97a5ef427cbfb896135b37f9b23d34744b8b5073a2a4db6a266",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoMessageSummarySystemBridge.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoMessageSummarySystemBridge.swift",
+            "sha256": "ee7af50a69b34afe6bb6a5e3a3e33c8a826067e2dda1e856bf3b90a50bae4143",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoNotificationActionPolicy.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoNotificationActionPolicy.swift",
+            "sha256": "4f20a21f70c2c22454fadf43cbdb85a30522815b0244ce789380d940be92ab9f",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoNotificationProjectionUpdater.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoNotificationProjectionUpdater.swift",
+            "sha256": "83d4aa7e1e8705df331e80d935c6932c67e8d64e9078d96021f52e47c6487036",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoProjectionSummaryBuilder.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoProjectionSummaryBuilder.swift",
+            "sha256": "70d7b5b304903a88ea66b26758abbc658f6a4d4a5fafdef9e6a3bd6e151f9492",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoShortcutOutput.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoShortcutOutput.swift",
+            "sha256": "a6389563bc3050d4aeb996ec1e7ac7c69ce22bbdc393c33ac4bc0fa4fec4ff36",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSpotlightIdentifier.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSpotlightIdentifier.swift",
+            "sha256": "ab62ec15eea337b56aa2100b28c0e85a5bf59f5ef0f4eb902cd689762c0264bb",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSpotlightIndexer.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSpotlightIndexer.swift",
+            "sha256": "87c48103947007788f629dc1c0a1aaaa734e9407457fc6bca42bfaf90e2f9554",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemEntityKind.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemEntityKind.swift",
+            "sha256": "2f393fa515c2d57ea9cbce51e89382cee617b342734951753d392669cfb6315c",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemIntentRouter.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemIntentRouter.swift",
+            "sha256": "cdf6d7b7615e3b243e58df16f554f9a9faba9d795fbc015bb04915bc963ae7fe",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemOpenTarget.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemOpenTarget.swift",
+            "sha256": "95356aaab21381e72c60c2eb2b8f890240fffac20ab0ff0ffe480749b9be5427",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemPendingActionStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemPendingActionStore.swift",
+            "sha256": "cd4ead767274e796ca66c380795106d3567521cdc9cc3bd2473b881ad33bf5e3",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemPrivacyPolicy.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemPrivacyPolicy.swift",
+            "sha256": "bf9ea0691b1d98482f65839c929ec5649bf2c344fba49c1da2b5d413b90aadf9",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemRouter.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemRouter.swift",
+            "sha256": "dc4b2b8540a00cd24b301deb2de5a1d465d5129702de6cb8fdbea82aefd12b31",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemSnapshotProjector.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemSnapshotProjector.swift",
+            "sha256": "741626fccec6d7f51b8e8500467561c4bdb739cd7a91663de4152943fe506ad9",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemSnapshotStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemSnapshotStore.swift",
+            "sha256": "c1a9a704a3e24042aab3fb1c75a29a9603ee3e887b19e10fcf6ffbe0a92f64d6",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemSummary.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemSummary.swift",
+            "sha256": "4048ee0e0a274cf99feeb34213bfb08a5c1cc6559bf79d837bb89da817b4a4de",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemSummaryBuilder.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemSummaryBuilder.swift",
+            "sha256": "810d0986b9ac3212e25c8d163661b05de95ef6dc01bc4531a78fd6b992eb4f43",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoSystemSurfaceSnapshot.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoSystemSurfaceSnapshot.swift",
+            "sha256": "4336cb30a9e976a52aa368bfa9febc3cb13a468a24115f550cfda274039b37b9",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoUserActivityBuilder.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoUserActivityBuilder.swift",
+            "sha256": "92190f361ed35656ecc497cd2471350a62dbb046ab40d6898a6fcd4aefe8e25e",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/SystemIntegration/PushGoWidgetPushTokenStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/SystemIntegration/PushGoWidgetPushTokenStore.swift",
+            "sha256": "12868b470aefcd96286ebfaac6e96e7a8146555feb2822f7d90b75bacccaa1ab",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/AppFormControls.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/AppFormControls.swift",
+            "sha256": "1b002abe5313c769fd5f791e089594fa3ffa260e2a162f531592aa1ba1e84488",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/AutomationRuntime.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/AutomationRuntime.swift",
+            "sha256": "6574c720fae9d3c2627891d6d25ea538c13e4bb98dac7d23422937c500c7c6fb",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/EntityProjectionModels.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/EntityProjectionModels.swift",
+            "sha256": "61254c88310fa45bed9c2f37babf9bb9d5b728138dba5c2013299d11f170f15a",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/EntityScreens.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/EntityScreens.swift",
+            "sha256": "f0d26190cefa815de600bafbd65c1167e56084fee79afc7f89c12ed0a73d60f8",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/KeyboardDismiss.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/KeyboardDismiss.swift",
+            "sha256": "be2d0d42302e79b034f52986411161e81bb1ee6c05e2df9678e204e1ed6d27cb",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/LiquidGlassEffect.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/LiquidGlassEffect.swift",
+            "sha256": "00718ff9297f4575d714ad309bd060fc514c1c6287a78a13b176c5cd28ec99a4",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/LocalDeletionConfirmationHost.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/LocalDeletionConfirmationHost.swift",
+            "sha256": "0704d5c578ddfa3b6b78d2fb7efe9471246493f9d64142a74c4aff2625269041",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/MessageDetailViewModel.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/MessageDetailViewModel.swift",
+            "sha256": "5713140bd374008d5b9c3cabace79083350de33045601c09855c245a165a4ddc",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/MessageListViewModel.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/MessageListViewModel.swift",
+            "sha256": "034a7d81f65552cd1095c8d932450661110a68b8090ca9f5d5f33e1cbebc92cd",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/MessageSearchViewModel.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/MessageSearchViewModel.swift",
+            "sha256": "40442b8b8341fb05f159fe106c987665b08006e2ddb9f37b8cd0a3a688382c87",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/NotificationSoundEditorView.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/NotificationSoundEditorView.swift",
+            "sha256": "e15137c5233c051be1e257b68776530d6df6b78ca70400571900f160cccd2d83",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/PlatformColor.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/PlatformColor.swift",
+            "sha256": "930834f91bd349ca8b6a7355b707fc804ecb76f8f0ca2e282726ff38ab6badab",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/PushGoMarkdownView.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/PushGoMarkdownView.swift",
+            "sha256": "3cba39c46663771cfcd93fa9cc8ea8d6d53e3f6658fc328390d4bcc6321cf46b",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/RemoteImageView.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/RemoteImageView.swift",
+            "sha256": "f0df1180462b3956a1e8b4dcb0bfc161b49e2eb729bd835466b08f0bdca57c6d",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/RootView.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/RootView.swift",
+            "sha256": "380e13d5e97e7d3d30c4793ab4c6bd2e40f753ed107c1e8b668281caf055d4f1",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/SettingsViewModel.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/SettingsViewModel.swift",
+            "sha256": "6a62119369608aab942584975b5c4bb619b8234f1d357778d4e7468c519e0c65",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/UI/ToastView.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/UI/ToastView.swift",
+            "sha256": "57f145c7534370b3ca93a89227aa05b79378350adb1a10d7099264d326aecd0f",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/AnyCodable.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/AnyCodable.swift",
+            "sha256": "6421b71a45214673b4dcf08164b28be64f4a157d1bf196eb11ba848b577749d7",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/AppConstants.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/AppConstants.swift",
+            "sha256": "4a0588018e901cc488c4d950488dfb1dc5a4d97c9afe11109f2fb73bab85fa68",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/ChannelNameValidator.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/ChannelNameValidator.swift",
+            "sha256": "ab747b8b0ffe06fa4b10ce18eb4f6fc2d2835cc7c04c4c94d693cc30fcc7e195",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/ChannelPasswordValidator.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/ChannelPasswordValidator.swift",
+            "sha256": "9b2fabb3dafe2bd8eff468b23e933e01ab09e46dd88eafb843bf4f369878ada0",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/KeychainStore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/KeychainStore.swift",
+            "sha256": "57200283d634a0865f9cf830868fc7baa085cc68b80d8892e15bbcfc0eb2225e",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/LocalizationManager.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/LocalizationManager.swift",
+            "sha256": "0abce5d43dcffa46ca40e253317d1a88b09bf9d8856226ac5c6f95c82a61c2bf",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/LocalizationProvider.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/LocalizationProvider.swift",
+            "sha256": "b1948ac689cb153c90701b298859f211d33a4f7ad09d9ec827d56be416491013",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/ManualNotificationKeyValidator.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/ManualNotificationKeyValidator.swift",
+            "sha256": "c339433a86a9a111a04bbf293d8f9a491b494e1149f8d9166e913790ec5b51ed",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/NotificationContextSnapshot.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/NotificationContextSnapshot.swift",
+            "sha256": "ac3a12269ac5bb158484dec5b5b19d0ef0325d331ec4f30595c6e9668ba1349d",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/NotificationPayloadSemantics.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/NotificationPayloadSemantics.swift",
+            "sha256": "d5560439f714887b42bb1989fa72f60386581942f99cdc08ae5235e16ccd235e",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/NotificationSoundResolver.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/NotificationSoundResolver.swift",
+            "sha256": "ca644e285939fa007fc1bbcaa49286d9ee1145af82096d127dce10c2e880ddfb",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/NotificationSoundSharedState.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/NotificationSoundSharedState.swift",
+            "sha256": "68f14efcbe7b75ce5a0802bded696d7a5f89a5374735829f86b25cb110137516",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/ProjectionSemantics.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/ProjectionSemantics.swift",
+            "sha256": "4050ffffbb055ebbabd9e4ed79c2c808e90ae6f27b5c928c4beb4e8a3d3d0b65",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/PushGoMarkdownCore.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/PushGoMarkdownCore.swift",
+            "sha256": "1a31a786f9f7e60bf8871b523c360d22371de422f2461913b0ba624bc404e39e",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/PushGoNotificationNames.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/PushGoNotificationNames.swift",
+            "sha256": "ea78dd032091e3f08e4e45b426496c3fa7459d88242e8051f2a7a712efd4261f",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/PushRegistrationSemantics.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/PushRegistrationSemantics.swift",
+            "sha256": "a73a44d6b8cb1118e8d1e36ec2e2dce3db17acf3ac03220a9082c6293c73537d",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/SearchQuerySemantics.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/SearchQuerySemantics.swift",
+            "sha256": "d1ff5b4b393903aefcd6b1060911cea469374bae50cfc3b06b9ba71648fe0e0f",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/SharedImageCache.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/SharedImageCache.swift",
+            "sha256": "574b948ac0a7ceb459174629970b4e359b36c47212a237c7290d813a73526c92",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/UserInfoSanitizer.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/UserInfoSanitizer.swift",
+            "sha256": "d9106fd288cb17b30309f7bf408492f4a962e4dc7d86b8c8afed50e615eac439",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/WatchLightQuantizer.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/WatchLightQuantizer.swift",
+            "sha256": "db1b42bbff886a11f6e8a2eadfe64fcd42f4ecdd5734ab3227c952616da97236",
+            "unchanged": true
+          },
+          {
+            "source": "/Users/ethan/Repo/PushGo/pushgo/Shared/Utilities/WatchNotificationFreshness.swift",
+            "isolated": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/apple-package/Shared/Utilities/WatchNotificationFreshness.swift",
+            "sha256": "8ca1555af5eeba437603e4e827fe9a83b8faaafc6b24c93f355b5fa7b5f7e1a3",
+            "unchanged": true
+          }
+        ],
+        "manifest_change": "Package.swift adds unchanged NotificationIngressController.swift and NonisolatedNonsendingByDefault to align primary Xcode SWIFT_APPROACHABLE_CONCURRENCY=YES; production Swift bytes untouched"
+      }
+    },
+    "android": {
+      "original_manifest": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/client-evidence/android/production-main-source-manifest.json",
+      "manifest_sha256": "c28808371b3e8cd2807db185cf26bfa1ed35b0b919685991881aabce8e98f3a1",
+      "unchanged_production_source_manifest": {
+        "all_primary_main_files_unchanged_in_staged_copy": true,
+        "file_count": 207,
+        "files": [
+          {
+            "path": "app/src/main/AndroidManifest.xml",
+            "sha256": "62ab6afe783d5b1e86c2d2de22111c4a6031751a3acb12a9c03df6911a954bb9"
+          },
+          {
+            "path": "app/src/main/ic_launcher-playstore.png",
+            "sha256": "619bdad07b15e60d06c0f790ad56273ecf089a3ae284af8571ef80e93d78b9be"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/MainActivity.kt",
+            "sha256": "96767a9811f61b5b3ad6706ba6c2d1980a89f1ea58c37110bbd29221973fe714"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/PushGoApp.kt",
+            "sha256": "cff80b3baa071246589d45e40573d3b09ff7073301b1b8ab0f4943cbef7e8b37"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/AndroidKeystoreSecretStore.kt",
+            "sha256": "31be98e20a1bdf335cac4e17d7888e7ade15cf5c6a4080a9e113f5375553b260"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/AppAutomationController.kt",
+            "sha256": "d6efebe17187ccf3ffba0c2eb9caf05188f348d8c896d9dbfe5dfa8cd25e3214"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/AppConstants.kt",
+            "sha256": "7ffd912abf4c2d30d4f82f874664661bb74f33e03c6f0a772f69087ee00d0220"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/AppContainer.kt",
+            "sha256": "8f0613fa5fadd135e46649d0384f93d08c2811aa4bf1bbd97a463def45c35a19"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/AppCoroutineDispatchers.kt",
+            "sha256": "9d680321af5fb4025bebeae147ee63e0f6532637102dba3e474a7aa023585939"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/CanonicalEntityType.kt",
+            "sha256": "46965d76aeeace25c5b3e56bbb046b5cf184f7245f61c644b76764393e550803"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/ChannelSubscriptionRepository.kt",
+            "sha256": "e0cde9512af0e67a49f62c2df2de4bfabb29fd93c650cd8dbe9a9728e4b8c90f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/ChannelSubscriptionService.kt",
+            "sha256": "cc6f359bcf661a93f27feee67fc07c0287b2f05547d651e4fc02ab54f8fcfe1f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/ChannelSubscriptionStore.kt",
+            "sha256": "fe0b95bd60f3ba54cd187bb494e3eb04505fa2c016337987e0e06103e211d875"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/ChannelValidators.kt",
+            "sha256": "16e418a637649cb1f62d2f091397c609ef254b3aa93ff29a70c96794c1083e00"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/DeletionNotificationCleanup.kt",
+            "sha256": "91bc7e54b2bd4f69d53034fd6841683959c701a8817d9384ff683627a1a5195c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/DurablePendingChannelDeletionExecutor.kt",
+            "sha256": "711785ff37ddb7d5fd597d87db6d9b012880216b89f7d7f381c8daa58e352f17"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/EntityProfileJson.kt",
+            "sha256": "25c60db1cfbb1769679e8fdf6bd41c5b9c69225d3483a9db0d064f584e8b513f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/EntityRepository.kt",
+            "sha256": "8f219047af2987d758c49aaef78389ae4109f7500af2a5b6d0a7bc17add06efb"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/ImageAssetMetadataStore.kt",
+            "sha256": "9ad74c6c129cf8d814dbc728e3391da69213b1addedf2bc7f7181bf910a3b97c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/ImageCacheCleanupScheduler.kt",
+            "sha256": "1bfe12241707f88463b11c470368f54276a98e0e4a28b8ed909248d57a8b780c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/InboundDeliveryLedger.kt",
+            "sha256": "193084e76b0fc8fd5ebdcf7dd3d24557d86cf521e8fe2958305eb4411ef02f3f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/InboundDeliveryScope.kt",
+            "sha256": "eb1a951a7c93684c60aa9c50b0b1c57d5249f96194cfd2f073b11a50e9e21085"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/MessageImageStore.kt",
+            "sha256": "6a87600cf6ba330460a31176351de10d682c49ddf986429fe1a972b24735f1c0"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/MessageImageStoreFetcher.kt",
+            "sha256": "9309a89508ae0a6b8efd1d3027dc48f30818f9988007a134cc6166dff6be7b21"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/MessageRepository.kt",
+            "sha256": "d49bf9ac3bbfb9bc6505c14db44935a5949273b9649644f6946a74bdd8957c5f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/NotificationKeyValidator.kt",
+            "sha256": "cc84eb02509be47f62a3339fc9f64a74f442e3cde7f2bb1d1a1607d587fda505"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/OpaqueId.kt",
+            "sha256": "834337d1e3624f2ef7f7765777315d8b75f9d2725b710752ea5972eaaf8145b8"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/OperationScopeKey.kt",
+            "sha256": "f25420f46bb63efe560f30e3bf3abcb9c423b40fcd8a938b2321b2cedab76527"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/OperationScopeLedger.kt",
+            "sha256": "11cabab9567c400ada9a344c8efdc0422f8d461dc4a06385e8ad65900d54b017"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/OrdinaryDeletionConfirmation.kt",
+            "sha256": "b07f9294917ae8c688c62b5be7c574c0ba942ab49ba1278083642fc59b497516"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/PendingLocalDeletion.kt",
+            "sha256": "36c59c05a2aa02942051eb1c13c282c46796291dde36f5865d48ef2b5866c607"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/PendingLocalDeletionRepository.kt",
+            "sha256": "4d795129967c5ec8195817fb5feb3822888646923a782fa84582ba2a856c5f17"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/PushTokenProvider.kt",
+            "sha256": "3478a4471fdce2e2b0bf3a57eac47b8cef586f36a44508963ecb6685e96c04fc"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/QualityFaultPagingSource.kt",
+            "sha256": "b5ad023702c478ddc51dfbc4c03937e1199b5f8875c95e934282175d06038093"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/RepositoryPendingChannelDeletionBackend.kt",
+            "sha256": "7a87df316495c93ba3ccee4d7a9f68dff1886c29d1548573e383bfedfeeb9ed2"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/RepositoryPendingLocalDeletionExecutor.kt",
+            "sha256": "8a5928ded32c33c547eb9af83dae1e3580499166750d447ba85ee8e964f40c5c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/SecureSecretStore.kt",
+            "sha256": "7c188ea5a188d0e5049f064b0baf51629b9717cfae20f9f7feeac6412f618234"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/SettingsRepository.kt",
+            "sha256": "b7c35a8e23a03a32f9b885a8d8f48a3f26a54f86ef74596fe7395b9eb58e4f5d"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/TransportSwitchCoordinator.kt",
+            "sha256": "c5542b03f64a61492a37708cce6a40fecbd9a5fe7def8418ba50e5477cc92ddb"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/AppSettingsDao.kt",
+            "sha256": "ddd91e32088ffd96fab74768153f79d0e700281b982025c7d6ff7f6c5d2052bf"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/AppSettingsEntity.kt",
+            "sha256": "764190ffea2cb2b6a10488e1114cb1710413b77d9319e1b9eb21e3f76a081f1e"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/ChannelSubscriptionDao.kt",
+            "sha256": "efac177e0fbda53336854702f057d326b8e8752b844f85173605530c8f87c261"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/ChannelSubscriptionEntity.kt",
+            "sha256": "ac13035f2d2e67ffcc2aecc3630d510a755f4350df25ddf10851ee8bfa257b4c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/DeletionNotificationCleanupDao.kt",
+            "sha256": "0235ed06f8cc8ff83162e54723b528ba802952048812e4f1e908ad654df0dfc1"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/DeletionNotificationCleanupEntity.kt",
+            "sha256": "1c7d02ca537de024b41822a00064dcd99c561cc6891e2b28a3ae1408e5ab5f38"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/EntityProjectionDaos.kt",
+            "sha256": "53c4450a9bfc9ade25c24fa2532edc38f2f3270fa25981d2de777d5209a5edad"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/EntityProjectionEntities.kt",
+            "sha256": "ba2c52a7fe86c217c8b49fa96b471eb8d7b4c80775d583b6ff68224af5634e10"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/InboundDeliveryAckOutboxDao.kt",
+            "sha256": "26f7f03b58c4383eef39c0634987e3eb90db30f5ae738859a528e32e3dae4d81"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/InboundDeliveryAckOutboxEntity.kt",
+            "sha256": "4cd63eb94415c8904fda130a3372cf6f61949771b32a71f62d1736e6f02c5bce"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/InboundDeliveryLedgerDao.kt",
+            "sha256": "a22f840908f864905aec54651dcef21e6ad4c037c3987408bbd1942162733c0c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/InboundDeliveryLedgerEntity.kt",
+            "sha256": "0d0ef127ac3e58bad43fdf032b01c845ef7e9e0d0887c481cbceb131175a80bd"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/LegacyDatabaseBootstrapPolicy.kt",
+            "sha256": "03b2cdce1a90f00cb5cffe4afe5faf0b5458cdc67f57cd3bc729697d7534fd11"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/LegacyProviderIngressDao.kt",
+            "sha256": "341d77fe194444a42d5ef13a726e5286f581971c327309009b9090891b9bc81c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/LegacyProviderIngressEntity.kt",
+            "sha256": "b4eab66e71af0aecc4928f8de29ab9bb9262854099282a2a629cb83df1c4aaa9"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageChannelStatsDao.kt",
+            "sha256": "b95a7e309dc51d1ac82f374a575900f3b36984d74c2b21aed9c1fe18ec295e7d"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageChannelStatsEntity.kt",
+            "sha256": "a507ac22c7faf66255d2c311e7ce1cd078f6305dd406b4304e5a30732071f0eb"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageDao.kt",
+            "sha256": "7ab02144368150ce61d9e5aae26544d4811ea4d4e4671a30b8f2fb5c43ef5d43"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageEntity.kt",
+            "sha256": "b8cdb8ae9e13412e44bee238c3e657f637cb5f18eda5fcb9665b134c9a63e875"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageFacetValueCount.kt",
+            "sha256": "6379c64131a56df8d9a8d09ce77dc0c1d1158664f7efb2a2a87ce3528cef9530"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageListRow.kt",
+            "sha256": "b405af7c007701133cd93f8e7e0a5b3b26be1c0eed4190e72d8a63c4ea675470"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageMetadataIndexDao.kt",
+            "sha256": "5d6822153871462a0258757618a2fddf2e84208e0d43700348cafa529584e0a7"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageMetadataIndexEntity.kt",
+            "sha256": "489d5615b6015c4f24208188ef912f8727c4ca301770b48decdea7fdf16f9291"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/MessageStoreStatsEntities.kt",
+            "sha256": "bb44108d9a4bac6d921b25bddeb23ddebe1e97bf9712b5f45fb89b6550c92470"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/OperationLedgerDao.kt",
+            "sha256": "d01ce85cb82ca0610536fa860ccd92befb7e83c07ade9ffdbab91b08b69760e6"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/OperationLedgerEntity.kt",
+            "sha256": "887e084de2924b7462c51a93d7da4a6db6a2385a6f2168be27efc2de4cdeabd5"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/PendingInboundEntities.kt",
+            "sha256": "ac5202bc686bfab5a94185d87455588d4a04ea9494e48ffc2b5d3b6076a2e586"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/PendingLocalDeletionDao.kt",
+            "sha256": "f3f8f7984a521bdddcd364fe68208855dcbd94114794873a63dd2b6898a50e1f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/PendingLocalDeletionEntity.kt",
+            "sha256": "41e7e33f48f96319fe5501baaf74f0869dd5939b2a52c06168e4d31e3b10eef0"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/db/PushGoDatabase.kt",
+            "sha256": "7eccd5960f123a67422de2b1dda4ff7c1413863b024d0e12906f962f74527eab"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/ChannelSubscription.kt",
+            "sha256": "cc3ec05a21c08717611b7d7460bdf66d92fa148c5d0114b995cb6d6b88b8281d"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/KeyEncoding.kt",
+            "sha256": "3998c19a7ffdd328aca1cf68dcebe2d9384baf8d5664491b3109fbaf1b38fe5a"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/MessageChannelCount.kt",
+            "sha256": "e53d833402756473f80d84dc56a2f1991ce01bbb1b32239063b133dc3a93ea25"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/MessageFacetOptionCount.kt",
+            "sha256": "6429eaaab04c66a368d9db5afca953652869b2d6f871458ff6cc330003e5bf50"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/MessageFilter.kt",
+            "sha256": "3ae110a05933cb8530f4891bf23fa6c10bbdece5668f4df298de252539d51688"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/MessageListItem.kt",
+            "sha256": "0dfe754fd11906378a52181d75bb3eeb1142cddba981b9fd7c6ec8c27e1e0670"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/MessageModels.kt",
+            "sha256": "c069de6c38623d4290a09c965ee2bc196da069bc91d928ca98e0a9f7b51260eb"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/data/model/ServerConfig.kt",
+            "sha256": "e8bfebb3ceaf47b11487e881c4be08881570f2486c58fd2fe636681848d9c6c9"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/markdown/PushGoMarkdown.kt",
+            "sha256": "9ae879cea91b554af1f854fdc18f44ef7f051983e17785d04bf541fa24be0f26"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/AlertPlaybackController.kt",
+            "sha256": "6bd5ad9b84f706182d35cdd40d823428b57a88863e051048b7d07370f2677384"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/AlertPlaybackPolicy.kt",
+            "sha256": "3232f5cd93b9abee28fe8e57d65acd434e879d644316f1c552e915fbd61d1c90"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/AlertPlaybackService.kt",
+            "sha256": "c1c2bfbb24d8154fa2e6ea6d155eab8e8f83ff8b3f41ebe86d6e05b065e4de36"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/EncryptedMessageRecoveryService.kt",
+            "sha256": "cafb5ff2730b09c247dbca282de767bc3c4baa497a02e3125e2c3fffc4c1b3ce"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/ForegroundNotificationPresentationState.kt",
+            "sha256": "8713a87a41b5c1fed3e2fb53d62af4aab0fc59248237dad7a731164c99faf6fe"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/ForegroundNotificationTopMetrics.kt",
+            "sha256": "a62d4f39d153d71cc2933e9dab246560340016787fb723596e34f8cf21f691e1"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/InboundDeliveryAckWorker.kt",
+            "sha256": "c1a8dfe8d8f663b55e2d18f2d2a9458b28112eb03236cd367eb059a878304ff5"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/InboundIngressRouteResolver.kt",
+            "sha256": "dd9fa2ab86f6f9846e35044d319e8098ed976f19e7dc541fef57dbfd1206926e"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/InboundMessageProcessor.kt",
+            "sha256": "73986609a44298449b6e530caf59b6ae5e9129581f68d879fefd231c9d3cfc5e"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/InboundMessageWorker.kt",
+            "sha256": "3577fc0a356b63633699a2e206e177b980dcd7cf2ef9705de03728b343a7199a"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/InboundPersistenceCoordinator.kt",
+            "sha256": "a9d3351c9b263b4b52541a7d86355bfc5e8aab6d248c25d9e58a8c698465a09c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/MessagePostProcessWorker.kt",
+            "sha256": "538ef3cb7a22b0c06321e354e80fece46e35e937240f0e27614cd750138c1d1a"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/MessageStateCoordinator.kt",
+            "sha256": "4a6db1d9959b4c1104f649d822030af9df4ed72e40a62af7ffde531ea7048429"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/NotificationDecryptor.kt",
+            "sha256": "361ccb9020884134598288484c781a2cfc3051557185d84d6db405756c91f933"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/NotificationHelper.kt",
+            "sha256": "d14404fde7baada088fa64f7320546cbb4b7ad36e9498e4561571a5021c4336f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/NotificationIngressParser.kt",
+            "sha256": "56f7f9f193a63ed3540458ac7a23aa70326ca9f21a16eefc69634614d9e52802"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/PrivateChannelBootReceiver.kt",
+            "sha256": "1dc4a2b63d10f35d65d2ea33807b3fa5eaadb69a7d11e40add776b1162091a05"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/PrivateChannelClient.kt",
+            "sha256": "b2a15006fff7a8bed238faf59e742b97ca8d6ad62dff4fbd34db58204c9129dd"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/PrivateChannelForegroundService.kt",
+            "sha256": "fb0fb28a504c17d62f1d02a6db85d4f25d15e7fc6ed115a649a9cd842468d643"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/PrivateChannelNotificationDismissReceiver.kt",
+            "sha256": "ad4d81a5f45dc43f4d53a26693e371d07e503d7f6d1738f0eb3dba2bf081a9b9"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/PrivateChannelServiceManager.kt",
+            "sha256": "45b9cb8bc282606b8ae2e995add103862562fd27a9ba6abacb95276267678672"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/PrivateTransportStatusPresenter.kt",
+            "sha256": "b892600d1b65177f08bcf42b47c665122ffa2bb063d98bc64b5b3af60f4e22e5"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/ProviderAckDrainCoordinator.kt",
+            "sha256": "1ed05aa66579c9073a7b491eef2e01ce83ddc7f155095e457bba0be723146f58"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/ProviderIngressCoordinator.kt",
+            "sha256": "2e4565b0c85a6a05936aeb9eda9f52c19d2c18f4a3e15870a1a77acab4f682f5"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/PushGoMessagingService.kt",
+            "sha256": "5df6196635fb232d674794eee91d0e40beb62b3582ec8ca465eb7472505edef4"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/RingtoneCatalog.kt",
+            "sha256": "29ffaf7c7d4bc2cffd1c4e3bd5e9cba4dd6b3d951928b3b07a82dcd47d6d5230"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/notifications/WarpLinkNativeBridge.kt",
+            "sha256": "3980994345e0dab7ef7d57b88cfa21330a9ca5c1567063d8bac3fb07d0593cf6"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/testing/InstrumentationRuntime.kt",
+            "sha256": "08a69610a6302be434d17936b7135559da1bd642d5d65bf37175a07ea15b7382"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/testing/QualityRuntime.kt",
+            "sha256": "d94593d4adbb6e0532cdd2c71320d3d1d16e196c23da84dc59c438d9fde6bf24"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/AccessibilityAnnouncements.kt",
+            "sha256": "168d0aad028b8b653a038142c788ccea2b494e05547f0b5ced269cd75a835d51"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/DeleteConfirmationDialog.kt",
+            "sha256": "8f410e3c2330af82813139b0a7c960ea7ce2a4d04e158bb91fb1f8ce6d733307"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/EdgeToEdgeInsets.kt",
+            "sha256": "fd7b8e70d9a74c83e3b9875f2dbe08c288915e2c9e01d8e26b44935056122c71"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/MessageDetailViewModelFactory.kt",
+            "sha256": "d6e363e399de0a0584952c14a26b7d06828c8be81b88e8b4821c3da4b012c59c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/MessagePayloadUtils.kt",
+            "sha256": "e3a21d40574c2705383fcc867a99633b664ef5d64132836d27217d1dddf4992a"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/PendingLocalDeletionCoordinator.kt",
+            "sha256": "8db331cf19c1625c80ef0f9aa8cc1b8761647bae960363527022c1cd75e1f057"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/PendingLocalDeletionDrainWorker.kt",
+            "sha256": "71df777e64ef172bc31c5eb832768a7009ef45300f57f48c8c6e865487ba134b"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/PushGoAppRoot.kt",
+            "sha256": "515c407649f19eca2489de43f904538af0066cc25aca8c818ce23e13eea88007"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/PushGoViewModelFactory.kt",
+            "sha256": "d6fcde1c42833ad573e6bc13a66890ce37e7d6936af1988530912d00443575a4"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/accessibility/PushGoAccessibility.kt",
+            "sha256": "4aef9d4e6e45005f029e3ea3b851e43d7f4a184cb424d311f2fc12dac1096b13"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/accessibility/PushGoAccessibilityStrings.kt",
+            "sha256": "4547550f6b419fc8844ff1b44e370ea18b20e9751530e14129be56ea6ca0e216"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/export/ExportUtils.kt",
+            "sha256": "6946fb908954e203bc329766195962a0d0c1fc55362ddf6595e90955e649487b"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/export/MessageExportJsonSemantics.kt",
+            "sha256": "2dd3c9bf5f82daca76ca3e0c6e826edfebfa6e68a9ab9f54d3a07564d8a38fd7"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/markdown/Coil3ImagesPlugin.kt",
+            "sha256": "1bb95371aa888b0717a13752081ff887bd9ae99a918c3ea12548bcd3110504f0"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/markdown/MarkdownPlayableDrawable.kt",
+            "sha256": "caaf78cbe7cd92fa3edce21c712c45069d5fcc7e79a40bdba421f7f75b60b97c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/markdown/MarkwonMarkdownRenderer.kt",
+            "sha256": "f1f5a0ec1fe42e0b71adafa316f0e73b152af479f609c737e2ba39ba45bd66c9"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/AppEmptyState.kt",
+            "sha256": "caf7b7b0c62ca12f3392bb25ddd5f1eb81bc0595001a8156f44104f1abee228c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/ChannelListScreen.kt",
+            "sha256": "d6c02b4203b13213f092d07e7e2501580dbf7731327b2fd9f63db810ae8f0dbc"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/ClipboardExtensions.kt",
+            "sha256": "4560321f9d67dfd62d9c2fa1e86e75f8e0e61e20f779ea576d3134590e73fdb6"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/EntityMetaBadges.kt",
+            "sha256": "cf1ab133f68ec61e1e4a6d27478b4e3a88be39547cb9003b308b2e46957b19e9"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/EntitySearchSemantics.kt",
+            "sha256": "01e1f59e39487a24eac7a4adc8adaab394c96eb24bd71e5a81b3b93c170f8053"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/EntityTargetUnavailableNotice.kt",
+            "sha256": "cf3fea8bc04ea6369a830458980b22af5cb20c2837b03927ccb200089503d544"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/EventListScreen.kt",
+            "sha256": "938398d13189b225c2a9de7b7c826ec0bb043ff1fdf69aa434def54846f9bd06"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/MessageDecryptionScreen.kt",
+            "sha256": "1fdfd2ec64bceb9b74565bc9b9f78b02e2c0e7f7e7c844f30b4b8e35f4ed7e99"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/MessageDetailScreen.kt",
+            "sha256": "7b40a6f0becdefb32ad1b2fb65d354a7a8efba9082ef28849c2188347d9ee6de"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/MessageHistoryCleanup.kt",
+            "sha256": "e05d37c7b81863d6ae6d27b924bdef57273744193bdce9ac32f1150109b01067"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/MessageListScreen.kt",
+            "sha256": "4189a53c6971ea041905ca52c7bf0e7ce86332d313017cee4db3502d9e5faf9d"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/MessageSearchScreen.kt",
+            "sha256": "e53b4b9a9e3aa67c8a97f8e880cf118574d0fbf08c6fab9a5f40983d3afb5d49"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoAlertDialog.kt",
+            "sha256": "044d1b4b4937171d9d5a9bc8e7707e3f445c0e623a95a886473204cb041bb966"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoAsyncImage.kt",
+            "sha256": "2d6d23105e7483fa71d3cd4ecfe4ce7e40252543a2d2b78a7dc46bae57cf5588"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoCircularActionIconButton.kt",
+            "sha256": "e89980fb5e433fed15fd16c6ef376777a7be6ff8d706c65902c126446fc19e84"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoDocumentation.kt",
+            "sha256": "f73e875a01d23cf8f177c4fdce7ba8a7a5b10ab67c08159233578af612ceae36"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoModalBottomSheet.kt",
+            "sha256": "fdf1a44e1dfe368a442bb09039281eaae011ac65bf2629c7a7570cca67f04182"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoPlayableImage.kt",
+            "sha256": "873d38cd968d79f7da480dede83d9a2ecf6a376ba06c1e4a130c8c208750620b"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoSearchBar.kt",
+            "sha256": "6ad90722d2b133a954a466035c0bbd625f530f0b1cea8df5dc73700f843f4ffa"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/PushGoVisualElements.kt",
+            "sha256": "ed1cce2bf926d94ced9e2a3c99f0b07b31468332a44df72c4be94d741ceb2c0e"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/SettingsScreen.kt",
+            "sha256": "0101760120ef3c5cda63510b03c5840a29a26212881d3a5e19fc4d7e54fbe031"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/ThingListScreen.kt",
+            "sha256": "5f9ad562b5e1d4f2ee61b2487b1ff61edbc2a9d11254a48cef3761b8ad0eed07"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/screens/ZoomableImagePreviewDialog.kt",
+            "sha256": "ae4c39d6f58515a1272af21cca2a9c56ec453a39cca210223723b7b2b23fa5f5"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/theme/Color.kt",
+            "sha256": "f132553afed9d9467ee3a86406094a1ebfafb6b1dad1caddabce7a5e2f073a34"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/theme/ExtendedColors.kt",
+            "sha256": "be13feb1ff2a3662da61a4242d9fa5e4e6d06bcf094b305e44fee5b34614086b"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/theme/PushGoComponentDefaults.kt",
+            "sha256": "eb537bd4c8ed4f99ca938d02c09b6dad43da87c22c4a2ca7c4d506e942bcaf06"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/theme/PushGoFieldDefaults.kt",
+            "sha256": "113d2b8d0d33b3f067a47bd2c0d9ccd44c73670778c5c7cb4d75c2fecb95a210"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/theme/Sheet.kt",
+            "sha256": "3f058c3eab5463871389f618a94776f6d37eaf2c085fffd155d96adcea10f3f8"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/theme/Theme.kt",
+            "sha256": "8b223538794b73c61f0aab6abeecded3c8d0d2be109e6c9a7d7f45145c69aed9"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/util/ShimmerUtils.kt",
+            "sha256": "9dee1354f8d66e73dd9f3dd586cf164cf667415eb2a4e512fe75cb5dee5ac8b3"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/viewmodel/GatewayErrorUi.kt",
+            "sha256": "1b7637bcc2d7bc7a494e261feaa5bdf728eb322f85ac0b9caf65bfa2c988e671"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/viewmodel/MessageDetailViewModel.kt",
+            "sha256": "4ea735d535cb906616feb877e4d4f02f352dff67af99a5ff10c38e0143883705"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/viewmodel/MessageListViewModel.kt",
+            "sha256": "484946abb28c248199101ae612dc677c5350e26ee224b06838ea8e8387bbf811"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/viewmodel/MessageSearchViewModel.kt",
+            "sha256": "13b6a3c6cbb13166e4d7119d83c2f47184281e82cbd9841e1e271c488b8e8a23"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/viewmodel/SettingsUiState.kt",
+            "sha256": "e682aff3b868d035aec3bc14255ba72eb3d295da43af578866448dd4e148bc63"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/viewmodel/SettingsViewModel.kt",
+            "sha256": "c223c7705c4c0712b278a12bdc103ac5d676879695cfe324c4da131909a63369"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/ui/viewmodel/UiMessage.kt",
+            "sha256": "566b1143597ea145cca7ea72ee6cb228730984e4dab7a08f5e28f052caa3ad53"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/CanonicalJson.kt",
+            "sha256": "210568444fb51e9c9e60fff489f3ec6c62f6f6e971fe6e340b8176349e07a9a9"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateCheckScheduler.kt",
+            "sha256": "ddfdf1addd3a16dad43f753d7a946f531a9ae7c315b463dbc5fffc2750d6e4e0"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateFeedClient.kt",
+            "sha256": "4d28aeb64d87d7bc2ff9f7587ebd6efc423e9ff6d61e8488015501c5e46da13d"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateInstallIntentLauncher.kt",
+            "sha256": "5ab839eb455dc26d462736f6dfaee0cc6e7a17f17c95617473094bba1ae3b1da"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateInstallStatusReceiver.kt",
+            "sha256": "94a82dc594a3c619bb3b5583a7fb8abb0e4c74e3691b07dbad25f90db666bea4"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateInstallUiEvents.kt",
+            "sha256": "48cc1111c39c4deb26302bf7de3057d19664d93b8584ea2ebebaf8c542c1df6e"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateInstaller.kt",
+            "sha256": "6013ed8a0b4d1da243030101a1b32f852d8388628cd80fedd611794b1d1b2f56"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateManager.kt",
+            "sha256": "9a41bb213ef42eba98ba44b9552bd0c39b8a10fe4418897c2b353bf59d627c52"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateModels.kt",
+            "sha256": "cb8df48ced87c2c00c2606bd48f817d4d403465b2fb9fbaf70aa9ade663305ac"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdateNotifier.kt",
+            "sha256": "fdf0c90f1b50320c054fe568170037feb3b7234b9c815b1b84d6937caa179a1c"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/update/UpdatePolicyEngine.kt",
+            "sha256": "684f5a220b8c3dc1e42e1d73a39c60b88854510289774ecfe18c4d9a25a953b8"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/DiagnosticLogStore.kt",
+            "sha256": "65f189d44aacb7cdcabdff09cd63776ab1a094dd31e55593e8421c10d4ef1083"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/ExternalNavigation.kt",
+            "sha256": "8090aa19b17ddcdc7a3e079ed73e1f5d1825c810766ed750f724193d0fcb7116"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/FcmSupport.kt",
+            "sha256": "fa53cfda780c40c4690bd3be25493e751d683f0cfbe34557ab2032cbf3a32bc1"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/JsonCompat.kt",
+            "sha256": "c1bf38774efe031090b6edc8464f3ccce24147be1a491dcb2b1613e003018ec7"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/PayloadTimeNormalizer.kt",
+            "sha256": "2d9408f3dfb5aace490992007472563308c224e7bd56d6d6eb2c90746b9409d7"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/ReminderSnoozeStore.kt",
+            "sha256": "f2cefe2e738a85a903481c744e78de94aee34694098154ffaadd8f2ef950aa41"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/SearchTextNormalizer.kt",
+            "sha256": "78258e84676384dc15a8a5ce901a73fedcd4a37c1c6b611152f5ec44e0bc0a61"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/SilentSink.kt",
+            "sha256": "01e41dd3dc3edc4fb92b02db7f9b11300af9e26330298c16fc888f4bcc0e8930"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/SystemSettingsNavigator.kt",
+            "sha256": "ff5944c140909b9ca91c4f10b271ba29ea46df93b0f4a9bcf3a0efe36afc417f"
+          },
+          {
+            "path": "app/src/main/java/io/ethan/pushgo/util/UrlValidators.kt",
+            "sha256": "5d4f2fbf8fe7cee7a9cc4b8a6f3bd86c4f486bc7bd865e8d9c2ff8017161b1d7"
+          },
+          {
+            "path": "app/src/main/res/drawable/ic_stat_pushgo.xml",
+            "sha256": "3a8d796b04bc03c750fb31216104c35d78aaedcdc8109f93badb50c666e8d3e9"
+          },
+          {
+            "path": "app/src/main/res/mipmap-anydpi/ic_launcher.xml",
+            "sha256": "e942c7fe3ff25dd038c0fbf921238a3189d46e17debf2875c6afa77102ea621e"
+          },
+          {
+            "path": "app/src/main/res/mipmap-anydpi/ic_launcher_round.xml",
+            "sha256": "e942c7fe3ff25dd038c0fbf921238a3189d46e17debf2875c6afa77102ea621e"
+          },
+          {
+            "path": "app/src/main/res/mipmap-hdpi/ic_launcher.webp",
+            "sha256": "cfd42a75b56218c0c0b2bbba851be890fad434ea16e6da84a73c412222e046e1"
+          },
+          {
+            "path": "app/src/main/res/mipmap-hdpi/ic_launcher_foreground.webp",
+            "sha256": "73835a1edfd5e6ab02e1daba15eed03f78028fad9d3588bce1d7bb7c626a0471"
+          },
+          {
+            "path": "app/src/main/res/mipmap-hdpi/ic_launcher_round.webp",
+            "sha256": "6d7e3912f86f96f832880d56b86d9d0288102be300fc54fac09ad5460393aa51"
+          },
+          {
+            "path": "app/src/main/res/mipmap-mdpi/ic_launcher.webp",
+            "sha256": "37bb279f982f0320ece24154dfe65002d4100b32a6498eab3840b240209ecbd3"
+          },
+          {
+            "path": "app/src/main/res/mipmap-mdpi/ic_launcher_foreground.webp",
+            "sha256": "34a599f673b4cf141f3ef1dbf4170488a198f294b6bee115c99030d0fd58c268"
+          },
+          {
+            "path": "app/src/main/res/mipmap-mdpi/ic_launcher_round.webp",
+            "sha256": "89b0460ae34f96f5590f4b8efff96db9f0949249c3230fff88f3465cd27c0ca4"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xhdpi/ic_launcher.webp",
+            "sha256": "406d7958a222040b4fdde6271859797b9d5f586812781f61280e0a177a79fd99"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.webp",
+            "sha256": "51b34aa19a55eaa9c5446f2e6e489b401dc763e78f85d01092507c0ec023200b"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xhdpi/ic_launcher_round.webp",
+            "sha256": "40ab5dd6550387dd55c32058057ae95b6229a98d8573efc3449c4378ced41219"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xxhdpi/ic_launcher.webp",
+            "sha256": "65ab87be161cd27770913f8b980ddce55d891df2d0c3d3884b28bbe440652798"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.webp",
+            "sha256": "e565da3f143fff0d6215464e31a462bc5fc7561c4a6f3b46698f5972c53a9bec"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xxhdpi/ic_launcher_round.webp",
+            "sha256": "468619672c266a03ec7768cee3c95cd1fd8bc89212a477acda67a3f229d8236f"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp",
+            "sha256": "34047580f5e2cd62401305b2943603fa85e12b71764e5f446d95bf00e0ece112"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.webp",
+            "sha256": "bf505a862c011e26eb489fbf618a8067746f2f62680b5fa3ee4f64e773644df1"
+          },
+          {
+            "path": "app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.webp",
+            "sha256": "4af116f10615d279e5ac9148b5b6bdb1ee068676c09c6d073742432bb901124b"
+          },
+          {
+            "path": "app/src/main/res/values/ic_launcher_background.xml",
+            "sha256": "97fc19d0f866a57c618a33f5b45b336d2bba846b644eaec8dd5b1c2c9175035d"
+          },
+          {
+            "path": "app/src/main/res/values/strings.xml",
+            "sha256": "e0507a94b9e86b413869067d280a0b12ebff6027c8e3923e805968888b27ce56"
+          },
+          {
+            "path": "app/src/main/res/values/themes.xml",
+            "sha256": "d7821e393cdcaf207ef474bbfd2bb148fa75a0d1890bdadda98a2c7cf074ada9"
+          },
+          {
+            "path": "app/src/main/res/values-zh-rCN/strings.xml",
+            "sha256": "4b0c0c3a348ce477a84079654e1d92239e297f3627f955949b6689379e7aa8d2"
+          },
+          {
+            "path": "app/src/main/res/values-zh-rTW/strings.xml",
+            "sha256": "ecd3a0514c9b2e15a39371e0f040900ef7da7a806d897121a4bba49fbf0c5b8d"
+          },
+          {
+            "path": "app/src/main/res/xml/data_extraction_rules.xml",
+            "sha256": "9ccf53e8c648736adbf95a27d70ace297c7e3b56d6e48e878194f98c51b36b21"
+          },
+          {
+            "path": "app/src/main/res/xml/file_paths.xml",
+            "sha256": "469575ba0bd83817a10dc5eafe5de902756c30c4e51aab18181d940af98f0fc0"
+          },
+          {
+            "path": "app/src/main/res/xml/locales_config.xml",
+            "sha256": "e0ea77452fe9d897653c645aa8b550ad6bd64a08632cbfd52683d8e1f2975e91"
+          }
+        ]
+      }
+    }
+  },
+  "archive_readme_sha256": "c9df65af71d5f8f6c8fb8e4719c99b547e2c99caa928ef26508e4d6c0ab6f622"
+}

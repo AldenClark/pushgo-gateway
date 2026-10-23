@@ -22,7 +22,7 @@ const PG_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const PG_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BYTEA PRIMARY KEY, token_raw BYTEA NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255), platform VARCHAR(32), channel_type VARCHAR(32), provider_token TEXT, route_updated_at BIGINT, route_revision BIGINT NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BYTEA PRIMARY KEY, token_raw BYTEA NOT NULL, platform_code SMALLINT NOT NULL, device_key VARCHAR(255), platform VARCHAR(32), channel_type VARCHAR(32), provider_token TEXT, route_updated_at BIGINT, route_revision BIGINT NOT NULL DEFAULT 0, watch_alert_window_minutes BIGINT NOT NULL DEFAULT 30)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BYTEA NOT NULL, key_id INTEGER NOT NULL, key_hash BYTEA NOT NULL, issued_at BIGINT NOT NULL, valid_until BIGINT, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id VARCHAR(128) PRIMARY KEY, device_id BYTEA NOT NULL, expires_at BIGINT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_outbox (device_id BYTEA NOT NULL, delivery_id VARCHAR(128) NOT NULL, status VARCHAR(16) NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, claimed_at BIGINT, claimed_by TEXT, claim_generation BIGINT NOT NULL DEFAULT 0, first_sent_at BIGINT, last_attempt_at BIGINT, acked_at BIGINT, fallback_sent_at BIGINT, next_attempt_at BIGINT NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at BIGINT NOT NULL, PRIMARY KEY (device_id, delivery_id))",
@@ -108,7 +108,10 @@ impl PostgresDb {
             .connect(db_url)
             .await?;
         validate_postgres_durability(&pool).await?;
-        let this = Self { pool };
+        let this = Self {
+            pool,
+            ordinary_store: Default::default(),
+        };
         this.init_schema().await?;
         Ok(this)
     }
@@ -126,7 +129,10 @@ impl PostgresDb {
             .max_lifetime(tuning.max_lifetime)
             .connect(db_url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            ordinary_store: Default::default(),
+        })
     }
 
     async fn init_schema(&self) -> StoreResult<()> {
@@ -178,7 +184,7 @@ impl PostgresDb {
             .iter()
             .chain(PG_RUNTIME_TABLE_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         self.ensure_pg_column(
@@ -302,6 +308,12 @@ impl PostgresDb {
             "devices",
             "route_updated_at",
             "ALTER TABLE devices ADD COLUMN route_updated_at BIGINT",
+        )
+        .await?;
+        self.ensure_pg_column(
+            "devices",
+            "watch_alert_window_minutes",
+            "ALTER TABLE devices ADD COLUMN watch_alert_window_minutes BIGINT NOT NULL DEFAULT 30",
         )
         .await?;
         self.ensure_pg_column(
@@ -470,10 +482,10 @@ impl PostgresDb {
             .iter()
             .chain(PG_RUNTIME_INDEX_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         for stmt in PG_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
@@ -611,7 +623,7 @@ impl PostgresDb {
                      SET {column} = {column} * 1000 \
                      WHERE {column} IS NOT NULL AND ABS({column}) < $1"
                 );
-                sqlx::query(&sql)
+                sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                     .bind(EPOCH_MILLIS_THRESHOLD)
                     .execute(&mut *tx)
                     .await?;
@@ -727,7 +739,12 @@ impl PostgresDb {
                     .execute(&mut *tx)
                     .await?;
             }
-            super::access::routes::upsert_device_route_in_tx(&mut tx, &route).await?;
+            super::access::routes::upsert_device_route_in_tx(
+                &mut tx,
+                &route,
+                self.ordinary_store(),
+            )
+            .await?;
             let (token_hash, _) = ProviderTokenSnapshot::from_token(&canonical).into_parts();
             sqlx::query(
                 "INSERT INTO private_bindings \
@@ -744,8 +761,12 @@ impl PostgresDb {
             .bind(values.updated_at)
             .execute(&mut *tx)
             .await?;
-            super::access::routes::coalesce_duplicate_provider_routes_in_tx(&mut tx, &values)
-                .await?;
+            super::access::routes::coalesce_duplicate_provider_routes_in_tx(
+                &mut tx,
+                &values,
+                self.ordinary_store(),
+            )
+            .await?;
         }
         sqlx::query(
             "INSERT INTO pushgo_schema_meta (meta_key, meta_value) VALUES ($1, 'complete') \
@@ -844,7 +865,12 @@ impl PostgresDb {
         Ok(count > 0)
     }
 
-    async fn ensure_pg_column(&self, table: &str, column: &str, ddl: &str) -> StoreResult<()> {
+    async fn ensure_pg_column(
+        &self,
+        table: &str,
+        column: &str,
+        ddl: &'static str,
+    ) -> StoreResult<()> {
         let exists: Option<i32> = sqlx::query_scalar(
             "SELECT 1 FROM information_schema.columns \
              WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
@@ -892,7 +918,9 @@ impl PostgresDb {
         if let Some(name) = pk_constraint {
             let escaped = name.replace('"', "\"\"");
             let ddl = format!("ALTER TABLE provider_pull_queue DROP CONSTRAINT \"{escaped}\"");
-            sqlx::query(ddl.as_str()).execute(&mut *tx).await?;
+            sqlx::query(sqlx::AssertSqlSafe(ddl.as_str()))
+                .execute(&mut *tx)
+                .await?;
         }
         sqlx::query("ALTER TABLE provider_pull_queue ALTER COLUMN device_id SET NOT NULL")
             .execute(&mut *tx)
@@ -909,15 +937,15 @@ impl PostgresDb {
 
     async fn hard_reset_pg_runtime_tables(&self) -> StoreResult<()> {
         for stmt in PG_RUNTIME_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in PG_RUNTIME_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in PG_RUNTIME_INDEX_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         Ok(())
@@ -1278,6 +1306,7 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for Postgres
             ("dispatch_op_dedupe", "provider_lease_until"),
             ("sender_submit_status", "provider_run_token"),
             ("devices", "route_revision"),
+            ("devices", "watch_alert_window_minutes"),
         ] {
             let exists: Option<i64> = sqlx::query_scalar(
                 "SELECT 1::BIGINT FROM information_schema.columns \

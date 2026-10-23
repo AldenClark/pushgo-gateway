@@ -1,0 +1,12 @@
+{
+  "current_files_sha256": {
+    "README.md": "25e37ace4916112cd346f67d245e926d1281a09f56cd4af06ca38200f42ac8d6",
+    "run_c2_matrix.py": "b73c8976c91855a80ae4ba192a3759fab32d09fea548256c04d57896551e1366",
+    "run_compare.py": "94ac5c3006992cf932d0f39305366ea684028e557e5ebcd0c4f2b8fb30754a58",
+    "analyse_c2.py": "fc71ad2f49f24572711586f7137da39c24f41bfac27b5e7a4395902d0a30b3d5",
+    "analyse_c1_base.py": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1"
+  },
+  "historical_first_smoke_runner_sha256": "65a43a6b703ff547bfe50128cf11955a33b50a22d9ea2c0d28b14b4b596289e9",
+  "historical_source_status": "not archived at execution; current source has changed; no historical source reconstructed or represented as retained original",
+  "measured_data_status": "original first-failure plan/result/log/SQLite receipts retained unchanged"
+}

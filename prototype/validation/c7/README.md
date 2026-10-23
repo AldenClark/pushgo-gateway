@@ -1,0 +1,9 @@
+# C7 validation source archive
+
+The 32 files in source-map.json match their original C7 execution/preparation locations byte-for-byte. This is an archive, not a new execution receipt. The originals and frozen receipts remain in gateway/build/quality-results/c7-private-frame64-20261015/; see ../../docs/c7-results.md for exact runtime, test, observer, client and dependency commits and SHA256 values.
+
+- environment/: exact owned-environment creation, identity, bounded budget, one-aggregate driver and pause lifecycle. The actual environment is currently paused. URL references, ownership state and synthetic credentials are deliberately excluded. The test guard binds the real C7 environment directory; do not run this archive in place as a substitute environment or relax the guard.
+- capacity/: immutable 8b3656ed Git baseline plus the eight observer overrides, original patch, builder and v6-derived C7 harness. The observer was built once and sources restored. The capacity workload was NOT RUN because the unchanged4GiB disk guard failed. Existing helper/explicit resource authorization, a fresh disposable case, the frozen kernel sampler and passing resource guard are prerequisites; source readiness is not capacity evidence.
+- http/: credential-free oversized HTTP negative test. The original unused-TCP fixture setup failure remains in the evidence directory; the archived final script uses the existing plaintext WSS edge and does not claim a TLS test.
+
+Android and Windows production/test sources are preserved in their separate local commits, not copied as another repository snapshot here. No certificates, keys, URL/state files, databases, binaries, logs, caches or user data are in this archive. Explicit approval flags in scripts are root execution windows, not authority to create new work after this task stops.

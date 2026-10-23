@@ -4,14 +4,14 @@ use super::{
     auth::{AuthorizedChannelContext, SubmitAuth},
     domain::{
         event::{EventCommand, EventPatch},
-        message::{MessageInput, MessageSend},
+        message::MessageInput,
         projection::EntityRef as DomainEntityRef,
         thing::{ThingCommand, ThingPatch},
     },
     error::CoreError,
     execution::request::{
         DispatchEventInput, DispatchLiveActivityIntent, DispatchLiveActivityUpdate,
-        DispatchMessageInput, DispatchThingInput,
+        DispatchThingInput,
     },
     response::{DeliveryDispatchStatus, DeliverySummary, EntityRef, SubmitResult},
     source::IngressSource,
@@ -63,10 +63,12 @@ pub(crate) trait SubmitRuntime: Send + Sync {
         password: &str,
     ) -> Result<AuthorizedSubmitChannel, CoreError>;
 
-    async fn dispatch_message(
+    async fn accept_ordinary_message(
         &self,
-        input: DispatchMessageInput,
-    ) -> Result<DeliverySummary, CoreError>;
+        channel: AuthorizedSubmitChannel,
+        message: MessageInput,
+        now_millis: i64,
+    ) -> Result<SubmitResult, CoreError>;
 
     async fn dispatch_event(&self, input: DispatchEventInput)
     -> Result<DeliverySummary, CoreError>;
@@ -183,85 +185,12 @@ async fn submit_message(
     message: MessageInput,
 ) -> Result<SubmitResult, CoreError> {
     let authorized_channel = resolve_authorized_channel(runtime, channel, auth).await?;
-    let normalized = MessageSend::new(message)
-        .normalize(
-            runtime.idempotency_store(),
-            authorized_channel.channel_id,
-            authorized_channel.channel_id_text.clone(),
-            now_millis,
-        )
-        .await?;
-    let projection = normalized.command.projection;
-    let DomainEntityRef::Message {
-        message_id,
-        thing_id: scoped_thing_id,
-    } = projection.entity
-    else {
-        return Err(CoreError::internal(
-            "message normalization returned non-message projection",
-        ));
-    };
-    let fingerprint_occurred_at = normalized.command.fingerprint_occurred_at;
-    let alert = projection.alert;
-    let delivery_policy = projection.delivery_policy;
-    let op_id = normalized.op_id.clone();
-    let entity_id = message_id.clone();
-    let owns_sender_status = record_sender_status_accepted(
-        runtime,
-        now_millis,
-        &op_id,
-        authorized_channel.channel_id,
-        "message",
-        &entity_id,
-    )
-    .await?;
-    if owns_sender_status {
-        record_sender_status_processing(runtime, now_millis, &op_id).await?;
-    }
-    let output = match runtime
-        .dispatch_message(DispatchMessageInput {
-            authorized_channel: authorized_channel.clone(),
-            op_id: Some(op_id.clone()),
-            thing_id: scoped_thing_id.clone(),
-            occurred_at: Some(normalized.occurred_at),
-            fingerprint_occurred_at,
-            title: alert.title.unwrap_or_default(),
-            body: alert.body,
-            severity: alert.severity,
-            ttl: alert.ttl,
-            custom_data: projection.custom_data,
-            extra_fields: projection.extra_fields,
-            delivery_policy,
-            message_id: message_id.clone(),
-        })
+    // The ordinary authority allocates identity, freezes recipients and commits
+    // acceptance together. Do not run the former semantic-id / sender-status /
+    // dispatch-submission writes before this call.
+    runtime
+        .accept_ordinary_message(authorized_channel, message, now_millis)
         .await
-    {
-        Ok(delivery) => delivery,
-        Err(err) => {
-            if owns_sender_status {
-                record_sender_status_failed(runtime, now_millis, &op_id).await?;
-            }
-            return Err(err);
-        }
-    };
-    let delivery = output;
-    if owns_sender_status {
-        record_sender_status_finished(runtime, now_millis, &delivery).await?;
-    }
-    let delivery_id = delivery.delivery_id.clone();
-    let acceptance = delivery.submit_acceptance();
-    let result = SubmitResult {
-        channel_id: delivery.channel_id.clone(),
-        op_id: delivery.op_id.clone(),
-        entity: EntityRef::Message {
-            message_id,
-            thing_id: scoped_thing_id,
-        },
-        delivery_id,
-        acceptance,
-        summary: delivery,
-    };
-    Ok(result)
 }
 
 async fn submit_event(
@@ -450,7 +379,7 @@ async fn record_sender_status_accepted(
         .sender_status_store()
         .insert_sender_submit_status_if_absent(&record)
         .await
-        .map_err(|err| CoreError::Store(err.to_string()))?;
+        .map_err(CoreError::from)?;
     if inserted {
         return Ok(true);
     }
@@ -587,7 +516,7 @@ mod tests {
     use super::*;
     use crate::{
         delivery_core::{
-            execution::request::{DispatchEventInput, DispatchMessageInput, DispatchThingInput},
+            execution::request::{DispatchEventInput, DispatchThingInput},
             response::{DeliveryDedupeStatus, DeliveryDispatchStatus, SubmitAcceptance},
             store::sender_status::SenderStatusStore,
         },
@@ -607,9 +536,9 @@ mod tests {
             semantic_id: &str,
             _created_at: i64,
         ) -> StoreResult<SemanticIdReservation> {
-            Ok(SemanticIdReservation::Existing {
-                semantic_id: semantic_id.to_string(),
-            })
+            unreachable!(
+                "ordinary submission must not reserve a legacy semantic identity: {semantic_id}"
+            )
         }
 
         async fn reserve_op_pending(
@@ -657,17 +586,30 @@ mod tests {
             })
         }
 
-        async fn dispatch_message(
+        async fn accept_ordinary_message(
             &self,
-            input: DispatchMessageInput,
-        ) -> Result<DeliverySummary, CoreError> {
-            Ok(DeliverySummary::new(
-                input.authorized_channel.channel_id_text,
-                input.op_id.unwrap_or_else(|| "op".to_string()),
+            channel: AuthorizedSubmitChannel,
+            message: MessageInput,
+            _now_millis: i64,
+        ) -> Result<SubmitResult, CoreError> {
+            let summary = DeliverySummary::new(
+                channel.channel_id_text,
+                message.op_id.unwrap_or_else(|| "op".to_string()),
                 "pending-delivery".to_string(),
                 DeliveryDedupeStatus::DuplicatePending,
                 DeliveryDispatchStatus::NotAttempted,
-            ))
+            );
+            Ok(SubmitResult {
+                channel_id: summary.channel_id.clone(),
+                op_id: summary.op_id.clone(),
+                entity: EntityRef::Message {
+                    message_id: "pending-message".into(),
+                    thing_id: message.thing_id,
+                },
+                delivery_id: summary.delivery_id.clone(),
+                acceptance: summary.submit_acceptance(),
+                summary,
+            })
         }
 
         async fn dispatch_event(
@@ -770,7 +712,7 @@ mod tests {
             &self,
             _record: &SenderSubmitStatusRecord,
         ) -> StoreResult<bool> {
-            Ok(true)
+            unreachable!("ordinary submission must not write legacy sender status")
         }
 
         async fn update_sender_submit_status(
@@ -780,14 +722,14 @@ mod tests {
             _dispatch_status: Option<&str>,
             _updated_at: i64,
         ) -> StoreResult<()> {
-            Ok(())
+            unreachable!("ordinary submission must not update legacy sender status")
         }
 
         async fn load_sender_submit_status(
             &self,
             _op_id: &str,
         ) -> StoreResult<Option<SenderSubmitStatusRecord>> {
-            Ok(None)
+            unreachable!("ordinary submission must not read legacy sender status")
         }
     }
 
@@ -854,11 +796,13 @@ mod tests {
             unreachable!("status transition test does not authorize")
         }
 
-        async fn dispatch_message(
+        async fn accept_ordinary_message(
             &self,
-            _input: DispatchMessageInput,
-        ) -> Result<DeliverySummary, CoreError> {
-            unreachable!("status transition test does not dispatch")
+            _channel: AuthorizedSubmitChannel,
+            _message: MessageInput,
+            _now_millis: i64,
+        ) -> Result<SubmitResult, CoreError> {
+            unreachable!("status transition test does not submit ordinary messages")
         }
 
         async fn dispatch_event(

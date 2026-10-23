@@ -15,6 +15,8 @@ use super::shared::{platform_from_channel_type, platform_from_str};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct DeviceRegisterRequest {
+    #[serde(default)]
+    pub watch_alert_window_minutes: Option<i64>,
     #[serde(default, deserialize_with = "deserialize_empty_as_none")]
     pub device_key: Option<String>,
     pub platform: String,
@@ -44,6 +46,8 @@ pub(crate) struct ProviderTokenRetireRequest {
 
 #[derive(Debug, Serialize)]
 pub(super) struct DeviceRegisterResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_alert_window_minutes: Option<i64>,
     pub device_key: String,
     pub issued_new_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -413,7 +417,14 @@ struct DeviceRouteChange<'a> {
 impl DeviceRouteChange<'_> {
     async fn persist(self, state: &AppState, action: &str) -> Result<(), Error> {
         let route = self.next.as_route_row(self.device_key);
-        state.store.persist_device_route_change(&route).await?;
+        if action == "route_delete_channel"
+            && self.next.channel_type == DeviceChannelType::Private
+            && state.store.ordinary_handle().is_some()
+        {
+            state.store.clear_ordinary_private_channel(&route).await?;
+        } else {
+            state.store.persist_device_route_change(&route).await?;
+        }
         tracing::debug!(
             target: "gateway.trace_event",
             event = "device_route.persisted",
@@ -515,6 +526,7 @@ pub(crate) async fn device_channel_upsert(
         )
         .await
         .map_err(|err| match err {
+            StoreError::Ordinary(error) => error.into(),
             StoreError::RouteMigrationCapacityExceeded { .. } => Error::Conflict {
                 message: "pending deliveries exceed private route capacity".into(),
                 code: "route_transition_pending_capacity_exceeded".into(),
@@ -544,9 +556,15 @@ pub(crate) async fn device_channel_upsert(
 
     reconcile_coalesced_route_owners(&state, &locked_keys, &persisted_routes, device_key);
 
-    let updated = state
+    let updated = DeviceRouteRecord {
+        platform: persisted.platform_kind()?,
+        channel_type: next_type,
+        provider_token: persisted.provider_token.clone(),
+        updated_at: persisted.updated_at,
+    };
+    state
         .device_registry
-        .update_channel(device_key, next_type, next_provider_token)
+        .restore_route(device_key, updated.clone())
         .map_err(Error::Internal)?;
     if migrated > 0
         && next_type == DeviceChannelType::Private
@@ -578,6 +596,15 @@ pub(crate) async fn device_register(
     State(state): State<AppState>,
     ApiJson(payload): ApiJson<DeviceRegisterRequest>,
 ) -> HttpResult {
+    let platform = payload.requested_platform()?;
+    if let Some(minutes) = payload.watch_alert_window_minutes
+        && (platform != Platform::WATCHOS || !matches!(minutes, 5 | 15 | 30 | 60))
+    {
+        return Err(Error::validation_code(
+            "invalid Watch alert window",
+            "invalid_watch_alert_window",
+        ));
+    }
     let _claim_lock = state.device_operation_guards.lock_provider_claim().await;
     let requested_device_key = payload
         .device_key
@@ -599,12 +626,29 @@ pub(crate) async fn device_register(
         },
     )
     .await?;
+    if let Some(minutes) = payload.watch_alert_window_minutes {
+        state
+            .store
+            .set_watch_alert_window_minutes(&resolved.device_key, minutes)
+            .await?;
+    }
+    let watch_alert_window_minutes = if platform == Platform::WATCHOS {
+        Some(
+            state
+                .store
+                .watch_alert_window_minutes(&resolved.device_key)
+                .await?,
+        )
+    } else {
+        None
+    };
     let route = state
         .store
         .active_device_route_snapshot(&resolved.device_key)
         .await?
         .ok_or(StoreError::DeviceNotFound)?;
     Ok(crate::api::ok(DeviceRegisterResponse {
+        watch_alert_window_minutes,
         device_key: resolved.device_key,
         issued_new_key: resolved.issued_new_key,
         issue_reason: resolved.issue_reason.map(ToString::to_string),
@@ -724,19 +768,36 @@ async fn resolve_existing_for_route(
     requested_device_key: &str,
     requested_platform: Option<Platform>,
 ) -> Result<DeviceRouteRecord, Error> {
-    let route = state
-        .device_registry
-        .get(requested_device_key)
+    let snapshot = state
+        .store
+        .active_device_route_snapshot(requested_device_key)
+        .await?
         .ok_or_else(|| Error::validation_code("device_key not found", "device_key_not_found"))?;
-    if let Some(platform) = requested_platform
-        && route.platform != platform
+    let platform = snapshot
+        .platform
+        .as_deref()
+        .ok_or_else(|| Error::Internal("active device route has no platform".into()))?
+        .parse::<Platform>()
+        .map_err(|_| Error::Internal("active device route has invalid platform".into()))?;
+    if let Some(requested_platform) = requested_platform
+        && platform != requested_platform
     {
         return Err(Error::validation_code(
             "platform does not match device identity",
             "platform_mismatch",
         ));
     }
-    Ok(route)
+    let channel_type = DeviceChannelType::parse(&snapshot.channel_type)
+        .ok_or_else(|| Error::Internal("active device route has invalid channel type".into()))?;
+    let updated_at = snapshot
+        .updated_at
+        .ok_or_else(|| Error::Internal("active device route has no control timestamp".into()))?;
+    Ok(DeviceRouteRecord {
+        platform,
+        channel_type,
+        provider_token: snapshot.provider_token,
+        updated_at,
+    })
 }
 
 #[cfg(test)]

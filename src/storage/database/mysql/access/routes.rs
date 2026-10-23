@@ -217,6 +217,26 @@ pub(in crate::storage::database::mysql) async fn coalesce_duplicate_provider_rou
 }
 
 impl MySqlDb {
+    pub(super) async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
+        let minutes: Option<i64> = sqlx::query_scalar("SELECT watch_alert_window_minutes FROM devices WHERE device_key = ? AND platform = 'watchos'")
+            .bind(device_key).fetch_optional(&self.pool).await?;
+        Ok(minutes
+            .filter(|value| matches!(value, 5 | 15 | 30 | 60))
+            .unwrap_or(30))
+    }
+    pub(super) async fn set_watch_alert_window_minutes(
+        &self,
+        device_key: &str,
+        minutes: i64,
+    ) -> StoreResult<()> {
+        if !matches!(minutes, 5 | 15 | 30 | 60) {
+            return Err(StoreError::InvalidPlatform);
+        }
+        sqlx::query("UPDATE devices SET watch_alert_window_minutes = ? WHERE device_key = ? AND platform = 'watchos'")
+            .bind(minutes).bind(device_key).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub(super) async fn provider_route_is_current(
         &self,
         device_key: &str,
@@ -269,7 +289,7 @@ impl MySqlDb {
         device_key: &str,
     ) -> StoreResult<Option<DeviceRouteSnapshot>> {
         let row = sqlx::query(
-            "SELECT route_revision, channel_type, provider_token FROM devices \
+            "SELECT route_revision, channel_type, provider_token, platform, route_updated_at FROM devices \
              WHERE device_key = ? AND channel_type IS NOT NULL",
         )
         .bind(device_key)
@@ -280,6 +300,8 @@ impl MySqlDb {
                 route_revision: row.get("route_revision"),
                 channel_type: row.get("channel_type"),
                 provider_token: decode_mysql_optional_text(&row, "provider_token")?,
+                platform: row.get("platform"),
+                updated_at: row.get("route_updated_at"),
             })
         })
         .transpose()
@@ -312,8 +334,62 @@ impl MySqlDb {
             .execute(&mut *tx)
             .await?;
         }
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_route_tx(
+                    &mut tx,
+                    &values.device_key,
+                    route.channel_type_kind()?.is_private(),
+                )
+                .await?;
+            if let Some(token) = values.provider_token.as_deref() {
+                ordinary
+                    .canonical_coalesce_tx(&mut tx, &values.device_key, &values.platform, token)
+                    .await?;
+            }
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
-        tx.commit().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.canonical_commit(tx).await?;
+        } else {
+            tx.commit().await?;
+        }
+        Ok(())
+    }
+
+    /// The normal Private-channel clear keeps the active route and all
+    /// subscriptions. Only the C Private obligations are terminalized here;
+    /// existing nonordinary cleanup remains in the caller's legacy tail.
+    pub(crate) async fn clear_ordinary_private_channel(
+        &self,
+        route: &DeviceRouteRecordRow,
+    ) -> StoreResult<()> {
+        if !route.channel_type_kind()?.is_private() || route.provider_token.is_some() {
+            return Err(StoreError::InvalidDeviceToken);
+        }
+        let ordinary = self.ordinary_store().ok_or_else(|| {
+            StoreError::Ordinary(crate::ordinary::store::KernelError::Unavailable)
+        })?;
+        let mut tx = self.pool.begin().await?;
+        let previous: Option<Option<i64>> = sqlx::query_scalar(
+            "SELECT route_updated_at FROM devices WHERE device_key=? AND channel_type='private' AND provider_token IS NULL FOR UPDATE",
+        )
+        .bind(&route.device_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+        // A stale clear must never recreate a device that exited, or turn a
+        // concurrently changed Provider route back into Private.
+        let previous = previous.ok_or(StoreError::DeviceNotFound)?;
+        let mut persisted = route.clone();
+        persisted.updated_at = persisted
+            .updated_at
+            .max(Utc::now().timestamp_millis())
+            .max(previous.unwrap_or(0).saturating_add(1));
+        upsert_device_route_in_tx(&mut tx, &persisted).await?;
+        ordinary
+            .canonical_clear_private_tx(&mut tx, &persisted.device_key)
+            .await?;
+        ordinary.canonical_commit(tx).await?;
         Ok(())
     }
 
@@ -365,8 +441,26 @@ impl MySqlDb {
             .execute(&mut *tx)
             .await?;
         }
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_route_tx(
+                    &mut tx,
+                    &values.device_key,
+                    route.channel_type_kind()?.is_private(),
+                )
+                .await?;
+            if let Some(token) = values.provider_token.as_deref() {
+                ordinary
+                    .canonical_coalesce_tx(&mut tx, &values.device_key, &values.platform, token)
+                    .await?;
+            }
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
-        tx.commit().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.canonical_commit(tx).await?;
+        } else {
+            tx.commit().await?;
+        }
         Ok(())
     }
 
@@ -392,7 +486,11 @@ impl MySqlDb {
             row.get::<Option<i64>, _>("route_updated_at")
                 .is_some_and(|updated_at| updated_at >= values.updated_at)
         }) {
-            tx.commit().await?;
+            if let Some(ordinary) = self.ordinary_store() {
+                ordinary.canonical_commit(tx).await?;
+            } else {
+                tx.commit().await?;
+            }
             return Ok(0);
         }
         let previous_channel_type = current_route
@@ -536,8 +634,26 @@ impl MySqlDb {
                 .execute(&mut *tx)
                 .await?;
         }
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_route_tx(
+                    &mut tx,
+                    &values.device_key,
+                    route.channel_type_kind()?.is_private(),
+                )
+                .await?;
+            if let Some(token) = values.provider_token.as_deref() {
+                ordinary
+                    .canonical_coalesce_tx(&mut tx, &values.device_key, &values.platform, token)
+                    .await?;
+            }
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
-        tx.commit().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.canonical_commit(tx).await?;
+        } else {
+            tx.commit().await?;
+        }
         Ok(migrated)
     }
 
@@ -570,9 +686,33 @@ impl MySqlDb {
         };
 
         upsert_device_route_in_tx(&mut tx, route).await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_route_tx(
+                    &mut tx,
+                    &values.device_key,
+                    route.channel_type_kind()?.is_private(),
+                )
+                .await?;
+            if let Some(token) = values.provider_token.as_deref() {
+                ordinary
+                    .canonical_coalesce_tx(&mut tx, &values.device_key, &values.platform, token)
+                    .await?;
+            }
+        }
         coalesce_duplicate_provider_routes_in_tx(&mut tx, &values).await?;
 
         if let (Some(old_key), Some(device_id)) = (old_key, old_device_id.as_deref()) {
+            if let Some(ordinary) = self.ordinary_store() {
+                ordinary
+                    .canonical_merge_tx(
+                        &mut tx,
+                        old_key.as_str(),
+                        &values.device_key,
+                        route.channel_type_kind()?.is_private(),
+                    )
+                    .await?;
+            }
             let wide_device_id = binary32_private_device_id(device_id)?;
             sqlx::query("DELETE FROM channel_subscriptions WHERE device_id = ?")
                 .bind(wide_device_id.as_slice())
@@ -598,7 +738,11 @@ impl MySqlDb {
             cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
         }
 
-        tx.commit().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.canonical_commit(tx).await?;
+        } else {
+            tx.commit().await?;
+        }
         Ok(())
     }
 
@@ -609,6 +753,11 @@ impl MySqlDb {
         let device_id = PrivateDeviceId::derive(normalized_key.as_str()).to_vec();
         let wide_device_id = binary32_private_device_id(device_id.as_slice())?;
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_revoke_tx(&mut tx, normalized_key.as_str())
+                .await?;
+        }
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM private_outbox WHERE device_id = ? \
              UNION SELECT delivery_id FROM provider_pull_queue WHERE device_id = ?",
@@ -646,7 +795,11 @@ impl MySqlDb {
 
         cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
 
-        tx.commit().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.canonical_commit(tx).await?;
+        } else {
+            tx.commit().await?;
+        }
         Ok(())
     }
 
@@ -676,6 +829,11 @@ impl MySqlDb {
         let (token_hash, _) =
             ProviderTokenSnapshot::from_token(normalized_token.as_str()).into_parts();
         let mut tx = self.pool.begin().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary
+                .canonical_retire_token_tx(&mut tx, platform_name, normalized_token.as_str())
+                .await?;
+        }
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM provider_pull_queue WHERE platform = ? AND provider_token = ?",
         )
@@ -712,7 +870,11 @@ impl MySqlDb {
 
         cleanup_orphan_private_payloads_in_tx(&mut tx, &delivery_ids).await?;
 
-        tx.commit().await?;
+        if let Some(ordinary) = self.ordinary_store() {
+            ordinary.canonical_commit(tx).await?;
+        } else {
+            tx.commit().await?;
+        }
         Ok(())
     }
 }

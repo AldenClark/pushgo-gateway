@@ -1,0 +1,446 @@
+{
+  "scope": "final source/compact evidence inventory; excludes this self-referential inventory only",
+  "portable_execution": "NOT RUN",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 14101,
+      "sha256": "7014f6656de90693cc70ad5e62fa9887f35862fe4d5c19e3b9ff42f6fc3f6001"
+    },
+    {
+      "path": "android/README.md",
+      "bytes": 6069,
+      "sha256": "198147361273dfb1e14db0044c901e47c0372236fc72a1a5d9f9e48dfb49af44"
+    },
+    {
+      "path": "android/provenance/cached-jni-identity.json",
+      "bytes": 1616,
+      "sha256": "8cdd56311cfdc064a0152e80b5c6699ed24d65c6ea2eb573bb963b697244aa37"
+    },
+    {
+      "path": "android/provenance/executed-apk-hashes.json",
+      "bytes": 565,
+      "sha256": "81cf69fdb318a40fe601e3605b84541e638bffe70acb588f312c96d857b15cc2"
+    },
+    {
+      "path": "android/provenance/executed-harness-source-identity.json",
+      "bytes": 503,
+      "sha256": "138f04957bc79b122f8e25a7965e318e6f25489edc876a3d66238a8e7db0d859"
+    },
+    {
+      "path": "android/provenance/packaging-inputs.json",
+      "bytes": 2194,
+      "sha256": "a3bfd8d82062eff1432b8876555d49112818e0075bf6f08a6245980bd425f191"
+    },
+    {
+      "path": "android/provenance/production-boundary-hashes.json",
+      "bytes": 3692,
+      "sha256": "b71c5369e8c1e664e502266ac0cb56cc911e71cd1cdc23563cd3b6faa156e9b0"
+    },
+    {
+      "path": "android/provenance/production-main-source-hashes.json",
+      "bytes": 51651,
+      "sha256": "9c00e9871a303763b5692761e2f39b3e3c1fcee0a3159ace4d483a1542e853ed"
+    },
+    {
+      "path": "android/run-loop.py",
+      "bytes": 9484,
+      "sha256": "598547fbf41fbd333e066fe3805237cc71b80ff744369a4f6023499537e4146b"
+    },
+    {
+      "path": "android/run-native.sh",
+      "bytes": 4745,
+      "sha256": "420ede78aeeb3bce9b7d9e6c559a3dc02ab5a98f92e67b08c845bd1c7adca9fc"
+    },
+    {
+      "path": "android/source/CandidateNetworkBoundary.kt",
+      "bytes": 6064,
+      "sha256": "bfb597d5cd39b5318edbccaba456dd1775aa26b27f59ae4f58dee0ea83e501c3"
+    },
+    {
+      "path": "android/source/CandidateOrdinaryC3DeviceTest.kt",
+      "bytes": 17063,
+      "sha256": "257fced2ea9e62c86fe2dd3cafb8c2f1aa8e84ea8ca314cb325b0f52db078a44"
+    },
+    {
+      "path": "android/source-manifest.json",
+      "bytes": 5037,
+      "sha256": "2c2c376c9a5450078b3f273018d85e90215fa8c494a4af692c01cbe57b25e7a9"
+    },
+    {
+      "path": "android/stage-native.sh",
+      "bytes": 3176,
+      "sha256": "3d3c59ea379e9b71199476b212a3cac6086fb437a27ca24cbafea8749a0eef96"
+    },
+    {
+      "path": "android/verify-existing-room.py",
+      "bytes": 3707,
+      "sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851"
+    },
+    {
+      "path": "apple/Package.resolved",
+      "bytes": 388,
+      "sha256": "59c8582c2af3e7b15309a19496a75660c3715d1b4b6fe8cb05756485229e8fd9"
+    },
+    {
+      "path": "apple/Package.swift",
+      "bytes": 8065,
+      "sha256": "94038fb24773e7c8fb5639c3126ac35b3ab952247e217cc061804c3be73954f6"
+    },
+    {
+      "path": "apple/README.md",
+      "bytes": 5616,
+      "sha256": "1be539f70065e829104ff62f1bed22ef89222fe181354ae192e625d800d44aa6"
+    },
+    {
+      "path": "apple/Tests/Fixtures/sqlite_migration_child.swift",
+      "bytes": 7532,
+      "sha256": "4255772ec64084adb1e76ad3f7d0ad9363ffc6de3996cad097469b8c1a682551"
+    },
+    {
+      "path": "apple/Tests/PushGoAppleCoreTests/C3OrdinaryClientLoopTests.swift",
+      "bytes": 11743,
+      "sha256": "df60570b96b25500488ce1b5f4b0e0859adb48141e44fbebbb972679b89da418"
+    },
+    {
+      "path": "apple/executed/run-loop.py",
+      "bytes": 13132,
+      "sha256": "ef407ce5a02f93ad1b08ffc03032960520df7757b5b956a6a0fded97351c26fb"
+    },
+    {
+      "path": "apple/executed/run-native.sh",
+      "bytes": 510,
+      "sha256": "4957210c88665cde0896ff82d674f63cf3691aec48820d978285e8446048c3c4"
+    },
+    {
+      "path": "apple/run-loop.py",
+      "bytes": 13806,
+      "sha256": "12ece061635a6863100689bb00db8b5f4024c251b9e5e8d6a949e7cd355dec6f"
+    },
+    {
+      "path": "apple/run-native.sh",
+      "bytes": 578,
+      "sha256": "38889b9cd4e9742f5e2e4459984839a4fb3647d22a1f75c9135932e390cb826c"
+    },
+    {
+      "path": "apple/source-copy-manifest.json",
+      "bytes": 17081,
+      "sha256": "0455c29e0b7b3707650c654c1de5f9999271c053962f430f790c12ccf9a59a09"
+    },
+    {
+      "path": "apple/source-provenance.json",
+      "bytes": 5300,
+      "sha256": "5471bbd6caf065eb68b7511664733bf8f98a682dbd0e937138760efec2eb56d1"
+    },
+    {
+      "path": "apple/stage.py",
+      "bytes": 3674,
+      "sha256": "5023ef02a0a4817bf84b5345cd2fdf6b9d6fdc5b33461be549b8b11d7f83820b"
+    },
+    {
+      "path": "apple/static-packaging-validation.json",
+      "bytes": 611,
+      "sha256": "57c04f03dd80503d87cc06f86624b372b1b0368e4ddefdcafb0c21dff131e5de"
+    },
+    {
+      "path": "current500/Cargo.lock",
+      "bytes": 93794,
+      "sha256": "78bce87bdfd5fda6fbbca7e7966e84dd2ab2964e7fe3a1e41207189e06ec6cd0"
+    },
+    {
+      "path": "current500/Cargo.toml.template",
+      "bytes": 603,
+      "sha256": "6bb225a4f06bd7d905d4b40b785e5f1332711742cc383d43648b56845001580c"
+    },
+    {
+      "path": "current500/fixture.rs",
+      "bytes": 8869,
+      "sha256": "f1c5585f238da52363e0c93f5bd13104d123b936ffaa9754282702a35329ef0d"
+    },
+    {
+      "path": "current500/prepare_package.py",
+      "bytes": 1323,
+      "sha256": "e5c40249d1bc36503135b603b8f1f799832a6334bb224bf241744ffdcc2e1dac"
+    },
+    {
+      "path": "harness/C3_MOCK_API.md",
+      "bytes": 4355,
+      "sha256": "d3b626397f9abee091ba5ddd30b5e141b75f8d2885e2a12a1e6c0f4a8de94e78"
+    },
+    {
+      "path": "harness/analyse_c1_base.py",
+      "bytes": 10519,
+      "sha256": "8bdd512b5d734247379ba4af0a12ec2f555d28dcbee723711c817477543d7dc1"
+    },
+    {
+      "path": "harness/analyse_c2.py",
+      "bytes": 10163,
+      "sha256": "4c7dd1145d79118b8b17f5cf608f7ce6b50a21e4ed1e96b435fb8d4a982db333"
+    },
+    {
+      "path": "harness/c3_history_analyze.py",
+      "bytes": 9955,
+      "sha256": "05bf60bb0ce968e1f3e1d1b7d7afd44fe3530e41d4b92bd5da988ab52d67a577"
+    },
+    {
+      "path": "harness/c3_history_probe.py",
+      "bytes": 5171,
+      "sha256": "9ac042161aaa7c9654d903e290ce6b124a403a717a4073eafd66e2bbaaef828f"
+    },
+    {
+      "path": "harness/c3_mock.py",
+      "bytes": 13168,
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+    },
+    {
+      "path": "harness/c3_pid_rusage.c",
+      "bytes": 3333,
+      "sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234"
+    },
+    {
+      "path": "harness/capacity-manifest.template.json",
+      "bytes": 1856,
+      "sha256": "f28deef101f0bdadab00aed3bf6ace00f50444a651fb0ab22c4e8ef772086f7a"
+    },
+    {
+      "path": "harness/common.py",
+      "bytes": 15347,
+      "sha256": "afcdade74a552af14c4748abcca430096a76a3477e2b2205b238715f83a54b7e"
+    },
+    {
+      "path": "harness/current500_run_compare.py",
+      "bytes": 36665,
+      "sha256": "03e1349e97599a339c5f04e500a7e0e24de8996a41bdae2347f14aa15a1a18da"
+    },
+    {
+      "path": "harness/prepare_native_diag.py",
+      "bytes": 4653,
+      "sha256": "bdf6dabd485705dad0ac24c54e11d5c25f925c97d320cce628dcd136c36aac51"
+    },
+    {
+      "path": "harness/prepare_native_diag_controls.py",
+      "bytes": 2398,
+      "sha256": "b82946be18e46aafe9dcf004368577f66cfb2e567ae556cbb23ef6e9fb952a39"
+    },
+    {
+      "path": "harness/prepare_native_semantics.py",
+      "bytes": 5259,
+      "sha256": "46ddba6921e8fa1b9ba05fc07b3f356207602e8d200d3f22e86bd6ac0a426c58"
+    },
+    {
+      "path": "harness/reduce_profile_capacity.py",
+      "bytes": 4310,
+      "sha256": "83432df2df2ff1fca3be7497d576c85b897aaeafeab3cfdaa14964ab72d258ac"
+    },
+    {
+      "path": "harness/resource-monitor-source-provenance.json",
+      "bytes": 993,
+      "sha256": "f686a3329022e4d4b8442c6e210bc53a110e8eb90897d10941a8557ee7e687a4"
+    },
+    {
+      "path": "harness/resource_monitor.py",
+      "bytes": 10853,
+      "sha256": "b019060657a25c18d282da9ccd433cb7f2f110df1ee90782472d24031999554e"
+    },
+    {
+      "path": "harness/run_c3_campaign.py",
+      "bytes": 10454,
+      "sha256": "362f39ba7500a46d5d2c848a665adb6a48bb9b1fee38b5aef3f82c3d6ef02191"
+    },
+    {
+      "path": "harness/run_c3_control_restart.py",
+      "bytes": 15573,
+      "sha256": "55a7ae9199d172fd9326d52a0638d676e468f656458f3b9502871fefca529a85"
+    },
+    {
+      "path": "harness/run_c3_mock_smoke.py",
+      "bytes": 4942,
+      "sha256": "6d6bcdf1c8d730da9b04bb30a012f486e6015921c6f25a603a000fd240891a79"
+    },
+    {
+      "path": "harness/run_profile_capacity.py",
+      "bytes": 39870,
+      "sha256": "3b762307eddce97f27896f49843f7d34b86c99f21e4d5c3aeb9f433a6b7b48a6"
+    },
+    {
+      "path": "harness/run_writerfix_followup.py",
+      "bytes": 5510,
+      "sha256": "5ecbcb43b9aebc62cda341b9957ffcef1eff1b24e8efbb41c9c2114bdf0f670f"
+    },
+    {
+      "path": "harness/sqlite_native_profile.py",
+      "bytes": 4965,
+      "sha256": "f4b97c269b993bd3dcc775d5b3b7c8b9caa9e9932c9ebd1a6e190f2a13c5795e"
+    },
+    {
+      "path": "harness/summarize_matched.py",
+      "bytes": 4143,
+      "sha256": "f159b03e55602a287d3c6dc6dc3ad894e2d54455b3a4a15f9d7834ef9524627d"
+    },
+    {
+      "path": "harness/test_c3_mock.py",
+      "bytes": 3747,
+      "sha256": "a7335967be5b50081ec624b7cab5791cf8be647fce0c814800c831057ad4bd40"
+    },
+    {
+      "path": "native-diag-inputs/provenance.json",
+      "bytes": 438,
+      "sha256": "1fafa91594682f93d79ed73fcbf16d9a9a0ba8cb574a22d8888206113c609f10"
+    },
+    {
+      "path": "native-diag-inputs/schema.sql",
+      "bytes": 5546,
+      "sha256": "2496ebbc10d10f292e7d4079b188f2dd5dd8e80fb268deb43642b588ca35073f"
+    },
+    {
+      "path": "native-diag-inputs/steps-10000.json",
+      "bytes": 21780,
+      "sha256": "f15b7815ae8bbfec4653e13f0bb90657559dd721c4703c4f64c6d6d7cc4e9724"
+    },
+    {
+      "path": "native-diag-inputs/steps-20000.json",
+      "bytes": 21780,
+      "sha256": "f15b7815ae8bbfec4653e13f0bb90657559dd721c4703c4f64c6d6d7cc4e9724"
+    },
+    {
+      "path": "native-diag-inputs/steps-controls.json",
+      "bytes": 18815,
+      "sha256": "accb6c841ba2c754c96c870bb1bce00cb828db3f29d22b0e33c4781cd1a9daf5"
+    },
+    {
+      "path": "native-diag-inputs/steps-key-index.json",
+      "bytes": 1429,
+      "sha256": "0ae85c374b74756dabc381c3548cadee4b8c55b31b57ce291818c714e83a5624"
+    },
+    {
+      "path": "native-diag-inputs/steps-semantics.json",
+      "bytes": 19158,
+      "sha256": "c6f2f698e200bf9e761569e191b9ee45ea8e58c2e12339e15535b63a0d481d76"
+    },
+    {
+      "path": "provenance/artifacts-profile-matched.json",
+      "bytes": 115100,
+      "sha256": "01a66eab6aa8d8db207ee50daa29906e2b92d55bd9a0416a000799b77eb4ce34"
+    },
+    {
+      "path": "provenance/artifacts-profile-writerfix.json",
+      "bytes": 115797,
+      "sha256": "dabb8576539e5904849dee0547821adb60794a4b7d08339ceed9cee6e1334b6d"
+    },
+    {
+      "path": "provenance/build-A.json",
+      "bytes": 1166,
+      "sha256": "27af0e5e68b4ebf6241511aa33876debadce50cde3353462e27e13b349d1c326"
+    },
+    {
+      "path": "provenance/build-final-tests.json",
+      "bytes": 793,
+      "sha256": "8718be378fa5738453c158a0572cb980c0283b15303afaa3fca3500c5305fe5d"
+    },
+    {
+      "path": "provenance/build-final.json",
+      "bytes": 1296,
+      "sha256": "7222658594b8c94a49273aaa17be8fd578a3b4de0e564eb08d9b18a90e14d497"
+    },
+    {
+      "path": "provenance/build-matched-control.json",
+      "bytes": 1490,
+      "sha256": "8878d5abee009dc124b1a04dc6c219bfe77e4337a2e5aa92bdd98d5625e8158f"
+    },
+    {
+      "path": "provenance/build-writer-final-tests.json",
+      "bytes": 371,
+      "sha256": "1798f442d38072d1708badb74d9f875725f295776e1cc0514afc8e1ad6d47037"
+    },
+    {
+      "path": "provenance/build-writer-final.json",
+      "bytes": 1560,
+      "sha256": "473dd47404b13b9929e9375dc75e200c39ff71aed7fe20769c86de91e21de01b"
+    },
+    {
+      "path": "provenance/capacity/capacity-frontend-admission-comparison.json",
+      "bytes": 4444,
+      "sha256": "e86fa6cf4b1f998f9a8c6577dcdf4e6c495c7a7b488a9f792c346ddaeefc4463"
+    },
+    {
+      "path": "provenance/capacity/capacity-results-final.md",
+      "bytes": 7580,
+      "sha256": "fc482544d081e12190381465a0f7c0992955765d6b4373d24b12ae0b003611c9"
+    },
+    {
+      "path": "provenance/capacity/capacity-writerfix256-cost-comparison.json",
+      "bytes": 13072,
+      "sha256": "06c4402d4428d88f8a1e311019b20f793fa66b5b59efa08493d2d74d75460753"
+    },
+    {
+      "path": "provenance/capacity-final-state.json",
+      "bytes": 9395,
+      "sha256": "755c46ba56e0551483f84a2c8d2ccb68f463278d62e0ca71260a3c61663a6b93"
+    },
+    {
+      "path": "provenance/capacity-source-handoff-current.json",
+      "bytes": 1921,
+      "sha256": "510edde860946f86c00870b781e555356a1678b75e6a6e347c273963d7d6d8ba"
+    },
+    {
+      "path": "provenance/current500-build-input.json",
+      "bytes": 801,
+      "sha256": "c83264bd9a3c8956462b1671567e435df256e4b77a1225924e1cb0b6a6de9820"
+    },
+    {
+      "path": "provenance/db-block-audit/conclusion.md",
+      "bytes": 7583,
+      "sha256": "9ab931decbf3e39a3e374bd661a8b71fab444c0faa7683288f046629ad7610c1"
+    },
+    {
+      "path": "provenance/history/active-fanout-projections.csv",
+      "bytes": 2003,
+      "sha256": "004a5cb40baeafda4f7145272a73a9d2c340e9a28151fca06f8e81a4f3f4bcb8"
+    },
+    {
+      "path": "provenance/history/analysis.json",
+      "bytes": 57249,
+      "sha256": "f2cda70960815112a842b0fe28b3c81c1d81856a54ad8c8a9f4532854c55cc2e"
+    },
+    {
+      "path": "provenance/history/analysis.md",
+      "bytes": 5766,
+      "sha256": "7fd7b5df6d8fcbdc0456adc064c760d0ca4810e14dff1a32270b19d03d688730"
+    },
+    {
+      "path": "provenance/history/execution.json",
+      "bytes": 5485,
+      "sha256": "e42210ce6696ce5442dd2ac2ace79f08dfef706f24d9fa5b632530aa7ce7ce4f"
+    },
+    {
+      "path": "provenance/history/identity-30d-projections.csv",
+      "bytes": 733,
+      "sha256": "3ce897f7e6dae3c8b38a2202111fc3b13971f52dccb99db0f5da551c99741ec9"
+    },
+    {
+      "path": "provenance/history/identity-costs.csv",
+      "bytes": 580,
+      "sha256": "489f5ac7789eb7ac9259fc57100517289de5d090a8a370af01181ee5e65d23db"
+    },
+    {
+      "path": "provenance/independent-review-writer.md",
+      "bytes": 7663,
+      "sha256": "ed736009e226bb346d18a12955cc821fe532d66d7bdec07f1eca2678de4ac11a"
+    },
+    {
+      "path": "provenance/independent-review.md",
+      "bytes": 7315,
+      "sha256": "f740a3e87af1134c0bf14a5484b3443b243d95283d5d0bc83aa5211a500b240c"
+    },
+    {
+      "path": "source-provenance.json",
+      "bytes": 28349,
+      "sha256": "44610b66a6d8cf751af0d69589aa35f198a8fa332cbcf953e53c2e0f432ed64b"
+    },
+    {
+      "path": "static-packaging-validation.json",
+      "bytes": 1991,
+      "sha256": "fe7e0dfe07ac3e0e259785e87e3cf4f745d64a36e0fc628ee9af7b34bbf80d38"
+    }
+  ]
+}

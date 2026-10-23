@@ -90,7 +90,7 @@ async fn setup_sqlite_storage_without_bootstrap(name: &str) -> SqliteTestContext
 
 async fn setup_sqlite_storage_with_custom_schema(
     name: &str,
-    statements: &[&str],
+    statements: &[&'static str],
 ) -> SqliteTestContext {
     let dir = tempdir().expect("tempdir should be created");
     let db_path = dir.path().join(format!("{name}.sqlite"));
@@ -113,7 +113,7 @@ async fn setup_sqlite_storage_with_custom_schema(
         .await
         .expect("sqlite bootstrap connection should succeed");
     for stmt in statements {
-        sqlx::query(stmt)
+        sqlx::query(*stmt)
             .execute(&mut conn)
             .await
             .expect("custom schema statement should succeed");

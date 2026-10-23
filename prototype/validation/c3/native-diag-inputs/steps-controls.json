@@ -1,0 +1,452 @@
+[
+  {
+    "path": "control",
+    "label": "drop_diag_index",
+    "sql": "DROP INDEX diagnostic_devices_token"
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_0",
+    "sql": "EXPLAIN QUERY PLAN INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_1",
+    "sql": "EXPLAIN QUERY PLAN UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_2",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_3",
+    "sql": "EXPLAIN QUERY PLAN UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesced_cleanup",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_0",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_1",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_2",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_3",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesced_cleanup",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_0",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_1",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_2",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_3",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesced_cleanup",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_0",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_1",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_2",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_3",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesced_cleanup",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "control",
+    "label": "devices_token_index",
+    "sql": "CREATE INDEX diagnostic_devices_token ON devices(platform,provider_token,device_key) WHERE retired_at IS NULL"
+  },
+  {
+    "path": "control",
+    "label": "devices_coalesced_index",
+    "sql": "CREATE INDEX diagnostic_devices_coalesced ON devices(coalesced_to,device_key) WHERE coalesced_to IS NOT NULL"
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_0_indexed",
+    "sql": "EXPLAIN QUERY PLAN INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_1_indexed",
+    "sql": "EXPLAIN QUERY PLAN UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_2_indexed",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesce_actual_3_indexed",
+    "sql": "EXPLAIN QUERY PLAN UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ],
+    "capture_rows": true
+  },
+  {
+    "path": "plan",
+    "label": "coalesced_cleanup_indexed",
+    "sql": "EXPLAIN QUERY PLAN DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": [],
+    "capture_rows": true
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_0_indexed",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_1_indexed",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_2_indexed",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_3_indexed",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesced_cleanup_indexed",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_0_indexed",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_1_indexed",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_2_indexed",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_3_indexed",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesced_cleanup_indexed",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_0_indexed",
+    "sql": "INSERT OR IGNORE INTO channel_subscriptions(channel_id,device_key) SELECT s.channel_id,? FROM channel_subscriptions s JOIN devices d ON d.device_key=s.device_key WHERE d.platform=? AND d.provider_token=? AND d.device_key<>? AND d.retired_at IS NULL",
+    "binds": [
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_1_indexed",
+    "sql": "UPDATE targets SET pull_owner=?,owner_generation=CASE WHEN owner_generation>=0 AND EXISTS(SELECT 1 FROM devices source WHERE source.device_key=targets.pull_owner AND source.retired_at IS NULL AND source.route_generation=targets.owner_generation AND source.platform=targets.platform AND source.provider=targets.provider AND source.provider_token=targets.provider_token) THEN (SELECT route_generation FROM devices WHERE device_key=?) ELSE -1 END WHERE pull_owner IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "winner",
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_2_indexed",
+    "sql": "DELETE FROM channel_subscriptions WHERE device_key IN (SELECT device_key FROM devices WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL)",
+    "binds": [
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesce_actual_3_indexed",
+    "sql": "UPDATE devices SET retired_at=?,coalesced_to=? WHERE platform=? AND provider_token=? AND device_key<>? AND retired_at IS NULL",
+    "binds": [
+      1000,
+      "winner",
+      "android",
+      "none",
+      "winner"
+    ]
+  },
+  {
+    "path": "measure",
+    "label": "coalesced_cleanup_indexed",
+    "sql": "DELETE FROM devices WHERE device_key IN (SELECT d.device_key FROM devices d WHERE d.coalesced_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM targets t WHERE t.device_key=d.device_key OR t.pull_owner=d.device_key) LIMIT 256)",
+    "binds": []
+  },
+  {
+    "path": "control",
+    "label": "seed_512_retired",
+    "sql": "INSERT OR REPLACE INTO retired_provider_tokens SELECT platform,provider_token,1 FROM targets WHERE device_key<'d000512'"
+  },
+  {
+    "path": "positive",
+    "label": "retire_join_limit256",
+    "sql": "SELECT t.delivery_id,t.device_key FROM targets t JOIN retired_provider_tokens r ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "capture_rows": true
+  },
+  {
+    "path": "positive",
+    "label": "retire_cross_limit256",
+    "sql": "SELECT t.delivery_id,t.device_key FROM retired_provider_tokens r CROSS JOIN targets t ON r.platform=t.platform AND r.provider_token=t.provider_token WHERE t.control_epoch<r.control_epoch AND t.acked_at IS NULL ORDER BY t.accepted_at,t.delivery_id,t.device_key LIMIT 256",
+    "capture_rows": true
+  }
+]

@@ -1,6 +1,7 @@
 use super::*;
 
 use axum::body::to_bytes;
+use sqlx::{Connection, SqliteConnection};
 
 type ExpectedOperation = (String, Option<String>, Option<(&'static str, &'static str)>);
 
@@ -30,7 +31,7 @@ async fn get_json_with_auth(app: axum::Router, path: &str, bearer: &str) -> (Sta
 
 #[tokio::test]
 async fn release_smoke_core_lifecycle() {
-    let mut state = build_test_state().await;
+    let (mut state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
     state.auth = AuthMode::SharedToken(Arc::from(GATEWAY_TOKEN));
     let app = super::super::build_router(state.clone(), "<html>docs</html>");
 
@@ -172,14 +173,24 @@ async fn release_smoke_core_lifecycle() {
         .and_then(Value::as_str)
         .expect("accepted message should return its operation ID");
     expected_operations.push((op_id.to_owned(), Some(CIPHERTEXT_FIXTURE.to_owned()), None));
+    let ordinary = state.store.ordinary_handle().unwrap();
+    let ordinary_status = ordinary
+        .status(op_id)
+        .await
+        .expect("HTTP acceptance must follow the ordinary identity COMMIT");
+    assert_eq!(
+        ordinary_status["entity_id"],
+        response_data(&accepted)["message_id"]
+    );
+    assert_eq!(ordinary_status["status"], "provider_queued");
     assert!(
         state
             .store
             .load_sender_submit_status(op_id)
             .await
-            .expect("sender status lookup should work")
-            .is_some(),
-        "accepted message should have a durable sender status"
+            .unwrap()
+            .is_none(),
+        "ordinary HTTP submission must not also create a legacy sender-status row"
     );
 
     // The second device joins after this message, so it must not gain a
@@ -365,6 +376,13 @@ async fn release_smoke_core_lifecycle() {
 
     assert_eq!(expected_operations.len(), 8);
     for (expected_op_id, _, _) in &expected_operations {
+        if expected_op_id == op_id {
+            assert_eq!(
+                ordinary.status(expected_op_id).await.unwrap()["model"],
+                "message"
+            );
+            continue;
+        }
         assert!(
             state
                 .store
@@ -659,5 +677,28 @@ async fn release_smoke_core_lifecycle() {
             .and_then(Value::as_array)
             .is_some_and(Vec::is_empty),
         "second subscriber ACK should retire only its own deliveries"
+    );
+    let mut inspect = SqliteConnection::connect(&format!("{db_url}?mode=ro"))
+        .await
+        .expect("isolated product database should allow bounded read-only inspection");
+    let payload_bytes: i64 =
+        sqlx::query_scalar("SELECT payload_bytes FROM ordinary_messages WHERE op_id = ?")
+            .bind(op_id)
+            .fetch_one(&mut inspect)
+            .await
+            .unwrap();
+    assert_eq!(payload_bytes, 0, "HTTP ACK must release the ordinary body");
+    let old_ordinary_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sender_submit_status WHERE model = 'message'")
+            .fetch_one(&mut inspect)
+            .await
+            .unwrap();
+    assert_eq!(
+        old_ordinary_rows, 0,
+        "normal HTTP must have one ordinary authority"
+    );
+    assert_eq!(
+        ordinary.status(op_id).await.unwrap()["entity_id"],
+        ordinary_status["entity_id"]
     );
 }

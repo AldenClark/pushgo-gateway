@@ -1,0 +1,49 @@
+{
+  "status": "STATIC_ONLY_NOT_EXECUTED",
+  "python_ast_files": [
+    "android/run-loop.py",
+    "android/verify-existing-room.py",
+    "apple/executed/run-loop.py",
+    "apple/run-loop.py",
+    "apple/stage.py",
+    "current500/prepare_package.py",
+    "harness/analyse_c1_base.py",
+    "harness/analyse_c2.py",
+    "harness/c3_history_analyze.py",
+    "harness/c3_history_probe.py",
+    "harness/c3_mock.py",
+    "harness/common.py",
+    "harness/current500_run_compare.py",
+    "harness/prepare_native_diag.py",
+    "harness/prepare_native_diag_controls.py",
+    "harness/prepare_native_semantics.py",
+    "harness/reduce_profile_capacity.py",
+    "harness/resource_monitor.py",
+    "harness/run_c3_campaign.py",
+    "harness/run_c3_control_restart.py",
+    "harness/run_c3_mock_smoke.py",
+    "harness/run_profile_capacity.py",
+    "harness/run_writerfix_followup.py",
+    "harness/sqlite_native_profile.py",
+    "harness/summarize_matched.py",
+    "harness/test_c3_mock.py"
+  ],
+  "all_json": "parsed",
+  "original_packaged_entry_count": 57,
+  "provenance_hashes": "all copied original/packaged mappings verified; twelve original runtime dependencies match final source handoff",
+  "text_only": "all delivered files UTF-8; no logs/DB/bin/APK/JNI/compiled library/staged production source directories",
+  "product_or_harness_runtime": "NOT RUN during packaging",
+  "subdirectory_validation": "Apple/Android static receipts retained; original native results remain10e evidence reused for19cc, not rerun",
+  "final_capacity_text_supplement": {
+    "files": [
+      "provenance/capacity/capacity-results-final.md",
+      "provenance/capacity/capacity-writerfix256-cost-comparison.json",
+      "provenance/capacity/capacity-frontend-admission-comparison.json"
+    ],
+    "updated_identity_copies": [
+      "provenance/capacity-source-handoff-current.json",
+      "provenance/capacity-final-state.json"
+    ],
+    "status": "exact SHA checks and JSON parsing only; no new runtime work"
+  }
+}

@@ -251,6 +251,8 @@ impl PrivateHub {
                 protocol::DeliverEnvelope {
                     delivery_id: item.delivery_id,
                     payload: item.payload,
+                    ordinary: item.ordinary,
+                    ordinary_expires_at: item.ordinary_expires_at,
                 },
             ));
         }
@@ -264,6 +266,8 @@ impl PrivateHub {
             pending.push_back(protocol::DeliverEnvelope {
                 delivery_id: entry.delivery_id,
                 payload: msg.payload,
+                ordinary: false,
+                ordinary_expires_at: None,
             });
         }
 

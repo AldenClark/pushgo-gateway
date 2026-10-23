@@ -4,12 +4,14 @@ use crate::storage::{
     database::DatabaseDriver,
     types::*,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[path = "storage/channels.rs"]
 mod channels;
 #[path = "storage/dedupe.rs"]
 mod dedupe;
+#[path = "storage/ordinary.rs"]
+mod ordinary;
 #[path = "storage/private_capacity_recovery.rs"]
 mod private_capacity_recovery;
 #[path = "storage/private_delivery.rs"]
@@ -21,7 +23,7 @@ mod system;
 
 const OP_DEDUPE_PENDING_STALE_MILLIS: i64 = 2 * 60 * 1000;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Storage {
     db: Arc<DatabaseDriver>,
     cache: Arc<CacheStore>,
@@ -32,12 +34,25 @@ pub struct Storage {
     /// closes COUNT/INSERT and ACK/replay races between concurrent request
     /// tasks in the currently supported one-process deployment model.
     durable_write_gate: Arc<tokio::sync::Mutex<()>>,
+    ordinary: Arc<OnceLock<crate::ordinary::OrdinaryStore>>,
+    ordinary_init_gate: Arc<tokio::sync::Mutex<()>>,
     #[cfg(test)]
     provider_finalize_failures_remaining: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     live_activity_enqueue_failures_remaining: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     submission_release_failures_remaining: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl std::fmt::Debug for Storage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Storage")
+            .field("db", &self.db)
+            .field("cache", &self.cache)
+            .field("ordinary_initialized", &self.ordinary.get().is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +122,8 @@ impl Storage {
                 private_capacity_recovery::PrivateCapacityRecovery::default(),
             ),
             durable_write_gate: Arc::new(tokio::sync::Mutex::new(())),
+            ordinary: Arc::new(OnceLock::new()),
+            ordinary_init_gate: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(test)]
             provider_finalize_failures_remaining: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
@@ -120,6 +137,11 @@ impl Storage {
 
     pub fn cache_memory_snapshot(&self) -> CacheMemorySnapshot {
         self.cache.memory_snapshot()
+    }
+
+    #[cfg(feature = "qa")]
+    pub(crate) fn resource_pool_snapshot(&self) -> serde_json::Value {
+        self.db.resource_pool_snapshot()
     }
 
     #[cfg(test)]

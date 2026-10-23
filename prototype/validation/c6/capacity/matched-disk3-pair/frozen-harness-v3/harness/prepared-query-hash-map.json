@@ -1,0 +1,8 @@
+{
+  "source_commit": "e3de1ebe1caac618ecdcc293e040752e36752fe4",
+  "source_sha256": "c75d0e31b48fc1f7691860e895137d0554a41c72dab82131f766861ef2abd0fe",
+  "query_names": {
+    "77fffd5c1fb34795185cee528215e29c36f6ebff0d28d562e56e84f48767bdbc": "CLAIM_ONE_SQL"
+  },
+  "unmapped_hashes": "retain numeric lifetime counters with unmapped label; never return SQL_TEXT or bindings"
+}

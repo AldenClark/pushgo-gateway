@@ -1,6 +1,60 @@
 use super::*;
 use async_trait::async_trait;
 
+impl DatabaseDriver {
+    /// The product Storage holds its mutation gate across the metadata counts
+    /// and this unchanged native whole-batch transaction. Each target keeps its
+    /// own allowance; a busy recipient never lowers another recipient's cap.
+    pub(crate) async fn enqueue_private_outbox_batch_with_ordinary_capacity(
+        &self,
+        entries: &[PrivateOutboxBatchEntry],
+        max_pending_per_device: usize,
+        global_max_pending: usize,
+        protected_delivery_id: Option<&str>,
+        ordinary_per_device: &hashbrown::HashMap<DeviceId, usize>,
+        ordinary_global: usize,
+    ) -> StoreResult<usize> {
+        match self {
+            Self::Sqlite(database) => {
+                database
+                    .enqueue_private_outbox_batch_with_ordinary_capacity(
+                        entries,
+                        max_pending_per_device,
+                        global_max_pending,
+                        protected_delivery_id,
+                        ordinary_per_device,
+                        ordinary_global,
+                    )
+                    .await
+            }
+            Self::Postgres(database) => {
+                database
+                    .enqueue_private_outbox_batch_with_ordinary_capacity(
+                        entries,
+                        max_pending_per_device,
+                        global_max_pending,
+                        protected_delivery_id,
+                        ordinary_per_device,
+                        ordinary_global,
+                    )
+                    .await
+            }
+            Self::MySql(database) => {
+                database
+                    .enqueue_private_outbox_batch_with_ordinary_capacity(
+                        entries,
+                        max_pending_per_device,
+                        global_max_pending,
+                        protected_delivery_id,
+                        ordinary_per_device,
+                        ordinary_global,
+                    )
+                    .await
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl PrivateMessageDatabaseAccess for DatabaseDriver {
     async fn load_private_outbox_entry(

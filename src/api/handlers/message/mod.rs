@@ -26,7 +26,7 @@ pub(crate) use compat::{
 };
 pub(crate) use dispatch::{
     dispatch_entity_notification, recover_pending_dispatch_submissions,
-    recover_pending_dispatch_submissions_before,
+    recover_pending_dispatch_submissions_before, widget_push_job,
 };
 pub(crate) use ids::OpId;
 

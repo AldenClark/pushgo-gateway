@@ -1,0 +1,70 @@
+{
+  "production_source_unchanged": true,
+  "files": [
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/notifications/InboundMessageProcessor.kt",
+      "source_sha256": "73986609a44298449b6e530caf59b6ae5e9129581f68d879fefd231c9d3cfc5e",
+      "staged_sha256": "73986609a44298449b6e530caf59b6ae5e9129581f68d879fefd231c9d3cfc5e"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/notifications/ProviderIngressCoordinator.kt",
+      "source_sha256": "2e4565b0c85a6a05936aeb9eda9f52c19d2c18f4a3e15870a1a77acab4f682f5",
+      "staged_sha256": "2e4565b0c85a6a05936aeb9eda9f52c19d2c18f4a3e15870a1a77acab4f682f5"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/notifications/ProviderAckDrainCoordinator.kt",
+      "source_sha256": "1ed05aa66579c9073a7b491eef2e01ce83ddc7f155095e457bba0be723146f58",
+      "staged_sha256": "1ed05aa66579c9073a7b491eef2e01ce83ddc7f155095e457bba0be723146f58"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/notifications/InboundPersistenceCoordinator.kt",
+      "source_sha256": "a9d3351c9b263b4b52541a7d86355bfc5e8aab6d248c25d9e58a8c698465a09c",
+      "staged_sha256": "a9d3351c9b263b4b52541a7d86355bfc5e8aab6d248c25d9e58a8c698465a09c"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/InboundDeliveryLedger.kt",
+      "source_sha256": "193084e76b0fc8fd5ebdcf7dd3d24557d86cf521e8fe2958305eb4411ef02f3f",
+      "staged_sha256": "193084e76b0fc8fd5ebdcf7dd3d24557d86cf521e8fe2958305eb4411ef02f3f"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/db/PushGoDatabase.kt",
+      "source_sha256": "7eccd5960f123a67422de2b1dda4ff7c1413863b024d0e12906f962f74527eab",
+      "staged_sha256": "7eccd5960f123a67422de2b1dda4ff7c1413863b024d0e12906f962f74527eab"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/ChannelSubscriptionRepository.kt",
+      "source_sha256": "e0cde9512af0e67a49f62c2df2de4bfabb29fd93c650cd8dbe9a9728e4b8c90f",
+      "staged_sha256": "e0cde9512af0e67a49f62c2df2de4bfabb29fd93c650cd8dbe9a9728e4b8c90f"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/ChannelSubscriptionService.kt",
+      "source_sha256": "cc6f359bcf661a93f27feee67fc07c0287b2f05547d651e4fc02ab54f8fcfe1f",
+      "staged_sha256": "cc6f359bcf661a93f27feee67fc07c0287b2f05547d651e4fc02ab54f8fcfe1f"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/ChannelSubscriptionStore.kt",
+      "source_sha256": "fe0b95bd60f3ba54cd187bb494e3eb04505fa2c016337987e0e06103e211d875",
+      "staged_sha256": "fe0b95bd60f3ba54cd187bb494e3eb04505fa2c016337987e0e06103e211d875"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/SettingsRepository.kt",
+      "source_sha256": "b7c35a8e23a03a32f9b885a8d8f48a3f26a54f86ef74596fe7395b9eb58e4f5d",
+      "staged_sha256": "b7c35a8e23a03a32f9b885a8d8f48a3f26a54f86ef74596fe7395b9eb58e4f5d"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/AndroidKeystoreSecretStore.kt",
+      "source_sha256": "31be98e20a1bdf335cac4e17d7888e7ade15cf5c6a4080a9e113f5375553b260",
+      "staged_sha256": "31be98e20a1bdf335cac4e17d7888e7ade15cf5c6a4080a9e113f5375553b260"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/MessageRepository.kt",
+      "source_sha256": "d49bf9ac3bbfb9bc6505c14db44935a5949273b9649644f6946a74bdd8957c5f",
+      "staged_sha256": "d49bf9ac3bbfb9bc6505c14db44935a5949273b9649644f6946a74bdd8957c5f"
+    },
+    {
+      "path": "app/src/main/java/io/ethan/pushgo/data/AppContainer.kt",
+      "source_sha256": "8f0613fa5fadd135e46649d0384f93d08c2811aa4bf1bbd97a463def45c35a19",
+      "staged_sha256": "8f0613fa5fadd135e46649d0384f93d08c2811aa4bf1bbd97a463def45c35a19"
+    }
+  ]
+}

@@ -6,7 +6,7 @@ pub(in crate::storage::database::sqlite) async fn upsert_device_route_in_tx(
     route: &DeviceRouteRecordRow,
 ) -> StoreResult<()> {
     let values = route.persistence_values()?;
-    sqlx::query(
+    let persisted = sqlx::query(
         "INSERT INTO devices \
          (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at, route_revision) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1) \
@@ -29,7 +29,16 @@ pub(in crate::storage::database::sqlite) async fn upsert_device_route_in_tx(
     .bind(values.provider_token.as_deref())
     .bind(values.updated_at)
     .execute(&mut **tx)
-    .await?;
+    .await;
+    if let Err(error) = persisted {
+        return Err(crate::ordinary::store::sqlite_route_control_error(
+            tx,
+            &values.device_key,
+            "main",
+            error,
+        )
+        .await);
+    }
     Ok(())
 }
 
@@ -57,12 +66,50 @@ async fn ensure_core_database_attached(
     Ok(())
 }
 
+// The delivery pool is also borrowed while a normal core transaction is held.
+// Returning a connection with `pushgo_core` attached would make its next
+// BEGIN IMMEDIATE try to reserve that already-held core database.
+struct AttachedCoreConnection {
+    connection: sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    detached: bool,
+}
+
+impl AttachedCoreConnection {
+    async fn acquire(pool: &sqlx::SqlitePool, core_db_path: Option<&str>) -> StoreResult<Self> {
+        let mut owner = Self {
+            connection: pool.acquire().await?,
+            detached: false,
+        };
+        ensure_core_database_attached(&mut owner.connection, core_db_path).await?;
+        Ok(owner)
+    }
+
+    async fn detach(mut self) -> StoreResult<()> {
+        sqlx::query("DETACH DATABASE pushgo_core")
+            .execute(&mut *self.connection)
+            .await?;
+        self.detached = true;
+        Ok(())
+    }
+}
+
+impl Drop for AttachedCoreConnection {
+    fn drop(&mut self) {
+        if !self.detached {
+            // Errors and cancellation cannot asynchronously detach here. Close
+            // this physical connection instead of leaking the attachment into
+            // the pool; sqlx retains its pool permit until closure completes.
+            self.connection.close_on_drop();
+        }
+    }
+}
+
 async fn upsert_device_route_in_attached_core_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     route: &DeviceRouteRecordRow,
 ) -> StoreResult<()> {
     let values = route.persistence_values()?;
-    sqlx::query(
+    let persisted = sqlx::query(
         "INSERT INTO pushgo_core.devices \
          (device_id, token_raw, platform_code, device_key, platform, channel_type, provider_token, route_updated_at, route_revision) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1) \
@@ -82,7 +129,16 @@ async fn upsert_device_route_in_attached_core_tx(
     .bind(values.provider_token.as_deref())
     .bind(values.updated_at)
     .execute(&mut **tx)
-    .await?;
+    .await;
+    if let Err(error) = persisted {
+        return Err(crate::ordinary::store::sqlite_route_control_error(
+            tx,
+            &values.device_key,
+            "pushgo_core",
+            error,
+        )
+        .await);
+    }
     Ok(())
 }
 
@@ -105,6 +161,13 @@ async fn coalesce_duplicate_provider_routes_in_attached_tx(
 
     for duplicate in duplicates {
         let duplicate_device_id: Vec<u8> = duplicate.get("device_id");
+        crate::ordinary::store::sqlite_coalesce_ordinary(
+            tx,
+            duplicate_device_id.as_slice(),
+            route.device_id.as_slice(),
+            "pushgo_core",
+        )
+        .await?;
         let delivery_ids =
             load_device_delivery_ids_in_tx(tx, duplicate_device_id.as_slice()).await?;
 
@@ -259,6 +322,13 @@ pub(in crate::storage::database::sqlite) async fn coalesce_duplicate_provider_ro
     let mut duplicate_device_ids = Vec::with_capacity(duplicates.len());
     for duplicate in duplicates {
         duplicate_device_ids.push(duplicate.device_id.clone());
+        crate::ordinary::store::sqlite_coalesce_ordinary(
+            tx,
+            duplicate.device_id.as_slice(),
+            route.device_id.as_slice(),
+            "main",
+        )
+        .await?;
         let delivery_ids =
             load_device_delivery_ids_in_tx(tx, duplicate.device_id.as_slice()).await?;
 
@@ -346,6 +416,59 @@ pub(in crate::storage::database::sqlite) async fn coalesce_duplicate_provider_ro
 }
 
 impl SqliteDb {
+    /// Clearing the current Private queue preserves this active route and its
+    /// subscriptions. It is distinct from revoking the device identity.
+    pub(crate) async fn clear_ordinary_private_channel(
+        &self,
+        route: &DeviceRouteRecordRow,
+    ) -> StoreResult<()> {
+        if !route.channel_type_kind()?.is_private() || route.provider_token.is_some() {
+            return Err(StoreError::InvalidDeviceToken);
+        }
+        let values = route.persistence_values()?;
+        let mut connection = self.pool.acquire().await?;
+        let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
+        upsert_device_route_in_tx(&mut tx, route).await?;
+        let present:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ordinary_targets')").fetch_one(&mut *tx).await?;
+        if present {
+            let exhausted:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets WHERE pull_owner=? AND delivery_mode='private' AND acked_at IS NULL AND delivery_epoch=9223372036854775807)").bind(&values.device_key).fetch_one(&mut *tx).await?;
+            if exhausted {
+                return Err(StoreError::Sqlx(sqlx::Error::Protocol(
+                    "ordinary private epoch exhausted".into(),
+                )));
+            }
+            sqlx::query("UPDATE ordinary_targets SET private_claim=NULL,private_group=NULL,delivery_epoch=delivery_epoch+1,acked_at=?,state=CASE WHEN state='running' THEN state ELSE 'cancelled' END WHERE pull_owner=? AND delivery_mode='private' AND acked_at IS NULL")
+                .bind(values.updated_at).bind(&values.device_key).execute(&mut *tx).await?;
+            sqlx::query("UPDATE ordinary_messages SET status=CASE WHEN EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.delivery_id=ordinary_messages.delivery_id AND t.provider IN ('FCM','APNS','WNS') AND (t.state='running' OR (t.delivery_mode='provider' AND t.acked_at IS NULL AND t.state IN ('pending','retry_wait')))) THEN 'provider_queued' WHEN provider_failed_count>0 THEN CASE WHEN provider_accepted_count>0 OR private_enqueued_count>0 THEN 'partially_failed' ELSE 'failed' END ELSE 'sent' END,updated_at=? WHERE status='provider_queued' AND delivery_id IN (SELECT delivery_id FROM ordinary_targets WHERE pull_owner=? AND delivery_mode='private')")
+                .bind(values.updated_at).bind(&values.device_key).execute(&mut *tx).await?;
+            sqlx::query("UPDATE ordinary_messages SET payload_blob=X'',payload_bytes=0 WHERE payload_bytes>0 AND delivery_id IN (SELECT delivery_id FROM ordinary_targets WHERE pull_owner=? AND delivery_mode='private') AND NOT EXISTS(SELECT 1 FROM ordinary_targets t WHERE t.delivery_id=ordinary_messages.delivery_id AND t.acked_at IS NULL)")
+                .bind(&values.device_key).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM ordinary_targets WHERE pull_owner=? AND delivery_mode='private' AND acked_at IS NOT NULL AND state<>'running'").bind(&values.device_key).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub(super) async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
+        let minutes: Option<i64> = sqlx::query_scalar("SELECT watch_alert_window_minutes FROM devices WHERE device_key = ? AND platform = 'watchos'")
+            .bind(device_key).fetch_optional(&self.pool).await?;
+        Ok(minutes
+            .filter(|value| matches!(value, 5 | 15 | 30 | 60))
+            .unwrap_or(30))
+    }
+    pub(super) async fn set_watch_alert_window_minutes(
+        &self,
+        device_key: &str,
+        minutes: i64,
+    ) -> StoreResult<()> {
+        if !matches!(minutes, 5 | 15 | 30 | 60) {
+            return Err(StoreError::InvalidPlatform);
+        }
+        sqlx::query("UPDATE devices SET watch_alert_window_minutes = ? WHERE device_key = ? AND platform = 'watchos'")
+            .bind(minutes).bind(device_key).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub(super) async fn provider_route_is_current(
         &self,
         device_key: &str,
@@ -398,7 +521,7 @@ impl SqliteDb {
         device_key: &str,
     ) -> StoreResult<Option<DeviceRouteSnapshot>> {
         let row = sqlx::query(
-            "SELECT route_revision, channel_type, provider_token FROM devices \
+            "SELECT route_revision, channel_type, provider_token, platform, route_updated_at FROM devices \
              WHERE device_key = ? AND channel_type IS NOT NULL",
         )
         .bind(device_key)
@@ -408,6 +531,8 @@ impl SqliteDb {
             route_revision: row.get("route_revision"),
             channel_type: row.get("channel_type"),
             provider_token: row.get("provider_token"),
+            platform: row.get("platform"),
+            updated_at: row.get("route_updated_at"),
         }))
     }
 
@@ -541,9 +666,12 @@ impl SqliteDb {
         let values = route.persistence_values()?;
         let next_channel_type = route.channel_type_kind()?;
         let now = Utc::now().timestamp_millis();
-        let mut conn = self.delivery_pool().acquire().await?;
-        ensure_core_database_attached(&mut conn, self.core_db_path.as_deref()).await?;
-        let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        let mut attachment =
+            AttachedCoreConnection::acquire(self.delivery_pool(), self.core_db_path.as_deref())
+                .await?;
+        let mut tx = (*attachment.connection)
+            .begin_with("BEGIN IMMEDIATE")
+            .await?;
 
         let current_route = sqlx::query(
             "SELECT channel_type, route_updated_at, route_revision FROM pushgo_core.devices WHERE device_id = ?",
@@ -556,6 +684,7 @@ impl SqliteDb {
                 .is_some_and(|updated_at| updated_at >= values.updated_at)
         }) {
             tx.commit().await?;
+            attachment.detach().await?;
             return Ok(0);
         }
         let previous_channel_type = current_route
@@ -700,6 +829,7 @@ impl SqliteDb {
         }
         coalesce_duplicate_provider_routes_in_attached_tx(&mut tx, &values).await?;
         tx.commit().await?;
+        attachment.detach().await?;
         Ok(migrated)
     }
 
@@ -834,6 +964,12 @@ impl SqliteDb {
             ProviderTokenSnapshot::from_token(normalized_token.as_str()).into_parts();
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
+        crate::ordinary::store::sqlite_retire_ordinary_token(
+            &mut tx,
+            platform_name,
+            normalized_token.as_str(),
+        )
+        .await?;
         let delivery_rows = sqlx::query(
             "SELECT delivery_id FROM provider_pull_queue WHERE platform = ? AND provider_token = ?",
         )

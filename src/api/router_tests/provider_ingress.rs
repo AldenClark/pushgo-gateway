@@ -1,3 +1,6 @@
+//! Retained Event/Thing queue protocol and malformed-row regressions. Ordinary
+//! messages are accepted through `/message` into C in the dedicated tests below;
+//! seeding the retired ordinary cache is never an ordinary delivery fallback.
 use super::*;
 
 use crate::{
@@ -8,6 +11,7 @@ use crate::{
 
 fn make_provider_payload(delivery_id: &str, title: &str) -> Vec<u8> {
     let mut data = hashbrown::HashMap::new();
+    data.insert("entity_type".to_string(), "event".to_string());
     data.insert("delivery_id".to_string(), delivery_id.to_string());
     data.insert("title".to_string(), title.to_string());
     postcard::to_allocvec(&PrivatePayloadEnvelope {
@@ -91,7 +95,7 @@ fn provider_contract_fixture(name: &str) -> Value {
 }
 
 #[tokio::test]
-async fn provider_pull_and_ack_v2_match_shared_windows_fixtures() {
+async fn retained_event_pull_and_ack_v2_match_shared_windows_fixtures() {
     let state = build_test_state().await;
     let app = super::super::build_router(state.clone(), "<html>docs</html>");
     let device_key = "fixture-device-key";
@@ -105,9 +109,10 @@ async fn provider_pull_and_ack_v2_match_shared_windows_fixtures() {
     )
     .await;
     assert_eq!(pull_status, StatusCode::OK);
+    let mut expected = provider_contract_fixture("pull_v2_response");
+    expected["data"]["items"][0]["payload"]["entity_type"] = json!("event");
     assert_eq!(
-        pull_body,
-        provider_contract_fixture("pull_v2_response"),
+        pull_body, expected,
         "Gateway pull response must remain JSON-shape compatible with the Windows fixture"
     );
 
@@ -579,6 +584,7 @@ async fn messages_pull_v2_discards_missing_and_mismatched_inner_ids_by_outer_id_
     let innocent_outer = "002-innocent-valid";
 
     let mut missing_data = hashbrown::HashMap::new();
+    missing_data.insert("entity_type".to_string(), "event".to_string());
     missing_data.insert("title".to_string(), "missing".to_string());
     enqueue_raw_provider_pull_item(
         &state,
@@ -894,5 +900,118 @@ async fn messages_ack_can_close_watch_delivery_without_closing_phone_delivery() 
             .expect("items should be an array")
             .len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn ordinary_http_accept_pull_ack_and_replay_use_only_c_authority() {
+    let state = build_test_state().await;
+    let device = "ordinary-http-client";
+    let password = crate::util::generate_hex_id_128();
+    let channel = seed_provider_channel_for_router_test(
+        &state,
+        device,
+        "ordinary HTTP C authority",
+        &password,
+        "synthetic-ordinary-provider-token",
+        Platform::ANDROID,
+    )
+    .await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let thing = crate::util::generate_hex_id_128();
+    let occurred = chrono::Utc::now().timestamp_millis() - 60_000;
+    let request = json!({
+        "channel_id":channel, "password":password, "op_id":"ordinary-http-idempotent",
+        "title":"ordinary HTTP", "body":"完整正文 remains intact", "thing_id":thing,
+        "occurred_at":occurred,
+    });
+    let (status, accepted) = post_json(app.clone(), "/message", request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "ordinary accept: {accepted:?}");
+    let identity = response_string_field(&accepted, "message_id").to_owned();
+    let (status, replay) = post_json(app.clone(), "/message", request.clone()).await;
+    assert_eq!(status, StatusCode::OK, "ordinary replay: {replay:?}");
+    assert_eq!(response_string_field(&replay, "message_id"), identity);
+    let (status, pulled) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "ordinary Pull: {pulled:?}");
+    let items = response_data(&pulled)["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "idempotent replay cannot add another frozen target"
+    );
+    let delivery = items[0]["delivery_id"].as_str().unwrap().to_owned();
+    let payload = &items[0]["payload"];
+    assert_eq!(payload["entity_type"], "message");
+    assert_eq!(payload["message_id"], identity);
+    assert_eq!(payload["thing_id"], thing);
+    assert_eq!(payload["occurred_at"], occurred.to_string());
+    assert_eq!(payload["body"], "完整正文 remains intact");
+    assert!(payload.get("delivery_id").is_none());
+    assert_eq!(
+        state
+            .store
+            .count_pending_provider_dispatch_jobs("FCM")
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(
+        state
+            .store
+            .peek_provider_item(
+                derive_private_device_id(device),
+                &delivery,
+                chrono::Utc::now().timestamp_millis()
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "ordinary Pull must not depend on a second legacy queue copy"
+    );
+    for expected in [1, 0] {
+        let (status, ack) = post_json(
+            app.clone(),
+            "/v2/messages/ack",
+            json!({
+                "device_key":device, "delivery_ids":[delivery,delivery],
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "ordinary ACK: {ack:?}");
+        assert_eq!(response_data(&ack)["requested_count"], 1);
+        assert_eq!(response_data(&ack)["removed_count"], expected);
+    }
+    let (status, after_ack_replay) = post_json(app.clone(), "/message", request.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        response_string_field(&after_ack_replay, "message_id"),
+        identity
+    );
+    let (status, empty) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        response_data(&empty)["items"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the retained identity must not resurrect released content"
+    );
+    let mut conflict = request;
+    conflict["body"] = json!("conflicting content");
+    let (status, response) = post_json(app, "/message", conflict).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "ordinary conflict: {response:?}"
     );
 }

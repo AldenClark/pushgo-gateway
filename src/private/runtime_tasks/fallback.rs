@@ -81,6 +81,8 @@ impl FallbackPayloadContext {
                 crate::private::protocol::DeliverEnvelope {
                     delivery_id: delivery_id.to_string(),
                     payload: self.payload.clone(),
+                    ordinary: false,
+                    ordinary_expires_at: None,
                 },
             )
             .await

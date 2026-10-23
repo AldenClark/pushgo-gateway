@@ -1,0 +1,2573 @@
+{
+  "format": "c6-source-replay-bundle-v2",
+  "status": "RELOCATED SOURCE ONLY; NOT EXECUTED",
+  "workspace_commit": "9fc812b40880e0ffd2375b4c83bb920292bdf880",
+  "original_OUT_root": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015",
+  "source_files": 165,
+  "source_bytes": 1315801,
+  "python_AST_only": 133,
+  "files": [
+    {
+      "path": "env/isolated_db.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/isolated_db.py",
+      "sha256": "e846d364e286e4c9fc59edd605a3497a5a05186c098ae91829d34aa862050eda",
+      "bytes": 8979,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/capture_environment.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/capture_environment.py",
+      "sha256": "e8b1486f4824e141d9e9fc4622ab28d52dbbed0b4341b77e22ceae3d8bb3bc20",
+      "bytes": 6029,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/prepare_pg_arm.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/prepare_pg_arm.py",
+      "sha256": "1180b8a40a4ee6824d3ca7f35b7989152beaa74353bb85eef8b9f41800d181b7",
+      "bytes": 6856,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh2/isolated_db.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh2/isolated_db.py",
+      "sha256": "d66fd7fed21b16da703fca3050fa928b19890b065d075eb885a76d81a5b26be4",
+      "bytes": 8982,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh2/budget_snapshot.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh2/budget_snapshot.py",
+      "sha256": "a08d822f601896d2d96ae466540f33b630579264ff89da5f9a2bdf52ad1fbef9",
+      "bytes": 2246,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/isolated_db.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/isolated_db.py",
+      "sha256": "d81f438c8f37e7320f82abf8091a142847cfc456d761840ebb5bbe5a830e5910",
+      "bytes": 10486,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/budget_snapshot.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/budget_snapshot.py",
+      "sha256": "a7956efb561b3836d2c505a09e652ca563e5a0be308853d4f5ca948bf16ae148",
+      "bytes": 3854,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/preserve_reset_old_arm.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/preserve_reset_old_arm.py",
+      "sha256": "9f3ba471dc989d8de01c7561661213592ca4b92f5b57d6428bc7169d14b87a9c",
+      "bytes": 6390,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "tests/final_source_verification.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/final_source_verification.py",
+      "sha256": "4cab18bc6065c28be63893703c2a00af648b46e73b07f85bec975f1f9abad73f",
+      "bytes": 5046,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "native/source/CandidatePrivateC6DeviceTest.kt",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/source/CandidatePrivateC6DeviceTest.kt",
+      "sha256": "454651b0b77398cff1a8cfaacdd139242fcb7c9951dc071f2844fb8772cc94ed",
+      "bytes": 19623,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+        "recorded_sha256": "454651b0b77398cff1a8cfaacdd139242fcb7c9951dc071f2844fb8772cc94ed",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/source/actual_case_driver.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/historical-source-preservation/actual_case_driver.py",
+      "sha256": "75bea8de611f0cebe5f75d88bbe76e867e1b3e200214d49fc22d51686c1893c1",
+      "bytes": 22510,
+      "provenance": "exact historical source copy; current original execution path changed for native05; stable preserved native04 bytes",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+        "recorded_sha256": "75bea8de611f0cebe5f75d88bbe76e867e1b3e200214d49fc22d51686c1893c1",
+        "current_source_matches": true
+      },
+      "original_execution_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/source/actual_case_driver.py"
+    },
+    {
+      "path": "native/source/build_jni_offline.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/source/build_jni_offline.py",
+      "sha256": "0cd95c6d22f9ae6ca54a3a4d39258bd327d79bdccc39730af8583fca8e47569d",
+      "bytes": 2879,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+        "recorded_sha256": "0cd95c6d22f9ae6ca54a3a4d39258bd327d79bdccc39730af8583fca8e47569d",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/source/device_phase_runner.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/source/device_phase_runner.py",
+      "sha256": "3fac97ecb644c4183798d36a05ebb795da757baef40fa0b7092ab9b7f4fa8f06",
+      "bytes": 5122,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+        "recorded_sha256": "3fac97ecb644c4183798d36a05ebb795da757baef40fa0b7092ab9b7f4fa8f06",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/source/emulator_lifecycle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/source/emulator_lifecycle.py",
+      "sha256": "1626848aecb9bdd3df6b68d75ed58159c4b6a1a22bc4483c94173d6dbb5ab5cc",
+      "bytes": 2084,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+        "recorded_sha256": "1626848aecb9bdd3df6b68d75ed58159c4b6a1a22bc4483c94173d6dbb5ab5cc",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/source/private_native_coordination.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/source/private_native_coordination.py",
+      "sha256": "a9d437b6aabebe117291ea5287e12b64ee575ea69e0a3818dc18bada1b845ac6",
+      "bytes": 13567,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+        "recorded_sha256": "a9d437b6aabebe117291ea5287e12b64ee575ea69e0a3818dc18bada1b845ac6",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/source/synthetic_tls_material.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/source/synthetic_tls_material.py",
+      "sha256": "020416ade3884d7385336046811299a620d97a1e18566b2e4fb04758be0056f3",
+      "bytes": 4201,
+      "provenance": "exact-source-copy",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+        "recorded_sha256": "020416ade3884d7385336046811299a620d97a1e18566b2e4fb04758be0056f3",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/locked-warp-test-ca.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/locked-warp-test-ca.patch",
+      "sha256": "c94f23cade21c9b8c72c28f3689e48b4f93c0a6e1146eae93fef916269f93d9d",
+      "bytes": 1385,
+      "provenance": "test-only-trust-overlay",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "native/attempt-03/historical-source-preservation/actual_case_driver.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/historical-source-preservation/actual_case_driver.py",
+      "sha256": "7b2a1dcc1b06fccf474905ec790813c041413289a2cea38ee438f75b2892d85f",
+      "bytes": 21052,
+      "provenance": "preserved-historical-executed-bytes",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/executed-source-manifest.json",
+        "recorded_sha256": "7b2a1dcc1b06fccf474905ec790813c041413289a2cea38ee438f75b2892d85f",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/attempt-03/historical-source-preservation/private_native_coordination.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/historical-source-preservation/private_native_coordination.py",
+      "sha256": "c063bc57efe5d9b178bdcf11ca3230232e5796b2034e65706fea670acf84ad3a",
+      "bytes": 13370,
+      "provenance": "RECONSTRUCTED-historical-byte-match-NOT-RERUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/historical-source-preservation/provenance.json",
+        "recorded_sha256": "c063bc57efe5d9b178bdcf11ca3230232e5796b2034e65706fea670acf84ad3a",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/attempt-03/historical-source-preservation/reconstruction.diff",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/historical-source-preservation/reconstruction.diff",
+      "sha256": "22ac8dfeb550d0e8af398e27ad54c9fc8144ef1d4f80b85a0e8d9bf161331606",
+      "bytes": 813,
+      "provenance": "documented-attempt02-to03-reconstruction-diff",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "native/attempt-02/private_native_coordination.executed.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-02/private_native_coordination.executed.py",
+      "sha256": "6bbb77abe08de4614844f9489a0c5c59d546d9b54061a09e342c83ecaf81f79b",
+      "bytes": 13253,
+      "provenance": "historical-reconstruction-base",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-02/executed-source-manifest.json",
+        "recorded_sha256": "6bbb77abe08de4614844f9489a0c5c59d546d9b54061a09e342c83ecaf81f79b",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/functional-artifacts-3708/CandidatePrivateC6DeviceTest.kt",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/functional-artifacts-3708/CandidatePrivateC6DeviceTest.kt",
+      "sha256": "e60613218043ce372b289c13a1fbcb5c03d5b724f2f255a09ecaa8b9d537eec2",
+      "bytes": 18111,
+      "provenance": "old-functional-3708-Kotlin-source",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/executed-source-manifest.json",
+        "recorded_sha256": "e60613218043ce372b289c13a1fbcb5c03d5b724f2f255a09ecaa8b9d537eec2",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/run-provider-lane.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/run-provider-lane.py",
+      "sha256": "0538253df90f97db874899013f5928de03ac7f19ea7b970deb4c82e6214e0ee3",
+      "bytes": 4542,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "0538253df90f97db874899013f5928de03ac7f19ea7b970deb4c82e6214e0ee3",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/apple/run-loop.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/apple/run-loop.py",
+      "sha256": "d16a8adffd3737ea1b6f4a40ba0a83446a38cc4a14c59e59deeda5a2b82083e4",
+      "bytes": 18113,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "d16a8adffd3737ea1b6f4a40ba0a83446a38cc4a14c59e59deeda5a2b82083e4",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/apple/run-native.sh",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/apple/run-native.sh",
+      "sha256": "48f34885892ad85df5bf615a6d8466c75dfe0f2600b8446035a462299072895f",
+      "bytes": 512,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "48f34885892ad85df5bf615a6d8466c75dfe0f2600b8446035a462299072895f",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/android/run-loop.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/android/run-loop.py",
+      "sha256": "dcd51c32e7c6d230925d6b5742827ac28a29a71de386a7ea74d5c1a844c420ec",
+      "bytes": 16164,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "dcd51c32e7c6d230925d6b5742827ac28a29a71de386a7ea74d5c1a844c420ec",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/android/run-native.sh",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/android/run-native.sh",
+      "sha256": "a9a10eebf106cede0ccee5d4f029064b61da0d17e0b19a5f70a19fbe327d506e",
+      "bytes": 3307,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "a9a10eebf106cede0ccee5d4f029064b61da0d17e0b19a5f70a19fbe327d506e",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/android/verify-existing-room.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/android/verify-existing-room.py",
+      "sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+      "bytes": 3707,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/harness/native_store_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/harness/native_store_observer.py",
+      "sha256": "ebaf609e3a4c505d5e108b6c48bdfc255ba0da085910df87fd217c5fc858ec4c",
+      "bytes": 3545,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "ebaf609e3a4c505d5e108b6c48bdfc255ba0da085910df87fd217c5fc858ec4c",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "provider-native/harness/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "provenance": "executed-source-manifest-bound",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+        "recorded_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+        "current_source_matches": true
+      }
+    },
+    {
+      "path": "native/android-staging/app/src/androidTest/java/io/ethan/pushgo/CandidateOrdinaryC3DeviceTest.kt",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/android-staging/app/src/androidTest/java/io/ethan/pushgo/CandidateOrdinaryC3DeviceTest.kt",
+      "sha256": "7edf7e400585c6a5e6058648b730f728d6d1118626bc1c8e445581cc075fc786",
+      "bytes": 21000,
+      "provenance": "Provider-native-compiled-test-source",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "native/android-staging/app/src/androidTest/java/io/ethan/pushgo/CandidateNetworkBoundary.kt",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/android-staging/app/src/androidTest/java/io/ethan/pushgo/CandidateNetworkBoundary.kt",
+      "sha256": "bfb597d5cd39b5318edbccaba456dd1775aa26b27f59ae4f58dee0ea83e501c3",
+      "bytes": 6064,
+      "provenance": "Provider-native-compiled-test-source",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/execute_matched_lane.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/execute_matched_lane.py",
+      "sha256": "888cd94b61160654f4a403e8edb5a5027af79fafaf4143b1c66d696133cf7ddc",
+      "bytes": 10073,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/c3_pid_rusage.c",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/c3_pid_rusage.c",
+      "sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "bytes": 3333,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/check_final_resource_oracle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/check_final_resource_oracle.py",
+      "sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9",
+      "bytes": 2154,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/db_os_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/db_statement_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/db_statement_observer.py",
+      "sha256": "562c4af563b43d2651c45290def53b11febae20317dffd09ca3d19d210a1b726",
+      "bytes": 5397,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/host_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "bytes": 1335,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/observer_fixture.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/observer_library.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/prepare_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/prepare_observer.py",
+      "sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "bytes": 4770,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/prepared_completion_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "bytes": 3565,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/reduce_commits.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/run_c5_capacity_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/run_c5_capacity_final.py",
+      "sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372",
+      "bytes": 28596,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/run_c6_capacity.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/run_c6_capacity.py",
+      "sha256": "4bda2e6a28e1c6061d8b46d47842f797cac8b0a2c71328adc80618e4a270c1d7",
+      "bytes": 34705,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/source_provenance.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/static_c6_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/static_c6_checks.py",
+      "sha256": "5b4591a309a59fbc6e0d923976fe4e9cb841d4482bcd4c16cae2ed34c1db11d5",
+      "bytes": 8840,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/static_final_runner_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/static_final_runner_checks.py",
+      "sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352",
+      "bytes": 7626,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/summarize_profile_window.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/summarize_resources_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/summarize_resources_final.py",
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "bytes": 5813,
+      "provenance": "frozen-harness-v3-source",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/final-e3de1eb/observer.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-e3de1eb/observer.patch",
+      "sha256": "a1e92a0116cfbcf57c87a0f264abcc3a73a94dc2deada5577e988b97357511d9",
+      "bytes": 7724,
+      "provenance": "observer-or-historical-source-patch",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/final-e3de1eb/executed-build_transient_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-e3de1eb/executed-build_transient_observer.py",
+      "sha256": "4ea859ec7004e9eb52dff049ebacc4d15db526a383bc41f394fed878efb56ed4",
+      "bytes": 8584,
+      "provenance": "observer-or-historical-source-patch",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/preparation-v1/runner-adaptation.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v1/runner-adaptation.patch",
+      "sha256": "19e6ee8d3b982157e3ad9198eec38c96222d4d8c7848ff34d38a88faae079403",
+      "bytes": 8922,
+      "provenance": "observer-or-historical-source-patch",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/preparation-v2/runner-fresh-helper-environment.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v2/runner-fresh-helper-environment.patch",
+      "sha256": "00c5d9f24cd865d96cfaf642a6a8db35e9b86f26df5a2811fb9ddd77a3438956",
+      "bytes": 1160,
+      "provenance": "observer-or-historical-source-patch",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/preparation-v3/post-completion-hook.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v3/post-completion-hook.patch",
+      "sha256": "237a134f7a5ef63697ac0a7214e1ea9e6fe66975abd00e2b772f337efffda193",
+      "bytes": 6678,
+      "provenance": "observer-or-historical-source-patch",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/preparation-v4/disk3-harness.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v4/disk3-harness.patch",
+      "sha256": "19b817e5fc96df8a8e87757ca8c3fd13d4853abee779446f847ec5d85578372e",
+      "bytes": 9628,
+      "provenance": "observer-or-historical-source-patch",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "env/fresh3/preserve_reset_final_arm.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/preserve_reset_final_arm.py",
+      "sha256": "667b21994ea19cfc9933d8dc8a005a65c3998a5c144412993ff24fce4bf32982",
+      "bytes": 6449,
+      "provenance": "exact-source-copy; final arm preparation source added after actual original execution",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "tests/sqlfix-9fc812b/source_verification.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/sqlfix-9fc812b/source_verification.py",
+      "sha256": "fc9b8606876d902fd609fe398b7db7cb971dd7a9e77b17ce294cb18bc7b5ac45",
+      "bytes": 6319,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "tests/sqlfix-9fc812b/continuation.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/sqlfix-9fc812b/continuation.py",
+      "sha256": "f48cd537eb1dd6202c09db0ab3a152d1cde4d92110e7630ae12ac544b65b6751",
+      "bytes": 6310,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "tests/sqlfix-9fc812b/continuation03.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/sqlfix-9fc812b/continuation03.py",
+      "sha256": "955ad29f0dd55dcb642facff60d4fccc570ed8830b2e10e85aa69ad790ab83d4",
+      "bytes": 6310,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/final-9fc812b/observer.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/observer.patch",
+      "sha256": "fb29821fb462a2752672ad77cf28cd9743fcb2457dc8c45bb877a6e91a136cbe",
+      "bytes": 7724,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/prepared-9fc812b/build_transient_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/prepared-9fc812b/build_transient_observer.py",
+      "sha256": "1b1b5782cbb32acf539228034b205d1e75eaceca265b566453a621a78886ee4a",
+      "bytes": 8585,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/prepared-9fc812b/harness/source_provenance.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/prepared-9fc812b/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/archive_sqlfix_space_phase1.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/archive_sqlfix_space_phase1.py",
+      "sha256": "0fe1ab9e9cc917a993a7dd04d82a6463e50f4f6751944a5235a54b4d6d2dba2a",
+      "bytes": 12318,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/purge_sqlfix_space_phase2.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/purge_sqlfix_space_phase2.py",
+      "sha256": "ff53144d05ecefb3233f7c2a42c264217814cd7b9f19690965a14faec982d64f",
+      "bytes": 7035,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/prepare_pg_arm_disk3.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/prepare_pg_arm_disk3.py",
+      "sha256": "965e183a2a31e649f10815afaeb4b14dc728fd320a822b8c55744efce95c3eb3",
+      "bytes": 7547,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/prepare_pg_arm_disk3.source.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/prepare_pg_arm_disk3.source.patch",
+      "sha256": "42be4b38abbee6b57ab50b7e4377e3e2b7cc8579894c51042508ba6019bac288",
+      "bytes": 7296,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/preparation-v5/static_timing_unknown_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v5/static_timing_unknown_checks.py",
+      "sha256": "80937a876386b7289911f568d8fde4faf226cb9cb8acd5010a6b17973aadcdeb",
+      "bytes": 1628,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/preparation-v5/timing-unknown-harness.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v5/timing-unknown-harness.patch",
+      "sha256": "8bd797d2c2e76b561258363375a5278196217028998b11c0efa2f0abe3a5b89a",
+      "bytes": 1497,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/execute_matched_lane.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/execute_matched_lane.py",
+      "sha256": "888cd94b61160654f4a403e8edb5a5027af79fafaf4143b1c66d696133cf7ddc",
+      "bytes": 10073,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "execute_matched_lane.py",
+        "expected_sha256": "888cd94b61160654f4a403e8edb5a5027af79fafaf4143b1c66d696133cf7ddc"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/c3_mock.py",
+        "expected_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/c3_pid_rusage.c",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/c3_pid_rusage.c",
+      "sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "bytes": 3333,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/c3_pid_rusage.c",
+        "expected_sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/check_final_resource_oracle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/check_final_resource_oracle.py",
+      "sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9",
+      "bytes": 2154,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/check_final_resource_oracle.py",
+        "expected_sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/db_os_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/db_os_observer.py",
+        "expected_sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/db_statement_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/db_statement_observer.py",
+      "sha256": "562c4af563b43d2651c45290def53b11febae20317dffd09ca3d19d210a1b726",
+      "bytes": 5397,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/db_statement_observer.py",
+        "expected_sha256": "562c4af563b43d2651c45290def53b11febae20317dffd09ca3d19d210a1b726"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/host_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "bytes": 1335,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/host_observer.py",
+        "expected_sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/observer_fixture.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/observer_fixture.rs",
+        "expected_sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/observer_library.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/observer_library.rs",
+        "expected_sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/prepare_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/prepare_observer.py",
+      "sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "bytes": 4770,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/prepare_observer.py",
+        "expected_sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/prepared_completion_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "bytes": 3565,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/prepared_completion_observer.py",
+        "expected_sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/reduce_commits.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/reduce_commits.py",
+        "expected_sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/run_c5_capacity_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/run_c5_capacity_final.py",
+      "sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372",
+      "bytes": 28596,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/run_c5_capacity_final.py",
+        "expected_sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/run_c6_capacity.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/run_c6_capacity.py",
+      "sha256": "764df24ad1df36f55f5b7cfb3c30ef2d8f08c850ae61eca953f2982f6639cad8",
+      "bytes": 34912,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/run_c6_capacity.py",
+        "expected_sha256": "764df24ad1df36f55f5b7cfb3c30ef2d8f08c850ae61eca953f2982f6639cad8"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/source_provenance.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/source_provenance.py",
+        "expected_sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/static_c6_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/static_c6_checks.py",
+      "sha256": "5b4591a309a59fbc6e0d923976fe4e9cb841d4482bcd4c16cae2ed34c1db11d5",
+      "bytes": 8840,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/static_c6_checks.py",
+        "expected_sha256": "5b4591a309a59fbc6e0d923976fe4e9cb841d4482bcd4c16cae2ed34c1db11d5"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/static_final_runner_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/static_final_runner_checks.py",
+      "sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352",
+      "bytes": 7626,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/static_final_runner_checks.py",
+        "expected_sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/summarize_profile_window.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/summarize_profile_window.py",
+        "expected_sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93"
+      }
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/summarize_resources_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/summarize_resources_final.py",
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "bytes": 5813,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v4 source bound to actual final9fc first MySQL lane below; first identity FAIL and after-resource STOP preserved; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+        "receipt_sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc",
+        "key": "harness/summarize_resources_final.py",
+        "expected_sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5"
+      }
+    },
+    {
+      "path": "native/attempt-05-mysql-receipt-fix/executed-source/CandidatePrivateC6DeviceTest.kt",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source/CandidatePrivateC6DeviceTest.kt",
+      "sha256": "454651b0b77398cff1a8cfaacdd139242fcb7c9951dc071f2844fb8772cc94ed",
+      "bytes": 19623,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+        "receipt_sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f",
+        "key": "source/CandidatePrivateC6DeviceTest.kt",
+        "expected_sha256": "454651b0b77398cff1a8cfaacdd139242fcb7c9951dc071f2844fb8772cc94ed"
+      }
+    },
+    {
+      "path": "native/attempt-05-mysql-receipt-fix/executed-source/actual_case_driver.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source/actual_case_driver.py",
+      "sha256": "b379e6dad635c9613771dd3db6a4265d63c6c58bf932d72052fe4b0024e0f16d",
+      "bytes": 23294,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+        "receipt_sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f",
+        "key": "source/actual_case_driver.py",
+        "expected_sha256": "b379e6dad635c9613771dd3db6a4265d63c6c58bf932d72052fe4b0024e0f16d"
+      }
+    },
+    {
+      "path": "native/attempt-05-mysql-receipt-fix/executed-source/build_jni_offline.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source/build_jni_offline.py",
+      "sha256": "0cd95c6d22f9ae6ca54a3a4d39258bd327d79bdccc39730af8583fca8e47569d",
+      "bytes": 2879,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+        "receipt_sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f",
+        "key": "source/build_jni_offline.py",
+        "expected_sha256": "0cd95c6d22f9ae6ca54a3a4d39258bd327d79bdccc39730af8583fca8e47569d"
+      }
+    },
+    {
+      "path": "native/attempt-05-mysql-receipt-fix/executed-source/device_phase_runner.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source/device_phase_runner.py",
+      "sha256": "3fac97ecb644c4183798d36a05ebb795da757baef40fa0b7092ab9b7f4fa8f06",
+      "bytes": 5122,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+        "receipt_sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f",
+        "key": "source/device_phase_runner.py",
+        "expected_sha256": "3fac97ecb644c4183798d36a05ebb795da757baef40fa0b7092ab9b7f4fa8f06"
+      }
+    },
+    {
+      "path": "native/attempt-05-mysql-receipt-fix/executed-source/emulator_lifecycle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source/emulator_lifecycle.py",
+      "sha256": "1626848aecb9bdd3df6b68d75ed58159c4b6a1a22bc4483c94173d6dbb5ab5cc",
+      "bytes": 2084,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+        "receipt_sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f",
+        "key": "source/emulator_lifecycle.py",
+        "expected_sha256": "1626848aecb9bdd3df6b68d75ed58159c4b6a1a22bc4483c94173d6dbb5ab5cc"
+      }
+    },
+    {
+      "path": "native/attempt-05-mysql-receipt-fix/executed-source/private_native_coordination.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source/private_native_coordination.py",
+      "sha256": "a9d437b6aabebe117291ea5287e12b64ee575ea69e0a3818dc18bada1b845ac6",
+      "bytes": 13567,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+        "receipt_sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f",
+        "key": "source/private_native_coordination.py",
+        "expected_sha256": "a9d437b6aabebe117291ea5287e12b64ee575ea69e0a3818dc18bada1b845ac6"
+      }
+    },
+    {
+      "path": "native/attempt-05-mysql-receipt-fix/executed-source/synthetic_tls_material.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source/synthetic_tls_material.py",
+      "sha256": "020416ade3884d7385336046811299a620d97a1e18566b2e4fb04758be0056f3",
+      "bytes": 4201,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "source copied only; original runtime status comes from external receipts; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+        "receipt_sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f",
+        "key": "source/synthetic_tls_material.py",
+        "expected_sha256": "020416ade3884d7385336046811299a620d97a1e18566b2e4fb04758be0056f3"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/run-provider-lane.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/run-provider-lane.py",
+      "sha256": "0538253df90f97db874899013f5928de03ac7f19ea7b970deb4c82e6214e0ee3",
+      "bytes": 4542,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "run-provider-lane.py",
+        "expected_sha256": "0538253df90f97db874899013f5928de03ac7f19ea7b970deb4c82e6214e0ee3",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/fresh3-preflight.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/fresh3-preflight.py",
+      "sha256": "3eb0aaf1827166597c6ee286c1805fb50e762f80765fa2978de1d5bc2253dc1b",
+      "bytes": 5936,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "fresh3-preflight.py",
+        "expected_sha256": "3eb0aaf1827166597c6ee286c1805fb50e762f80765fa2978de1d5bc2253dc1b",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/budget_adapter.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/budget_adapter.py",
+      "sha256": "ce6f6f4c9111692513f0105de69d0ae28c43d3fd96e0a5f6998640713437ee38",
+      "bytes": 4193,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "budget_adapter.py",
+        "expected_sha256": "ce6f6f4c9111692513f0105de69d0ae28c43d3fd96e0a5f6998640713437ee38",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/check-budget-adapter.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/check-budget-adapter.py",
+      "sha256": "dd1dc70172f549db859a4bfadd23bed4260be66a8d691ad89764b7a1d3c86594",
+      "bytes": 4258,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "check-budget-adapter.py",
+        "expected_sha256": "dd1dc70172f549db859a4bfadd23bed4260be66a8d691ad89764b7a1d3c86594",
+        "execution_kind": "pure parser validation only"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/apple/run-loop.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/apple/run-loop.py",
+      "sha256": "d16a8adffd3737ea1b6f4a40ba0a83446a38cc4a14c59e59deeda5a2b82083e4",
+      "bytes": 18113,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "apple/run-loop.py",
+        "expected_sha256": "d16a8adffd3737ea1b6f4a40ba0a83446a38cc4a14c59e59deeda5a2b82083e4",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/apple/run-native.sh",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/apple/run-native.sh",
+      "sha256": "48f34885892ad85df5bf615a6d8466c75dfe0f2600b8446035a462299072895f",
+      "bytes": 512,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "apple/run-native.sh",
+        "expected_sha256": "48f34885892ad85df5bf615a6d8466c75dfe0f2600b8446035a462299072895f",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/android/run-loop.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/android/run-loop.py",
+      "sha256": "dcd51c32e7c6d230925d6b5742827ac28a29a71de386a7ea74d5c1a844c420ec",
+      "bytes": 16164,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "android/run-loop.py",
+        "expected_sha256": "dcd51c32e7c6d230925d6b5742827ac28a29a71de386a7ea74d5c1a844c420ec",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/android/run-native.sh",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/android/run-native.sh",
+      "sha256": "a9a10eebf106cede0ccee5d4f029064b61da0d17e0b19a5f70a19fbe327d506e",
+      "bytes": 3307,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "android/run-native.sh",
+        "expected_sha256": "a9a10eebf106cede0ccee5d4f029064b61da0d17e0b19a5f70a19fbe327d506e",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/android/verify-existing-room.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/android/verify-existing-room.py",
+      "sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+      "bytes": 3707,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "android/verify-existing-room.py",
+        "expected_sha256": "556b17286f91bc7be68770d9b019f56c1c9c01c14e533e071c1489779ce1d851",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/harness/native_store_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/harness/native_store_observer.py",
+      "sha256": "ebaf609e3a4c505d5e108b6c48bdfc255ba0da085910df87fd217c5fc858ec4c",
+      "bytes": 3545,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "harness/native_store_observer.py",
+        "expected_sha256": "ebaf609e3a4c505d5e108b6c48bdfc255ba0da085910df87fd217c5fc858ec4c",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/harness/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT execution attested by final manifest; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "harness/c3_mock.py",
+        "expected_sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+        "execution_kind": "native runner/observer/mock or preflight budget guard"
+      }
+    },
+    {
+      "path": "provider-native-mysql-9fc812b/finalize-quiet.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/finalize-quiet.py",
+      "sha256": "fc614470099e3951366391ccecddcc2217dcaf6e81f12bb7f032fd85ecb86ce5",
+      "bytes": 8006,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original finalization execution attested; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+        "receipt_sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4",
+        "key": "finalization_source",
+        "expected_sha256": "fc614470099e3951366391ccecddcc2217dcaf6e81f12bb7f032fd85ecb86ce5"
+      }
+    },
+    {
+      "path": "env/fresh3/preserve_reset_sqlfix_final_arm.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/preserve_reset_sqlfix_final_arm.py",
+      "sha256": "70da5dd7f7e4184231210d49eb8b6ed396398e7498df2a7884b72337a3208fdd",
+      "bytes": 8966,
+      "provenance": "exact-source-copy; stable actual final preparation source",
+      "execution_evidence_status": "original OUT source attested by environment owner and correction receipt; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/sqlfix-final-prepare-runtime-source-corrections.json",
+        "receipt_sha256": "5bdb8cdf60bb1154ab3a9c7035efdefd8d07e2189284f45fa1f92298381392d2",
+        "expected_sha256": "70da5dd7f7e4184231210d49eb8b6ed396398e7498df2a7884b72337a3208fdd"
+      }
+    },
+    {
+      "path": "env/fresh3/preserve_reset_sqlfix_final_arm.first-failed-source.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/preserve_reset_sqlfix_final_arm.first-failed-source.py",
+      "sha256": "7b6c18728e53a13c78f39814ffbd9f31e469f1dac9ba15e82ed325971c89a6e1",
+      "bytes": 8987,
+      "provenance": "exact historical failed-source copy; first errors retained",
+      "execution_evidence_status": "original OUT source attested by environment owner and correction receipt; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/sqlfix-final-prepare-runtime-source-corrections.json",
+        "receipt_sha256": "5bdb8cdf60bb1154ab3a9c7035efdefd8d07e2189284f45fa1f92298381392d2",
+        "expected_sha256": "7b6c18728e53a13c78f39814ffbd9f31e469f1dac9ba15e82ed325971c89a6e1"
+      }
+    },
+    {
+      "path": "env/fresh3/preserve_reset_sqlfix_final_arm.second-failed-source.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/preserve_reset_sqlfix_final_arm.second-failed-source.py",
+      "sha256": "74da6f2a604699c3265ac667c7d34e7c2daca0de07c55e3ad091944aa0454121",
+      "bytes": 8976,
+      "provenance": "exact historical failed-source copy; first errors retained",
+      "execution_evidence_status": "original OUT source attested by environment owner and correction receipt; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/sqlfix-final-prepare-runtime-source-corrections.json",
+        "receipt_sha256": "5bdb8cdf60bb1154ab3a9c7035efdefd8d07e2189284f45fa1f92298381392d2",
+        "expected_sha256": "74da6f2a604699c3265ac667c7d34e7c2daca0de07c55e3ad091944aa0454121"
+      }
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/c3_pid_rusage.c",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/c3_pid_rusage.c",
+      "sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "bytes": 3333,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/check_final_resource_oracle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/check_final_resource_oracle.py",
+      "sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9",
+      "bytes": 2154,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/db_os_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/db_statement_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/db_statement_observer.py",
+      "sha256": "562c4af563b43d2651c45290def53b11febae20317dffd09ca3d19d210a1b726",
+      "bytes": 5397,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/host_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "bytes": 1335,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/observer_fixture.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/observer_library.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/prepare_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/prepare_observer.py",
+      "sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "bytes": 4770,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/prepared_completion_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "bytes": 3565,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/reduce_commits.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/run_c5_capacity_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/run_c5_capacity_final.py",
+      "sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372",
+      "bytes": 28596,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/run_c6_capacity.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/run_c6_capacity.py",
+      "sha256": "46fe7d8da3f43278f980ee826c0335f9bf17fa0c11965cb2bd59c8acef05e3f1",
+      "bytes": 36540,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/source_provenance.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/static_c6_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/static_c6_checks.py",
+      "sha256": "5b4591a309a59fbc6e0d923976fe4e9cb841d4482bcd4c16cae2ed34c1db11d5",
+      "bytes": 8840,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/static_final_runner_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/static_final_runner_checks.py",
+      "sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352",
+      "bytes": 7626,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/summarize_profile_window.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/summarize_resources_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/summarize_resources_final.py",
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "bytes": 5813,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "frozen v6 source bound to actual final9fc repeated MySQL lane below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/execute_matched_lane.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/execute_matched_lane.py",
+      "sha256": "bc6b58921b8e231239da87bb8a6b1d53d222fcfbc725beda25bb02a7c4d4ab2d",
+      "bytes": 8006,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/c3_mock.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310",
+      "bytes": 13168,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/c3_pid_rusage.c",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/c3_pid_rusage.c",
+      "sha256": "271db0d2bd5bf58118c34ed8093262f95899b3dc4d993451d225a48463e2d234",
+      "bytes": 3333,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/check_final_resource_oracle.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/check_final_resource_oracle.py",
+      "sha256": "355a73b2e5eaba13efce0df8f6097c25dbef2608dd7208e3dd05604c357341b9",
+      "bytes": 2154,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/db_os_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/db_statement_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/db_statement_observer.py",
+      "sha256": "d51c02c9dc3391d23231314acd165701e1415b51343f846022bf4f393c45fb5b",
+      "bytes": 5371,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/host_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "bytes": 1335,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/observer_fixture.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/observer_library.rs",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/prepare_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/prepare_observer.py",
+      "sha256": "b8317418eeac7c55ea4501e4c941070827bda6c2fe74bddec4fbff859d6c7c63",
+      "bytes": 4770,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/prepared_completion_observer.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "bytes": 3565,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/reduce_commits.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/run_c5_capacity_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/run_c5_capacity_final.py",
+      "sha256": "9fbf6ccd609966c7025ba393e1dd0341f58844031e4384bf320ba5860a725372",
+      "bytes": 28596,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/run_c6_capacity.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/run_c6_capacity.py",
+      "sha256": "b56c036e284b252013c02e469ee5f91b2ee66739055bd66f8753c6f2e3cb3714",
+      "bytes": 33948,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/source_provenance.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/static_c6_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/static_c6_checks.py",
+      "sha256": "5b4591a309a59fbc6e0d923976fe4e9cb841d4482bcd4c16cae2ed34c1db11d5",
+      "bytes": 8840,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/static_final_runner_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/static_final_runner_checks.py",
+      "sha256": "21ec8a385446b9d2671c7ee3ca654393cdd968698c652614490586e11ca66352",
+      "bytes": 7626,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/summarize_profile_window.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/summarize_resources_final.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/summarize_resources_final.py",
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5",
+      "bytes": 5813,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original frozen v2 code inputs; actual PG1/PG2 captured inputs bound below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "capacity/preparation-v6/capacity-observation-boundary.patch",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v6/capacity-observation-boundary.patch",
+      "sha256": "99cbdadbf1ec9e43e10c57e5120e9b90e187950e1b7c5b6fe452795afe44c82d",
+      "bytes": 6951,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "UTF-8/NUL text check only; not compiled/executed"
+    },
+    {
+      "path": "capacity/preparation-v6/static_boundary_checks.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v6/static_boundary_checks.py",
+      "sha256": "d300aeabdf362ddb6aea6ff9f269d256affaab8b8c1cac52592adbf189c29f1f",
+      "bytes": 5933,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/archive_sqlfix_9fc_phase1.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/archive_sqlfix_9fc_phase1.py",
+      "sha256": "1ea3066b7b7660837707c6a8189ff2bb703b3483bd2e76331194bb65b3da9eba",
+      "bytes": 13156,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/purge_sqlfix_9fc_phase2.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/purge_sqlfix_9fc_phase2.py",
+      "sha256": "31d8ba6efaf8b53736d20de9de7074040484fd0100f2f28e9b35e8d6bc6ee6c8",
+      "bytes": 7251,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/provision_sqlfix_repeat.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/provision_sqlfix_repeat.py",
+      "sha256": "901346f1634c5b2622e0488143d2cd139185983a80fefe59efa639760142304b",
+      "bytes": 2316,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/preserve_reset_sqlfix_repeat_arm.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/preserve_reset_sqlfix_repeat_arm.py",
+      "sha256": "ff3909dbec471916af7bbe624326f0a57ba2da93367efcdf313a9b6cdd077720",
+      "bytes": 8973,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/archive_sqlfix_repeat_phase1.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/archive_sqlfix_repeat_phase1.py",
+      "sha256": "5011f03b7d506c8b92a85ad2fdcb5a0b743465fb0bc1b8ad4f510c64804a9c00",
+      "bytes": 13553,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/purge_sqlfix_repeat_phase2.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/purge_sqlfix_repeat_phase2.py",
+      "sha256": "f03a09ccaee132e84a175559b4f3f05b08febf0a71116ee4d9318d462597eeb6",
+      "bytes": 7429,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/fresh3/read_sqlfix_final_quiet.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/read_sqlfix_final_quiet.py",
+      "sha256": "634fd016814f1040f630fd137099ef28022c55e13c59388fd1a205e38cffef23",
+      "bytes": 4233,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/prepare_pg_arm_disk3_bounded.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/prepare_pg_arm_disk3_bounded.py",
+      "sha256": "b3574853461cc82a2f5d61ffa64c8ef29af58c5cf1def0fd0c9e6ea981844d20",
+      "bytes": 3939,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/prepare_pg2_arm_disk3_bounded.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/prepare_pg2_arm_disk3_bounded.py",
+      "sha256": "85ebf04979bd06b5094af626315057c3930c07c96e4e07c8c7c95dc36d9c5b4e",
+      "bytes": 4105,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/archive_pg1_maintenance.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/archive_pg1_maintenance.py",
+      "sha256": "85ac61627dab84400df383963dafb376b8b4dd60a2681ba223ee6bad227176ac",
+      "bytes": 7790,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/archive_pg1_maintenance_v2.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/archive_pg1_maintenance_v2.py",
+      "sha256": "3dd47b245e133712a87f497064a1fe847912fa7b03ec1970ab4c269770892c86",
+      "bytes": 8527,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/drop_archived_pg1.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/drop_archived_pg1.py",
+      "sha256": "c144db90eb672bae47bb15ede53e8f21592c10723f52185c575f0fac93fd3886",
+      "bytes": 4758,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "original OUT source; runtime binding where captured below; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/final_owned_preserve.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final_owned_preserve.py",
+      "sha256": "d304f83451690ad32671690d1d5bee6d829e869af66e5ab6ac27b812be442d4b",
+      "bytes": 12002,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "actual preservation PASS at original OUT; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final-owned-preservation/manifest.json",
+        "receipt_sha256": "3179f0620fa9ee31d26fd349c98d49da2c7e72a4097fa33ff660ba97a860fc98"
+      }
+    },
+    {
+      "path": "env/final_owned_remove.before-lsof-and.prepared-only.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final_owned_remove.before-lsof-and.prepared-only.py",
+      "sha256": "0d335b3621412aa6cf982b8a2596536ffc29bb97661679b713bc656d340c8e3a",
+      "bytes": 7082,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "historical prepared source only; NEVER executed; final source separately preserved",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed"
+    },
+    {
+      "path": "env/final_owned_remove.py",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final_owned_remove.py",
+      "sha256": "abe2a5c45345a647507670c895a3b142faa06adcd6e9bbd94f23c1a8a178a6ea",
+      "bytes": 7087,
+      "provenance": "exact-source-copy",
+      "execution_evidence_status": "actual root-authorized scoped removal completed at original OUT; relocated NOT RUN",
+      "relocated_executed": false,
+      "static_check": "Python AST parse only; not imported/executed",
+      "external_binding": {
+        "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final-owned-cleanup.json",
+        "receipt_sha256": "a0490bc395782c8a125c4cebdfd09dde153c2e130c5c9f5e0e38ed65d7d2f502"
+      }
+    }
+  ],
+  "artifact_identities_from_external_receipts_not_rehashed_binaries": {
+    "source_commit": "e3de1ebe1caac618ecdcc293e040752e36752fe4",
+    "source_tree": "d631191587514d1286044ec6c8eb674d947c7087",
+    "server_sha256": "ef08db18881801b84d3fca496ae58d66b3e0eeb735f1d97e5cc665392bd0744c",
+    "test_sha256": "8e721dccd4bf8a481c0ce70cc319ca53c498786ffa4fa4628dfbf4084ed52204",
+    "observer_sha256": "2616e3fd02244fcd0a4b10760803ae8e484422b1657115b0e9a8a7ff741d768b",
+    "observer_patch_sha256": "a1e92a0116cfbcf57c87a0f264abcc3a73a94dc2deada5577e988b97357511d9",
+    "main_APK_sha256": "779930c0750bfae52aab59472a1bca21104541335e536b6466cb9920417f50d2",
+    "functional_3708_test_APK_sha256": "3708eacadbaf4da07e5a5fe38b2e40cfadb53545091e66f89ee36495dcbc1b75",
+    "TLS_observer_test_APK_sha256": "024a6945a14676159cdc62bcbc9ef034b77c2c70b9957ec127758fbdb45b0ab5",
+    "JNI_sha256": "802b41a519b3ce9deb214204869e0a899ed8965c76fa141d87b7bc3b2e4e883c"
+  },
+  "fresh3_environment_reference_only": {
+    "receipt": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/environment-receipt.json",
+    "image_reference": "mysql@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+    "image_id": "sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+    "storage_medium": "disk-backed-named-volume",
+    "owner_state_and_URL_values_bundled": false
+  },
+  "external_receipts_not_copied": [
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/final-e3de1eb/identity.json",
+      "sha256": "733b5054c9ad9d5e3819ed31dc232cafa87ef81345b5db5ce443939d1280db6d"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/final-e3de1eb/results.json",
+      "sha256": "f64c2e706c99f89ca5d8590155564b9a9ef66839520fdce13ce3e4a45d975177"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-e3de1eb/build-handoff-manifest.json",
+      "sha256": "e7b5dd480e6173a17171e0a243ee61a09faefb9594aa52a9accd79e8d9d9a0fb"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/apk-final-identity.json",
+      "sha256": "0689093cf9101a1e57d1d6dc026a3d0c06dd8387e8d731ee084cd2efdacb4f50"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/functional-apk-identity-3708.json",
+      "sha256": "93d2773a34762fb7a8caa2751d372f04ef2c8377eed8dc0a34d7117279282e5d"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/executed-source-manifest.json",
+      "sha256": "cbb1abb0b4ec4a0840a3ac434c6c6c432673274724c320ca04e193c56fc18e84"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-03/historical-source-preservation/provenance.json",
+      "sha256": "89adefe0d4e58c4eb2d89b6a391d3e0cf6423fa0fb85c66626cd6278e313f993"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-04-tls/executed-source-manifest.json",
+      "sha256": "16ad5b6554cb21cdebd7c8036a46a41a893401fd84bdef691d0d94130962db90"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/summary.json",
+      "sha256": "da5d9d776acdebb280117c0bbed7a8a190bf1c5c0a2cb474c487c24c626f1396"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/executed-source-manifest.json",
+      "sha256": "23fac6594e0dee98e37d7f56af0d33e3fa43a4985856dfeda85819f811810ec3"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/summary.json",
+      "sha256": "055c64625bf6f4537971f6a076bb6b45ed1722d53f949f91aaceb700e109ebc2"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native/apple/cache-identity.json",
+      "sha256": "40f96fe51e3b0e606a5f29641733a8dbed43dbd952784c1840ad6728198e2688"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/environment-receipt.json",
+      "sha256": "9498c0911a58dec649321ae9866dbf3fb227b70ee66e040b0a9d7cb908a9f77d"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/preparation-manifest.json",
+      "sha256": "daa3a618ed5ff38b9b9aeead09dacafcfab35c1801e95311ac66a2a70f33ab43"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/sqlfix-9fc812b/final-summary.json",
+      "sha256": "d2e641007dec3a14df5f6c0ded1be9b0ef63e1a1e056c5761276e6be1a672063"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/tests/sqlfix-9fc812b/fixture-layout-failure-classification.json",
+      "sha256": "f538edc1ee53ac7906e8984f5e2bb44aa0a4c0d417f89784a07aacf85e0219f0"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/build-handoff-manifest.json",
+      "sha256": "3da6861791c94ad6974ec11f289de9703547c65363c95503e05b8bb0442bf248"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/freeze-manifest.json",
+      "sha256": "16ef9854b3e0b86b4e4a6d4e371542692517588470294bc0d79e3734e6f0fedc"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/native/attempt-05-mysql-receipt-fix/executed-source-manifest.json",
+      "sha256": "00051650ab189020ef61c941d8302a9594cd88bac3f75865c92fe714d204d69f"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/source-provenance.json",
+      "sha256": "825b17ab16b7a46cf01deb5d0fc329e792e1af6787983b307cceecf4b1484186"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/budget-adapter-pure-checks.json",
+      "sha256": "eaf27e5f778101a108f70446329dace538d65c31111b3c43fc56c43337d79283"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/sqlfix-provision-role-receipt.json",
+      "sha256": "27354c7836312e45109f98de8bc3b3d4ffb643fd6a038960ad3bf8b6b60c7554",
+      "kind": "result only; inline executed source not preserved"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/sqlfix-private-mysql-url-layout-receipt.json",
+      "sha256": "360cb59f6972b4b757d7a8697b78fbd9d820c91f9e05011b6d245b91f2b5ca9b",
+      "kind": "result only; inline executed source not preserved"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/sqlfix-private-mysql-testguard-projection-receipt.json",
+      "sha256": "0f6e1749f861e15b880160217a2e7329a4a70735594cffd404d96582f931c62d",
+      "kind": "result only; inline executed source not preserved"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/provider-native-mysql-9fc812b/executed-source-manifest.json",
+      "sha256": "883779b83d47a27e878016414f559ef929266479b0ca512c93724e4b341e0fb4"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/sqlfix-final-prepare-first-error.json",
+      "sha256": "5e40469eccf2c1bcf25c36acdf2bb439d5b84982549a9088356d65332632570d",
+      "kind": "source-correction/result metadata reference only; raw receipt not copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/sqlfix-final-prepare-second-error.json",
+      "sha256": "edf13cb7de5763fdb4c5bc5f97aa22cac28d7dda21536f8c078a3fbd85f22156",
+      "kind": "source-correction/result metadata reference only; raw receipt not copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/sqlfix-final-prepare-runtime-source-corrections.json",
+      "sha256": "5bdb8cdf60bb1154ab3a9c7035efdefd8d07e2189284f45fa1f92298381392d2",
+      "kind": "source-correction/result metadata reference only; raw receipt not copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/fresh3/disk3-mysql-sqlfix-final-digest-reset-receipt.json",
+      "sha256": "6765469950b61f7bc68c695fb1e3219ceb53abeee113516e741cfbd377d7f7e8",
+      "kind": "source-correction/result metadata reference only; raw receipt not copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/offline-handoff-manifest.json",
+      "sha256": "03fdbbd4bbaf4204a65a2f767bf005d0d1480ab3ea9c500ea0ff8d56edc0ef02",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/offline-handoff-manifest.json",
+      "sha256": "98168f790bce615fd5b2cb83cbeb16e1afa6eb703fe6e18b242c0f0f77c38ff9",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/offline-handoff-manifest.json",
+      "sha256": "a545a956cbc0711319d6184c25f1dced2219aaf6b28c357186ca0259b99a422d",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/offline-handoff-manifest.json",
+      "sha256": "272ef979443b8a37ebfe578381244e6af919296e3bac0683d5a5b9830e6e2f75",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/pg-current-finite-repeat-comparison.json",
+      "sha256": "1f0dac35080a20f7796a7b913bfc1616bb1b50cdc63506b4d55c7cecee48387a",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/execution-source-provenance.json",
+      "sha256": "cab904e91af6426ac90dd93af0c4b45686c556a7fe1e4b63a90fe90eba2d979e",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/preparation-v6/static-boundary-receipt.json",
+      "sha256": "cb976928781d785287138eb99386898f333b785c9d3ca34bd248547858adb590",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final-owned-preservation/manifest.json",
+      "sha256": "3179f0620fa9ee31d26fd349c98d49da2c7e72a4097fa33ff660ba97a860fc98",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final-owned-cleanup.json",
+      "sha256": "a0490bc395782c8a125c4cebdfd09dde153c2e130c5c9f5e0e38ed65d7d2f502",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final-owned-remnant-check.json",
+      "sha256": "a842a9240fb3d0d97c2b8e3325b26a2e00c052d12fe629268840d330f3b128f3",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final-remove-lsof-and-source-correction.json",
+      "sha256": "551253e840e0d7e8032003fdb907915172e1b3960b1ac386c57bf97d74a0b063",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/final-owned-cleanup-plan-v2.json",
+      "sha256": "dc340f05efd5a9ea9e9561e0849d8129971bbc96318a7e584d330e5313612583",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/env/pg2-preparation-binding.json",
+      "sha256": "5aa5a1bb249b403ad39db989d3b59c6c51a4fcb4150f206a6a24bd3944bce22c",
+      "kind": "external receipt metadata reference only; no result/state content copied"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/review/capacity-v6-observation-boundary-review.md",
+      "sha256": "743e52453327354aa921195571e1621b48f77c29764fd714f726971e994a179d",
+      "kind": "independent source review metadata reference only"
+    }
+  ],
+  "historical_failures_external_only": [
+    "native/attempt-01",
+    "native/attempt-02/failure-classification.json",
+    "native/attempt-03/tls-wrong-ca",
+    "capacity/matched-final-pair/frozen-harness-v1",
+    "capacity/matched-final-pair/frozen-harness-v2",
+    "capacity/mysql-early-pair",
+    "env/fresh3/disk3-old-preparation-first-error.json"
+  ],
+  "capacity_result_at_packaging": "four final9fc lanes ended; source binding complete; two MySQL all-cutoff40960PASS, first identityFAIL preserved, both after-resourceSTOP; PG1/2 current finite repeats externally bound; no historical25s or RSS causal attribution",
+  "excluded": [
+    "URL files",
+    "owned/container/volume/case state",
+    "environment credentials",
+    "binaries/APKs/JNI artifacts",
+    "databases/binlogs",
+    "raw logs",
+    "runtime result JSON copies",
+    "build/Gradle/Cargo caches"
+  ],
+  "history_archive": {
+    "directory": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/bundle-history/pre-sqlfix-refresh-9434ccfc",
+    "manifest_sha256": "9434ccfccd0469eadca69789db562ccd080299b463c53c7247ff9104ab10e7c3",
+    "README_sha256": "f893cf8c792377325d22b03f9c60ca915df54660a6bbf55779bf9cd8b0eb3790"
+  },
+  "artifact_identities_9fc_from_external_receipts_not_rehashed_binaries": {
+    "source_commit": "9fc812b40880e0ffd2375b4c83bb920292bdf880",
+    "source_tree": "304a7787f98714a5fe340421edd3d0fe96b24129",
+    "normal_sha256": "b7a0683dd46dd5d167c93b5e960adde4423323fd2bf96b81f89c9846b4572af3",
+    "tests_sha256": "5a610bd4bf301689abe46a7c2d49cdf2c06771305fdd09bb0e9a1a50a8805cb1",
+    "observer_sha256": "3dcceddb5c15fd35f1000f7b198519e9e49a87f29a3c84ae1aa8f3e1a5c01a69"
+  },
+  "provenance_gaps": [
+    {
+      "scope": "sqlfix dedicated-role grant provision, allowed URL-file alias copy, test_guard_only projection creation",
+      "actual_execution": "inline Python; standalone exact executed source was not preserved",
+      "confirmation": "environment owner confirmed no independent .py; ordinary create helpers are included but do not contain these inline modifications",
+      "receipts_are_not_source": true,
+      "reconstructed_source_created": false,
+      "replay_status": "not independently reproducible from this bundle; source provenance gap explicit",
+      "result_receipt_references": [
+        "env/fresh3/sqlfix-provision-role-receipt.json",
+        "env/sqlfix-private-mysql-url-layout-receipt.json",
+        "env/sqlfix-private-mysql-testguard-projection-receipt.json"
+      ]
+    }
+  ],
+  "pending_source_append": [],
+  "history_archives_after_initial_refresh": [
+    {
+      "directory": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/bundle-history/pre-provider-binding-c39c42c9",
+      "manifest_sha256": "c39c42c96bb7a6be04ed2b75cc642d400ace7632b8dbf419dfdc6e4bd6368b72",
+      "README_sha256": "112d32dac5bfb3226037d09a9fe923505a54e133e7f61d5101ae936a3dfa4a96"
+    },
+    {
+      "directory": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/bundle-history/pre-envprep-binding-318d1267",
+      "manifest_sha256": "318d12670f6b72060aca1b5de683cee43a73193120405b240aaa6cfca590cb48",
+      "README_sha256": "7611c7aac7faa5dde8054ba3b974e1fa95d0925a5818106f0e05b4e311a3bd4d"
+    },
+    {
+      "directory": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/bundle-history/pre-final-capacity-binding-64b4bc6b",
+      "manifest_sha256": "64b4bc6bdcda4bdce4e8e0115b4d64bd7c89fd0c8ed8674719f0413692d076a9",
+      "README_sha256": "78ab4bc8da82503832afdb8c6036dad28ac12cc978a1a9851ef6e7da9fe02e4f"
+    },
+    {
+      "directory": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/bundle-history/pre-local-whitespace-policy-9e2d10be",
+      "manifest_sha256": "9e2d10bec2ebf47dd5d985f8a937fcdc24a54a0b920a0cf450d89453690ff6f2",
+      "README_sha256": "22397dd93b0407bcd252d7fef27748d2e44e91a83ac6ca5e8a7ba83fa4a889d4",
+      "first_root_report_receipt_sha256": "dc05de87a18722c7c5bd941335d29b23f8269318fa1b86d2b1f333454d3a83a7",
+      "read_only_reproduction_receipt_sha256": "d5b75505293b9cd1a2886adf4bd0c2559313f2de0a34fa34712d17b3021682ff"
+    }
+  ],
+  "env_sqlfix_final_prepare_correction_scope": {
+    "first": "SHOW COLUMNS mistakenly combined with LIMIT",
+    "second": "BusyBox timeout incompatible GNU long arguments",
+    "both_before_snapshot_and_TRUNCATE": true,
+    "deadline_seconds_unchanged": 5,
+    "successful_reset_executed_once": true,
+    "sources_preserved": [
+      "preserve_reset_sqlfix_final_arm.py",
+      "preserve_reset_sqlfix_final_arm.first-failed-source.py",
+      "preserve_reset_sqlfix_final_arm.second-failed-source.py"
+    ]
+  },
+  "static_data_files": [
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v3/harness/prepared-query-hash-map.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v3/harness/prepared-query-hash-map.json",
+      "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155",
+      "bytes": 377,
+      "kind": "static code data: SQL SHA256 to label only; not runtime observation/state/URL/credential",
+      "relocated_executed": false
+    },
+    {
+      "path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/prepared-query-hash-map.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-disk3-pair/frozen-harness-v4/harness/prepared-query-hash-map.json",
+      "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155",
+      "bytes": 377,
+      "kind": "static code data: SQL SHA256 to label only; not runtime observation/state/URL/credential",
+      "relocated_executed": false
+    },
+    {
+      "path": "capacity/frozen-harness-v6/harness/prepared-query-hash-map.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/frozen-harness-v6/harness/prepared-query-hash-map.json",
+      "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155",
+      "bytes": 377,
+      "kind": "static code data: SQL SHA256 to label only; not runtime observation/state/URL/credential",
+      "relocated_executed": false
+    },
+    {
+      "path": "capacity/matched-final-pair/frozen-harness-v2/harness/prepared-query-hash-map.json",
+      "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/matched-final-pair/frozen-harness-v2/harness/prepared-query-hash-map.json",
+      "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155",
+      "bytes": 377,
+      "kind": "static code data: SQL SHA256 to label only; not runtime observation/state/URL/credential",
+      "relocated_executed": false
+    }
+  ],
+  "derived_files": [
+    {
+      "path": "env/final_owned_remove.lsof-and-derived.patch",
+      "sha256": "17d25da707abc6e0001718f32e79bf0df3791876e3ca56304e262b9e920ff9b0",
+      "bytes": 1722,
+      "provenance": "derived unified diff of two exact copied sources; not an original executed script",
+      "from_source_sha256": "0d335b3621412aa6cf982b8a2596536ffc29bb97661679b713bc656d340c8e3a",
+      "to_source_sha256": "abe2a5c45345a647507670c895a3b142faa06adcd6e9bbd94f23c1a8a178a6ea",
+      "relocated_executed": false
+    }
+  ],
+  "final_capacity_execution_source_bindings": [
+    {
+      "lane": "run-mysql-final",
+      "handoff_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/offline-handoff-manifest.json",
+      "handoff_sha256": "03fdbbd4bbaf4204a65a2f767bf005d0d1480ab3ea9c500ea0ff8d56edc0ef02",
+      "sources": [
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/c3_mock.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-c3_mock.py",
+          "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/db_os_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-db_os_observer.py",
+          "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/host_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-host_observer.py",
+          "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/observer_fixture.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-observer_fixture.rs",
+          "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/observer_library.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-observer_library.rs",
+          "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/prepared-query-hash-map.json",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-prepared-query-hash-map.json",
+          "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/prepared_completion_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-prepared_completion_observer.py",
+          "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/reduce_commits.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-reduce_commits.py",
+          "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/run_c6_capacity.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-run_c6_capacity.py",
+          "sha256": "764df24ad1df36f55f5b7cfb3c30ef2d8f08c850ae61eca953f2982f6639cad8"
+        },
+        {
+          "source_path": "capacity/matched-disk3-pair/frozen-harness-v4/harness/source_provenance.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-final/executed-source_provenance.py",
+          "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e"
+        }
+      ],
+      "relocated_executed": false
+    },
+    {
+      "lane": "run-mysql-repeat-v6",
+      "handoff_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/offline-handoff-manifest.json",
+      "handoff_sha256": "98168f790bce615fd5b2cb83cbeb16e1afa6eb703fe6e18b242c0f0f77c38ff9",
+      "sources": [
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/c3_mock.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-c3_mock.py",
+          "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/db_os_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-db_os_observer.py",
+          "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/host_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-host_observer.py",
+          "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/observer_fixture.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-observer_fixture.rs",
+          "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/observer_library.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-observer_library.rs",
+          "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/prepared-query-hash-map.json",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-prepared-query-hash-map.json",
+          "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/prepared_completion_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-prepared_completion_observer.py",
+          "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/reduce_commits.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-reduce_commits.py",
+          "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/run_c6_capacity.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-run_c6_capacity.py",
+          "sha256": "46fe7d8da3f43278f980ee826c0335f9bf17fa0c11965cb2bd59c8acef05e3f1"
+        },
+        {
+          "source_path": "capacity/frozen-harness-v6/harness/source_provenance.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-mysql-repeat-v6/executed-source_provenance.py",
+          "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e"
+        }
+      ],
+      "relocated_executed": false
+    },
+    {
+      "lane": "run-pg-final-1",
+      "handoff_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/offline-handoff-manifest.json",
+      "handoff_sha256": "a545a956cbc0711319d6184c25f1dced2219aaf6b28c357186ca0259b99a422d",
+      "sources": [
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/c3_mock.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-c3_mock.py",
+          "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/db_os_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-db_os_observer.py",
+          "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/host_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-host_observer.py",
+          "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/observer_fixture.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-observer_fixture.rs",
+          "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/observer_library.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-observer_library.rs",
+          "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/prepared-query-hash-map.json",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-prepared-query-hash-map.json",
+          "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/prepared_completion_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-prepared_completion_observer.py",
+          "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/reduce_commits.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-reduce_commits.py",
+          "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/run_c6_capacity.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-run_c6_capacity.py",
+          "sha256": "b56c036e284b252013c02e469ee5f91b2ee66739055bd66f8753c6f2e3cb3714"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/source_provenance.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-1/executed-source_provenance.py",
+          "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e"
+        }
+      ],
+      "relocated_executed": false
+    },
+    {
+      "lane": "run-pg-final-2",
+      "handoff_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/offline-handoff-manifest.json",
+      "handoff_sha256": "272ef979443b8a37ebfe578381244e6af919296e3bac0683d5a5b9830e6e2f75",
+      "sources": [
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/c3_mock.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-c3_mock.py",
+          "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/db_os_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-db_os_observer.py",
+          "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/host_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-host_observer.py",
+          "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/observer_fixture.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-observer_fixture.rs",
+          "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/observer_library.rs",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-observer_library.rs",
+          "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/prepared-query-hash-map.json",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-prepared-query-hash-map.json",
+          "sha256": "e86218fd18c4eb4acfdccb3a97d40d699e4b41666448c9708f7b5d30c55b8155"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/prepared_completion_observer.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-prepared_completion_observer.py",
+          "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/reduce_commits.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-reduce_commits.py",
+          "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/run_c6_capacity.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-run_c6_capacity.py",
+          "sha256": "b56c036e284b252013c02e469ee5f91b2ee66739055bd66f8753c6f2e3cb3714"
+        },
+        {
+          "source_path": "capacity/matched-final-pair/frozen-harness-v2/harness/source_provenance.py",
+          "original_executed_copy_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c6-private-capacity-20261015/capacity/final-9fc812b/run-pg-final-2/executed-source_provenance.py",
+          "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e"
+        }
+      ],
+      "relocated_executed": false
+    }
+  ],
+  "cleanup_state_from_external_receipts": "preservation PASS and scoped 4 containers/one fresh3 volume removed; OrbStack remained Running under conservative process-name guard, initial Stopped not restored",
+  "final_static_audit": {
+    "source_AST_only": 133,
+    "all_original_source_bytes_copied_exactly": true,
+    "original_pre_refresh_source_bytes_unchanged": 111,
+    "static_SQL_label_map_files": 4,
+    "derived_diff_files": 1,
+    "relocated_execution": false,
+    "harness_imports": false,
+    "business_DB_ADB_build_calls": 0,
+    "excluded_runtime_data_and_credentials": true,
+    "pending_source_append": false
+  },
+  "metadata_files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "1f50200bc8c18885e8b654e36961aa2a194a1ff2e7d35cc8db1b4a100b8e42cb",
+      "bytes": 127,
+      "kind": "local archive whitespace policy only; exact preserved source and patch bytes unchanged"
+    }
+  ],
+  "total_files": 173,
+  "local_whitespace_policy": {
+    "scope": "prototype/validation/c6 only",
+    "patterns": [
+      "*.patch",
+      "env/isolated_db.py",
+      "env/fresh2/isolated_db.py",
+      "env/fresh3/isolated_db.py"
+    ],
+    "attribute": "-whitespace",
+    "source_or_patch_byte_changes": false,
+    "README_EOF_trimmed": true,
+    "root_readd_required": true
+  }
+}

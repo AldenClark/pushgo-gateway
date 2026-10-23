@@ -59,7 +59,43 @@ impl From<crate::value::ValueError> for CoreError {
 impl From<crate::storage::StoreError> for CoreError {
     fn from(value: crate::storage::StoreError) -> Self {
         match value {
+            crate::storage::StoreError::Ordinary(error) => Self::from(error),
+            crate::storage::StoreError::OperationScopeConflict => Self::conflict(
+                "op_id is already used by a different operation",
+                "op_id_scope_conflict",
+            ),
             crate::storage::StoreError::PasswordKdfBusy => Self::TooBusy,
+            other => Self::Store(other.to_string()),
+        }
+    }
+}
+
+impl From<crate::ordinary::KernelError> for CoreError {
+    fn from(error: crate::ordinary::KernelError) -> Self {
+        use crate::ordinary::KernelError;
+        match error {
+            KernelError::Control {
+                status: 400,
+                message,
+                code,
+            } => Self::validation_code(message, code),
+            KernelError::Control {
+                status: 409,
+                message,
+                code,
+            } => Self::conflict(message, code),
+            KernelError::Conflict => {
+                Self::conflict("operation fingerprint conflict", "op_id_payload_conflict")
+            }
+            KernelError::ScopeConflict => Self::conflict(
+                "op_id is already used by a different operation",
+                "op_id_scope_conflict",
+            ),
+            KernelError::Invalid(message) => Self::validation(message),
+            KernelError::Capacity | KernelError::Unavailable => Self::TooBusy,
+            KernelError::Unauthorized => {
+                Self::auth("channel not authorized", "channel_not_authorized")
+            }
             other => Self::Store(other.to_string()),
         }
     }

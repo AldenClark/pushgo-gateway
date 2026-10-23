@@ -1,0 +1,8 @@
+{
+  "status": "NEVER_EXECUTED_PROPOSAL",
+  "original_plan": "c9-frozen-input-plan.json",
+  "original_5pure_receipt": "static-c9-plan-receipt.json",
+  "original_harness_draft": "harness/",
+  "reason": "rootextended16msg/sstagebeforeanyMySQLload; usev2beforeandafter",
+  "SQLite1260_idle_unaffected": true
+}

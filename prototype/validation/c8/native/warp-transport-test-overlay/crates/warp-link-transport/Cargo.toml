@@ -1,0 +1,35 @@
+[package]
+name = "warp-link-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["quic", "tcp", "wss"]
+quic = []
+tcp = []
+wss = []
+
+[dependencies]
+bytes = { workspace = true }
+futures-util = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+url = { workspace = true }
+warp-link-core = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "fded360134f2144876bb11b95e7431cb1d72aef3" }
+webpki-roots = { workspace = true }
+hex = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+quinn = { workspace = true, features = ["rustls-ring"] }
+rustls = { workspace = true, features = ["ring"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+quinn = { workspace = true, features = ["rustls-aws-lc-rs"] }
+rustls = { workspace = true, features = ["aws_lc_rs"] }
+tokio-rustls = { workspace = true, features = ["aws_lc_rs"] }

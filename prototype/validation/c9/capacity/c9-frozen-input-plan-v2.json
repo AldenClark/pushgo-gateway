@@ -1,0 +1,167 @@
+{
+  "status": "INPUT_PLAN_FROZEN_RUNTIME_HOLD",
+  "scope": "Measure baseline first; no runtime product changes, no controller assumed; no push/deploy",
+  "working_tree_head_observed": "a17f605323ed1195439508df4146ab54e6aea4f0",
+  "compiled_baseline_commit": "be3bc95c58500ee9913dbc2d9b442d5eb6a74227",
+  "runtime_paths_unchanged_from_baseline": true,
+  "working_tree_status": "",
+  "frozen_observer": {
+    "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/final-be3bc95-observer/c5-observer",
+    "sha256": "a77c754c15f78fb725e4f22ae4b46981959744f0659b074c16d585372d8bf9eb",
+    "source_identity": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/capacity/final-be3bc95-observer/replay-source-identity.json",
+    "identity_scope": "immutable Gitbe3 plus8sparseobserveroverrides; actualWTa17 has onlydocs/validation differences, not claimedcompileda17"
+  },
+  "frozen_normal": {
+    "sha256": "b771b79a93b24025a037ca61c7056ea5a743ba52627a417dbee7f90d9d9efe44",
+    "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c8-private48-20261015/binaries/gateway-be3bc95-normal"
+  },
+  "C8_provenance": {
+    "report_sha256": "fc58ebe00095ab6be8652a555a298f9127fe68623d38b65ce2ad504ece9808f2",
+    "twenty_source_list_sha256": "d289b0564ea1ccc1887fd471790162231caaa6ab0dc32d5ab40751bf0c5a0813",
+    "original_failures_untouched": true
+  },
+  "mysql_process": {
+    "processes": 1,
+    "small_cycles": 2,
+    "small_body_ASCII_bytes": 1024,
+    "targets_per_message": 16,
+    "targets_by_provider": {
+      "FCM": 8,
+      "APNS": 8
+    },
+    "provider_budget_per_provider": 32,
+    "claim_quantum": 32,
+    "http_callers": 8,
+    "ordinary_mock_delay_ms": 20,
+    "cold_idle_seconds": 120,
+    "post_ACK_idle_after_each_cycle_seconds": 120,
+    "stages_per_small_cycle": [
+      {
+        "name": "low",
+        "messages_s": 0.25,
+        "seconds": 20,
+        "messages": 5,
+        "delay_ms": 20
+      },
+      {
+        "name": "ramp_4",
+        "messages_s": 4,
+        "seconds": 5,
+        "messages": 20,
+        "delay_ms": 20
+      },
+      {
+        "name": "ramp_16",
+        "messages_s": 16,
+        "seconds": 30,
+        "messages": 480,
+        "delay_ms": 20
+      },
+      {
+        "name": "burst_256",
+        "messages_s": 256,
+        "seconds": 2,
+        "messages": 512,
+        "delay_ms": 20
+      },
+      {
+        "name": "drain_barrier",
+        "offers": 0,
+        "cutoff": "same cycle absolute190s, never reset",
+        "purpose": "separate preexistingburstbacklog from deliberate slowProvider stage"
+      },
+      {
+        "name": "slow_provider",
+        "messages_s": 16,
+        "seconds": 8,
+        "messages": 128,
+        "delay_ms": 500
+      },
+      {
+        "name": "restore_and_drain",
+        "offers": 0,
+        "delay_ms": 20,
+        "cutoff": "same cycle absolute190s"
+      }
+    ],
+    "messages_per_cycle": 1145,
+    "targets_per_cycle": 18320,
+    "cycle_business_cutoff_seconds": 190,
+    "cutoff_anchor": "first actual offered message of that cycle; barriers/HTTP/phase changes never reset it",
+    "missing_input": "ifdeadline orfirstfailureprevents remainingphases, preserve emitted/offeredfull denominator plusplanned-not-offered count, STOP no newphase/cycle",
+    "identity_witness_bound_seconds": 10,
+    "ACK_validation_total_bound_seconds": 60,
+    "long_idle_no_Gateway_HTTP_or_SQL_observation": true,
+    "large_cohort": {
+      "position": "aftertwoidenticalsmallcycles/postidle",
+      "messages": 4,
+      "complete_JSON_UTF8_bytes_each": 49152,
+      "targets": 64,
+      "offset_seconds": [
+        0,
+        2.5,
+        5,
+        7.5
+      ],
+      "planned_input_end_seconds": 10,
+      "absolute_callback_cutoff_seconds": 190,
+      "post_ACK_idle_seconds": 120,
+      "content": [
+        "ASCII",
+        "UTF8Unicode",
+        "JSONquotes/backslashes",
+        "scalar_metadata"
+      ],
+      "wire_limit_bytes": 4096,
+      "fullPull": "hash/sizeverification only; no fullbodylogs"
+    },
+    "formal_total_messages": 2294,
+    "formal_total_targets": 36704,
+    "warmup_targets_excluded": 16
+  },
+  "sqlite_cold_idle": {
+    "processes": 1,
+    "binary": "frozen normalb771",
+    "seconds": 1260,
+    "HTTP_offers": 0,
+    "Gateway_HTTP_or_SQL_observation": 0,
+    "separate_PID_local_DB_lease": true,
+    "may_overlap_MySQL": true,
+    "fixture_stats_heartbeat_hz": 1,
+    "timer_scope": "covers two600s reaper ticks with60s margin; strictelapsed>600 expiration boundary",
+    "min_connections": 1,
+    "max_connections": 1,
+    "does_not_promise_shrink_to_zero": true,
+    "max_lifetime_1800s": "NOT_COVERED; robustmaxlife/reaperwouldneed~2460s and is outofscope",
+    "no_product_minimum_claim": "fixture includesHTTP/runtime/1HzSTATS; concurrentMySQL/OSobservation mayinterfere"
+  },
+  "budget": {
+    "hard_floor_bytes": 4294967296,
+    "expected_new_MySQL_lane_growth_bytes": 3221225472,
+    "required_effective_start_available_bytes": 7516192768,
+    "basis": "C8sameengine40960targetsmallgrew~1.59GB; v236704targettotalstillbelow40960buttwocyclesACK/48K/observerqueriesjustifyrounded3GiBreserve, envownerrecheckrequired",
+    "checks": "freshhost+exactownedMySQLdatadiravailablemin;pre/postlane receipts;OSfirst; no automaticdrop/purge/cachedelete/resize",
+    "SQLite_growth_estimate_bytes": 67108864,
+    "SQLite_basis": "emptylocalSQLite+schema/WALonly,noformalofferedmessages;rootenvguardmustconfirmpath/lease andspace",
+    "resource_stop": "STOP/no-nextifguardfails; neverretroactivelyerase witnessedtargetCOMMIT"
+  },
+  "measurement": {
+    "primary": "offerMach->per-targetsuccessfulCOMMITawaitcallback, allofferedtargetsdenominator",
+    "HTTPacceptance_response": "http_endMach->callback supplementary; notDBadmissionCOMMIT; negative/missing retained",
+    "rate_bins": "sameMach1s offer/HTTPresponseaccepted/targetcallbackbins and rolling5s rates/backlogslope;30s16msg/sstage isfiniteobservation, notproductionsteady-state",
+    "backlog": "driverqueued=offered-started excludesinflight; durablepending/running/retrycount separate;loaded-only2sSQLpoll",
+    "oldest_age": "loaded-onlyaggregateMINtargetaccepted_at, ageasobserverhostwall minusGatewaypersistedwall; stalenessboundedbyquerytime, notexactofferlatency; noidleSQL",
+    "resource_separation": "GatewayownedPIDOS+mallocSTATS, MySQLownedengineOS, SQLiteownPID/localfilestats, harnessownPIDCPU/RSS separately; Dockerobservercount/elapsed, childCPUunknownnotfoldedintoGateway",
+    "SQLprofile": "perphasefirst/lastcumulativeSTATSdifferences withsamplecounts; nestedgate/SQL/COMMIToverlap; fixedhistbucketupperboundsnotexactquantiles",
+    "writer": "unchanged4096recordsx96byteschannel/64KiBbuffer/oneOSwriter; sourcefixtureMachFFIonly",
+    "cycle_stream_reduction": "preserveoneoriginalglobalstream andwriterreceipt;aftershutdown deriveidentity-filteredpercycle/cohortstreamviews andmeta boundtorawSHA;strictC8reducerunchangedper190cutoff;globaldrop/writeerrorinvalidatesall; noSQLtimestampbackfill",
+    "preliminary_completion": "SQLaggregatebeforecutoff marker permitsboundedidentity/ACK; intermediatecycle remains provisionaluntilglobalwriterjoined/strictpercyclecoverage succeeds"
+  },
+  "optimization_gate": "Only if baseline evidences consequential cost; smallestcorrectseam, then oneMySQLafterprocess with identicaltwo-cycle+cohortinput/delays/idle; otherwise baseline can supportno-newcontroller decision withinfinitecoverage",
+  "after_observer_rebase": "generate minimalfeature/callback/sessionpatch from actualnewcandidateGitcommit; gitapplycheck+review6basefiles/2newobservermodules; neverC8fullfileoverride; reversebytes/modesproof, normal/testprotection, frozenuniqueobserverandnewidentity; uniqueprototype/targetonlywithrootbuildslot",
+  "runtime_authorization": "HOLD; await C9envactualREADY+budget/sourceoraclereview+rootGO; thisJSONisworkload/provenanceplanonly, noURL/state/credentials/executionconfig",
+  "historical_PG_25s": "UNEXPLAINED; noPGcapacitymatrix inC9",
+  "version": 2,
+  "supersedes": "v1NEVER_EXECUTED_PROPOSAL; noMySQLbusinessloadbeforeinputchange",
+  "comparison_acceptance": "Ifroot-authorizedlocalSQLcandidateA ismeasured, correctness/budgetnotworse, directionconsistentacross2cycles, burstcommit/drain/offer-tailbenefitlargerthanbaselinebetween-cyclevariation, noCPU/idletradeoff. OnefewerSQLwithoutdistinguishablerunbenefit=>revertA. NotaproductSLAthreshold. Maxonebefore+oneaftersamev2inputprocess, nocherry-pickreruns."
+}

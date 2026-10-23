@@ -1,0 +1,9 @@
+{
+  "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/android/c5-staged-pushgo-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+  "sha256": "c95c2dda1bcdf16461636e9af8fc04613044fde9809a3ffee4f98febbccb31e2",
+  "bytes": 4637725,
+  "test_source_sha256": "7edf7e400585c6a5e6058648b730f728d6d1118626bc1c8e445581cc075fc786",
+  "original_main_apk": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-client-loop-gate-20261015/android/staged-pushgo-android/app/build/outputs/apk/debug/app-universal-debug.apk",
+  "original_main_apk_sha256": "148b254d1fdef70c8cbe5a842f54551b8aedb601fdb1c46d7bf25a6bf9ba62fa",
+  "scope": "new isolated C5 instrumentation test APK; unchanged original cached production main APK/JNI"
+}

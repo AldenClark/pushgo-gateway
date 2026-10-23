@@ -14,19 +14,50 @@ use warp_link::warp_link_core::SessionControl;
 
 use crate::{private::protocol::DeliverEnvelope, storage::DeviceId};
 
+pub(super) struct PreparedOutbound {
+    pub seq: Option<u64>,
+    pub envelope: DeliverEnvelope,
+}
+
+pub(super) enum PendingOutbound {
+    Running(tokio::task::JoinHandle<Option<PreparedOutbound>>),
+    Ready(PreparedOutbound),
+}
+
 pub(super) struct SessionRuntime {
     pub device_id: DeviceId,
     pub conn_id: u64,
-    pub terminate_requested: AtomicBool,
-    pub control: Mutex<Option<SessionControl>>,
+    pub ordinary_route_generation: Option<i64>,
+    pub ordinary_first: Arc<AtomicBool>,
+    pub terminate_requested: Arc<AtomicBool>,
+    pub control: Arc<Mutex<Option<SessionControl>>>,
+    pub outbound_stop: Arc<tokio::sync::Notify>,
     pub receiver: Receiver<DeliverEnvelope>,
-    pub bootstrap_inflight: Mutex<VecDeque<(u64, DeliverEnvelope)>>,
-    pub bootstrap_pending: Mutex<VecDeque<DeliverEnvelope>>,
+    pub bootstrap_inflight: Arc<Mutex<VecDeque<(u64, DeliverEnvelope)>>>,
+    pub bootstrap_pending: Arc<Mutex<VecDeque<DeliverEnvelope>>>,
+    /// Warp may cancel the borrow when an inbound/control branch wins. The
+    /// single owned operation itself survives until completion or disconnect.
+    pub pending_outbound: tokio::sync::Mutex<Option<PendingOutbound>>,
+    pub failure_store: Option<crate::ordinary::OrdinaryStore>,
+}
+
+impl Drop for SessionRuntime {
+    fn drop(&mut self) {
+        if let Some(pending) = self.pending_outbound.get_mut().take() {
+            if let Some(store) = &self.failure_store {
+                store.fail("Private outbound owner dropped before joined completion");
+            }
+            if let PendingOutbound::Running(task) = pending {
+                task.abort();
+            }
+        }
+    }
 }
 
 impl SessionRuntime {
     pub(super) fn request_termination(&self) {
         let already_requested = self.terminate_requested.swap(true, Ordering::SeqCst);
+        self.outbound_stop.notify_waiters();
         if already_requested {
             return;
         }

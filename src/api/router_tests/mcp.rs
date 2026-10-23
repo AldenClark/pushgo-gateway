@@ -2,6 +2,103 @@ use super::*;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
+#[test]
+fn mcp_reply_json_result_and_error_keep_the_request_identity() {
+    for response in [
+        json!({"jsonrpc": "2.0", "id": 2102, "result": {"resources_changed": true}}),
+        json!({"jsonrpc": "2.0", "id": 2102, "error": {"code": -32602, "message": "invalid params"}}),
+    ] {
+        let (actual, notifications) = parse_mcp_reply(
+            "application/json; charset=utf-8",
+            &serde_json::to_vec(&response).unwrap(),
+            &json!(2102),
+        )
+        .unwrap();
+        assert_eq!(actual, response);
+        assert!(notifications.is_empty());
+    }
+}
+
+#[test]
+fn mcp_reply_sse_notification_before_response_selects_the_correlated_result() {
+    // Same message order and framing as the retained remote CI failure.
+    let body = b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/resources/list_changed\"}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":2102,\"result\":{\"resources_changed\":true}}\n\n";
+    assert!(
+        serde_json::from_slice::<Value>(body).is_err(),
+        "old JSON-only observer must reject this fixture"
+    );
+    let (response, notifications) =
+        parse_mcp_reply("text/event-stream", body, &json!(2102)).unwrap();
+    assert_eq!(
+        response,
+        json!({"jsonrpc":"2.0","id":2102,"result":{"resources_changed":true}})
+    );
+    assert_eq!(
+        notifications,
+        vec![json!({"jsonrpc":"2.0","method":"notifications/resources/list_changed"})]
+    );
+}
+
+#[test]
+fn mcp_reply_wrong_or_missing_response_id_cannot_pass() {
+    for (body, reason) in [
+        (
+            br#"{"jsonrpc":"2.0","id":2103,"result":{}}"#.as_slice(),
+            "unexpected MCP response id",
+        ),
+        (
+            br#"{"jsonrpc":"2.0","result":{}}"#.as_slice(),
+            "MCP response is missing its id",
+        ),
+    ] {
+        assert!(
+            parse_mcp_reply("application/json", body, &json!(2102))
+                .unwrap_err()
+                .contains(reason)
+        );
+    }
+}
+
+#[test]
+fn mcp_reply_sse_duplicate_response_id_is_rejected() {
+    let body = b"data: {\"jsonrpc\":\"2.0\",\"id\":2102,\"result\":{}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":2102,\"result\":{}}\n\n";
+    assert!(
+        parse_mcp_reply("text/event-stream", body, &json!(2102))
+            .unwrap_err()
+            .contains("duplicate MCP response id")
+    );
+}
+
+#[test]
+fn mcp_reply_sse_notification_without_a_response_is_not_business_success() {
+    let body =
+        b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/resources/list_changed\"}\n\n";
+    assert!(
+        parse_mcp_reply("text/event-stream", body, &json!(2102))
+            .unwrap_err()
+            .contains("missing MCP response for request id")
+    );
+}
+
+#[test]
+fn mcp_reply_sse_malformed_data_after_a_valid_response_still_fails() {
+    let body = b"data: {\"jsonrpc\":\"2.0\",\"id\":2102,\"result\":{}}\n\ndata: not-json\n\n";
+    assert!(
+        parse_mcp_reply("text/event-stream", body, &json!(2102))
+            .unwrap_err()
+            .contains("invalid MCP SSE data")
+    );
+}
+
+#[test]
+fn mcp_reply_sse_joins_multiline_data_and_accepts_crlf_comments() {
+    let body = b": keepalive\r\n\r\nevent: message\r\ndata: {\"jsonrpc\":\"2.0\",\r\ndata: \"id\":2102,\"result\":{}}\r\n\r\n";
+    let (response, notifications) =
+        parse_mcp_reply("text/event-stream; charset=utf-8", body, &json!(2102)).unwrap();
+    assert_eq!(response["id"], 2102);
+    assert!(notifications.is_empty());
+}
+
 fn extract_auth_code(location: &str) -> String {
     location
         .split('?')
@@ -172,7 +269,7 @@ async fn mcp_oauth_s256_authorize_and_send_success() {
         Platform::ANDROID,
     )
     .await;
-    let app = super::super::build_router(state, "<html>docs</html>");
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
     let access_token = oauth_access_token(
         app.clone(),
         channel_id.as_str(),
@@ -221,6 +318,25 @@ async fn mcp_oauth_s256_authorize_and_send_success() {
     assert!(
         structured.get("auth_mode").is_none(),
         "mcp send response should not include auth_mode"
+    );
+    let op_id = structured["op_id"].as_str().unwrap();
+    let ordinary_status = state
+        .store
+        .ordinary_handle()
+        .expect("router startup initializes the product ordinary authority")
+        .status(op_id)
+        .await
+        .expect("MCP success must follow a committed ordinary identity");
+    assert_eq!(ordinary_status["entity_id"], structured["message_id"]);
+    assert_eq!(ordinary_status["status"], "provider_queued");
+    assert!(
+        state
+            .store
+            .load_sender_submit_status(op_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "ordinary MCP acceptance must not also write the retired sender-status ledger"
     );
 }
 
@@ -627,7 +743,7 @@ async fn mcp_bind_status_marks_resources_changed_once() {
     let (bind_status, _, _) = post_form(app.clone(), "/mcp/bind/session", bind_form.as_str()).await;
     assert_eq!(bind_status, StatusCode::OK);
 
-    let (first_status, first_body) = post_json_with_auth(
+    let (first_status, first_body, first_notifications) = post_json_with_auth_events(
         app.clone(),
         "/mcp",
         json!({
@@ -645,35 +761,30 @@ async fn mcp_bind_status_marks_resources_changed_once() {
     )
     .await;
     assert_eq!(first_status, StatusCode::OK);
-    if let Some(structured) = first_body
+    let structured = first_body
         .get("result")
         .and_then(|v| v.get("structuredContent"))
-    {
+        .expect("first bind.status should return correlated structured content");
+    assert_eq!(first_body["id"], 2102);
+    assert_eq!(structured["status"], "completed");
+    assert_eq!(structured["resources_changed"], true);
+    assert_eq!(structured["channel_id"], channel_id);
+    assert_eq!(structured["channel_name"], "mcp-oauth-bind-status-once");
+    // rmcp may emit terminal-first JSON, or retain an earlier notification in SSE.
+    assert!(
+        first_notifications.len() <= 1,
+        "duplicate resource notification"
+    );
+    for notification in first_notifications {
+        assert_eq!(notification["jsonrpc"], "2.0");
         assert_eq!(
-            structured.get("status").and_then(Value::as_str),
-            Some("completed")
+            notification["method"],
+            "notifications/resources/list_changed"
         );
-        assert_eq!(
-            structured.get("resources_changed").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            structured.get("channel_id").and_then(Value::as_str),
-            Some(channel_id.as_str())
-        );
-        assert_eq!(
-            structured.get("channel_name").and_then(Value::as_str),
-            Some("mcp-oauth-bind-status-once")
-        );
-    } else {
-        assert_eq!(
-            first_body.get("method").and_then(Value::as_str),
-            Some("notifications/resources/list_changed"),
-            "unexpected first bind.status payload: {first_body}"
-        );
+        assert!(notification.get("params").is_none_or(Value::is_null));
     }
 
-    let (second_status, second_body) = post_json_with_auth(
+    let (second_status, second_body, second_notifications) = post_json_with_auth_events(
         app,
         "/mcp",
         json!({
@@ -691,6 +802,11 @@ async fn mcp_bind_status_marks_resources_changed_once() {
     )
     .await;
     assert_eq!(second_status, StatusCode::OK);
+    assert_eq!(second_body["id"], 2103);
+    assert!(
+        second_notifications.is_empty(),
+        "resource notification must be one-shot"
+    );
     let structured = second_body
         .get("result")
         .and_then(|v| v.get("structuredContent"))

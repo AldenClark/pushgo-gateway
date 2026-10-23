@@ -269,6 +269,36 @@ run_managed_upgrade_smoke() {
     > "$PREFLIGHT_METRICS_DIR/managed-upgrade.json"
 }
 
+# Read only this flow's fresh synthetic ledger. Preserve identities and complete
+# payload bytes across restart; delivery success is not inferred from sent status.
+private_ledger_snapshot() {
+  local core="$1" delivery="$2" expected="$3" output="$4"
+  local invalid legacy
+  invalid="$(sqlite3 -readonly "$core" ".timeout 3000" "
+    SELECT (SELECT COUNT(*) FROM ordinary_messages) <> $expected
+      OR (SELECT COUNT(*) FROM ordinary_targets) <> $expected
+      OR (SELECT COUNT(DISTINCT delivery_id) FROM ordinary_targets) <> $expected
+      OR (SELECT COUNT(*) FROM ordinary_messages m JOIN ordinary_targets t USING(delivery_id)
+          WHERE m.identity_state='live' AND m.payload_bytes=length(m.payload_blob)
+            AND m.payload_bytes>0 AND m.private_enqueued_count=1 AND m.provider_target_count=0
+            AND m.pending_targets=1 AND m.expires_at-m.accepted_at>0
+            AND m.expires_at-m.accepted_at<=2592000000
+            AND t.delivery_mode='private' AND t.provider='PRIVATE'
+            AND t.acked_at IS NULL AND t.pull_owner=t.device_key) <> $expected;")" || return 1
+  legacy="$(sqlite3 -readonly "$delivery" ".timeout 3000" \
+    "SELECT (SELECT COUNT(*) FROM private_outbox)+(SELECT COUNT(*) FROM private_payloads);")" || return 1
+  if [[ "$invalid" != 0 || "$legacy" != 0 ]]; then
+    echo "ordinary Private ledger invariant failed: invalid=$invalid legacy_rows=$legacy" >&2
+    return 1
+  fi
+  sqlite3 -readonly -json "$core" ".timeout 3000" \
+    "SELECT m.op_id,m.message_id,m.delivery_id,m.channel_id,m.accepted_at,m.expires_at,
+            hex(m.payload_blob) AS payload_hex,m.payload_bytes,t.device_key,t.pull_owner,
+            t.delivery_mode,t.provider,t.route_generation,t.delivery_epoch
+     FROM ordinary_messages m JOIN ordinary_targets t USING(delivery_id)
+     ORDER BY m.op_id,t.device_key;" > "$output"
+}
+
 run_private_flow() {
   local work_dir="$1"
   local http_port="$2"
@@ -337,12 +367,14 @@ run_private_flow() {
     printf '%s\n' "$code" >> "$out"
   done
 
-  local send_200 send_429 send_other outbox_before outbox_after ttl_delta
+  local send_200 send_429 send_other ttl_delta
+  local before="$work_dir/ordinary-before-restart.json"
+  local after="$work_dir/ordinary-after-restart.json"
   send_200="$(grep -c '^200$' "$out" || true)"
   send_429="$(grep -c '^429$' "$out" || true)"
   send_other="$(awk '$1!="200" && $1!="429"{c++} END{print c+0}' "$out")"
-  outbox_before="$(sqlite3 "$delivery_db_file" "SELECT COUNT(1) FROM private_outbox;")"
-  ttl_delta="$(sqlite3 "$delivery_db_file" "SELECT COALESCE(MAX(expires_at - sent_at),0) FROM private_payloads;")"
+  private_ledger_snapshot "$db_file" "$delivery_db_file" "$send_count" "$before" || return 1
+  ttl_delta="$(sqlite3 -readonly "$db_file" "SELECT MAX(expires_at-accepted_at) FROM ordinary_messages;")"
 
   kill "$pid"
   for _ in $(seq 1 150); do
@@ -376,17 +408,21 @@ run_private_flow() {
     cat "$log_file" >&2
     return 1
   }
-  outbox_after="$(sqlite3 "$delivery_db_file" "SELECT COUNT(1) FROM private_outbox;")"
+  private_ledger_snapshot "$db_file" "$delivery_db_file" "$send_count" "$after" || return 1
+  if ! cmp -s "$before" "$after"; then
+    echo "ordinary Private identities, targets or bodies changed across restart" >&2
+    return 1
+  fi
 
-  printf 'PRIVATE_WORK_DIR=%s\nPRIVATE_DEVICE_KEY=%s\nPRIVATE_CHANNEL=%s\nPRIVATE_SEND_200=%s\nPRIVATE_SEND_429=%s\nPRIVATE_SEND_OTHER=%s\nPRIVATE_OUTBOX_BEFORE=%s\nPRIVATE_OUTBOX_AFTER=%s\nPRIVATE_MAX_TTL_MILLIS=%s\n' \
-    "$work_dir" "$device_key" "$cid" "$send_200" "$send_429" "$send_other" "$outbox_before" "$outbox_after" "$ttl_delta"
+  printf 'PRIVATE_WORK_DIR=%s\nPRIVATE_DEVICE_KEY=%s\nPRIVATE_CHANNEL=%s\nPRIVATE_SEND_200=%s\nPRIVATE_SEND_429=%s\nPRIVATE_SEND_OTHER=%s\nORDINARY_TARGETS_BEFORE=%s\nORDINARY_TARGETS_AFTER=%s\nPRIVATE_MAX_TTL_MILLIS=%s\n' \
+    "$work_dir" "$device_key" "$cid" "$send_200" "$send_429" "$send_other" "$send_count" "$send_count" "$ttl_delta"
   if [[ "$send_429" -ne 0 || "$send_other" -ne 0 ]]; then
     echo "private audit saw unexpected HTTP statuses:" >&2
     sort "$out" | uniq -c >&2
     return 1
   fi
-  if [[ "$send_200" != "$send_count" || "$outbox_before" != "$send_200" || "$outbox_after" != "$outbox_before" ]]; then
-    echo "private durable outbox invariant failed: accepted=$send_200 before=$outbox_before after_restart=$outbox_after" >&2
+  if [[ "$send_200" != "$send_count" ]]; then
+    echo "ordinary Private accepted count mismatch: accepted=$send_200 expected=$send_count" >&2
     return 1
   fi
   if [[ "$ttl_delta" -le 0 || "$ttl_delta" -gt 2592000000 ]]; then
@@ -395,10 +431,10 @@ run_private_flow() {
   fi
   jq -n \
     --argjson send_200 "$send_200" \
-    --argjson outbox_before_restart "$outbox_before" \
-    --argjson outbox_after_restart "$outbox_after" \
+    --argjson ordinary_targets_before_restart "$send_count" \
+    --argjson ordinary_targets_after_restart "$send_count" \
     --argjson max_ttl_millis "$ttl_delta" \
-    '{private: {status: "passed", send_200: $send_200, outbox_before_restart: $outbox_before_restart, outbox_after_restart: $outbox_after_restart, max_ttl_millis: $max_ttl_millis}}' \
+    '{private: {status: "passed", send_200: $send_200, ordinary_targets_before_restart: $ordinary_targets_before_restart, ordinary_targets_after_restart: $ordinary_targets_after_restart, legacy_ordinary_rows: 0, restart_facts_unchanged: true, max_ttl_millis: $max_ttl_millis}}' \
     > "$PREFLIGHT_METRICS_DIR/private.json"
   trap - RETURN
   cleanup_private

@@ -60,12 +60,6 @@ pub struct MaintenanceRuntimeTuning {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct DispatchRuntimeTuning {
-    pub worker_count: usize,
-    pub queue_capacity: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct RuntimeCounterRuntimeTuning {
     pub channel_capacity: usize,
     pub flush_event_threshold: usize,
@@ -109,13 +103,6 @@ pub struct CacheRuntimeTuning {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ProviderRuntimeTuning {
-    pub apns_max_in_flight: usize,
-    pub fcm_max_in_flight: usize,
-    pub wns_max_in_flight: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct McpRuntimeTuning {
     pub access_token_ttl_secs: i64,
     pub refresh_token_absolute_ttl_secs: i64,
@@ -123,17 +110,35 @@ pub struct McpRuntimeTuning {
     pub bind_session_ttl_secs: i64,
 }
 
+/// Shared external-request limits for every business path in this process.
+/// H32 is the measured starting configuration, not a throughput guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRuntimeTuning {
+    pub apns: usize,
+    pub fcm: usize,
+    pub wns: usize,
+}
+
+impl Default for ProviderRuntimeTuning {
+    fn default() -> Self {
+        Self {
+            apns: 32,
+            fcm: 32,
+            wns: 32,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct RuntimeTuning {
     pub profile: GatewayRuntimeProfile,
+    pub providers: ProviderRuntimeTuning,
     pub private: PrivateRuntimeTuning,
     pub maintenance: MaintenanceRuntimeTuning,
-    pub dispatch: DispatchRuntimeTuning,
     pub runtime_counters: RuntimeCounterRuntimeTuning,
     pub sqlite: SqliteRuntimeTuning,
     pub external_db: ExternalDbRuntimeTuning,
     pub cache: CacheRuntimeTuning,
-    pub provider: ProviderRuntimeTuning,
     pub mcp: McpRuntimeTuning,
 }
 
@@ -189,6 +194,7 @@ impl RuntimeTuning {
         const DAY_SECS: i64 = 24 * 60 * 60;
         Self {
             profile: GatewayRuntimeProfile::Small,
+            providers: ProviderRuntimeTuning::default(),
             private: PrivateRuntimeTuning {
                 session_ttl_secs: 3600,
                 grace_window_secs: 60,
@@ -232,10 +238,6 @@ impl RuntimeTuning {
                 orphan_channel_cleanup_enabled: false,
                 dry_run: false,
             },
-            dispatch: DispatchRuntimeTuning {
-                worker_count: 2,
-                queue_capacity: 256,
-            },
             runtime_counters: RuntimeCounterRuntimeTuning {
                 channel_capacity: 512,
                 flush_event_threshold: 256,
@@ -271,11 +273,6 @@ impl RuntimeTuning {
                 dispatch_targets_max: 512,
                 dispatch_targets_ttl_ms: 1_000,
             },
-            provider: ProviderRuntimeTuning {
-                apns_max_in_flight: 32,
-                fcm_max_in_flight: 32,
-                wns_max_in_flight: 16,
-            },
             mcp: McpRuntimeTuning {
                 access_token_ttl_secs: 900,
                 refresh_token_absolute_ttl_secs: 30 * DAY_SECS,
@@ -288,12 +285,9 @@ impl RuntimeTuning {
     #[must_use]
     fn public() -> Self {
         const DAY_SECS: i64 = 24 * 60 * 60;
-        let cpu = std::thread::available_parallelism()
-            .map(|value| value.get())
-            .unwrap_or(4);
-        let worker_count = cpu.clamp(4, 16);
         Self {
             profile: GatewayRuntimeProfile::Public,
+            providers: ProviderRuntimeTuning::default(),
             private: PrivateRuntimeTuning {
                 session_ttl_secs: 3600,
                 grace_window_secs: 60,
@@ -337,10 +331,6 @@ impl RuntimeTuning {
                 orphan_channel_cleanup_enabled: true,
                 dry_run: false,
             },
-            dispatch: DispatchRuntimeTuning {
-                worker_count,
-                queue_capacity: (worker_count * 256).clamp(2_048, 16_384),
-            },
             runtime_counters: RuntimeCounterRuntimeTuning {
                 channel_capacity: 8_192,
                 flush_event_threshold: 1_024,
@@ -375,11 +365,6 @@ impl RuntimeTuning {
                 dispatch_targets_min: 512,
                 dispatch_targets_max: 8_192,
                 dispatch_targets_ttl_ms: 2_000,
-            },
-            provider: ProviderRuntimeTuning {
-                apns_max_in_flight: 128,
-                fcm_max_in_flight: 256,
-                wns_max_in_flight: 128,
             },
             mcp: McpRuntimeTuning {
                 access_token_ttl_secs: 900,

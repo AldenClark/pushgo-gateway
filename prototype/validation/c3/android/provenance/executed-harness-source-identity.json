@@ -1,0 +1,14 @@
+{
+  "files": [
+    {
+      "path": "source/CandidateNetworkBoundary.kt",
+      "sha256": "bfb597d5cd39b5318edbccaba456dd1775aa26b27f59ae4f58dee0ea83e501c3",
+      "staged_sha256": "bfb597d5cd39b5318edbccaba456dd1775aa26b27f59ae4f58dee0ea83e501c3"
+    },
+    {
+      "path": "source/CandidateOrdinaryC3DeviceTest.kt",
+      "sha256": "257fced2ea9e62c86fe2dd3cafb8c2f1aa8e84ea8ca314cb325b0f52db078a44",
+      "staged_sha256": "257fced2ea9e62c86fe2dd3cafb8c2f1aa8e84ea8ca314cb325b0f52db078a44"
+    }
+  ]
+}

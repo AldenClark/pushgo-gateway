@@ -1,0 +1,452 @@
+[
+  {
+    "run": "matched-observerfix-candidate-offer256-r1",
+    "first_sql_seconds": 23.863037792,
+    "profile_window_seconds": 24.125483625,
+    "exclusive_gate_hold_fraction": 0.7382598946759974,
+    "cpu": {
+      "cpu_source": "raw Mach ticks converted by retained helper numer/denom; not ps percent",
+      "interrupt_wakes": 10176,
+      "kernel_interrupt_definition": "ri_interrupt_wkups, not total wakeups",
+      "package_idle_wakes": 1052,
+      "system_cpu_seconds": 12.414739334,
+      "user_cpu_seconds": 8.981556375
+    },
+    "network_mean_us": 28072.446899414062,
+    "complete_mock": {
+      "count": 40960,
+      "fixed_adapter_delay_ms": 20,
+      "mean": 23.704443359375,
+      "meaning": "received to response write completion; not durable receipt or remote consumption",
+      "p95": 27,
+      "p99": 31
+    },
+    "path_phases": {
+      "accept": {
+        "begin": {
+          "samples": 2560,
+          "total_us": 27419,
+          "mean_us": 10.710546875,
+          "p95_upper_us": 31
+        },
+        "commit": {
+          "samples": 2560,
+          "total_us": 2148629,
+          "mean_us": 839.308203125,
+          "p95_upper_us": 8191
+        },
+        "gate_hold": {
+          "samples": 2560,
+          "total_us": 4629472,
+          "mean_us": 1808.3875,
+          "p95_upper_us": 8191
+        },
+        "gate_wait": {
+          "samples": 2560,
+          "total_us": 12761959,
+          "mean_us": 4985.140234375,
+          "p95_upper_us": 16383
+        },
+        "pool_acquire": {
+          "samples": 2560,
+          "total_us": 169238,
+          "mean_us": 66.10859375,
+          "p95_upper_us": 511
+        },
+        "statement_inclusive": {
+          "samples": 12800,
+          "total_us": 151842,
+          "mean_us": 11.86265625,
+          "p95_upper_us": 31
+        }
+      },
+      "claim": {
+        "begin": {
+          "samples": 13530,
+          "total_us": 132211,
+          "mean_us": 9.771692535107169,
+          "p95_upper_us": 31
+        },
+        "commit": {
+          "samples": 13530,
+          "total_us": 684598,
+          "mean_us": 50.598521803399855,
+          "p95_upper_us": 127
+        },
+        "gate_hold": {
+          "samples": 13530,
+          "total_us": 6012080,
+          "mean_us": 444.3518107908352,
+          "p95_upper_us": 2047
+        },
+        "gate_wait": {
+          "samples": 13530,
+          "total_us": 23076569,
+          "mean_us": 1705.5852919438285,
+          "p95_upper_us": 8191
+        },
+        "pool_acquire": {
+          "samples": 54490,
+          "total_us": 11015414,
+          "mean_us": 202.15478069370528,
+          "p95_upper_us": 1023
+        },
+        "statement_inclusive": {
+          "samples": 183976,
+          "total_us": 2666858,
+          "mean_us": 14.495684219680827,
+          "p95_upper_us": 31
+        }
+      },
+      "receipt": {
+        "begin": {
+          "samples": 40960,
+          "total_us": 394147,
+          "mean_us": 9.6227294921875,
+          "p95_upper_us": 31
+        },
+        "commit": {
+          "samples": 40960,
+          "total_us": 2325911,
+          "mean_us": 56.7849365234375,
+          "p95_upper_us": 127
+        },
+        "gate_hold": {
+          "samples": 40960,
+          "total_us": 7169325,
+          "mean_us": 175.0323486328125,
+          "p95_upper_us": 511
+        },
+        "gate_wait": {
+          "samples": 40960,
+          "total_us": 122763102,
+          "mean_us": 2997.146044921875,
+          "p95_upper_us": 16383
+        },
+        "pool_acquire": {
+          "samples": 40960,
+          "total_us": 1329310,
+          "mean_us": 32.453857421875,
+          "p95_upper_us": 127
+        },
+        "statement_inclusive": {
+          "samples": 245760,
+          "total_us": 2900374,
+          "mean_us": 11.801652018229166,
+          "p95_upper_us": 31
+        }
+      }
+    },
+    "host": {
+      "load_average": [
+        2.388671875,
+        2.82470703125,
+        5.06103515625
+      ],
+      "cpu_count": 10,
+      "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded\n",
+      "observed_only": true
+    },
+    "host_context_file": "gateway/build/quality-results/c-client-loop-gate-20261015/runs/matched-observerfix-candidate-offer256-r1/host-context-before.json"
+  },
+  {
+    "run": "matched-observerfix-candidate-offer256-r2",
+    "first_sql_seconds": 23.362928791999998,
+    "profile_window_seconds": 23.623759375,
+    "exclusive_gate_hold_fraction": 0.7734881527508786,
+    "cpu": {
+      "cpu_source": "raw Mach ticks converted by retained helper numer/denom; not ps percent",
+      "interrupt_wakes": 10306,
+      "kernel_interrupt_definition": "ri_interrupt_wkups, not total wakeups",
+      "package_idle_wakes": 1071,
+      "system_cpu_seconds": 12.561670709,
+      "user_cpu_seconds": 9.129341375
+    },
+    "network_mean_us": 27117.999267578125,
+    "complete_mock": {
+      "count": 40960,
+      "fixed_adapter_delay_ms": 20,
+      "mean": 23.6378173828125,
+      "meaning": "received to response write completion; not durable receipt or remote consumption",
+      "p95": 27,
+      "p99": 32
+    },
+    "path_phases": {
+      "accept": {
+        "begin": {
+          "samples": 2560,
+          "total_us": 45016,
+          "mean_us": 17.584375,
+          "p95_upper_us": 31
+        },
+        "commit": {
+          "samples": 2560,
+          "total_us": 2181399,
+          "mean_us": 852.108984375,
+          "p95_upper_us": 8191
+        },
+        "gate_hold": {
+          "samples": 2560,
+          "total_us": 4806547,
+          "mean_us": 1877.557421875,
+          "p95_upper_us": 8191
+        },
+        "gate_wait": {
+          "samples": 2560,
+          "total_us": 14463803,
+          "mean_us": 5649.923046875,
+          "p95_upper_us": 16383
+        },
+        "pool_acquire": {
+          "samples": 2560,
+          "total_us": 217593,
+          "mean_us": 84.997265625,
+          "p95_upper_us": 511
+        },
+        "statement_inclusive": {
+          "samples": 12800,
+          "total_us": 177774,
+          "mean_us": 13.88859375,
+          "p95_upper_us": 31
+        }
+      },
+      "claim": {
+        "begin": {
+          "samples": 13845,
+          "total_us": 138140,
+          "mean_us": 9.977609245214879,
+          "p95_upper_us": 31
+        },
+        "commit": {
+          "samples": 13845,
+          "total_us": 716705,
+          "mean_us": 51.76634163958108,
+          "p95_upper_us": 127
+        },
+        "gate_hold": {
+          "samples": 13845,
+          "total_us": 6163933,
+          "mean_us": 445.2100397255327,
+          "p95_upper_us": 1023
+        },
+        "gate_wait": {
+          "samples": 13845,
+          "total_us": 24553167,
+          "mean_us": 1773.4320693391116,
+          "p95_upper_us": 8191
+        },
+        "pool_acquire": {
+          "samples": 54805,
+          "total_us": 10702996,
+          "mean_us": 195.29232734239577,
+          "p95_upper_us": 1023
+        },
+        "statement_inclusive": {
+          "samples": 184993,
+          "total_us": 2729298,
+          "mean_us": 14.753520403474726,
+          "p95_upper_us": 31
+        }
+      },
+      "receipt": {
+        "begin": {
+          "samples": 40960,
+          "total_us": 407160,
+          "mean_us": 9.9404296875,
+          "p95_upper_us": 31
+        },
+        "commit": {
+          "samples": 40960,
+          "total_us": 2300661,
+          "mean_us": 56.1684814453125,
+          "p95_upper_us": 127
+        },
+        "gate_hold": {
+          "samples": 40960,
+          "total_us": 7302218,
+          "mean_us": 178.276806640625,
+          "p95_upper_us": 511
+        },
+        "gate_wait": {
+          "samples": 40960,
+          "total_us": 130560277,
+          "mean_us": 3187.5067626953123,
+          "p95_upper_us": 16383
+        },
+        "pool_acquire": {
+          "samples": 40960,
+          "total_us": 1439324,
+          "mean_us": 35.13974609375,
+          "p95_upper_us": 127
+        },
+        "statement_inclusive": {
+          "samples": 245760,
+          "total_us": 2933357,
+          "mean_us": 11.935860188802083,
+          "p95_upper_us": 31
+        }
+      }
+    },
+    "host": {
+      "load_average": [
+        4.15380859375,
+        3.34033203125,
+        5.01025390625
+      ],
+      "cpu_count": 10,
+      "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded\n",
+      "observed_only": true
+    },
+    "host_context_file": "gateway/build/quality-results/c-client-loop-gate-20261015/runs/matched-observerfix-candidate-offer256-r2/host-context-before.json"
+  },
+  {
+    "run": "writerfix-candidate-offer256-r1",
+    "first_sql_seconds": 28.726301708,
+    "profile_window_seconds": 28.979011999999997,
+    "exclusive_gate_hold_fraction": 0.6820293597311048,
+    "cpu": {
+      "cpu_source": "raw Mach ticks converted by retained helper numer/denom; not ps percent",
+      "interrupt_wakes": 10243,
+      "kernel_interrupt_definition": "ri_interrupt_wkups, not total wakeups",
+      "package_idle_wakes": 734,
+      "system_cpu_seconds": 12.790070583,
+      "user_cpu_seconds": 9.319107417
+    },
+    "network_mean_us": 32050.635034179686,
+    "complete_mock": {
+      "count": 40960,
+      "fixed_adapter_delay_ms": 20,
+      "mean": 24.0205078125,
+      "meaning": "received to response write completion; not durable receipt or remote consumption",
+      "p95": 28,
+      "p99": 33
+    },
+    "path_phases": {
+      "accept": {
+        "begin": {
+          "samples": 2560,
+          "total_us": 67648,
+          "mean_us": 26.425,
+          "p95_upper_us": 63
+        },
+        "commit": {
+          "samples": 2560,
+          "total_us": 2494705,
+          "mean_us": 974.494140625,
+          "p95_upper_us": 8191
+        },
+        "gate_hold": {
+          "samples": 2560,
+          "total_us": 5369275,
+          "mean_us": 2097.373046875,
+          "p95_upper_us": 8191
+        },
+        "gate_wait": {
+          "samples": 2560,
+          "total_us": 19073240,
+          "mean_us": 7450.484375,
+          "p95_upper_us": 32767
+        },
+        "pool_acquire": {
+          "samples": 2560,
+          "total_us": 170599,
+          "mean_us": 66.640234375,
+          "p95_upper_us": 511
+        },
+        "statement_inclusive": {
+          "samples": 12800,
+          "total_us": 167923,
+          "mean_us": 13.118984375,
+          "p95_upper_us": 31
+        }
+      },
+      "claim": {
+        "begin": {
+          "samples": 11682,
+          "total_us": 241492,
+          "mean_us": 20.672145180619758,
+          "p95_upper_us": 63
+        },
+        "commit": {
+          "samples": 11682,
+          "total_us": 651644,
+          "mean_us": 55.781886663242595,
+          "p95_upper_us": 127
+        },
+        "gate_hold": {
+          "samples": 11682,
+          "total_us": 6191843,
+          "mean_us": 530.032785481938,
+          "p95_upper_us": 2047
+        },
+        "gate_wait": {
+          "samples": 11682,
+          "total_us": 25534153,
+          "mean_us": 2185.7689607943844,
+          "p95_upper_us": 16383
+        },
+        "pool_acquire": {
+          "samples": 52642,
+          "total_us": 14837928,
+          "mean_us": 281.8648227650925,
+          "p95_upper_us": 1023
+        },
+        "statement_inclusive": {
+          "samples": 178480,
+          "total_us": 2830593,
+          "mean_us": 15.859440833706858,
+          "p95_upper_us": 31
+        }
+      },
+      "receipt": {
+        "begin": {
+          "samples": 40960,
+          "total_us": 899790,
+          "mean_us": 21.967529296875,
+          "p95_upper_us": 63
+        },
+        "commit": {
+          "samples": 40960,
+          "total_us": 2464710,
+          "mean_us": 60.173583984375,
+          "p95_upper_us": 127
+        },
+        "gate_hold": {
+          "samples": 40960,
+          "total_us": 8203419,
+          "mean_us": 200.2787841796875,
+          "p95_upper_us": 511
+        },
+        "gate_wait": {
+          "samples": 40960,
+          "total_us": 183134502,
+          "mean_us": 4471.057177734375,
+          "p95_upper_us": 16383
+        },
+        "pool_acquire": {
+          "samples": 40960,
+          "total_us": 1431238,
+          "mean_us": 34.942333984375,
+          "p95_upper_us": 127
+        },
+        "statement_inclusive": {
+          "samples": 245760,
+          "total_us": 3182885,
+          "mean_us": 12.951192220052084,
+          "p95_upper_us": 31
+        }
+      }
+    },
+    "host": {
+      "load_average": [
+        2.26904296875,
+        2.39404296875,
+        3.25048828125
+      ],
+      "cpu_count": 10,
+      "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded\n",
+      "observed_only": true
+    },
+    "host_context_file": "gateway/build/quality-results/c-client-loop-gate-20261015/runs/writerfix-candidate-offer256-r1/host-context-before.json"
+  }
+]

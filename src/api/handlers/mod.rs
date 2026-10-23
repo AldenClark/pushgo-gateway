@@ -31,7 +31,13 @@ pub(crate) fn public_router(docs_html: &'static str) -> Router<AppState> {
         .route("/private/readyz", get(health::private_readyz))
         .route(
             "/message",
-            post(message::message_to_channel).get(message::message_to_channel_get),
+            post(message::message_to_channel)
+                .get(message::message_to_channel_get)
+                // This limit counts the entire message request JSON. The
+                // router-wide 32 KiB control limit remains in place elsewhere.
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    crate::ordinary::MESSAGE_SUBMISSION_BODY_BYTES,
+                )),
         )
         .route("/send_status/{op_id}", get(send_status::send_status))
         .route(

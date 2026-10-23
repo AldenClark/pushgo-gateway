@@ -15,7 +15,7 @@ use crate::private::{
     warp_engine::{PushgoServerApp, default_server_config},
 };
 
-pub(crate) const MAX_WSS_FRAME_BYTES: usize = (32 * 1024) + 2;
+pub(crate) const MAX_WSS_FRAME_BYTES: usize = warp_link::warp_link_core::MAX_FRAME_BYTES;
 const WSS_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn serve_ws_socket(
@@ -208,5 +208,16 @@ impl WsUpgradeIo for AxumWsIo {
         }
         let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
         self.recv_binary_until(deadline, timeout_ms).await
+    }
+}
+
+#[cfg(test)]
+mod shared_frame_budget_tests {
+    #[test]
+    fn embedded_websocket_uses_the_shared_complete_frame_budget() {
+        assert_eq!(
+            super::MAX_WSS_FRAME_BYTES,
+            warp_link::warp_link_core::MAX_FRAME_BYTES
+        );
     }
 }

@@ -103,6 +103,14 @@ async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let ordinary = state.store.ordinary_handle().unwrap();
+    assert_eq!(
+        ordinary
+            .private_pending_count(Some(device_key))
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(
         state
             .store
@@ -110,7 +118,8 @@ async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
             .await
             .expect("outbox should list")
             .len(),
-        1
+        0,
+        "ordinary MQTT work must not also be written to the retained-model outbox"
     );
 
     for (path, payload) in [
@@ -180,8 +189,50 @@ async fn mqtt_private_device_without_active_receiver_is_durably_queued() {
         .expect("outbox should list after non-message dispatches");
     assert_eq!(
         outbox.len(),
-        5,
-        "each MQTT receiver delivery must remain durable until PUBACK"
+        3,
+        "Event/Thing deliveries remain in their retained-model MQTT outbox"
+    );
+    assert_eq!(
+        ordinary
+            .private_pending_count(Some(device_key))
+            .await
+            .unwrap(),
+        2
+    );
+    let route = ordinary.private_route(device_key).await.unwrap();
+    let tickets = ordinary
+        .private_claim(&route, "router-offline-mqtt", 16)
+        .await
+        .unwrap();
+    assert_eq!(
+        tickets.len(),
+        2,
+        "both ordinary messages remain durable without a receiver"
+    );
+    let payloads = tickets
+        .iter()
+        .map(|ticket| serde_json::from_slice::<Value>(&ticket.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        payloads
+            .iter()
+            .all(|payload| payload["entity_type"] == "message")
+    );
+    assert!(
+        payloads
+            .iter()
+            .any(|payload| payload["thing_id"] == "thing-1")
+    );
+    for ticket in tickets {
+        assert!(ordinary.private_authorize(&ticket).await.unwrap());
+    }
+    assert_eq!(
+        ordinary
+            .private_pending_count(Some(device_key))
+            .await
+            .unwrap(),
+        2,
+        "claiming for a receiver does not substitute for its durable ACK"
     );
 }
 
@@ -230,11 +281,13 @@ async fn full_private_lane_does_not_block_healthy_provider_materialization() {
     for index in 0..16 {
         let (status, body) = post_json(
             app.clone(),
-            "/message",
+            "/event/create",
             json!({
                 "channel_id": channel_id,
                 "password": channel_secret,
-                "title": format!("fill private lane {index}")
+                "title": format!("retained event fills private lane {index}"),
+                "status": "open",
+                "event_time": chrono::Utc::now().timestamp_millis()
             }),
         )
         .await;
@@ -256,7 +309,7 @@ async fn full_private_lane_does_not_block_healthy_provider_materialization() {
         .expect("provider jobs should count");
 
     let (status, body) = post_json(
-        app,
+        app.clone(),
         "/message",
         json!({
             "channel_id": channel_id,
@@ -270,16 +323,62 @@ async fn full_private_lane_does_not_block_healthy_provider_materialization() {
         .get("op_id")
         .and_then(Value::as_str)
         .expect("accepted response should contain op_id");
-    let sender = state
-        .store
-        .load_sender_submit_status(op_id)
-        .await
-        .expect("sender status should load")
-        .expect("sender status should exist");
+    let ordinary = state.store.ordinary_handle().unwrap();
+    let frozen = ordinary.target_status(op_id).await.unwrap();
+    assert_eq!(frozen["targets"].as_array().unwrap().len(), 2);
     assert_eq!(
-        sender.status,
-        crate::storage::SenderSubmitStatusKind::Processing,
-        "the frozen submission must remain replayable for the full private lane"
+        ordinary
+            .private_pending_count(Some(private_device_key))
+            .await
+            .unwrap(),
+        1
+    );
+    let route = ordinary.private_route(private_device_key).await.unwrap();
+    assert!(
+        ordinary
+            .private_claim(&route, "full-private-lane", 16)
+            .await
+            .unwrap()
+            .is_empty(),
+        "legacy work occupies the per-device active lane, not the new accepted obligation"
+    );
+    let provider = ordinary.claim("APNS", 1, false).await.unwrap();
+    assert_eq!(
+        provider.tickets.len(),
+        1,
+        "the healthy Provider must remain claimable"
+    );
+    assert_eq!(provider.tickets[0].payload["op_id"], op_id);
+    assert!(
+        ordinary
+            .authorize_ticket(&provider.tickets[0])
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        provider.tickets[0].delivery_id.as_str(),
+        frozen["targets"][0]["delivery_id"].as_str().unwrap()
+    );
+    ordinary
+        .settle(&provider.tickets[0], "provider_accepted", 200, "", 0, None)
+        .await
+        .unwrap();
+    assert!(
+        state
+            .store
+            .load_sender_submit_status(op_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .store
+            .list_pending_dispatch_submissions(32, i64::MAX)
+            .await
+            .unwrap()
+            .iter()
+            .all(|record| record.op_id != op_id)
     );
     assert_eq!(
         state
@@ -287,8 +386,8 @@ async fn full_private_lane_does_not_block_healthy_provider_materialization() {
             .count_pending_provider_dispatch_jobs("APNS")
             .await
             .expect("provider jobs should count after partial materialization"),
-        provider_jobs_before + 1,
-        "the healthy APNs target must be activated independently"
+        provider_jobs_before,
+        "ordinary Provider work belongs only to the C ledger"
     );
 }
 
@@ -337,11 +436,13 @@ async fn private_ack_releases_capacity_and_recovery_completes_frozen_submission(
     for index in 0..16 {
         let (status, body) = post_json(
             app.clone(),
-            "/message",
+            "/event/create",
             json!({
                 "channel_id": channel_id,
                 "password": channel_secret,
-                "title": format!("fill private lane {index}")
+                "title": format!("retained event fills private lane {index}"),
+                "status": "open",
+                "event_time": chrono::Utc::now().timestamp_millis()
             }),
         )
         .await;
@@ -349,7 +450,7 @@ async fn private_ack_releases_capacity_and_recovery_completes_frozen_submission(
     }
 
     let (status, body) = post_json(
-        app,
+        app.clone(),
         "/message",
         json!({
             "channel_id": channel_id,
@@ -370,6 +471,18 @@ async fn private_ack_releases_capacity_and_recovery_completes_frozen_submission(
         .await
         .expect("private outbox should list");
     assert_eq!(queued.len(), 16);
+    let ordinary = state.store.ordinary_handle().unwrap();
+    let before_status = ordinary.status(op_id).await.unwrap();
+    let frozen = ordinary.target_status(op_id).await.unwrap();
+    assert_eq!(frozen["targets"].as_array().unwrap().len(), 2);
+    let route = ordinary.private_route(private_device_key).await.unwrap();
+    assert!(
+        ordinary
+            .private_claim(&route, "before-legacy-ack", 16)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let capacity_notifier = state.store.private_capacity_recovery_notifier();
     let capacity_signal = capacity_notifier.notified();
     tokio::pin!(capacity_signal);
@@ -385,14 +498,23 @@ async fn private_ack_releases_capacity_and_recovery_completes_frozen_submission(
         .await
         .expect("ACK must immediately notify the owned recovery worker");
 
-    assert_eq!(
-        crate::api::handlers::message::recover_pending_dispatch_submissions_before(
-            &state,
-            i64::MAX,
-        )
+    let grants = ordinary
+        .private_claim(&route, "after-legacy-ack", 16)
         .await
-        .expect("recovery sweep should succeed"),
-        1
+        .unwrap();
+    assert_eq!(
+        grants.len(),
+        1,
+        "the normal legacy ACK releases one shared active slot"
+    );
+    assert_eq!(
+        grants[0].delivery_id.as_str(),
+        frozen["targets"][0]["delivery_id"].as_str().unwrap()
+    );
+    assert!(ordinary.private_authorize(&grants[0]).await.unwrap());
+    assert_eq!(
+        ordinary.status(op_id).await.unwrap()["accepted_at"],
+        before_status["accepted_at"]
     );
     assert_eq!(
         state
@@ -401,8 +523,8 @@ async fn private_ack_releases_capacity_and_recovery_completes_frozen_submission(
             .await
             .expect("private outbox should refill")
             .len(),
-        16,
-        "the frozen delivery must consume the slot released by ACK"
+        15,
+        "the ordinary grant must not copy its body into the retained-model outbox"
     );
     assert!(
         state
@@ -412,18 +534,161 @@ async fn private_ack_releases_capacity_and_recovery_completes_frozen_submission(
             .expect("pending submissions should list")
             .iter()
             .all(|record| record.op_id != op_id),
-        "successful replay must leave no pending frozen manifest"
+        "ordinary acceptance never creates a second pending frozen manifest"
     );
-    let sender = state
-        .store
-        .load_sender_submit_status(op_id)
-        .await
-        .expect("sender status should load")
-        .expect("sender status should exist");
+    assert!(
+        state
+            .store
+            .load_sender_submit_status(op_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(ordinary.private_ack(&route, &grants[0]).await.unwrap());
     assert_eq!(
-        sender.status,
-        crate::storage::SenderSubmitStatusKind::ProviderQueued,
-        "the recovered operation should advance out of processing"
+        ordinary
+            .private_pending_count(Some(private_device_key))
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn ordinary_target_budget_is_atomic_and_replay_survives_full_private_execution() {
+    use sqlx::{Connection, SqliteConnection};
+    let target_limit = 64usize;
+    let execution_limit = 16usize;
+    let mut private_config = test_private_config();
+    private_config.global_max_pending = execution_limit;
+    let (state, db_url) =
+        build_private_test_state_with_limits(private_config, Some(target_limit as i64)).await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let (status, registration) = post_json(
+        app.clone(),
+        "/device/register",
+        json!({"platform": "android"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{registration:?}");
+    let device_key = response_string_field(&registration, "device_key").to_owned();
+    let fixture_credential = crate::util::generate_hex_id_128();
+    let (status, subscription) = post_json(
+        app.clone(),
+        "/channel/subscribe",
+        json!({
+            "device_key": device_key,
+            "channel_name": "private-global-responsibility",
+            "password": fixture_credential
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{subscription:?}");
+    let channel_id = response_string_field(&subscription, "channel_id");
+    let original = json!({
+        "channel_id": channel_id,
+        "password": fixture_credential,
+        "op_id": "private-global-first",
+        "title": "bounded accepted responsibility",
+        "ttl": chrono::Utc::now().timestamp_millis() + 300_000
+    });
+    let (status, first) = post_json(app.clone(), "/message", original.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{first:?}");
+    let ordinary = state.store.ordinary_handle().unwrap();
+    let first_status = ordinary.status("private-global-first").await.unwrap();
+    let route = ordinary.private_route(&device_key).await.unwrap();
+    let mut active = Vec::new();
+    for index in 1..target_limit {
+        let mut next = original.clone();
+        next["op_id"] = json!(format!("private-global-{index}"));
+        let (status, body) = post_json(app.clone(), "/message", next).await;
+        assert_eq!(status, StatusCode::OK, "responsibility {index}: {body:?}");
+        if index == execution_limit - 1 {
+            active = ordinary
+                .private_claim(&route, "full-execution-lane", target_limit)
+                .await
+                .unwrap();
+            assert_eq!(active.len(), execution_limit);
+        }
+    }
+    assert_eq!(
+        ordinary.private_pending_count(None).await.unwrap(),
+        target_limit as i64
+    );
+    assert!(
+        ordinary
+            .private_claim(&route, "execution-lane-stays-full", target_limit)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a full Private execution lane keeps accepted obligations waiting"
+    );
+    let mut inspect = SqliteConnection::connect(&format!("{db_url}?mode=ro"))
+        .await
+        .unwrap();
+    let (targets, claimed): (i64, i64) = sqlx::query_as(
+        "SELECT targets,(SELECT COUNT(*) FROM ordinary_targets WHERE private_claim IS NOT NULL) FROM ordinary_ledger_usage WHERE singleton=1")
+        .fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(
+        targets, target_limit as i64,
+        "this single-recipient channel consumes one system target per accepted message"
+    );
+    assert_eq!(
+        claimed, execution_limit as i64,
+        "the smaller Private global/per-device execution limit does not become an admission limit"
+    );
+    let mut rejected = original.clone();
+    rejected["op_id"] = json!("private-global-rejected");
+    let (status, denied) = post_json(app.clone(), "/message", rejected.clone()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{denied:?}");
+    assert_eq!(denied["error_code"], "server_busy");
+    assert!(matches!(
+        ordinary.status("private-global-rejected").await,
+        Err(crate::ordinary::KernelError::NotFound)
+    ));
+    assert_eq!(
+        ordinary.private_pending_count(None).await.unwrap(),
+        target_limit as i64
+    );
+    let (status, replay) = post_json(app.clone(), "/message", original).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "accepted replay at capacity: {replay:?}"
+    );
+    assert_eq!(response_data(&replay), response_data(&first));
+    assert_eq!(
+        ordinary.status("private-global-first").await.unwrap(),
+        first_status
+    );
+
+    assert!(ordinary.private_ack(&route, &active[0]).await.unwrap());
+    let (status, retried) = post_json(app, "/message", rejected).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "released responsibility should admit retry: {retried:?}"
+    );
+    assert_eq!(
+        ordinary.private_pending_count(None).await.unwrap(),
+        target_limit as i64
+    );
+    assert!(
+        state
+            .store
+            .list_private_outbox(derive_private_device_id(&device_key), target_limit)
+            .await
+            .unwrap()
+            .is_empty(),
+        "ordinary waiting/claimed work has no legacy outbox copy"
+    );
+    assert!(
+        state
+            .store
+            .load_sender_submit_status("private-global-rejected")
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 

@@ -1,4 +1,3 @@
-
 pub struct PrivateHub {
     store: Storage,
     presence: DashMap<DeviceId, Presence>,
@@ -16,6 +15,7 @@ pub struct PrivateHub {
     hot_order: Mutex<VecDeque<String>>,
     resume_state: DashMap<DeviceId, ResumeState>,
     enqueue_gate: tokio::sync::Mutex<()>,
+    ordinary: OrdinaryPrivateWork,
     #[cfg(test)]
     payload_conflict_events: AtomicUsize,
 }
@@ -88,7 +88,9 @@ impl Presence {
     }
 
     fn mqtt_delivery_sender(&self) -> Option<Sender<protocol::DeliverEnvelope>> {
-        self.mqtt_active.as_ref().map(|active| active.sender.clone())
+        self.mqtt_active
+            .as_ref()
+            .map(|active| active.sender.clone())
     }
 
     fn has_active(&self) -> bool {
@@ -164,8 +166,10 @@ impl ResumeState {
             .collect();
         let mut acked_delivery_ids = Vec::with_capacity(acked.len());
         for seq in acked {
-            if let Some(inflight) = self.inflight.remove(&seq) {
-                acked_delivery_ids.push(inflight.delivery.delivery_id);
+            if let Some(inflight) = self.inflight.get(&seq) {
+                // Resume is client evidence, not a database COMMIT. The caller
+                // settles these IDs durably before forgetting their sequences.
+                acked_delivery_ids.push(inflight.delivery.delivery_id.clone());
             }
         }
         self.updated_at = now;
@@ -177,6 +181,13 @@ impl ResumeState {
         envelope: protocol::DeliverEnvelope,
         now: Instant,
     ) -> (u64, protocol::DeliverEnvelope) {
+        if envelope.ordinary
+            && let Some((seq, inflight)) = self.inflight.iter().find(|(_, item)| {
+                item.delivery.ordinary && item.delivery.delivery_id == envelope.delivery_id
+            })
+        {
+            return (*seq, inflight.delivery.clone());
+        }
         let seq = self.next_seq;
         self.next_seq = self.next_seq.saturating_add(1).max(1);
         self.inflight.insert(

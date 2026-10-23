@@ -254,7 +254,7 @@ impl SqliteDb {
                 "UPDATE {sender_table} SET status = ?, dispatch_status = ?, updated_at = ? \
                  WHERE op_id = ? AND status IN ('processing', 'provider_queued') AND updated_at <= ?"
             );
-            sqlx::query(&sender_sql)
+            sqlx::query(sqlx::AssertSqlSafe(sender_sql.as_str()))
                 .bind(sender_status)
                 .bind(dispatch_status)
                 .bind(now)
@@ -389,7 +389,7 @@ impl SqliteDb {
                     "UPDATE {sender_table} SET status = ?, dispatch_status = ?, updated_at = ? \
                      WHERE op_id = ? AND status = 'provider_queued' AND updated_at <= ?"
                 );
-                sqlx::query(&sender_sql)
+                sqlx::query(sqlx::AssertSqlSafe(sender_sql.as_str()))
                     .bind(sender_status)
                     .bind(dispatch_status)
                     .bind(updated_at)
@@ -639,7 +639,7 @@ impl SqliteDb {
 
     async fn cleanup_devices_by_query(
         &self,
-        select_sql: &str,
+        select_sql: &'static str,
         before_ts: i64,
         limit: usize,
     ) -> StoreResult<usize> {
@@ -697,7 +697,7 @@ impl SqliteDb {
 
     async fn cleanup_subscription_status_with_delivery_gate(
         &self,
-        select_sql: &str,
+        select_sql: &'static str,
         statuses: &[&str; 2],
         before_ts: i64,
         now: i64,
@@ -1100,7 +1100,7 @@ impl SqliteDb {
                 let sender_sql = format!(
                     "UPDATE {sender_table} SET status='failed', dispatch_status=?, updated_at=? WHERE op_id=?"
                 );
-                sqlx::query(&sender_sql)
+                sqlx::query(sqlx::AssertSqlSafe(sender_sql.as_str()))
                     .bind(reason)
                     .bind(now)
                     .bind(op_id)
@@ -1228,7 +1228,7 @@ impl SqliteDb {
         let mut conn = self.pool.acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         for table in tables {
-            sqlx::query(&format!("DELETE FROM {}", table))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {}", table)))
                 .execute(&mut *tx)
                 .await?;
         }
@@ -1236,7 +1236,7 @@ impl SqliteDb {
         let mut conn = self.delivery_pool().acquire().await?;
         let mut tx = (*conn).begin_with("BEGIN IMMEDIATE").await?;
         for table in ["provider_pull_queue", "private_outbox", "private_payloads"] {
-            sqlx::query(&format!("DELETE FROM {}", table))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {}", table)))
                 .execute(&mut *tx)
                 .await?;
         }
@@ -1251,7 +1251,7 @@ impl SqliteDb {
             "dispatch_delivery_dedupe",
             "semantic_id_registry",
         ] {
-            sqlx::query(&format!("DELETE FROM {}", table))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {}", table)))
                 .execute(&mut *tx)
                 .await?;
         }
@@ -1370,11 +1370,11 @@ fn invalid_sender_status_data(message: &'static str) -> StoreError {
 
 async fn select_delivery_keys(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    sql: &str,
+    sql: &'static str,
     before_ts: i64,
     limit: usize,
 ) -> StoreResult<Vec<(Vec<u8>, String)>> {
-    let rows = sqlx::query(sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(before_ts)
         .bind(limit as i64)
         .fetch_all(&mut **tx)

@@ -1,0 +1,142 @@
+--- a/prototype/Cargo.toml
++++ b/prototype/Cargo.toml
+@@ -14,6 +14,9 @@
+ codegen-units = 1
+ panic = "abort"
+ opt-level = 3
++
++[features]
++commit-observer = []
+ 
+ [dependencies]
+ pushgo-gateway = { path = ".." }
+--- a/prototype/src/lib.rs
++++ b/prototype/src/lib.rs
+@@ -1,5 +1,7 @@
+ #![forbid(unsafe_code)]
+ //! Single-host delivery candidate; credential owners are reused from Gateway.
++#[cfg(feature = "commit-observer")]
++pub mod commit_observer;
+ pub mod credentials;
+ mod http;
+ mod ingress;
+--- a/prototype/src/store.rs
++++ b/prototype/src/store.rs
+@@ -1854,6 +1854,8 @@
+             .profile
+             .phase(Path::Receipt, Phase::Commit, tx.commit())
+             .await?;
++        #[cfg(feature = "commit-observer")]
++        if changed > 0 { crate::commit_observer::committed(&ticket.delivery_id, &ticket.device_key, ticket.attempt_id, state); }
+         drop(profile_connection);
+         record_duration(
+             &self.counters.receipt_commit_samples,
+--- a/prototype/src/bin/free_architecture_fixture.rs
++++ b/prototype/src/bin/free_architecture_fixture.rs
+@@ -1,4 +1,7 @@
+ //! Synthetic loopback-only fixture for the independent SQLite authority.
++#[cfg(feature = "commit-observer")]
++#[path = "support/commit_observer_fixture.rs"]
++mod commit_observer_fixture;
+ use clap::Parser;
+ use free_delivery_prototype::{
+     Config, DeliveryRuntime, HttpLimits, RealProviders,
+@@ -43,6 +46,9 @@
+ #[tokio::main(worker_threads = 4)]
+ async fn main() -> Result<(), Box<dyn Error>> {
+     let cli = Cli::parse();
++    #[cfg(feature = "commit-observer")]
++    let commit_session = std::env::var_os("C4_COMMIT_STREAM").map(|path|
++        commit_observer_fixture::Session::start(std::path::Path::new(&path))).transpose()?;
+     let authority = cli
+         .mock_endpoint
+         .strip_prefix("http://")
+@@ -184,6 +190,8 @@
+             .metrics()
+             .num_alive_tasks()
+     );
++    #[cfg(feature = "commit-observer")]
++    if let Some(session) = commit_session { session.finish()?; }
+     if report.panicked != 0 || report.aborted != 0 || report.failed != 0 {
+         return Err("unclean driver shutdown".into());
+     }
+--- /dev/null
++++ b/prototype/src/commit_observer.rs
+@@ -0,0 +1,8 @@
++//! Measurement-only post-COMMIT boundary. No unsafe code and no retained fields.
++use std::sync::OnceLock;
++pub type Observer = fn(&str, &str, i64, &str);
++static OBSERVER: OnceLock<Observer> = OnceLock::new();
++pub fn install(observer: Observer) -> Result<(), Observer> { OBSERVER.set(observer) }
++pub(crate) fn committed(delivery: &str, device: &str, attempt: i64, state: &str) {
++    if let Some(callback) = OBSERVER.get() { callback(delivery, device, attempt, state); }
++}
+--- /dev/null
++++ b/prototype/src/bin/support/commit_observer_fixture.rs
+@@ -0,0 +1,66 @@
++//! Bounded measurement-only macOS observer; no Tokio task or per-event allocation.
++use std::{fs::OpenOptions, io::{BufWriter, Write}, path::Path,
++    sync::{OnceLock, Mutex, mpsc::{self, SyncSender}, atomic::{AtomicU64, Ordering}},
++    thread::JoinHandle};
++static SENDER: OnceLock<Mutex<Option<SyncSender<[u8;96]>>>> = OnceLock::new();
++static EMITTED: AtomicU64 = AtomicU64::new(0);
++static DROPPED: AtomicU64 = AtomicU64::new(0);
++static INVALID: AtomicU64 = AtomicU64::new(0);
++static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
++unsafe extern "C" { fn mach_absolute_time() -> u64; }
++fn commit(delivery: &str, device: &str, attempt: i64, state: &str) {
++    // SAFETY: zero-argument system monotonic clock, no pointers or ownership.
++    let ticks = unsafe { mach_absolute_time() };
++    let state = match state { "provider_accepted"=>1, "permanent_failed"=>2,
++        "expired"=>3, "cancelled"=>4, "retry_wait"=>5, _=>0 };
++    if delivery.len()!=32 || device.len()!=32 || !delivery.is_ascii()
++        || !device.is_ascii() || attempt<0 || state==0 {
++        INVALID.fetch_add(1,Ordering::Relaxed); return;
++    }
++    let sequence = EMITTED.fetch_add(1,Ordering::Relaxed);
++    let mut record=[0_u8;96];
++    record[0..8].copy_from_slice(&ticks.to_le_bytes());
++    record[8..16].copy_from_slice(&(attempt as u64).to_le_bytes());
++    record[16..24].copy_from_slice(&sequence.to_le_bytes());
++    record[24..56].copy_from_slice(delivery.as_bytes());
++    record[56..88].copy_from_slice(device.as_bytes()); record[88]=state;
++    // try_lock plus try_send: observer cannot wait behind a consumer or shutdown.
++    let sent = SENDER.get().and_then(|s| s.try_lock().ok())
++        .and_then(|s| s.as_ref().map(|tx| tx.try_send(record).is_ok())).unwrap_or(false);
++    if !sent { DROPPED.fetch_add(1,Ordering::Relaxed); }
++}
++pub struct Session { writer: JoinHandle<()>, summary: std::path::PathBuf }
++impl Session {
++    pub fn start(path: &Path) -> Result<Self,Box<dyn std::error::Error>> {
++        let file=OpenOptions::new().write(true).create_new(true).open(path)?;
++        let (tx,rx)=mpsc::sync_channel::<[u8;96]>(4096);
++        SENDER.set(Mutex::new(Some(tx))).map_err(|_| "observer already installed")?;
++        let writer=std::thread::spawn(move || {
++            let mut out=BufWriter::with_capacity(64*1024,file);
++            let mut failed=false;
++            for record in rx {
++                if !failed && out.write_all(&record).is_err() {
++                    WRITE_ERRORS.fetch_add(1,Ordering::Relaxed); failed=true;
++                }
++            }
++            if !failed && out.flush().is_err() { WRITE_ERRORS.fetch_add(1,Ordering::Relaxed); }
++        });
++        free_delivery_prototype::commit_observer::install(commit).map_err(|_| "callback already installed")?;
++        Ok(Self{writer,summary:path.with_extension("observer.json")})
++    }
++    pub fn finish(self) -> Result<(),Box<dyn std::error::Error>> {
++        SENDER.get().unwrap().lock().unwrap().take();
++        let joined=self.writer.join().is_ok();
++        let dropped=DROPPED.load(Ordering::Relaxed);
++        let invalid=INVALID.load(Ordering::Relaxed);
++        let errors=WRITE_ERRORS.load(Ordering::Relaxed);
++        let summary=serde_json::json!({"writer_joined":joined,"emitted":EMITTED.load(Ordering::Relaxed),
++            "dropped":dropped,"invalid_ids":invalid,"write_errors":errors,
++            "capacity_records":4096,"record_bytes":96,"writer_buffer_bytes":65536,
++            "clock":"mach_absolute_time","boundary":"successful receipt COMMIT await returned, changed target only"});
++        let mut file=OpenOptions::new().write(true).create_new(true).open(self.summary)?;
++        writeln!(file,"{summary}")?;
++        if !joined || dropped!=0 || invalid!=0 || errors!=0 { return Err("invalid commit telemetry".into()); }
++        Ok(())
++    }
++}

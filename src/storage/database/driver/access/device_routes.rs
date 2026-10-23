@@ -3,6 +3,17 @@ use async_trait::async_trait;
 
 #[async_trait]
 impl DeviceRouteDatabaseAccess for DatabaseDriver {
+    async fn watch_alert_window_minutes(&self, device_key: &str) -> StoreResult<i64> {
+        delegate_db_async!(self, watch_alert_window_minutes(device_key))
+    }
+    async fn set_watch_alert_window_minutes(
+        &self,
+        device_key: &str,
+        minutes: i64,
+    ) -> StoreResult<()> {
+        delegate_db_async!(self, set_watch_alert_window_minutes(device_key, minutes))
+    }
+
     async fn load_device_routes(&self) -> StoreResult<Vec<DeviceRouteRecordRow>> {
         delegate_db_async!(self, load_device_routes())
     }

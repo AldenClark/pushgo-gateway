@@ -107,10 +107,15 @@ Fine-grained performance/resource knobs are internal profile defaults, not publi
 
 | Profile | Intended deployment | Key defaults |
 | ------- | ------------------- | ------------ |
-| `small` | Tiny/private SQLite deployment | Lower SQLite/cache/queue footprints, 5min maintenance tick, conservative cleanup defaults, provider in-flight caps 32/32/16 |
-| `public` | Large external-DB gateway, primarily PostgreSQL/MySQL | Larger queue/pool limits, 1min maintenance tick, higher fanout budgets, external DB pool max 64/min 4, provider in-flight caps 128/256/128 |
+| `small` | Tiny/private SQLite deployment | SQLite read-pool limit 2, page-cache setting 512 KiB per connection, four storage caches min 64/max 512, external DB pool min 0/max 8, 5min maintenance tick, conservative cleanup |
+| `public` | Large external-DB gateway, primarily PostgreSQL/MySQL | SQLite read-pool limit 4, page-cache setting 4096 KiB per connection, larger storage caches, external DB pool min 4/max 64, 1min maintenance tick, higher private fanout budgets |
 
 Database driver selection is always based on `--db-url`; setting `--runtime-profile=public` with a SQLite URL still uses SQLite, and setting `--runtime-profile=small` with a PostgreSQL URL still uses PostgreSQL. If omitted, `small` is used.
+
+Both profiles use the same independent adaptive dispatch bounds: APNs alert 2–64, Live Activity 1–8, Widget 1–8, FCM 2–64, and WNS 1–32. Each lane retains a 1024-capacity wakeup channel; these are bounds, not current concurrency or allocated queue entries. Provider clients share one HTTP client per provider. Database/cache limits are configuration settings, not measured RSS or live connection counts; only the selected database backend uses its corresponding settings.
+
+The 2026-10-14 cleanup removes unused `RuntimeTuning.dispatch`/`.provider` fields, their public tuning types, and the three Provider `new_with_profile` constructors. Rust library callers must use `ApnsService::new`, `FcmService::new`, or `WnsService::new`; callers reading the removed fields must remove those reads. This is a Rust source API change. No CLI/env option is removed in this batch; `PUSHGO_RUNTIME_PROFILE`, its existing aliases, default and invalid-value rejection remain. Startup JSON drops `dispatch_worker_count`, `dispatch_queue_capacity`, and the three `provider_*_max_in_flight` fields, which had no runtime consumers. Log consumers must stop relying on those fields. The replacement SQLite/cache and external-DB fields describe configured resources, not Provider capacity.
+
 
 ### MCP / OAuth
 
@@ -444,11 +449,14 @@ If you rely on Dynamic Client Registration, you can omit `PUSHGO_MCP_PREDEFINED_
 - `POST /v2/messages/pull` is non-destructive and returns at most 200 valid items plus `has_more`. Clients must keep pulling while `has_more=true`; an empty page can still have `has_more=true` when corrupt/unsupported rows were silently deleted.
 - The outer `items[].delivery_id` is authoritative. Missing or conflicting embedded IDs are corrupt data and are silently deleted by the outer ID.
 - `POST /messages/ack` remains the legacy single-item contract `{device_key, delivery_id}`. `POST /v2/messages/ack` is the separate batch contract `{device_key, delivery_ids}` with at most 200 unique IDs and returns both `requested_count` and `removed_count`.
-- `provider_queued` means the operation has entered this Gateway process's in-memory Provider worker queue; it is not Provider success. `sent/provider_success` or `partially_failed/provider_failed` is persisted only after the worker receives the actual Provider result.
+- `provider_queued` means the accepted operation is pending durable Provider dispatch; in-memory channels are wakeup hints, and the state is not Provider success. `sent/provider_success` or `partially_failed/provider_failed` is persisted only after the worker receives the actual Provider result.
 
 ## Device routing authority
 
 `POST /device/register` and `POST /channel/sync` return the current durable route in `data.route`: `{channel_type, route_revision, provider_token_present}`. Channel synchronization also returns `data.device_key`; registration retains its existing top-level `route_revision` and `issued_new_key` fields. These additive fields do not expose the Provider token. A newly issued identity starts with the default Private route; clients may initialize their chosen mode through the existing write endpoint. For an existing identity, clients apply the server route before token reporting and receiver startup.
+
+Watch registration accepts `watch_alert_window_minutes` (5, 15, 30, or 60). It defaults to 30; omission on an existing Watch preserves its setting. The response reports the effective value for Watch only. Updating this setting does not change the route revision. Each newly materialized Watch delivery freezes its configured window against original Gateway acceptance `sent_at`, with `watch_alert_deadline_at` as an epoch-millisecond string in both direct and wakeup APNs snapshots. Existing queued jobs and retries retain that deadline. Older jobs without it use their durable acceptance plus 30 minutes. Invalid or future acceptance suppresses reminders. Expiry ends only provider reminder attempts; pull data, source retention, state updates, and client delivery ACK remain independent. Watch APNs expiration is bounded by the deadline and any earlier positive sender expiration; zero retains APNs do-not-store semantics. iPhone payload TTL is unchanged.
+
 
 `POST /channel/device` remains the single explicit route switch. Its transaction moves pending deliveries together with the route; a Provider-to-Private capacity rejection leaves both unchanged. Registration and channel synchronization do not select a new mode. After a timeout, clients confirm the actual route through normal registration/synchronization, and repair local settings toward that result. This is eventual convergence, not a promise to undo every timed-out request.
 
@@ -460,7 +468,7 @@ Released Gateway v1.3.2 has the same SQLite schema/startup definitions and no op
 
 1. Back up the database before the first start after upgrade. Legacy runtime schema versions may trigger a runtime-table hard reset; channel/base data is preserved by migration tests, but runtime queues and deprecated observability rows can be rebuilt or dropped.
 2. Replace legacy private-channel switches with `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`. Use `none`, `wss`, `quic,tcp,wss`, or `quic,tcp,wss,mqtt` explicitly.
-3. Replace removed per-queue private tuning environment variables with `PUSHGO_RUNTIME_PROFILE=small|public`. The profile controls queue, cache, dispatch, and DB-pool defaults.
+3. Replace removed per-queue private tuning environment variables with `PUSHGO_RUNTIME_PROFILE=small|public`. The profile controls private-channel and runtime-counter queue budgets, caches, maintenance, and DB-pool defaults; Provider adaptive concurrency is independent.
 4. Sender clients may provide a globally unique `op_id` for payload-bound idempotent retry. Reusing it for the same operation returns the original delivery; reusing it with a different payload or operation scope returns `409`. If omitted, the gateway generates one. Save the returned `op_id` and use `/send_status/{op_id}` for sender-facing status.
 5. MQTT deployments must publish `1883/tcp` for plain MQTT or terminate TLS at the edge on `8883/tcp`. If gateway terminates MQTT/TLS directly, set `PUSHGO_MQTT_TLS_ENABLED=true` and provide `PUSHGO_PRIVATE_TLS_CERT` / `PUSHGO_PRIVATE_TLS_KEY`.
 6. For cross-database upgrade validation, run `scripts/storage_crossdb_parity.sh`. The script uses Docker when available and falls back to Apple container when `CONTAINER_CLI=container` or Docker is absent.
@@ -589,10 +597,15 @@ Gateway 到 token-service 的请求不做鉴权。HTTP 只允许字面 loopback 
 
 | Profile | 适用部署 | 关键默认值 |
 | ------- | -------- | ---------- |
-| `small` | 极小规模私有 SQLite 部署 | 更低 SQLite/cache/队列占用，maintenance 5 分钟 tick，保守清理默认值，provider 并发 32/32/16 |
-| `public` | 大规模外部 DB 网关，主要是 PostgreSQL/MySQL | 更大的队列/pool 限制，maintenance 1 分钟 tick，更高 fanout 预算，外部 DB pool max 64/min 4，provider 并发 128/256/128 |
+| `small` | 极小规模私有 SQLite 部署 | SQLite 读池上限 2、每连接 page cache 设置 512 KiB、四类存储缓存 min 64/max 512、外部 DB pool min 0/max 8、maintenance 5 分钟 tick、保守清理 |
+| `public` | 大规模外部 DB 网关，主要是 PostgreSQL/MySQL | SQLite 读池上限 4、每连接 page cache 设置 4096 KiB、更大存储缓存、外部 DB pool min 4/max 64、maintenance 1 分钟 tick、更高私有通道 fanout 预算 |
 
 数据库驱动始终由 `--db-url` 决定；设置 `--runtime-profile=public` 加 SQLite URL 仍然使用 SQLite，设置 `--runtime-profile=small` 加 PostgreSQL URL 仍然使用 PostgreSQL。不传时默认使用 `small`。
+
+两种 profile 使用相同且彼此独立的自适应调度范围：APNs alert 2–64、Live Activity 1–8、Widget 1–8、FCM 2–64、WNS 1–32。每条 lane 保留容量 1024 的唤醒通道；这些是边界，不是当前并发或已分配队列元素。每个 Provider 共享一个 HTTP client。数据库／缓存参数表示配置，不是 RSS 或实时连接数；仅所选数据库后端使用对应参数。
+
+2026-10-14 清理删除了无消费者的 `RuntimeTuning.dispatch`／`.provider` 字段、对应公开类型及三个 Provider 的 `new_with_profile` 构造器。Rust 库调用方须改用 `ApnsService::new`、`FcmService::new`、`WnsService::new`，并移除对旧字段的读取；这是 Rust 源码 API 变化。本批未删除 CLI/env 选项，`PUSHGO_RUNTIME_PROFILE` 及既有别名、默认值、无效值拒绝保持不变。启动 JSON 删除无实际运行消费者的 `dispatch_worker_count`、`dispatch_queue_capacity` 和三个 `provider_*_max_in_flight` 字段，日志消费者须停止依赖它们。新增 SQLite／缓存及外部 DB 字段描述真实配置责任，不代表 Provider 容量。
+
 
 ### MCP / OAuth
 
@@ -882,11 +895,14 @@ container run -d --name pushgo-gateway \
 - `POST /v2/messages/pull` 是非破坏性 Pull，每页最多返回 200 条有效数据和 `has_more`。客户端必须在 `has_more=true` 时继续拉取；当损坏/不支持数据被静默删除时，空页也可能返回 `has_more=true`。
 - `items[].delivery_id` 外层字段是唯一权威 ID。缺失或冲突的内层 ID 视为损坏数据，只按外层 ID 静默删除。
 - `POST /messages/ack` 保持 legacy 单条合同 `{device_key, delivery_id}`；独立的 `POST /v2/messages/ack` 才接受 `{device_key, delivery_ids}`，最多 200 个去重 ID，并同时返回 `requested_count` 与 `removed_count`。
-- `provider_queued` 只表示操作已进入当前 Gateway 进程的 Provider worker 内存队列，不代表 Provider 成功；worker 获得真实结果后才持久化 `sent/provider_success` 或 `partially_failed/provider_failed`。
+- `provider_queued` 表示已受理操作等待持久 Provider 调度；内存通道只负责唤醒，不代表 Provider 成功。只有 worker 收到实际 Provider 结果后，才持久化 `sent/provider_success` 或 `partially_failed/provider_failed`。
 
 ## 设备路由以服务端为准
 
 `POST /device/register` 与 `POST /channel/sync` 在 `data.route` 中返回实际持久路由：`{channel_type, route_revision, provider_token_present}`，不返回 Provider token 明文。频道同步还返回 `data.device_key`；注册保留原有 `route_revision`、`issued_new_key` 字段。新设备默认 Private，可通过现有写接口初始化通知方式；已有设备先应用服务端路由，再上报 token、启动接收服务。
+
+Watch 注册支持 `watch_alert_window_minutes`：5、15、30、60 分钟，默认 30；已有 Watch 省略字段时保留原设置，仅 Watch 响应返回有效值。更新设置不改变路由版本。每次新建 Watch 投递时，以 Gateway 原始接受时间 `sent_at` 加当时设置冻结截止时间，并在 direct/wakeup APNs 持久快照中写入毫秒时间戳字符串 `watch_alert_deadline_at`。已排队投递与重试不刷新；旧任务缺少字段时使用其持久接受时间加默认 30 分钟。无效或未来接受时间不触发提醒。过期只终止 Provider 提醒尝试，Pull、源数据保留、状态更新与客户端交付 ACK 独立处理。Watch 的 APNs expiration 取截止时间与发送方更早的正值中较早者；0 保留 APNs 不存储语义，iPhone 的 payload TTL 保持原行为。
+
 
 `POST /channel/device` 继续作为单次明确切换入口，路由与待投递消息在同一事务中迁移；Provider 转 Private 容量不足时，旧路由和队列均保持不变。注册和频道同步不重新选择通知方式。请求超时后，通过正常注册或同步确认远端结果，本地设置向该结果收敛，不保证将每个超时请求回滚。
 
@@ -898,7 +914,7 @@ container run -d --name pushgo-gateway \
 
 1. 首次启动新版本前先备份数据库。旧 runtime schema 可能触发 runtime 表 hard reset；迁移测试覆盖了频道等基础数据保留，但 runtime 队列和废弃观测表可能被重建或清理。
 2. 将旧私有通道开关替换为 `PUSHGO_PRIVATE_TRANSPORTS` / `--private-transports`，显式使用 `none`、`wss`、`quic,tcp,wss` 或 `quic,tcp,wss,mqtt`。
-3. 移除旧的私有队列调参环境变量，改用 `PUSHGO_RUNTIME_PROFILE=small|public`。队列、缓存、dispatch 和 DB pool 默认值由 profile 统一控制。
+3. 移除旧的私有队列调参环境变量，改用 `PUSHGO_RUNTIME_PROFILE=small|public`。私有通道与 runtime counter 队列预算、缓存、维护和 DB pool 默认值由 profile 控制；Provider 自适应并发独立。
 4. 发送端可以提供全局唯一的 `op_id` 用于与 payload 绑定的幂等重试；同一操作重试会复用原投递，不同 payload 或不同操作范围复用会返回 `409`。省略时由 gateway 生成。发送端应保存响应里的 `op_id`，并通过 `/send_status/{op_id}` 查询发送状态。
 5. MQTT 部署需要发布 `1883/tcp` 明文端口，或在边缘层终止 `8883/tcp` TLS。如果由 gateway 直接终止 MQTT/TLS，需要设置 `PUSHGO_MQTT_TLS_ENABLED=true` 并提供 `PUSHGO_PRIVATE_TLS_CERT` / `PUSHGO_PRIVATE_TLS_KEY`。
 6. 跨库升级验证可运行 `scripts/storage_crossdb_parity.sh`。脚本优先使用 Docker；没有 Docker 时可使用 Apple container，也可以显式设置 `CONTAINER_CLI=container`。

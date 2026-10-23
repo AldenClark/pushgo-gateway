@@ -1,0 +1,49 @@
+{
+  "purpose": "isolated read-only native backend test observation only",
+  "downloaded": true,
+  "source": "pip configured/default index; noncredential endpoint identity recorded below; wheels pinned by exact SHA256",
+  "installed_target": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/vendor",
+  "global_install": false,
+  "product_dependency_files_changed": false,
+  "new_downloads_complete": true,
+  "wheels": [
+    {
+      "filename": "asn1crypto-1.5.1-py2.py3-none-any.whl",
+      "bytes": 105045,
+      "sha256": "db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67"
+    },
+    {
+      "filename": "pg8000-1.31.5-py3-none-any.whl",
+      "bytes": 57816,
+      "sha256": "0af2c1926b153307639868d2ee5cef6cd3a7d07448e12736989b10e1d491e201"
+    },
+    {
+      "filename": "pymysql-1.2.3-py3-none-any.whl",
+      "bytes": 46740,
+      "sha256": "14f1c68e2ed859243ae5ca41ffbe677027fc46bc136a9f0be8a4e928e5e7415a"
+    },
+    {
+      "filename": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "bytes": 229892,
+      "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"
+    },
+    {
+      "filename": "scramp-1.4.6-py3-none-any.whl",
+      "bytes": 12812,
+      "sha256": "a0cf9d2b4624b69bac5432dd69fecfc55a542384fe73c3a23ed9b138cda484e1"
+    },
+    {
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "bytes": 11050,
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"
+    }
+  ],
+  "configured_index_endpoints": [
+    {
+      "origin": "pip default after config/environment check",
+      "scheme": "https",
+      "hostname": "pypi.org",
+      "path": "/simple"
+    }
+  ]
+}

@@ -360,6 +360,8 @@ impl Storage {
             hash_channel_password(password)?
         };
 
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         let outcome = self
             .db
             .subscribe_channel_for_device_key(
@@ -382,6 +384,7 @@ impl Storage {
             },
         );
 
+        self.ordinary_control_committed();
         Ok(outcome)
     }
 
@@ -390,11 +393,14 @@ impl Storage {
         channel_id: [u8; 16],
         device_key: &str,
     ) -> StoreResult<bool> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         let removed = self
             .db
             .unsubscribe_channel_for_device_key(channel_id, device_key)
             .await?;
         self.cache.invalidate_channel_devices(channel_id);
+        self.ordinary_control_committed();
         Ok(removed)
     }
 
@@ -406,6 +412,8 @@ impl Storage {
         provider_token: &str,
         route_updated_at: i64,
     ) -> StoreResult<bool> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         let removed = self
             .db
             .unsubscribe_channel_if_provider_route_current(
@@ -419,6 +427,7 @@ impl Storage {
         if removed {
             self.cache.invalidate_channel_devices(channel_id);
         }
+        self.ordinary_control_committed();
         Ok(removed)
     }
 
@@ -576,6 +585,8 @@ impl Storage {
         } else {
             hash_channel_password(password)?
         };
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         let outcome = self
             .db
             .upsert_private_channel(channel_id, alias, &password_hash)
@@ -588,6 +599,7 @@ impl Storage {
                 password_hash,
             },
         );
+        self.ordinary_control_committed();
         Ok(outcome)
     }
 
@@ -596,10 +608,13 @@ impl Storage {
         channel_id: [u8; 16],
         device_id: DeviceId,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db
             .private_subscribe_channel(channel_id, device_id)
             .await?;
         self.cache.invalidate_channel_devices(channel_id);
+        self.ordinary_control_committed();
         Ok(())
     }
 
@@ -608,10 +623,13 @@ impl Storage {
         channel_id: [u8; 16],
         device_id: DeviceId,
     ) -> StoreResult<()> {
+        let _control_write = self.durable_write_gate.lock().await;
+        self.ensure_ordinary_health()?;
         self.db
             .private_unsubscribe_channel(channel_id, device_id)
             .await?;
         self.cache.invalidate_channel_devices(channel_id);
+        self.ordinary_control_committed();
         Ok(())
     }
 

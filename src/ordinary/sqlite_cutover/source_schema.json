@@ -1,0 +1,455 @@
+{
+  "core": [
+    [
+      "index",
+      "channel_subscriptions_device_idx",
+      "CREATE INDEX channel_subscriptions_device_idx ON channel_subscriptions (device_id)"
+    ],
+    [
+      "index",
+      "channel_subscriptions_dispatch_idx",
+      "CREATE INDEX channel_subscriptions_dispatch_idx ON channel_subscriptions (channel_id, status, created_at)"
+    ],
+    [
+      "index",
+      "devices_device_key_uidx",
+      "CREATE UNIQUE INDEX devices_device_key_uidx ON devices (device_key)"
+    ],
+    [
+      "index",
+      "devices_route_platform_type_updated_idx",
+      "CREATE INDEX devices_route_platform_type_updated_idx ON devices (platform, channel_type, route_updated_at)"
+    ],
+    [
+      "index",
+      "devices_route_provider_token_idx",
+      "CREATE INDEX devices_route_provider_token_idx ON devices (provider_token)"
+    ],
+    [
+      "index",
+      "dispatch_delivery_dedupe_created_idx",
+      "CREATE INDEX dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)"
+    ],
+    [
+      "index",
+      "dispatch_delivery_dedupe_expires_idx",
+      "CREATE INDEX dispatch_delivery_dedupe_expires_idx ON dispatch_delivery_dedupe (expires_at)"
+    ],
+    [
+      "index",
+      "dispatch_op_dedupe_created_idx",
+      "CREATE INDEX dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)"
+    ],
+    [
+      "index",
+      "dispatch_op_dedupe_expires_idx",
+      "CREATE INDEX dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)"
+    ],
+    [
+      "index",
+      "dispatch_op_dedupe_provider_lease_idx",
+      "CREATE INDEX dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)"
+    ],
+    [
+      "index",
+      "dispatch_submission_expires_idx",
+      "CREATE INDEX dispatch_submission_expires_idx ON dispatch_submission (expires_at)"
+    ],
+    [
+      "index",
+      "live_activity_tokens_channel_idx",
+      "CREATE INDEX live_activity_tokens_channel_idx ON live_activity_tokens (channel_id, updated_at)"
+    ],
+    [
+      "index",
+      "live_activity_tokens_expires_idx",
+      "CREATE INDEX live_activity_tokens_expires_idx ON live_activity_tokens (expires_at)"
+    ],
+    [
+      "index",
+      "private_bindings_device_idx",
+      "CREATE INDEX private_bindings_device_idx ON private_bindings (device_id)"
+    ],
+    [
+      "index",
+      "private_bindings_platform_token_uidx",
+      "CREATE UNIQUE INDEX private_bindings_platform_token_uidx ON private_bindings (platform, token_hash)"
+    ],
+    [
+      "index",
+      "private_bindings_token_idx",
+      "CREATE INDEX private_bindings_token_idx ON private_bindings (platform, token_hash)"
+    ],
+    [
+      "index",
+      "private_outbox_delivery_idx",
+      "CREATE INDEX private_outbox_delivery_idx ON private_outbox (delivery_id)"
+    ],
+    [
+      "index",
+      "private_outbox_device_status_order_idx",
+      "CREATE INDEX private_outbox_device_status_order_idx ON private_outbox (device_id, status, occurred_at, created_at, delivery_id)"
+    ],
+    [
+      "index",
+      "private_outbox_due_idx",
+      "CREATE INDEX private_outbox_due_idx ON private_outbox (status, next_attempt_at, attempts)"
+    ],
+    [
+      "index",
+      "private_payloads_expires_idx",
+      "CREATE INDEX private_payloads_expires_idx ON private_payloads (expires_at)"
+    ],
+    [
+      "index",
+      "private_sessions_exp_idx",
+      "CREATE INDEX private_sessions_exp_idx ON private_sessions (expires_at)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_delivery_idx",
+      "CREATE INDEX provider_dispatch_outbox_delivery_idx ON provider_dispatch_outbox (delivery_id)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_due_idx",
+      "CREATE INDEX provider_dispatch_outbox_due_idx ON provider_dispatch_outbox (provider, state, next_attempt_at, accepted_at)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_lease_idx",
+      "CREATE INDEX provider_dispatch_outbox_lease_idx ON provider_dispatch_outbox (state, lease_until)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_retry_expiry_idx",
+      "CREATE INDEX provider_dispatch_outbox_retry_expiry_idx ON provider_dispatch_outbox (provider, state, expires_at, next_attempt_at, accepted_at)"
+    ],
+    [
+      "index",
+      "provider_pull_queue_device_created_idx",
+      "CREATE INDEX provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)"
+    ],
+    [
+      "index",
+      "provider_pull_queue_device_delivery_uidx",
+      "CREATE UNIQUE INDEX provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)"
+    ],
+    [
+      "index",
+      "provider_pull_queue_device_expires_idx",
+      "CREATE INDEX provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)"
+    ],
+    [
+      "index",
+      "semantic_id_registry_created_idx",
+      "CREATE INDEX semantic_id_registry_created_idx ON semantic_id_registry (created_at)"
+    ],
+    [
+      "index",
+      "semantic_id_registry_expires_idx",
+      "CREATE INDEX semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)"
+    ],
+    [
+      "index",
+      "sender_submit_status_expires_idx",
+      "CREATE INDEX sender_submit_status_expires_idx ON sender_submit_status (expires_at)"
+    ],
+    [
+      "index",
+      "widget_push_subscriptions_channel_lookup_idx",
+      "CREATE INDEX widget_push_subscriptions_channel_lookup_idx ON widget_push_subscriptions (device_key, widget_kind, updated_at)"
+    ],
+    [
+      "index",
+      "widget_push_subscriptions_token_idx",
+      "CREATE INDEX widget_push_subscriptions_token_idx ON widget_push_subscriptions (platform, token)"
+    ],
+    [
+      "table",
+      "channel_subscriptions",
+      "CREATE TABLE channel_subscriptions (channel_id BLOB NOT NULL, device_id BLOB NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (channel_id, device_id))"
+    ],
+    [
+      "table",
+      "channels",
+      "CREATE TABLE channels (channel_id BLOB PRIMARY KEY, password_hash TEXT NOT NULL, alias TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "devices",
+      "CREATE TABLE devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER, route_revision INTEGER NOT NULL DEFAULT 0, watch_alert_window_minutes INTEGER NOT NULL DEFAULT 30)"
+    ],
+    [
+      "table",
+      "dispatch_acceptance_sequence",
+      "CREATE TABLE dispatch_acceptance_sequence (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), current_value INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "dispatch_delivery_dedupe",
+      "CREATE TABLE dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)"
+    ],
+    [
+      "table",
+      "dispatch_op_dedupe",
+      "CREATE TABLE dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, provider_run_token TEXT, provider_owner TEXT, provider_lease_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)"
+    ],
+    [
+      "table",
+      "dispatch_submission",
+      "CREATE TABLE dispatch_submission (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL UNIQUE, op_id TEXT NOT NULL, payload_version INTEGER NOT NULL, payload_blob BLOB NOT NULL, acceptance_order INTEGER NOT NULL DEFAULT 0, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "live_activity_tokens",
+      "CREATE TABLE live_activity_tokens (activity_key TEXT NOT NULL, token TEXT NOT NULL, channel_id BLOB, platform TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER, PRIMARY KEY (activity_key, token))"
+    ],
+    [
+      "table",
+      "mcp_state",
+      "CREATE TABLE mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "private_bindings",
+      "CREATE TABLE private_bindings (platform INTEGER NOT NULL, token_hash BLOB NOT NULL, device_id BLOB NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (platform, token_hash))"
+    ],
+    [
+      "table",
+      "private_device_keys",
+      "CREATE TABLE private_device_keys (device_id BLOB NOT NULL, key_id INTEGER NOT NULL, key_hash BLOB NOT NULL, issued_at INTEGER NOT NULL, valid_until INTEGER, PRIMARY KEY (device_id, key_id))"
+    ],
+    [
+      "table",
+      "private_outbox",
+      "CREATE TABLE private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, claim_generation INTEGER NOT NULL DEFAULT 0, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))"
+    ],
+    [
+      "table",
+      "private_payloads",
+      "CREATE TABLE private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "private_sessions",
+      "CREATE TABLE private_sessions (session_id TEXT PRIMARY KEY, device_id BLOB NOT NULL, expires_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "provider_dispatch_outbox",
+      "CREATE TABLE provider_dispatch_outbox (job_id TEXT PRIMARY KEY, provider TEXT NOT NULL, delivery_id TEXT NOT NULL, op_id TEXT, dedupe_key TEXT, device_key TEXT NOT NULL, payload_blob BLOB NOT NULL, state TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, lease_owner TEXT, lease_until INTEGER, lease_generation INTEGER NOT NULL DEFAULT 0, provider_status INTEGER, provider_error_code TEXT, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, coalesce_order INTEGER NOT NULL DEFAULT 0, completed_at INTEGER, updated_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "provider_pull_queue",
+      "CREATE TABLE provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))"
+    ],
+    [
+      "table",
+      "pushgo_schema_meta",
+      "CREATE TABLE pushgo_schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)"
+    ],
+    [
+      "table",
+      "pushgo_schema_migrations",
+      "CREATE TABLE pushgo_schema_migrations (migration_id TEXT PRIMARY KEY,description TEXT NOT NULL,checksum TEXT NOT NULL,target_schema_version TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER NOT NULL,execution_ms INTEGER NOT NULL,success INTEGER NOT NULL,error TEXT)"
+    ],
+    [
+      "table",
+      "pushgo_upgrade_runs",
+      "CREATE TABLE pushgo_upgrade_runs (run_id TEXT PRIMARY KEY,gateway_version TEXT NOT NULL,driver TEXT NOT NULL,from_schema_version TEXT,target_schema_version TEXT NOT NULL,status TEXT NOT NULL,backup_uri TEXT,backup_sha256 TEXT,started_at INTEGER NOT NULL,finished_at INTEGER,error TEXT)"
+    ],
+    [
+      "table",
+      "pushgo_upgrade_steps",
+      "CREATE TABLE pushgo_upgrade_steps (run_id TEXT NOT NULL,step_order INTEGER NOT NULL,migration_id TEXT NOT NULL,step_id TEXT NOT NULL,description TEXT NOT NULL,status TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER,error TEXT,PRIMARY KEY (run_id, step_order))"
+    ],
+    [
+      "table",
+      "semantic_id_registry",
+      "CREATE TABLE semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)"
+    ],
+    [
+      "table",
+      "sender_submit_status",
+      "CREATE TABLE sender_submit_status (op_id TEXT PRIMARY KEY, channel_id BLOB NOT NULL, model TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL, dispatch_status TEXT, provider_run_token TEXT, accepted_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "widget_push_subscriptions",
+      "CREATE TABLE widget_push_subscriptions (device_key TEXT NOT NULL, platform TEXT NOT NULL, token TEXT NOT NULL, widget_kind TEXT NOT NULL, family TEXT NOT NULL, schema_version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_key, platform, token, widget_kind, family))"
+    ]
+  ],
+  "dispatch": [
+    [
+      "index",
+      "dispatch_delivery_dedupe_created_idx",
+      "CREATE INDEX dispatch_delivery_dedupe_created_idx ON dispatch_delivery_dedupe (created_at)"
+    ],
+    [
+      "index",
+      "dispatch_delivery_dedupe_expires_idx",
+      "CREATE INDEX dispatch_delivery_dedupe_expires_idx ON dispatch_delivery_dedupe (expires_at)"
+    ],
+    [
+      "index",
+      "dispatch_op_dedupe_created_idx",
+      "CREATE INDEX dispatch_op_dedupe_created_idx ON dispatch_op_dedupe (created_at)"
+    ],
+    [
+      "index",
+      "dispatch_op_dedupe_expires_idx",
+      "CREATE INDEX dispatch_op_dedupe_expires_idx ON dispatch_op_dedupe (expires_at)"
+    ],
+    [
+      "index",
+      "dispatch_op_dedupe_provider_lease_idx",
+      "CREATE INDEX dispatch_op_dedupe_provider_lease_idx ON dispatch_op_dedupe (state, provider_lease_until)"
+    ],
+    [
+      "index",
+      "dispatch_submission_expires_idx",
+      "CREATE INDEX dispatch_submission_expires_idx ON dispatch_submission (expires_at)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_delivery_idx",
+      "CREATE INDEX provider_dispatch_outbox_delivery_idx ON provider_dispatch_outbox (delivery_id)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_due_idx",
+      "CREATE INDEX provider_dispatch_outbox_due_idx ON provider_dispatch_outbox (provider, state, next_attempt_at, accepted_at)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_lease_idx",
+      "CREATE INDEX provider_dispatch_outbox_lease_idx ON provider_dispatch_outbox (state, lease_until)"
+    ],
+    [
+      "index",
+      "provider_dispatch_outbox_retry_expiry_idx",
+      "CREATE INDEX provider_dispatch_outbox_retry_expiry_idx ON provider_dispatch_outbox (provider, state, expires_at, next_attempt_at, accepted_at)"
+    ],
+    [
+      "index",
+      "semantic_id_registry_created_idx",
+      "CREATE INDEX semantic_id_registry_created_idx ON semantic_id_registry (created_at)"
+    ],
+    [
+      "index",
+      "semantic_id_registry_expires_idx",
+      "CREATE INDEX semantic_id_registry_expires_idx ON semantic_id_registry (expires_at)"
+    ],
+    [
+      "table",
+      "dispatch_acceptance_sequence",
+      "CREATE TABLE dispatch_acceptance_sequence (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), current_value INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "dispatch_delivery_dedupe",
+      "CREATE TABLE dispatch_delivery_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER)"
+    ],
+    [
+      "table",
+      "dispatch_op_dedupe",
+      "CREATE TABLE dispatch_op_dedupe (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, request_fingerprint TEXT, state TEXT NOT NULL, provider_run_token TEXT, provider_owner TEXT, provider_lease_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER, expires_at INTEGER)"
+    ],
+    [
+      "table",
+      "dispatch_submission",
+      "CREATE TABLE dispatch_submission (dedupe_key TEXT PRIMARY KEY, delivery_id TEXT NOT NULL UNIQUE, op_id TEXT NOT NULL, payload_version INTEGER NOT NULL, payload_blob BLOB NOT NULL, acceptance_order INTEGER NOT NULL DEFAULT 0, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "provider_dispatch_outbox",
+      "CREATE TABLE provider_dispatch_outbox (job_id TEXT PRIMARY KEY, provider TEXT NOT NULL, delivery_id TEXT NOT NULL, op_id TEXT, dedupe_key TEXT, device_key TEXT NOT NULL, payload_blob BLOB NOT NULL, state TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, lease_owner TEXT, lease_until INTEGER, lease_generation INTEGER NOT NULL DEFAULT 0, provider_status INTEGER, provider_error_code TEXT, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, coalesce_order INTEGER NOT NULL DEFAULT 0, completed_at INTEGER, updated_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "pushgo_sidecar_meta",
+      "CREATE TABLE pushgo_sidecar_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)"
+    ],
+    [
+      "table",
+      "semantic_id_registry",
+      "CREATE TABLE semantic_id_registry (dedupe_key TEXT PRIMARY KEY, semantic_id TEXT NOT NULL UNIQUE, source TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_seen_at INTEGER, expires_at INTEGER)"
+    ]
+  ],
+  "delivery": [
+    [
+      "index",
+      "private_outbox_delivery_idx",
+      "CREATE INDEX private_outbox_delivery_idx ON private_outbox (delivery_id)"
+    ],
+    [
+      "index",
+      "private_outbox_device_status_order_idx",
+      "CREATE INDEX private_outbox_device_status_order_idx ON private_outbox (device_id, status, occurred_at, created_at, delivery_id)"
+    ],
+    [
+      "index",
+      "private_outbox_due_idx",
+      "CREATE INDEX private_outbox_due_idx ON private_outbox (status, next_attempt_at, attempts)"
+    ],
+    [
+      "index",
+      "private_payloads_expires_idx",
+      "CREATE INDEX private_payloads_expires_idx ON private_payloads (expires_at)"
+    ],
+    [
+      "index",
+      "provider_pull_queue_device_created_idx",
+      "CREATE INDEX provider_pull_queue_device_created_idx ON provider_pull_queue (device_id, created_at)"
+    ],
+    [
+      "index",
+      "provider_pull_queue_device_delivery_uidx",
+      "CREATE UNIQUE INDEX provider_pull_queue_device_delivery_uidx ON provider_pull_queue (device_id, delivery_id)"
+    ],
+    [
+      "index",
+      "provider_pull_queue_device_expires_idx",
+      "CREATE INDEX provider_pull_queue_device_expires_idx ON provider_pull_queue (device_id, expires_at)"
+    ],
+    [
+      "index",
+      "provider_pull_queue_platform_token_idx",
+      "CREATE INDEX provider_pull_queue_platform_token_idx ON provider_pull_queue (platform, provider_token)"
+    ],
+    [
+      "table",
+      "private_outbox",
+      "CREATE TABLE private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, claim_generation INTEGER NOT NULL DEFAULT 0, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))"
+    ],
+    [
+      "table",
+      "private_payloads",
+      "CREATE TABLE private_payloads (delivery_id TEXT PRIMARY KEY, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "provider_pull_queue",
+      "CREATE TABLE provider_pull_queue (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, payload_blob BLOB NOT NULL, payload_size INTEGER NOT NULL, sent_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, platform TEXT NOT NULL, provider_token TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))"
+    ],
+    [
+      "table",
+      "pushgo_sidecar_meta",
+      "CREATE TABLE pushgo_sidecar_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)"
+    ]
+  ],
+  "runtime": [
+    [
+      "table",
+      "mcp_state",
+      "CREATE TABLE mcp_state (state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+    ],
+    [
+      "table",
+      "pushgo_sidecar_meta",
+      "CREATE TABLE pushgo_sidecar_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)"
+    ]
+  ]
+}

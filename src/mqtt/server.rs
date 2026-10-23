@@ -30,7 +30,7 @@ use crate::{
     app::AuthMode,
     mqtt::{MqttMessageTopic, MqttPublishCommand, MqttRuntime},
     private::protocol::DeliverEnvelope,
-    routing::{DeviceChannelType, derive_private_device_id},
+    routing::derive_private_device_id,
     services::{
         ChannelCommandSource, ChannelSubscribeCommand, ChannelUnsubscribeCommand,
         DeviceRegisterCommand, ensure_device_registered,
@@ -55,17 +55,24 @@ struct MqttSession {
     remote_addr: SocketAddr,
     buffer: BytesMut,
     next_pkid: u16,
-    inflight: HashMap<u16, String>,
+    inflight: HashMap<u16, MqttInflightDelivery>,
     read_timeout: Duration,
     handshake_deadline: Option<Instant>,
     handshake_permit: Option<OwnedSemaphorePermit>,
     write_failed: bool,
+    ordinary_first: bool,
+}
+
+struct MqttInflightDelivery {
+    delivery_id: String,
+    ordinary: bool,
 }
 
 struct AuthenticatedMqttClient {
     dedupe_client_id: String,
     device_key: Option<String>,
     device_id: Option<DeviceId>,
+    ordinary_route_generation: Option<i64>,
     conn_id: Option<u64>,
     device_type: MqttDeviceType,
     rx: Option<Receiver<DeliverEnvelope>>,
@@ -117,6 +124,7 @@ impl MqttSession {
             handshake_deadline: Some(handshake_deadline),
             handshake_permit: Some(handshake_permit),
             write_failed: false,
+            ordinary_first: true,
         }
     }
 
@@ -240,6 +248,7 @@ impl MqttSession {
                     ),
                     device_key: None,
                     device_id: None,
+                    ordinary_route_generation: None,
                     conn_id: None,
                     device_type,
                     rx: None,
@@ -296,13 +305,15 @@ impl MqttSession {
             )
         })?;
         let device_key = registered.device_key;
+        let device_id = derive_private_device_id(&device_key);
         let route = self
             .runtime
             .state
-            .device_registry
-            .get(device_key.as_str())
-            .ok_or((ConnectReturnCode::ServerUnavailable, "device_route_missing"))?;
-        if route.channel_type != DeviceChannelType::Private {
+            .store
+            .ordinary_private_route(device_id)
+            .await
+            .map_err(|_| (ConnectReturnCode::NotAuthorized, "private_route_required"))?;
+        if route.device_key != device_key {
             return Err((ConnectReturnCode::NotAuthorized, "private_route_required"));
         }
         // The device guard continues to pin this route through bootstrap;
@@ -316,7 +327,6 @@ impl MqttSession {
             return Err((ConnectReturnCode::NotAuthorized, "device_revoked"));
         }
 
-        let device_id = derive_private_device_id(&device_key);
         let prepared = self
             .runtime
             .private
@@ -387,6 +397,7 @@ impl MqttSession {
                 ),
                 device_key: Some(device_key),
                 device_id: Some(device_id),
+                ordinary_route_generation: Some(route.route_generation),
                 conn_id: Some(conn_id),
                 device_type,
                 rx: Some(rx),
@@ -398,7 +409,54 @@ impl MqttSession {
     async fn run_authenticated(&mut self, client: AuthenticatedMqttClient) {
         let mut close_kind = MqttCloseKind::WithWill;
         let shutdown = Arc::clone(&self.runtime.private);
+        let ordinary_notifier = shutdown
+            .hub
+            .ordinary_notifier()
+            .unwrap_or_else(|| Arc::new(tokio::sync::Notify::new()));
         loop {
+            if shutdown.is_shutting_down() {
+                close_kind = MqttCloseKind::Normal;
+                break;
+            }
+            if let (Some(device_id), Some(conn_id)) = (client.device_id, client.conn_id)
+                && shutdown.hub.connection_mode(device_id, conn_id)
+                    == crate::private::ConnectionMode::Stale
+            {
+                break;
+            }
+            // Register the notification before the durable claim so a commit
+            // between an empty claim and select cannot strand an accepted item.
+            let ordinary_changed = ordinary_notifier.notified();
+            tokio::pin!(ordinary_changed);
+            ordinary_changed.as_mut().enable();
+            if let Some(device_id) = client.device_id
+                && self.inflight.len() < MAX_INFLIGHT
+            {
+                match shutdown
+                    .hub
+                    .validate_ordinary_session_route(device_id, client.ordinary_route_generation)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        self.log_failure(
+                            "mqtt.ordinary_session_route_failed",
+                            error.to_string().as_str(),
+                        );
+                        break;
+                    }
+                }
+                match self.try_write_fresh_delivery(&client).await {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(()) => break,
+                }
+            }
+            let ack_timeout = Duration::from_secs(shutdown.config.ack_timeout_secs.max(2));
+            let retransmit_wait = client
+                .device_id
+                .and_then(|device_id| shutdown.hub.next_retransmit_due_in(device_id, ack_timeout));
             tokio::select! {
                 biased;
                 _ = shutdown.wait_for_shutdown() => {
@@ -450,11 +508,26 @@ impl MqttSession {
                 outbound = recv_outbound(&client), if client.rx.is_some() => {
                     match outbound {
                         Some(envelope) => {
-                            if self.write_delivery(envelope).await.is_err() {
+                            if self.write_delivery(client.device_id, envelope, true).await.is_err() {
                                 break;
                             }
                         }
                         None => break,
+                    }
+                }
+                _ = &mut ordinary_changed, if client.device_id.is_some() => {}
+                _ = tokio::time::sleep(retransmit_wait.unwrap_or(Duration::from_secs(60))),
+                    if retransmit_wait.is_some() => {
+                    if let Some(device_id) = client.device_id {
+                        let retransmit = shutdown.hub.poll_retransmit_outbound(device_id, ack_timeout);
+                        if retransmit.exhausted_count > 0 {
+                            shutdown.metrics.mark_retransmit_exhausted(retransmit.exhausted_count);
+                        }
+                        if let Some((_, envelope)) = retransmit.outbound
+                            && self.write_delivery(client.device_id, envelope, false).await.is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             }
@@ -467,6 +540,15 @@ impl MqttSession {
                 .private
                 .hub
                 .unregister_mqtt_connection(device_id, conn_id);
+            if let Err(error) = self
+                .runtime
+                .private
+                .hub
+                .release_ordinary_if_offline(device_id)
+                .await
+            {
+                self.log_failure("mqtt.ordinary_release_failed", error.to_string().as_str());
+            }
         }
         if close_kind == MqttCloseKind::WithWill {
             self.send_will(&client).await;
@@ -855,7 +937,7 @@ impl MqttSession {
     }
 }
 
-fn next_available_packet_id(next_pkid: &mut u16, inflight: &HashMap<u16, String>) -> u16 {
+fn next_available_packet_id<T>(next_pkid: &mut u16, inflight: &HashMap<u16, T>) -> u16 {
     let mut candidate = (*next_pkid).max(1);
     loop {
         *next_pkid = if candidate == u16::MAX {

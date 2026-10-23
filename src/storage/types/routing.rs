@@ -31,6 +31,11 @@ pub struct DeviceRouteSnapshot {
     pub route_revision: i64,
     pub channel_type: String,
     pub provider_token: Option<String>,
+    // Internal control authority. These are deliberately not added to the
+    // HTTP route response; activity can advance this timestamp independently
+    // of the in-memory Registry projection.
+    pub(crate) platform: Option<String>,
+    pub(crate) updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,0 +1,13 @@
+{
+  "mainline_head": "dfb6b7c2cfd1b2f8e6d7fe7c95d8bf59473ed0b6",
+  "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: aarch64-apple-darwin\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+  "fixture_changes": "Remove global QueryCounts enabled veto, add gateway.trace_event WARN JSON subscriber only; production library untouched. Diagnostics contain only synthetic fixture values.",
+  "fixture_sha256": "f1c5585f238da52363e0c93f5bd13104d123b936ffaa9754282702a35329ef0d",
+  "profile": {
+    "opt_level": 3,
+    "lto": "fat",
+    "codegen_units": 1,
+    "panic": "abort"
+  },
+  "runner_change": "Resolve resource_monitor import to explicit read-only mainline bench/scripts; all workload logic unchanged."
+}

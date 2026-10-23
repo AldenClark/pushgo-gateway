@@ -1,0 +1,38 @@
+{
+  "status": "SOURCE_ONLY_NOT_BUILT_NOT_RUN",
+  "source_root": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c-single-ledger-contract-20261015/workspace-final",
+  "source_commit_at_preparation": "1b9836a3a1c98d0c6a8e7a7559ea9676c0027c9a",
+  "source_input_method": "exact Git blobs for specified new candidate; never C8 full-file overrides",
+  "working_tree_not_read_or_modified": true,
+  "source_before_sha256": {
+    "prototype/Cargo.toml": "9476b3c3d88ee7bebd17d68096a1887181574a238859633c57d2bdcb375eef2b",
+    "prototype/src/lib.rs": "95bbec9ca2efbced7f8d8584a35018dccd6cdbfc1a14e3bef27e2f5fd84a224f",
+    "prototype/src/store.rs": "9f14dbc10c9c99868bffb00de0ec08dbde2fce7fd55d0359b0908c63d68872b2",
+    "prototype/src/pg_store.rs": "51aaa2b0370ac548f74fcc0bc6777352998bb4e386e4940a1a714a651e385824",
+    "prototype/src/mysql_store.rs": "8425ef54a8242563063ae1aef24d9d8ef447aa8c006ca63da1bfe8aa1cb6389a",
+    "prototype/src/bin/free_architecture_fixture.rs": "4e8778981562c72164550637a649bc788607517595b28b6775e4d8f4b8b69639"
+  },
+  "overlay_sha256": {
+    "prototype/Cargo.toml": "9f8f6eb9184bafc072571c7063871447ca499db4e1c01aeb3c814227a25ba45f",
+    "prototype/src/lib.rs": "45d204c635a9ace166446fd6227048c28ab74906478b03ecf58078d56f6407de",
+    "prototype/src/store.rs": "06e2b5621001c38725b7df153289b5914b9d0e7ad4e73e6a4df968e1da1bcdb5",
+    "prototype/src/pg_store.rs": "d28fbf0c574257de8a5650b9c98eae84fccb07b39aa662231188a828e3fb974b",
+    "prototype/src/mysql_store.rs": "9fd71ce3a10b9f4bc5618591f8dfbf5b413583c0024325a7cc9bcef3b747696d",
+    "prototype/src/bin/free_architecture_fixture.rs": "ad79276e38d4af3ee92eedaa7b3487c4f34cd49e6b23b1e695137a194355ee85",
+    "prototype/src/commit_observer.rs": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+    "prototype/src/bin/support/commit_observer_fixture.rs": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+  },
+  "patch_sha256": "4f4da321e52635634aa0502c5bdeefcd68bb9e3a3ef4fb31c6c6d764710590b4",
+  "seam": "all 3 backends: successful receipt COMMIT await returned AND changed > 0",
+  "bounded": {
+    "channel_records": 4096,
+    "record_bytes": 96,
+    "writer_buffer_bytes": 65536,
+    "os_writer_threads": 1
+  },
+  "unsafe_scope": "fixture-only zero-argument Mach clock FFI; library forbid unchanged",
+  "candidate_modified": false,
+  "builds": 0,
+  "database_runtime_calls": 0,
+  "must_regenerate_after_final_commit": true
+}

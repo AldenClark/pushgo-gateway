@@ -64,11 +64,18 @@ pub struct AppRuntime {
 }
 
 pub struct AppShutdown {
+    ordinary: crate::ordinary::DeliveryRuntime,
+    owner: crate::ordinary::owner::ProductOwner,
+    store: Storage,
     private: Option<Arc<PrivateState>>,
     storage_maintenance: Option<StorageMaintenanceWorker>,
     submission_recovery: SubmissionRecoveryWorker,
     dispatch_workers: DispatchWorkerTasks,
     runtime_counters: Arc<RuntimeCounterCollector>,
+    #[cfg(feature = "qa")]
+    qa_provider_budgets: Arc<crate::dispatch::ProviderBudgets>,
+    #[cfg(feature = "qa")]
+    qa_resource_observation: Option<crate::qa::ResourceObservation>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -76,9 +83,41 @@ pub struct AppShutdownReport {
     pub joined: usize,
     pub panicked: usize,
     pub aborted: usize,
+    pub failed: usize,
 }
 
 impl AppShutdown {
+    #[cfg(feature = "qa")]
+    pub fn start_qa_resource_observation(
+        &mut self,
+        directory: &std::path::Path,
+        allocator: fn() -> serde_json::Value,
+    ) -> std::io::Result<()> {
+        if self.qa_resource_observation.is_some() {
+            return Err(std::io::Error::other(
+                "QA resource observer already started",
+            ));
+        }
+        self.qa_resource_observation = Some(crate::qa::ResourceObservation::start(
+            directory,
+            self.store.clone(),
+            self.private.clone(),
+            self.ordinary_counters(),
+            self.qa_provider_budgets.clone(),
+            allocator,
+        )?);
+        Ok(())
+    }
+
+    pub fn ordinary_counters(&self) -> Arc<crate::ordinary::Counters> {
+        self.ordinary.store.counters.clone()
+    }
+    pub fn ordinary_stop_requester(&self) -> tokio::sync::watch::Sender<bool> {
+        self.ordinary.stop_requester()
+    }
+    pub fn failure_receiver(&self) -> tokio::sync::watch::Receiver<Option<String>> {
+        self.ordinary.store.health.subscribe()
+    }
     pub fn private_state(&self) -> Option<Arc<PrivateState>> {
         self.private.clone()
     }
@@ -89,13 +128,21 @@ impl AppShutdown {
 
     pub async fn shutdown_until(self, deadline: TokioInstant) -> AppShutdownReport {
         let AppShutdown {
+            ordinary,
+            owner,
+            store,
             private,
             storage_maintenance,
             submission_recovery,
             dispatch_workers,
             runtime_counters,
+            #[cfg(feature = "qa")]
+                qa_provider_budgets: _,
+            #[cfg(feature = "qa")]
+            qa_resource_observation,
         } = self;
         let mut report = AppShutdownReport::default();
+        ordinary.stop_requester().send_replace(true);
 
         if let Some(storage_maintenance) = storage_maintenance {
             let maintenance_report = storage_maintenance.shutdown_until(deadline).await;
@@ -116,6 +163,7 @@ impl AppShutdown {
             report.joined = report.joined.saturating_add(private_report.joined);
             report.panicked = report.panicked.saturating_add(private_report.panicked);
             report.aborted = report.aborted.saturating_add(private_report.aborted);
+            report.failed = report.failed.saturating_add(private_report.failed);
             drop(private);
         }
 
@@ -128,12 +176,55 @@ impl AppShutdown {
         report.panicked = report.panicked.saturating_add(dispatch_report.panicked);
         report.aborted = report.aborted.saturating_add(dispatch_report.aborted);
 
+        match tokio::time::timeout_at(deadline, ordinary.shutdown()).await {
+            Ok(ordinary_report) => {
+                report.joined += ordinary_report.joined;
+                report.panicked += ordinary_report.panicked;
+                report.aborted += ordinary_report.aborted;
+                report.failed += ordinary_report.failed;
+            }
+            Err(_) => report.aborted += 1,
+        }
+
         // Dispatch workers are producers of runtime counter events. Close and
         // flush the counter worker only after every provider worker is done.
         let counter_report = runtime_counters.shutdown_until(deadline).await;
         report.joined = report.joined.saturating_add(counter_report.joined);
         report.panicked = report.panicked.saturating_add(counter_report.panicked);
         report.aborted = report.aborted.saturating_add(counter_report.aborted);
+
+        // The optional QA owner observes drained work before pools/owner are
+        // released. No observer or sampling task exists without the QA flag.
+        #[cfg(feature = "qa")]
+        if let Some(observation) = qa_resource_observation {
+            match observation.shutdown_until(deadline).await {
+                Ok(()) => report.joined += 1,
+                Err(error) => {
+                    report.failed += 1;
+                    ::tracing::event!(
+                        target: "gateway.trace_event",
+                        ::tracing::Level::ERROR,
+                        event = "qa.resource_observer_failed",
+                        error = %(error.to_string())
+                    );
+                }
+            }
+        }
+
+        // HTTP has drained before this phase. Keep the owner until every
+        // session, external attempt and durable receipt has finished. On an
+        // abnormal deadline the process exits with the OS lock still held.
+        if report.aborted == 0 && report.panicked == 0 && report.failed == 0 {
+            match tokio::time::timeout_at(deadline, store.close_ordinary_storage()).await {
+                Ok(Ok(())) => {
+                    if owner.shutdown().await.is_err() {
+                        report.failed += 1;
+                    }
+                }
+                Ok(Err(_)) => report.failed += 1,
+                Err(_) => report.aborted += 1,
+            }
+        }
 
         ::tracing::event!(
             target: "gateway.trace_event",
@@ -209,11 +300,28 @@ struct SubmissionRecoveryWorker {
     handle: JoinHandle<()>,
 }
 
+struct OrdinaryRecoveryPanicGuard(crate::ordinary::OrdinaryStore);
+impl Drop for OrdinaryRecoveryPanicGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0
+                .fail("ordinary recovery worker panicked; restart required");
+        }
+    }
+}
+
 impl SubmissionRecoveryWorker {
     fn spawn(state: AppState) -> Self {
         let (shutdown, mut shutdown_rx) = tokio::sync::oneshot::channel();
         let capacity_recovery = state.store.private_capacity_recovery_notifier();
+        let ordinary = state
+            .store
+            .ordinary_handle()
+            .expect("ordinary initialized before recovery");
+        let widget_wake = ordinary.widget_wake.clone();
+        widget_wake.notify_one();
         let handle = tokio::spawn(async move {
+            let _panic_fence = OrdinaryRecoveryPanicGuard(ordinary.clone());
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             interval.tick().await;
@@ -266,6 +374,21 @@ impl SubmissionRecoveryWorker {
                                 error = %(err.to_string())
                             );
                         }
+                    }
+                    _ = widget_wake.notified() => {}
+                }
+                match crate::ordinary::widget_refresh::project_pending(
+                    &state.store,
+                    &state.dispatch,
+                    8,
+                )
+                .await
+                {
+                    Ok(8) => widget_wake.notify_one(),
+                    Ok(_) => {}
+                    Err(error) => {
+                        ordinary.fail(&format!("ordinary Widget recovery failed: {error}"));
+                        break;
                     }
                 }
             }
@@ -412,6 +535,21 @@ pub async fn build_app(
         ::tracing::Level::INFO,
         event = "gateway.app_build_started"
     );
+    let ordinary_health = Arc::new(crate::ordinary::store::Health::default());
+    let owner = crate::ordinary::owner::ProductOwner::acquire(
+        args.db_url.as_deref(),
+        ordinary_health.clone(),
+    )
+    .await?;
+    // A migrated SQLite dataset crosses the conservative rollback boundary
+    // before Storage initialization, maintenance, ACK or any network work.
+    ordinary_health.ensure()?;
+    crate::ordinary::cutover::activate_before_runtime(
+        args.db_url.as_deref(),
+        runtime_tuning.profile.as_str(),
+    )
+    .await?;
+    ordinary_health.ensure()?;
     let store = Storage::new_with_config(StorageInitConfig {
         db_url: args.db_url.clone(),
         runtime_profile: runtime_tuning.profile,
@@ -419,6 +557,37 @@ pub async fn build_app(
         managed_upgrade: true,
     })
     .await?;
+    let provider_budgets = Arc::new(crate::dispatch::ProviderBudgets::new(
+        runtime_tuning.providers.apns,
+        runtime_tuning.providers.fcm,
+        runtime_tuning.providers.wns,
+    ));
+    let ordinary_store = store
+        .initialize_ordinary(
+            crate::ordinary::Config {
+                // Reuse C's pending-work budget for frozen Private waiting and
+                // pending/running/retrying Provider targets. Completed Provider
+                // content and 30-day identities gain no new retention quota.
+                max_messages: i64::MAX,
+                max_targets: crate::ordinary::Config::default().max_targets,
+                max_payload_bytes: i64::MAX,
+                provider_budget: runtime_tuning
+                    .providers
+                    .apns
+                    .max(runtime_tuning.providers.fcm)
+                    .max(runtime_tuning.providers.wns),
+                default_ttl_secs: runtime_tuning.private.default_ttl_secs,
+                public_base_url: args.public_base_url.clone().unwrap_or_default(),
+                private: crate::ordinary::private_model::PrivateLedgerConfig {
+                    enabled: args.private_transports()?.any_enabled(),
+                    max_pending_per_device: runtime_tuning.private.max_pending_per_device,
+                    max_pending: runtime_tuning.private.global_max_pending,
+                },
+                ..crate::ordinary::Config::default()
+            },
+            ordinary_health,
+        )
+        .await?;
     let recovered_provider_dispatches = store
         .recover_interrupted_provider_dispatches(chrono::Utc::now().timestamp_millis())
         .await?;
@@ -436,7 +605,7 @@ pub async fn build_app(
     let device_operation_guards = Arc::new(DeviceOperationGuards::default());
     restore_device_registry(&store, &device_registry).await?;
 
-    let (dispatch, receivers) = DispatchChannels::with_profile(runtime_tuning.profile);
+    let (dispatch, receivers) = DispatchChannels::new();
 
     let auth = match args.token.as_deref() {
         None => AuthMode::Disabled,
@@ -571,7 +740,7 @@ pub async fn build_app(
         runtime_counters: Arc::clone(&runtime_counters),
         private_transport_profile,
         private: private.clone(),
-        store,
+        store: store.clone(),
         mcp: mcp_state,
     };
     if let Some(private_state) = private.as_ref() {
@@ -604,14 +773,27 @@ pub async fn build_app(
         }
     }
 
+    let ordinary = crate::ordinary::DeliveryRuntime::start_from_store(
+        ordinary_store,
+        Arc::new(crate::ordinary::transport::ProductProviders::new(
+            apns.clone(),
+            fcm.clone(),
+            wns.clone(),
+        )),
+        provider_budgets.clone(),
+    )
+    .await?;
+
+    #[cfg(feature = "qa")]
+    let qa_provider_budgets = provider_budgets.clone();
     let dispatch_workers = DispatchWorkerDeps {
+        budgets: provider_budgets,
         apns: Arc::clone(&apns),
         fcm: Arc::clone(&fcm),
         wns: Arc::clone(&wns),
         store: state.store.clone(),
         private: private.clone(),
         runtime_counters: Arc::clone(&runtime_counters),
-        runtime_profile: runtime_tuning.profile,
     }
     .spawn(receivers);
 
@@ -647,11 +829,18 @@ pub async fn build_app(
     Ok(AppRuntime {
         router,
         shutdown: AppShutdown {
+            ordinary,
+            owner,
+            store,
             private,
             storage_maintenance,
             submission_recovery,
             dispatch_workers,
             runtime_counters,
+            #[cfg(feature = "qa")]
+            qa_provider_budgets,
+            #[cfg(feature = "qa")]
+            qa_resource_observation: None,
         },
     })
 }

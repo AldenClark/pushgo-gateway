@@ -1,0 +1,28 @@
+--- a/crates/warp-link-transport/src/lib.rs
++++ b/crates/warp-link-transport/src/lib.rs
+@@ -237,6 +237,12 @@
+ pub async fn connect_quic(config: &ClientConfig) -> Result<ClientIo, WarpLinkError> {
+     let mut roots = rustls::RootCertStore::empty();
+     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
++    // C6 TEST-STAGING ONLY: additive synthetic CA; normal PKIX/host/ALPN/pin remain.
++    roots
++        .add(rustls::pki_types::CertificateDer::from(
++            include_bytes!(env!("PUSHGO_C6_TEST_CA_DER")).to_vec(),
++        ))
++        .map_err(|error| WarpLinkError::Transport(format!("C6 synthetic CA rejected: {error}")))?;
+     let mut crypto = rustls::ClientConfig::builder()
+         .with_root_certificates(roots)
+         .with_no_client_auth();
+@@ -377,6 +383,12 @@
+ 
+     let mut roots = rustls::RootCertStore::empty();
+     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
++    // C6 TEST-STAGING ONLY: additive synthetic CA; normal PKIX/host/ALPN/pin remain.
++    roots
++        .add(rustls::pki_types::CertificateDer::from(
++            include_bytes!(env!("PUSHGO_C6_TEST_CA_DER")).to_vec(),
++        ))
++        .map_err(|error| WarpLinkError::Transport(format!("C6 synthetic CA rejected: {error}")))?;
+     let mut tls_config = rustls::ClientConfig::builder()
+         .with_root_certificates(roots)
+         .with_no_client_auth();

@@ -55,7 +55,7 @@ impl PrivateHub {
                 let acked_delivery_ids = entry.ack_up_to(last_acked_seq, now);
                 (entry.token.clone(), acked_delivery_ids)
             });
-                ::tracing::event!(
+        ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "private.resume_session_started",
@@ -107,7 +107,7 @@ impl PrivateHub {
             })
             .flatten();
         if result.is_none() {
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.resume_ack_by_seq_missed",
@@ -116,6 +116,39 @@ impl PrivateHub {
             );
         }
         Ok(result)
+    }
+
+    // Resolve without consuming transport state. A failed durable ACK must not
+    // erase the only issued capability before reconnect/retry can use it.
+    pub(crate) fn peek_delivery_by_seq(
+        &self,
+        device_id: DeviceId,
+        seq: u64,
+        expected_delivery_id: &str,
+    ) -> Option<protocol::DeliverEnvelope> {
+        self.with_resume_state(device_id, |state| {
+            state
+                .inflight
+                .get(&seq)
+                .filter(|item| item.delivery.delivery_id == expected_delivery_id)
+                .map(|item| item.delivery.clone())
+        })
+        .flatten()
+    }
+
+    pub(crate) fn forget_delivery_after_commit(&self, device_id: DeviceId, delivery: &str) {
+        let _ = self.with_resume_state_mut(device_id, |state| {
+            let seq = state
+                .inflight
+                .iter()
+                .find_map(|(seq, item)| (item.delivery.delivery_id == delivery).then_some(*seq));
+            if let Some(seq) = seq {
+                let _ = state.ack_by_seq(seq, Some(delivery), Instant::now());
+            }
+            state
+                .inflight
+                .retain(|_, item| item.delivery.delivery_id != delivery);
+        });
     }
 
     fn snapshot_inflight(&self, device_id: DeviceId) -> Vec<(u64, protocol::DeliverEnvelope)> {
@@ -215,7 +248,7 @@ impl PrivateHub {
             self.resume_state.remove(&device_id);
         }
         if stale_count > 0 {
-                        ::tracing::event!(
+            ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::INFO,
                 event = "private.resume_state_pruned",

@@ -121,6 +121,7 @@ pub(super) async fn serve_mqtt_listener(
             _ = runtime.private.wait_for_shutdown() => break,
             joined = sessions.join_next(), if !sessions.is_empty() => {
                 if let Some(Err(join_error)) = joined {
+                    runtime.private.record_session_task_failure("Private MQTT session task failed");
                     ::tracing::event!(
                         target: "gateway.trace_event",
                         ::tracing::Level::ERROR,
@@ -206,6 +207,9 @@ pub(super) async fn serve_mqtt_listener(
 
     while let Some(joined) = sessions.join_next().await {
         if let Err(join_error) = joined {
+            runtime
+                .private
+                .record_session_task_failure("Private MQTT session task failed");
             ::tracing::event!(
                 target: "gateway.trace_event",
                 ::tracing::Level::ERROR,

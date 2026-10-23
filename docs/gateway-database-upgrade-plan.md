@@ -1,5 +1,7 @@
 # Gateway managed database upgrade
 
+The C ordinary-ledger cutover is a separate, narrowly supported offline operation. See [C15 SQLite historical cutover](c15-sqlite-historical-cutover.md) and [C16 native PostgreSQL/MySQL cutover](c16-native-historical-cutover.md) for the fixed-main/v12, globally drained zero-target-history subset, explicit source-retention provenance, native backup/recovery and activation/restore boundary. `--db-upgrade run` alone does not perform that cutover. Directly starting the old binary is **not** blocked by the new marker; universal downgrade protection remains unverified and unsupported. The following managed-upgrade procedure is not a substitute for the separate cutover's backup and restore commands.
+
 The managed upgrade path is `pushgo-gateway --db-upgrade plan|run`. Run it with exactly one gateway process against the target database. Do not mix beta and stable gateway processes while applying the 1.3.0 database semantics.
 
 ## Preflight
@@ -49,3 +51,7 @@ printf '%s' "$PUSHGO_DB_URL" | shasum -a 256
 ## Release acceptance
 
 Before production rollout, run `scripts/preflight_release_audit.sh all` and `scripts/storage_crossdb_parity.sh`. The parity script creates and hashes small test-only artifacts for its ephemeral PostgreSQL/MySQL containers; those files are not production backup evidence.
+
+## Watch reminder setting
+
+`20261013_001_watch_alert_window` is an additive managed migration on the current v12 schema. It adds `devices.watch_alert_window_minutes` with default 30 on SQLite, PostgreSQL and MySQL, independently of provider route revisions. Existing v12 databases with no record for this migration receive a normal managed backfill with the required backup policy. Verification requires the column. Earlier binaries reject the unknown migration record; this change does not claim binary downgrade compatibility.

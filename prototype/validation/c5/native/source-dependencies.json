@@ -1,0 +1,23 @@
+{
+  "note": "Historical original-location dependencies; not bundled, not executable defaults. Relocated scripts have NOT RUN.",
+  "external_cache_manifest": {
+    "original_path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c5-mysql-ordinary-20261015/native/preflight-native-cache.json",
+    "original_sha256": "6e97124b07178877978bc9b6ac352c12cf0b958e862541e6b73588eb90f2fbd0",
+    "bytes": 236711,
+    "included": false,
+    "purpose": "626 cached client/main/JNI/source hashes consumed by run-matrix.py and verify-c5-staging.py; corresponding old artifacts remain external."
+  },
+  "existing_C3_source_only_harness_reference": "../../c3/apple",
+  "C5_test_source": "android/source/CandidateOrdinaryC3DeviceTest.kt",
+  "baseline_harness_identity_note": "android/harness-source-identity.json identifies the prior C3 baseline test source (257f...), not the C5 owner-coalescing test source (7edf...). C5 identity is android/c5-test-apk-manifest.json and artifact-identities.json.",
+  "observer_packages": {
+    "source_manifest": "observer-dependencies.json",
+    "included_wheels": false,
+    "included_vendor": false,
+    "requirements": "Exact versions and wheel SHA256 are recorded in source manifest; provide dependencies in a separately prepared external environment. No install is performed by packaging."
+  },
+  "final_execution_source_manifest": "provenance/attempt-03-executed-adapter-manifest.json",
+  "final_source_manifest_original_sha256": "161564a3432eec29bd6bb0090cf8774754fffa35552140b74d0e5e8283ebfd36",
+  "baseline_attempt02_sources": "baseline-attempt02/run-matrix.py and baseline-attempt02/emulator_lifecycle.py",
+  "finalizer": "finalize-native-attempt03.py; historical read-only verifier source, not run by packaging"
+}

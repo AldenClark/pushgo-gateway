@@ -1,0 +1,98 @@
+--- frozen-v2/execute_matched_lane.py
++++ frozen-v3/execute_matched_lane.py
+@@ -16,16 +16,32 @@
+         os.killpg(child.pid,signal.SIGKILL);child.communicate();raise TimeoutError('Storage budget observer exceeded fixed 20s; no lane start or deadline extension') from None
+     assert child.returncode==0,'storage budget observer failed; command output withheld'
+     receipt=pathlib.Path(json.loads(stdout)['receipt']);r=json.loads(receipt.read_text())
+-    assert r['container_id']==config['mysql_container_id'],'budget container mismatch'
+-    assert r['current_durability_trust'].split()==['1','1','1','1'],'durability/trust mismatch'
+-    fields=r['datadir_inodes'].splitlines()[-1].split();assert len(fields)>=5
+-    free_inodes=int(fields[3]);assert free_inodes>0,'no free datadir inodes'
+-    assert r['conservative_observed_input_reservation_kib']==410376
+-    if before:assert r['available_at_least_observed_reservation'],'insufficient observed disk reservation; stop for root, no purge/resize/retry'
+-    return {'path':str(receipt),'sha256':sha(receipt),'available_kib':r['available_kib'],'free_inodes':free_inodes,'reservation_met':r['available_at_least_observed_reservation'],'binlog_lifecycle':'raw receipt inventories retained binlog sizes; no reset or purge by runner'}
++    observed=validate_disk_budget(r,config,before)
++    return {'path':str(receipt),'sha256':sha(receipt),**observed,'binlog_lifecycle':'raw SQL inventory retained; no reset/purge/drop by runner'}
++
++def validate_disk_budget(r,config,before):
++    assert r['container_id']==config['mysql_container_id'] and r['owner_uuid']==config['mysql_storage']['owner_uuid'],'budget container/owner mismatch'
++    storage=config['mysql_storage'];assert r['storage_medium']==storage['medium']=='disk-backed-named-volume'
++    assert r['volume_name']==storage['volume_name'] and r['volume_driver']=='local' and r['volume_mountpoint']==storage['volume_mountpoint']
++    assert r['volume_owner_label_key']=='io.pushgo.c6.disk3.synthetic.owner' and r['volume_owner_label_value']==storage['owner_uuid']
++    mounts=r['container_datadir_mount'];assert len(mounts)==1 and mounts[0]['Destination']=='/var/lib/mysql' and mounts[0]['Type']=='volume' and mounts[0]['Name']==storage['volume_name'] and mounts[0]['Source']==storage['volume_mountpoint']
++    assert r['os_snapshot_persisted_before_sql'] and r['sql_inventory']['status']=='COMPLETE' and r['sql_inventory']['exit_code']==0 and r['status']=='BUDGET_READY'
++    identity=r['sql_inventory']['stdout'].splitlines()[-1].split();assert len(identity)==6
++    assert identity[:2]==[config['mysql_server_identity']['server_uuid'],str(config['mysql_server_identity']['server_id'])] and identity[2:]==['1','1','1','1'],'server identity/durability/trust mismatch'
++    os_raw=r['os_observations'];assert all(v['exit_code']==0 for v in os_raw.values())
++    filesystem=os_raw['filesystem_type']['stdout'].strip();assert filesystem==storage['filesystem_type'] and filesystem.lower() not in ('tmpfs','ramfs','devtmpfs','memory'),'non-disk or mismatched filesystem'
++    guest=int(os_raw['datadir_df_bytes']['stdout'].splitlines()[-1].split()[4]);host=r['host_available_bytes'];assert guest==r['available_bytes'] and min(guest,host)==r['guard_effective_available_bytes']
++    assert r['minimum_available_bytes']==4294967296
++    fields=os_raw['datadir_inodes']['stdout'].splitlines()[-1].split();total,used,free=map(int,fields[1:4])
++    inode={'available':False,'reason':'df reports total0/free0; capacity UNAVAILABLE, no fabricated free-inode count','raw':os_raw['datadir_inodes']['stdout']} if total==0 and free==0 else {'available':True,'total':total,'used':used,'free':free}
++    if before:
++        assert min(guest,host)>=4294967296 and r['guard_pass'],'less than4GiB host/guest free bytes; stop root, no resize/retry'
++        if inode['available']:assert free>0,'known inode exhaustion; stop root'
++    return {'storage_medium':r['storage_medium'],'available_bytes':guest,'host_available_bytes':host,'effective_available_bytes':min(guest,host),'minimum_available_bytes':4294967296,'space_guard_pass':min(guest,host)>=4294967296,'inodes':inode,'filesystem_type':filesystem,'volume_name':storage['volume_name']}
++
+ def main(a):
+     config=json.loads(a.manifest.read_text());assert config['runtime_ready'] is True,'final source/binary and root exclusive window not yet bound'
+-    assert a.authorized_window=='root-exclusive-c6-fresh2'
++    assert a.authorized_window=='root-exclusive-c6-disk3'
+     assert config['authorized_lane']==a.lane,'only one root-authorized arm per finalized manifest'
+     for path,expected in config['pinned_artifacts'].items():assert sha(pathlib.Path(path))==expected,('pinned artifact changed',path)
+     assert config['instrumentation_reset']['approved_completed'] is True,'owner instrumentation reset receipt required'
+@@ -77,4 +93,4 @@
+     save(out.with_name(out.name+'-reductions.json'),reductions)
+     raise SystemExit(result.returncode or int(record.get('further_lane_allowed') is False) or int(any(v!=0 for k,v in reductions.items() if k.endswith('_returncode'))))
+ if __name__=='__main__':
+-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--manifest',required=True,type=pathlib.Path);p.add_argument('--lane',required=True,choices=['mysql-old','mysql-final','pg-final-1','pg-final-2']);p.add_argument('--authorized-window',required=True);main(p.parse_args())
++    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--manifest',required=True,type=pathlib.Path);p.add_argument('--lane',required=True,choices=['mysql-old','mysql-final']);p.add_argument('--authorized-window',required=True);main(p.parse_args())
+--- frozen-v2/harness/run_c6_capacity.py
++++ frozen-v3/harness/run_c6_capacity.py
+@@ -6,7 +6,7 @@
+ 30s cold and post-ACK idle. No retries; output directory must not exist.
+ """
+ import argparse, concurrent.futures, ctypes, hashlib, importlib.util, json, math
+-import os, pathlib, re, signal, struct, subprocess, sys, threading, time, urllib.request
++import os, pathlib, re, signal, stat, struct, subprocess, sys, threading, time, urllib.request
+ from urllib.parse import urlsplit
+ import c3_mock
+ import db_os_observer
+@@ -67,11 +67,16 @@
+     base=Timebase();assert mach.mach_timebase_info(ctypes.byref(base))==0
+     scale=base.numer/base.denom/1_000_000
+     helper=load_helper(a.db_helper.resolve())
+-    assert helper.KEY=='io.pushgo.c6.synthetic.owner','C6 ownership helper required'
++    assert a.engine=='mysql' and helper.KEY=='io.pushgo.c6.disk3.synthetic.owner','exact disk3 MySQL helper required'
+     assert a.db_url_file.resolve().parent==a.db_helper.resolve().parent,'URL must belong to this C6 env directory'
+     helper.check(); owned,container_inspect=helper.owned(a.engine)
+     environment=json.loads(a.environment_identity.read_text())['engines'][a.engine]
+     assert owned['id']==environment['id'] and container_inspect['Image']==environment['image_id'],'environment identity mismatch'
++    storage=environment['storage'];assert storage['medium']=='disk-backed-named-volume'
++    mounts=[m for m in container_inspect['Mounts'] if m['Destination']=='/var/lib/mysql']
++    assert len(mounts)==1 and mounts[0]['Type']=='volume' and mounts[0]['Name']==storage['volume_name'] and mounts[0]['Source']==storage['volume_mountpoint'],'exact disk3 volume mount mismatch'
++    assert owned['volume_name']==storage['volume_name'] and owned['owner']==storage['owner_uuid']
++    assert a.db_url_file.is_file() and not a.db_url_file.is_symlink() and stat.S_IMODE(a.db_url_file.stat().st_mode)==0o600,'private regular URL file mode0600 required'
+     url=a.db_url_file.read_text().strip();parsed=urlsplit(url);database=parsed.path.lstrip('/')
+     assert database in owned['cases'],'fresh captured C6 case required'
+     assert database.startswith('c5_synthetic_'),'legacy fixture compatibility name in new C6 container required'
+@@ -125,7 +130,7 @@
+           'quantiles':'exact nearest-rank observed completions; all offered targets retained in denominator',
+           'toolchain_required':'Rust 1.97.1 release; no build in runner','retries':0,'host_load_observer':'sanitized pid/ppid/comm/CPU/TIME at start and5s; no args/env, no quiet assumption',
+           'environment_comparison':'C6 owned containers with P_S ON / pg_stat_statements ON; pair only, no absolute C5 OFF timing comparison',
+-          'storage_scope':'owned pinned PG16.14 / MySQL8.4.11 tmpfs cluster; not physical disk durability'}
++          'storage_scope':'MySQL8.4.11 exact owned disk-backed named volume in OrbStack VM; VM filesystem/fsync boundary, no host power-loss durability claim','storage_identity':storage}
+     receipt=json.loads(a.build_receipt.read_text())
+     assert receipt.get('binary_sha256')==plan['binary_sha256'],'build/binary identity mismatch'
+     assert receipt.get('source_commit')==a.source_commit,'build/source commit mismatch'
+--- frozen-v2/harness/db_statement_observer.py
++++ frozen-v3/harness/db_statement_observer.py
+@@ -21,7 +21,7 @@
+       FROM public.pg_stat_statements WHERE dbid=(SELECT oid FROM pg_database
+       WHERE datname=current_database()) ORDER BY queryid LIMIT 1000) x;"""
+ def capture(helper,engine,database):
+-    assert helper.KEY=='io.pushgo.c6.synthetic.owner'
++    assert engine=='mysql' and helper.KEY=='io.pushgo.c6.disk3.synthetic.owner'
+     assert re.fullmatch('c5_synthetic_[a-z0-9_]+',database)
+     state,inspect=helper.owned(engine);assert database in state['cases']
+     begin=time.monotonic();rows=[json.loads(line) for line in helper.sql(engine,query(engine),database).splitlines()]

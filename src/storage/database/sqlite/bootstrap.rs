@@ -22,7 +22,7 @@ const SQLITE_BASE_TABLE_STATEMENTS: &[&str] = &[
 ];
 
 const SQLITE_RUNTIME_TABLE_STATEMENTS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER, route_revision INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS devices (device_id BLOB PRIMARY KEY, token_raw BLOB NOT NULL, platform_code INTEGER NOT NULL, device_key TEXT, platform TEXT, channel_type TEXT, provider_token TEXT, route_updated_at INTEGER, route_revision INTEGER NOT NULL DEFAULT 0, watch_alert_window_minutes INTEGER NOT NULL DEFAULT 30)",
     "CREATE TABLE IF NOT EXISTS private_device_keys (device_id BLOB NOT NULL, key_id INTEGER NOT NULL, key_hash BLOB NOT NULL, issued_at INTEGER NOT NULL, valid_until INTEGER, PRIMARY KEY (device_id, key_id))",
     "CREATE TABLE IF NOT EXISTS private_sessions (session_id TEXT PRIMARY KEY, device_id BLOB NOT NULL, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS private_outbox (device_id BLOB NOT NULL, delivery_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, occurred_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, claimed_by TEXT, claim_generation INTEGER NOT NULL DEFAULT 0, first_sent_at INTEGER, last_attempt_at INTEGER, acked_at INTEGER, fallback_sent_at INTEGER, next_attempt_at INTEGER NOT NULL, last_error_code TEXT, last_error_detail TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (device_id, delivery_id))",
@@ -254,11 +254,13 @@ impl SqliteDb {
             .execute(&self.pool)
             .await?;
         let busy_timeout = format!("PRAGMA busy_timeout = {}", tuning.busy_timeout.as_millis());
-        sqlx::query(busy_timeout.as_str())
+        sqlx::query(sqlx::AssertSqlSafe(busy_timeout.as_str()))
             .execute(&self.pool)
             .await?;
         let cache_size = format!("PRAGMA cache_size = -{}", tuning.page_cache_kib);
-        sqlx::query(cache_size.as_str()).execute(&self.pool).await?;
+        sqlx::query(sqlx::AssertSqlSafe(cache_size.as_str()))
+            .execute(&self.pool)
+            .await?;
         self.ensure_sqlite_schema_meta_table().await?;
         self.ensure_sqlite_schema_migrations_table().await?;
         let applied_migrations = self.load_sqlite_schema_migrations().await?;
@@ -302,7 +304,7 @@ impl SqliteDb {
             .iter()
             .chain(SQLITE_RUNTIME_TABLE_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         self.ensure_sqlite_column(
@@ -400,6 +402,12 @@ impl SqliteDb {
             "devices",
             "route_updated_at",
             "ALTER TABLE devices ADD COLUMN route_updated_at INTEGER",
+        )
+        .await?;
+        self.ensure_sqlite_column(
+            "devices",
+            "watch_alert_window_minutes",
+            "ALTER TABLE devices ADD COLUMN watch_alert_window_minutes INTEGER NOT NULL DEFAULT 30",
         )
         .await?;
         self.ensure_sqlite_column(
@@ -568,10 +576,10 @@ impl SqliteDb {
             .iter()
             .chain(SQLITE_RUNTIME_INDEX_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         for stmt in SQLITE_DEPRECATED_OBSERVABILITY_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
         sqlx::query("DROP TABLE IF EXISTS provider_pull_retry")
             .execute(&self.pool)
@@ -628,7 +636,7 @@ impl SqliteDb {
             .execute(&self.dispatch_pool)
             .await?;
         for stmt in SQLITE_DISPATCH_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(&self.dispatch_pool).await?;
+            sqlx::query(*stmt).execute(&self.dispatch_pool).await?;
         }
         for (column, ddl) in [
             (
@@ -680,7 +688,7 @@ impl SqliteDb {
         )
         .await?;
         for stmt in SQLITE_DISPATCH_INDEX_STATEMENTS {
-            sqlx::query(stmt).execute(&self.dispatch_pool).await?;
+            sqlx::query(*stmt).execute(&self.dispatch_pool).await?;
         }
         migrate_sidecar_tables_once(
             &self.dispatch_pool,
@@ -714,7 +722,7 @@ impl SqliteDb {
             .iter()
             .chain(SQLITE_DELIVERY_INDEX_STATEMENTS.iter())
         {
-            sqlx::query(stmt).execute(&self.delivery_pool).await?;
+            sqlx::query(*stmt).execute(&self.delivery_pool).await?;
         }
         ensure_sqlite_column_in_pool(
             &self.delivery_pool,
@@ -746,7 +754,7 @@ impl SqliteDb {
             .execute(&self.delivery_pool)
             .await?;
             for table in ["provider_pull_queue", "private_outbox", "private_payloads"] {
-                sqlx::query(&format!("DELETE FROM {table}"))
+                sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
                     .execute(&self.pool)
                     .await?;
             }
@@ -987,7 +995,9 @@ impl SqliteDb {
                    updated_at = excluded.updated_at \
                  WHERE excluded.updated_at >= private_outbox.updated_at"
             );
-            sqlx::query(sql.as_str()).execute(&mut *tx).await?;
+            sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+                .execute(&mut *tx)
+                .await?;
         }
         if sqlite_attached_table_exists(&mut tx, "pushgo_core", "provider_pull_queue").await? {
             sqlx::query(
@@ -1027,7 +1037,7 @@ impl SqliteDb {
         };
         sqlx::query(SQLITE_SIDECAR_META_TABLE).execute(pool).await?;
         for stmt in SQLITE_RUNTIME_SIDECAR_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(pool).await?;
+            sqlx::query(*stmt).execute(pool).await?;
         }
         migrate_sidecar_tables_once(
             pool,
@@ -1130,7 +1140,7 @@ impl SqliteDb {
                      SET {column} = {column} * 1000 \
                      WHERE {column} IS NOT NULL AND ABS({column}) < ?"
                 );
-                sqlx::query(&sql)
+                sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                     .bind(EPOCH_MILLIS_THRESHOLD)
                     .execute(&mut *tx)
                     .await?;
@@ -1235,7 +1245,12 @@ impl SqliteDb {
         Ok(count > 0)
     }
 
-    async fn ensure_sqlite_column(&self, table: &str, column: &str, ddl: &str) -> StoreResult<()> {
+    async fn ensure_sqlite_column(
+        &self,
+        table: &str,
+        column: &str,
+        ddl: &'static str,
+    ) -> StoreResult<()> {
         ensure_sqlite_column_in_pool(&self.pool, table, column, ddl).await
     }
 
@@ -1317,15 +1332,15 @@ impl SqliteDb {
 
     async fn hard_reset_sqlite_runtime_tables(&self) -> StoreResult<()> {
         for stmt in SQLITE_RUNTIME_DROP_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in SQLITE_RUNTIME_TABLE_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         for stmt in SQLITE_RUNTIME_INDEX_STATEMENTS {
-            sqlx::query(stmt).execute(&self.pool).await?;
+            sqlx::query(*stmt).execute(&self.pool).await?;
         }
 
         Ok(())
@@ -1765,12 +1780,15 @@ impl crate::storage::database::upgrade::verify::UpgradeVerifyAccess for SqliteDb
             ("private_outbox", "claim_generation"),
             ("devices", "provider_token"),
             ("devices", "route_revision"),
+            ("devices", "watch_alert_window_minutes"),
             ("private_bindings", "provider_token"),
             ("provider_pull_queue", "provider_token"),
         ] {
-            let rows = sqlx::query(format!("PRAGMA table_info({table})").as_str())
-                .fetch_all(&self.pool)
-                .await?;
+            let rows = sqlx::query(sqlx::AssertSqlSafe(
+                format!("PRAGMA table_info({table})").as_str(),
+            ))
+            .fetch_all(&self.pool)
+            .await?;
             if !rows
                 .into_iter()
                 .any(|row| row.get::<String, _>("name") == column)
@@ -1841,7 +1859,8 @@ async fn connect_sqlite_pool(
         .after_connect(move |conn, _meta| {
             Box::pin(async move {
                 let cache_size = format!("PRAGMA cache_size = -{sqlite_page_cache_kib}");
-                conn.execute(cache_size.as_str()).await?;
+                conn.execute(sqlx::AssertSqlSafe(cache_size.as_str()))
+                    .await?;
                 Ok(())
             })
         })
@@ -1878,7 +1897,9 @@ async fn migrate_sidecar_tables_once(
     for table in tables {
         if sqlite_attached_table_exists(&mut tx, "pushgo_core", table).await? {
             let sql = format!("INSERT OR IGNORE INTO {table} SELECT * FROM pushgo_core.{table}");
-            sqlx::query(sql.as_str()).execute(&mut *tx).await?;
+            sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+                .execute(&mut *tx)
+                .await?;
         }
     }
     sqlx::query(
@@ -1902,7 +1923,7 @@ async fn sqlite_attached_table_exists(
 ) -> StoreResult<bool> {
     let sql =
         format!("SELECT 1 FROM {schema}.sqlite_master WHERE type = 'table' AND name = ? LIMIT 1");
-    let exists: Option<i64> = sqlx::query_scalar(sql.as_str())
+    let exists: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(table)
         .fetch_optional(&mut **tx)
         .await?;
@@ -1913,11 +1934,13 @@ async fn ensure_sqlite_column_in_pool(
     pool: &SqlitePool,
     table: &str,
     column: &str,
-    ddl: &str,
+    ddl: &'static str,
 ) -> StoreResult<()> {
-    let rows = sqlx::query(format!("PRAGMA table_info({table})").as_str())
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(
+        format!("PRAGMA table_info({table})").as_str(),
+    ))
+    .fetch_all(pool)
+    .await?;
     let exists = rows
         .into_iter()
         .any(|r| r.get::<String, _>("name") == column);
@@ -1967,7 +1990,9 @@ async fn sqlite_attached_column_exists(
     column: &str,
 ) -> StoreResult<bool> {
     let sql = format!("PRAGMA {schema}.table_info({table})");
-    let rows = sqlx::query(sql.as_str()).fetch_all(&mut **tx).await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+        .fetch_all(&mut **tx)
+        .await?;
     Ok(rows
         .into_iter()
         .any(|row| row.get::<String, _>("name") == column))

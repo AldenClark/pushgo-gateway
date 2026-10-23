@@ -1,0 +1,166 @@
+{
+  "status": "source_archive_only_not_a_new_execution",
+  "files": [
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env/isolated_db.py",
+      "copy": "environment/isolated_db.py",
+      "sha256": "0b27cec2e4004c3bcc60766d07188a0d730860d3b0ef615b849c1aef378f0049"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env/budget_snapshot.py",
+      "copy": "environment/budget_snapshot.py",
+      "sha256": "ecc1bc56ce5b01a3241e862da3461621e4e3fad15f17a2b97c38b73eac613607"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env/run_four_aggregates.py",
+      "copy": "environment/run_four_aggregates.py",
+      "sha256": "b8cd2e747578af67036058335c8c9428354961de66b4e5f3ee63ccde4f19ae42"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/reduce_commits.py",
+      "copy": "capacity/harness/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/observer_library.rs",
+      "copy": "capacity/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/observer_fixture.rs",
+      "copy": "capacity/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/prepared-query-hash-map.json",
+      "copy": "capacity/harness/prepared-query-hash-map.json",
+      "sha256": "5d212c259151bc18f25503e925288866c17d1ad8fbe7853afd1e25d444fc48c1"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/source_provenance.py",
+      "copy": "capacity/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/summarize_resources_final.py",
+      "copy": "capacity/harness/summarize_resources_final.py",
+      "sha256": "c237562dfea5a9c2b94a573bcdcfe66be74a114d31dbf8b4e10c2360bb08dde5"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/db_os_observer.py",
+      "copy": "capacity/harness/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/prepared_completion_observer.py",
+      "copy": "capacity/harness/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/static_c7_budget_checks.py",
+      "copy": "capacity/harness/static_c7_budget_checks.py",
+      "sha256": "0495d9fed0721040839441be7b82270d25f3bcb85620a1a61330e08d0e8318e0"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/c3_mock.py",
+      "copy": "capacity/harness/c3_mock.py",
+      "sha256": "25d792438432e0efe873ad7940112911eef15275553fceaf047e8e9b8c4c9310"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/summarize_profile_window.py",
+      "copy": "capacity/harness/summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/C7-namespace-source.patch",
+      "copy": "capacity/harness/C7-namespace-source.patch",
+      "sha256": "51bdcc386bf3e49823e5adf179a080be51ccfcdbc0812cdf4b2a026d8ab5824a"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/host_observer.py",
+      "copy": "capacity/harness/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/db_statement_observer.py",
+      "copy": "capacity/harness/db_statement_observer.py",
+      "sha256": "d4bb8f0eb0527b4fec24e09d3f9bb7cfe85f173449b3fb31d2a4da248753ae72"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/runner-source-c7/run_c7_capacity.py",
+      "copy": "capacity/harness/run_c7_capacity.py",
+      "sha256": "5073ba4e39ba88acd0af674dff1c02ad1a9b272947957fc45dfcdb5ddb798de5"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/build_transient_observer.py",
+      "copy": "capacity/build_transient_observer.py",
+      "sha256": "fa8c21e7925bbb77163e530b69f1af391240a6d87f30c2fc23fd6a755e1e9da6"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/observer.patch",
+      "copy": "capacity/observer.patch",
+      "sha256": "fb29821fb462a2752672ad77cf28cd9743fcb2457dc8c45bb877a6e91a136cbe"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/preparation.json",
+      "copy": "capacity/preparation.json",
+      "sha256": "9744e8bceb89a6a95ddb04efc24baf1e58e707e541bb091b65f3dde8d83d9c4e"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/Cargo.toml",
+      "copy": "capacity/overlay/prototype/Cargo.toml",
+      "sha256": "9f8f6eb9184bafc072571c7063871447ca499db4e1c01aeb3c814227a25ba45f"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/src/mysql_store.rs",
+      "copy": "capacity/overlay/prototype/src/mysql_store.rs",
+      "sha256": "f82cf964698262094319b8dbd9aeb86fc22c1cfd627bb7858fa3204eb6bc913d"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/src/lib.rs",
+      "copy": "capacity/overlay/prototype/src/lib.rs",
+      "sha256": "c667d712a210de8e3852d958fd926b03f0376234b8d54403c4979b8960326d0f"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/src/store.rs",
+      "copy": "capacity/overlay/prototype/src/store.rs",
+      "sha256": "576d1def216de3e91b3dabfabaeedd852151ab5bc398d78440e404041098993e"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/src/commit_observer.rs",
+      "copy": "capacity/overlay/prototype/src/commit_observer.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/src/pg_store.rs",
+      "copy": "capacity/overlay/prototype/src/pg_store.rs",
+      "sha256": "d28fbf0c574257de8a5650b9c98eae84fccb07b39aa662231188a828e3fb974b"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/src/bin/free_architecture_fixture.rs",
+      "copy": "capacity/overlay/prototype/src/bin/free_architecture_fixture.rs",
+      "sha256": "fb4f427c7453e03c29b7e491c4c86f240405c5ece805ee0d381d456588f52450"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/capacity/prepared-8b3656e/overlay/prototype/src/bin/support/commit_observer_fixture.rs",
+      "copy": "capacity/overlay/prototype/src/bin/support/commit_observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env/capture_environment_identity.py",
+      "copy": "environment/capture_environment_identity.py",
+      "sha256": "fc209311925eba05ce509998b217e5acfb37709b3e0dc88c24fcbba184287908"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/tests/check_http_oversize.py",
+      "copy": "http/check_http_oversize.py",
+      "sha256": "4037cbfe9cb75b62cc94281a56c95de535336bd7ee6ade7ad94e131f19d4930d"
+    },
+    {
+      "original": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c7-private-frame64-20261015/env/pause_owned_environment.py",
+      "copy": "environment/pause_owned_environment.py",
+      "sha256": "4928a22d188a5b8faf79ba26eec3b9c4bc352312b79c5bf554445d10c7468506"
+    }
+  ],
+  "excluded": "URLs, owned state, credentials/certificates, databases, binaries, build caches, execution logs and native trust preparation"
+}

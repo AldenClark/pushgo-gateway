@@ -105,6 +105,8 @@ pub(crate) async fn execute_mqtt_receiver_deliveries(
                 crate::private::protocol::DeliverEnvelope {
                     delivery_id: execution.delivery_id.to_string(),
                     payload: Arc::clone(&outcome.canonical_payload),
+                    ordinary: false,
+                    ordinary_expires_at: None,
                 },
             );
         progress.record_mqtt_success(target.device_id);

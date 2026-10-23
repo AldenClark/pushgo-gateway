@@ -1,0 +1,252 @@
+{
+  "status": "FINAL_BASELINE_AND_REJECTED_A_SOURCES_RETAINED",
+  "original_22_source_list_unchanged": true,
+  "sources": [
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/build_transient_observer.py",
+      "sha256": "3e4b45fa2927bd1bfbecaac1c35c3675e8943f85149a388faa3ca1d8110abfd6",
+      "bytes": 10892,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/prepare_observer.py",
+      "sha256": "b9f5c1c1ce3e8e8d5e90f105c5d1ce8a6eef541caab5ba018bb994aff235eabb",
+      "bytes": 5153,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/after-observer-preparation/harness/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c3_mock.py",
+      "sha256": "dc3e9b0cf76f0f12c467dfe0169b60f6af0ce553ac67c30cd9dcbd783767e93e",
+      "bytes": 13638,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/c9_input_plan.py",
+      "sha256": "ed2891439f461ecc740adc770cbc4ca0df334b7dcd8c2c8187d78da7a63efc82",
+      "bytes": 2072,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/db_os_observer.py",
+      "sha256": "82ba85f3b1e86eab8f93f3ce81cdb92b9a1ca7a0e92bbe9cf88e01a42a2a4675",
+      "bytes": 4187,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/host_observer.py",
+      "sha256": "f4f380cb4fc9ae49ce95acf8a7935cb5095770c0efb2ae90e777d61c05ba8755",
+      "bytes": 1335,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/observer_library.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/prepared_completion_observer.py",
+      "sha256": "d53600172c08a5f67b1f57152c994ea585d462da9434b07af36820c74844223e",
+      "bytes": 3565,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/reduce_c9_cycles.py",
+      "sha256": "a8790fc353b547fab445908dffab5820b14d3a0e6581101beaaa435cdc2ac557",
+      "bytes": 3191,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/reduce_commits.py",
+      "sha256": "6ca68dc05db2349c4a9ca0d6cce06a7fe94b1ff99488bc92f10238a0bda911c3",
+      "bytes": 6534,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/run_c9_mysql_cycles.py",
+      "sha256": "9f9dd7c68d50b60b589a58362e650a6df8593c44d826435db58345e2defd6ded",
+      "bytes": 45791,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/source_provenance.py",
+      "sha256": "5501ca8319b61a2281d9b091172b25b173d5351f6d56a9a6a8893adb3ee7146e",
+      "bytes": 2101,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/harness-v2/summarize_profile_window.py",
+      "sha256": "41d923c938ffae9d8a6613b07d391866e798669190dde94276a643bdd86eed93",
+      "bytes": 5440,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/run_sqlite_cold_idle.py",
+      "sha256": "ea63d2d673c295e403faaba00dea2754412479c879a66d34ee823cd255f0f29f",
+      "bytes": 6465,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/static_c9_plan_checks.py",
+      "sha256": "48db3d809a91acb85900858fbcab4033545eb2d1c427a7a7680465682ba3f57b",
+      "bytes": 2186,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_baseline.py",
+      "sha256": "e88bf1b290a66eb015047d39298a7f608027bf52ac594c96e47eb0bb064800ea",
+      "bytes": 8282,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_metadata.py",
+      "sha256": "f4ebf1b4489dd3f2cacfdf6f4958fef8655f6c524b69199ac295ef955103351e",
+      "bytes": 2284,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_profile.py",
+      "sha256": "bb29a58c2212f5ded12f7af8eea18bd13dc75182fa144cafc8d0c2e14d331a0f",
+      "bytes": 2359,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/executed-run_sqlite_cold_idle.py",
+      "sha256": "ea63d2d673c295e403faaba00dea2754412479c879a66d34ee823cd255f0f29f",
+      "bytes": 6465,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.first-source.py",
+      "sha256": "4531f1a572593b44d88433b196e10f4651b48173ace02d40ea4a98a5dc3edfc6",
+      "bytes": 12436,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/baseline-sqlite-cold-idle/reduce_sqlite_idle_resources.py",
+      "sha256": "be82c3e7e71d6fffd2a4c6b402c013a89601d0520ea40dbccc064f34298f911c",
+      "bytes": 12460,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-frozen-input-plan-v2.json",
+      "sha256": "74a6d6308c6c8a0432a3ac74b165642b2593a3164bff7f2772feb6c0f9f07876",
+      "bytes": 8518,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-frozen-input-plan.json",
+      "sha256": "7620892383f20029fc08b5f33c805137d0c37c6bed2f5372949995969173ea6c",
+      "bytes": 8062,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/c9-v2-provision-plan-amendment.json",
+      "sha256": "23d77c13ccaccd9147cd0ced79ecaaee7177460c383b2a3972a15594b467b64b",
+      "bytes": 729,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/compare_c9_trial.py",
+      "sha256": "e2882e01076e80cde3902e5e22c37a258bb5ce474201ab630b693589cc233adc",
+      "bytes": 6434,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/observer.patch",
+      "sha256": "4f4da321e52635634aa0502c5bdeefcd68bb9e3a3ef4fb31c6c6d764710590b4",
+      "bytes": 7724,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/Cargo.toml",
+      "sha256": "9f8f6eb9184bafc072571c7063871447ca499db4e1c01aeb3c814227a25ba45f",
+      "bytes": 2059,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/free_architecture_fixture.rs",
+      "sha256": "ad79276e38d4af3ee92eedaa7b3487c4f34cd49e6b23b1e695137a194355ee85",
+      "bytes": 19883,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/bin/support/commit_observer_fixture.rs",
+      "sha256": "be5053d1895e55b5cf1e7e9eb7ae513d5bec919f058194dc7f6aa502cbf90794",
+      "bytes": 3810,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/commit_observer.rs",
+      "sha256": "66a1d7acb6286b5e1c0b3a4becfc969e6effd816e696bc34f2526118abfffa5d",
+      "bytes": 471,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/lib.rs",
+      "sha256": "45d204c635a9ace166446fd6227048c28ab74906478b03ecf58078d56f6407de",
+      "bytes": 1462,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/mysql_store.rs",
+      "sha256": "9fd71ce3a10b9f4bc5618591f8dfbf5b413583c0024325a7cc9bcef3b747696d",
+      "bytes": 63966,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/pg_store.rs",
+      "sha256": "d28fbf0c574257de8a5650b9c98eae84fccb07b39aa662231188a828e3fb974b",
+      "bytes": 53331,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/prepared-after-1b9836a/overlay/prototype/src/store.rs",
+      "sha256": "06e2b5621001c38725b7df153289b5914b9d0e7ad4e73e6a4df968e1da1bcdb5",
+      "bytes": 112304,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_candidate_profile.py",
+      "sha256": "89013d5e38bfec8fbc3af9fd3f5afdbfaa431cad10097e061152158bf7e07dce",
+      "bytes": 1223,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/summarize_c9_stage_gauges.py",
+      "sha256": "0628c2c4a1399caaa805d3d7f1813277d31f060a28547b0cf0f00a3dc191d945",
+      "bytes": 4940,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    },
+    {
+      "path": "/Users/ethan/Repo/PushGo/gateway/build/quality-results/c9-idle-scaling-20261016/capacity/v1-never-executed-status.json",
+      "sha256": "1ab7d598c2faa5848dc439a9d2cd7f1c84c6a7b3168e3e940129330ba7cbb4d5",
+      "bytes": 306,
+      "kind": "pure-input JSON or source only; no URL/state/lease/credentials/rawlog/database/binary"
+    }
+  ]
+}
