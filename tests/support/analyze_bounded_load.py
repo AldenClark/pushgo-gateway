@@ -10,14 +10,20 @@ from pathlib import Path
 
 def quantiles(values, denominator):
     ordered = sorted(values)
+    if denominator < len(ordered):
+        raise ValueError("denominator cannot be smaller than the observed sample count")
+
+    def at_rank(fraction):
+        rank = math.ceil(fraction * denominator)
+        return ordered[rank - 1] if 1 <= rank <= len(ordered) else None
+
     return {
         "samples": len(ordered),
         "denominator": denominator,
         "missing": max(0, denominator - len(ordered)),
-        "method": "nearest rank ceil(p*n); missing samples stay in denominator",
+        "method": "nearest rank ceil(p*denominator); percentile is null when incomplete samples reach its rank",
         **{
-            label: ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
-            if ordered else None
+            label: at_rank(fraction)
             for label, fraction in (("p50_ms", .50), ("p95_ms", .95), ("p99_ms", .99))
         },
     }
@@ -125,9 +131,11 @@ def main():
         }
 
     ack_keys = sorted(expected_targets)
+    planned_target_offers = {
+        key: planned[key[0]]["planned_offer_us"] for key in ack_keys
+    }
     offer_to_commit = latency(
-        planned, committed, ack_keys,
-        lambda key, m: m[key[0]]["planned_offer_us"],
+        planned_target_offers, committed, ack_keys, lambda key, m: m[key]
     )
     ack_to_commit = latency(ack_sent, committed, ack_keys, lambda key, m: m[key])
     load_end = max((r["elapsed_us"] for r in events["all_http_complete"]), default=None)
@@ -147,16 +155,20 @@ def main():
     completed_seconds = (final_ack - load_start) / 1e6 if final_ack is not None else None
     cpu_window = None
     phase = {r["data"].get("phase"): r for r in events["phase_resources"]}
-    if "low_started" in phase and "drained_idle_started" in phase:
+    if "low_started" in phase:
         start = phase["low_started"]
-        end = phase["drained_idle_started"]
-        cpu_window = {
-            "wall_seconds": (end["elapsed_us"] - start["elapsed_us"]) / 1e6,
-            "gateway_cpu_seconds": end["data"]["gateway"]["cpu_seconds"] - start["data"]["gateway"]["cpu_seconds"],
-            "gateway_rss_start_kib": start["data"]["gateway"]["rss_kib"],
-            "gateway_rss_end_kib": end["data"]["gateway"]["rss_kib"],
-            "scope": "offer through durable drain; process CPU/RSS, not energy or device power",
-        }
+        drained_phase = phase.get("drained_idle_started")
+        end = drained_phase or phase.get("all_http_complete")
+        if end is not None:
+            cpu_window = {
+                "wall_seconds": (end["elapsed_us"] - start["elapsed_us"]) / 1e6,
+                "gateway_cpu_seconds": end["data"]["gateway"]["cpu_seconds"] - start["data"]["gateway"]["cpu_seconds"],
+                "gateway_rss_start_kib": start["data"]["gateway"]["rss_kib"],
+                "gateway_rss_end_kib": end["data"]["gateway"]["rss_kib"],
+                "complete_drain_observed": drained_phase is not None,
+                "scope": "offer through durable drain" if drained_phase is not None else "partial offer window through all HTTP responses; durable drain incomplete",
+                "not_energy_or_device_power": True,
+            }
 
     report = {
         "status": "PASS" if result.get("passed") is True and not conflicts and len(committed) == len(expected_targets) else "INCOMPLETE_OR_FAILED",
@@ -168,6 +180,7 @@ def main():
         "target_devices": config["target_devices"],
         "http_concurrency_cap": config["http_concurrency_max"],
         "plan": plan,
+        "stage_execution": stages,
         "terminal_result": result,
         "counts": {
             "planned_offers": len(planned),
