@@ -37,6 +37,21 @@ def digest(path):
     return h.hexdigest()
 
 
+def backlog_sample_at_or_after(rows, boundary_us):
+    """Return the first actual sample, never infer backlog from a missing field."""
+    if boundary_us is None:
+        return None
+    sample = next((row for row in rows if row["elapsed_us"] >= boundary_us), None)
+    if sample is None:
+        return None
+    return {
+        "pending_targets": sample["data"]["pending_targets"],
+        "sample_elapsed_us": sample["elapsed_us"],
+        "sample_lag_us": sample["elapsed_us"] - boundary_us,
+        "semantics": "first database sample at/after boundary; not instantaneous SQL at that boundary",
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_directory", type=Path)
@@ -145,7 +160,8 @@ def main():
         end_sample = next((r for r in db_rows if r["elapsed_us"] >= load_end), None)
         if end_sample:
             end_backlog = end_sample["data"]["pending_targets"]
-    drained = events.get("drained", [{}])[0].get("data", {}) if events.get("drained") else {}
+    drained_elapsed = events["drained"][0]["elapsed_us"] if events.get("drained") else None
+    after_drain_sample = backlog_sample_at_or_after(db_rows, drained_elapsed)
     resource_rows = events["resources"]
     gateway_samples = [r["data"]["gateway"] for r in resource_rows]
     harness_samples = [r["data"]["harness_including_peers_and_observer"] for r in resource_rows]
@@ -219,7 +235,8 @@ def main():
         "backlog": {
             "peak_pending_targets": max((r["data"]["pending_targets"] for r in db_rows), default=None),
             "pending_targets_at_first_sample_after_http_offer_end": end_backlog,
-            "pending_targets_after_drain": drained.get("residual_targets"),
+            "pending_targets_after_drain": after_drain_sample["pending_targets"] if after_drain_sample else None,
+            "after_drain_observation": after_drain_sample,
             "sample_count": len(db_rows),
             "peak_oldest_pending_age_ms": max((r["data"]["oldest_pending_age_ms"] for r in db_rows if r["data"]["oldest_pending_age_ms"] is not None), default=None),
         },
@@ -233,7 +250,7 @@ def main():
             "process_samples": len(resource_rows),
             "task_count_limit": "explicit test-owned tasks are recorded in configuration; Gateway async task count is not instrumented",
             "cpu_during_offer_and_drain": cpu_window,
-            "recovery": "post-drain 60s idle; RSS returning to cold-start value is not a success criterion",
+            "recovery": f"post-drain {plan['post_drain_idle_seconds']}s idle; RSS returning to cold-start value is not a success criterion",
         },
         "limitations": [
             "One optimized normal-product build and one SQLite ordinary-ledger configuration; no before/after product-code comparison.",
