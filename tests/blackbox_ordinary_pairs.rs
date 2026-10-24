@@ -28,19 +28,366 @@ use product_mqtt::ProductMqttClient;
 const MESSAGES: usize = 136;
 const HARD_LIMIT: Duration = Duration::from_secs(100);
 const DRAIN_LIMIT: Duration = Duration::from_secs(30);
+const MAX_LOAD_MESSAGES: usize = 12_000;
+const MAX_LOAD_TARGETS: usize = 4;
+const MAX_LOAD_HTTP_CONCURRENCY: usize = 64;
+const MAX_LOAD_RATE_PER_SECOND: u32 = 500;
+const MAX_LOAD_DURATION_SECONDS: u64 = 720;
+const MAX_RUN_DIRECTORY_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PROCESS_RSS_KIB: u64 = 1_048_576;
+const MAX_PENDING_TARGETS: usize = 16_384;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoadStageName {
+    Low,
+    Sustained20,
+    Sustained40,
+    Sustained80,
+    Burst200,
+    Recovery80,
+}
+impl LoadStageName {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "low" => Some(Self::Low),
+            "sustained_20" => Some(Self::Sustained20),
+            "sustained_40" => Some(Self::Sustained40),
+            "sustained_80" => Some(Self::Sustained80),
+            "burst_200" => Some(Self::Burst200),
+            "recovery_80" => Some(Self::Recovery80),
+            _ => None,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Sustained20 => "sustained_20",
+            Self::Sustained40 => "sustained_40",
+            Self::Sustained80 => "sustained_80",
+            Self::Burst200 => "burst_200",
+            Self::Recovery80 => "recovery_80",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LoadStage {
+    name: LoadStageName,
+    messages: usize,
+    rate_per_second: u32,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LoadPlan {
+    stages: [LoadStage; 6],
+    target_devices: usize,
+    http_concurrency: usize,
+    disconnect_stage: usize,
+    disconnect_device: usize,
+    disconnect_seconds: u64,
+    warm_idle_seconds: u64,
+    post_drain_idle_seconds: u64,
+    drain_limit_seconds: u64,
+    hard_limit_seconds: u64,
+}
+impl LoadPlan {
+    fn representative() -> Self {
+        Self {
+            stages: [
+                LoadStage {
+                    name: LoadStageName::Low,
+                    messages: 30,
+                    rate_per_second: 1,
+                },
+                LoadStage {
+                    name: LoadStageName::Sustained20,
+                    messages: 1_200,
+                    rate_per_second: 20,
+                },
+                LoadStage {
+                    name: LoadStageName::Sustained40,
+                    messages: 2_400,
+                    rate_per_second: 40,
+                },
+                LoadStage {
+                    name: LoadStageName::Sustained80,
+                    messages: 4_800,
+                    rate_per_second: 80,
+                },
+                LoadStage {
+                    name: LoadStageName::Burst200,
+                    messages: 1_000,
+                    rate_per_second: 200,
+                },
+                LoadStage {
+                    name: LoadStageName::Recovery80,
+                    messages: 800,
+                    rate_per_second: 80,
+                },
+            ],
+            target_devices: 4,
+            http_concurrency: 64,
+            disconnect_stage: 5,
+            disconnect_device: 3,
+            disconnect_seconds: 10,
+            warm_idle_seconds: 30,
+            post_drain_idle_seconds: 60,
+            drain_limit_seconds: 60,
+            hard_limit_seconds: 720,
+        }
+    }
+
+    fn from_environment() -> Self {
+        let raw = match std::env::var("C13_LOAD_PLAN_JSON") {
+            Ok(raw) => raw,
+            Err(std::env::VarError::NotPresent) => return Self::representative(),
+            Err(error) => panic!("cannot read C13_LOAD_PLAN_JSON: {error}"),
+        };
+        let value: Value = serde_json::from_str(&raw)
+            .unwrap_or_else(|error| panic!("invalid C13_LOAD_PLAN_JSON: {error}"));
+        Self::from_value(&value).unwrap_or_else(|error| panic!("invalid load plan: {error}"))
+    }
+
+    fn from_value(value: &Value) -> Result<Self, String> {
+        let integer = |name: &str| {
+            value
+                .get(name)
+                .and_then(Value::as_u64)
+                .ok_or_else(|| format!("{name} must be a nonnegative integer"))
+        };
+        if integer("version")? != 1 {
+            return Err("load plan version must be 1".into());
+        }
+        let stage_values = value
+            .get("stages")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "stages must be an array".to_string())?;
+        if stage_values.len() != 6 {
+            return Err("stages must contain the six bounded phases".into());
+        }
+        let mut stages = Self::representative().stages;
+        for (index, stage) in stage_values.iter().enumerate() {
+            let name = stage
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(LoadStageName::parse)
+                .ok_or_else(|| format!("stages[{index}].name is unsupported"))?;
+            if name != stages[index].name {
+                return Err(format!(
+                    "stages[{index}] is out of the required phase order"
+                ));
+            }
+            let messages: usize = stage
+                .get("messages")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| format!("stages[{index}].messages must be an integer"))?
+                .try_into()
+                .map_err(|_| format!("stages[{index}].messages is too large"))?;
+            let rate: u32 = stage
+                .get("rate_per_second")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| format!("stages[{index}].rate_per_second must be an integer"))?
+                .try_into()
+                .map_err(|_| format!("stages[{index}].rate_per_second is too large"))?;
+            stages[index].messages = messages;
+            stages[index].rate_per_second = rate;
+        }
+        let disconnect_stage_name = value
+            .get("disconnect_stage")
+            .and_then(Value::as_str)
+            .and_then(LoadStageName::parse)
+            .ok_or_else(|| "disconnect_stage must name a configured phase".to_string())?;
+        let disconnect_stage = stages
+            .iter()
+            .position(|stage| stage.name == disconnect_stage_name)
+            .ok_or_else(|| "disconnect_stage is absent from stages".to_string())?;
+        let plan = Self {
+            stages,
+            target_devices: integer("target_devices")?
+                .try_into()
+                .map_err(|_| "target_devices is too large".to_string())?,
+            http_concurrency: integer("http_concurrency")?
+                .try_into()
+                .map_err(|_| "http_concurrency is too large".to_string())?,
+            disconnect_stage,
+            disconnect_device: integer("disconnect_device")?
+                .try_into()
+                .map_err(|_| "disconnect_device is too large".to_string())?,
+            disconnect_seconds: integer("disconnect_seconds")?,
+            warm_idle_seconds: integer("warm_idle_seconds")?,
+            post_drain_idle_seconds: integer("post_drain_idle_seconds")?,
+            drain_limit_seconds: integer("drain_limit_seconds")?,
+            hard_limit_seconds: integer("hard_limit_seconds")?,
+        };
+        plan.validate()?;
+        Ok(plan)
+    }
+
+    fn validate(self) -> Result<(), String> {
+        if !(2..=MAX_LOAD_TARGETS).contains(&self.target_devices) {
+            return Err(format!(
+                "target_devices must be between 2 and {MAX_LOAD_TARGETS}"
+            ));
+        }
+        if !(1..=MAX_LOAD_HTTP_CONCURRENCY).contains(&self.http_concurrency) {
+            return Err(format!(
+                "http_concurrency must be between 1 and {MAX_LOAD_HTTP_CONCURRENCY}"
+            ));
+        }
+        if self.disconnect_device >= self.target_devices {
+            return Err("disconnect_device must identify a configured target".into());
+        }
+        if self.disconnect_seconds == 0
+            || self.warm_idle_seconds == 0
+            || self.post_drain_idle_seconds == 0
+            || self.drain_limit_seconds == 0
+            || self.hard_limit_seconds == 0
+            || self.hard_limit_seconds > MAX_LOAD_DURATION_SECONDS
+        {
+            return Err(format!(
+                "durations must be nonzero and hard_limit_seconds <= {MAX_LOAD_DURATION_SECONDS}"
+            ));
+        }
+        for stage in self.stages {
+            if stage.messages == 0 || stage.rate_per_second == 0 {
+                return Err("every phase must have positive messages and rate".into());
+            }
+            if stage.messages > MAX_LOAD_MESSAGES {
+                return Err(format!("a phase exceeds {MAX_LOAD_MESSAGES} messages"));
+            }
+            if stage.rate_per_second > MAX_LOAD_RATE_PER_SECOND {
+                return Err(format!(
+                    "phase rate exceeds {MAX_LOAD_RATE_PER_SECOND} messages/second"
+                ));
+            }
+        }
+        let messages = self.messages();
+        if messages > MAX_LOAD_MESSAGES {
+            return Err(format!("planned messages exceed {MAX_LOAD_MESSAGES}"));
+        }
+        let phase_seconds: u64 = self
+            .stages
+            .iter()
+            .map(|stage| {
+                ((stage.messages as u64) + (stage.rate_per_second as u64) - 1)
+                    / stage.rate_per_second as u64
+            })
+            .sum();
+        let required_seconds = self.warm_idle_seconds
+            + phase_seconds
+            + self.drain_limit_seconds
+            + self.post_drain_idle_seconds;
+        if required_seconds > self.hard_limit_seconds {
+            return Err(
+                "the fixed schedule plus drain/idle windows exceeds hard_limit_seconds".into(),
+            );
+        }
+        let disconnected_stage = self.stages[self.disconnect_stage];
+        let disconnected_stage_seconds =
+            (disconnected_stage.messages as u64 + disconnected_stage.rate_per_second as u64 - 1)
+                / disconnected_stage.rate_per_second as u64;
+        if self.disconnect_seconds > disconnected_stage_seconds {
+            return Err("disconnect interval must fit inside its configured stage".into());
+        }
+        Ok(())
+    }
+
+    fn messages(self) -> usize {
+        self.stages.iter().map(|stage| stage.messages).sum()
+    }
+    fn stage_duration(stage: LoadStage) -> Duration {
+        let nanos =
+            (stage.messages as u128 * 1_000_000_000u128).div_ceil(stage.rate_per_second as u128);
+        Duration::from_nanos(nanos as u64)
+    }
+    fn stage_offset(self, stage_index: usize) -> Duration {
+        self.stages[..stage_index]
+            .iter()
+            .copied()
+            .map(Self::stage_duration)
+            .sum()
+    }
+    fn disconnect_offset(self) -> Duration {
+        self.stage_offset(self.disconnect_stage)
+    }
+    fn planned_offset(self, index: usize) -> Duration {
+        let mut remaining = index;
+        let mut offset = Duration::ZERO;
+        for stage in self.stages {
+            if remaining < stage.messages {
+                let nanos = (remaining as u128 * 1_000_000_000u128) / stage.rate_per_second as u128;
+                return offset + Duration::from_nanos(nanos as u64);
+            }
+            remaining -= stage.messages;
+            offset += Self::stage_duration(stage);
+        }
+        panic!("load message index out of bounds");
+    }
+    fn stage_name(self, index: usize) -> &'static str {
+        let mut remaining = index;
+        for stage in self.stages {
+            if remaining < stage.messages {
+                return stage.name.name();
+            }
+            remaining -= stage.messages;
+        }
+        panic!("load message index out of bounds");
+    }
+    fn phase_offsets(self) -> Vec<(Duration, &'static str)> {
+        let mut offset = Duration::ZERO;
+        self.stages
+            .iter()
+            .copied()
+            .map(|stage| {
+                let current = (offset, stage.name.name());
+                offset += Self::stage_duration(stage);
+                current
+            })
+            .collect()
+    }
+    fn to_value(self) -> Value {
+        json!({
+            "version": 1,
+            "target_devices": self.target_devices,
+            "http_concurrency": self.http_concurrency,
+            "disconnect_stage": self.stages[self.disconnect_stage].name.name(),
+            "disconnect_device": self.disconnect_device,
+            "disconnect_seconds": self.disconnect_seconds,
+            "warm_idle_seconds": self.warm_idle_seconds,
+            "post_drain_idle_seconds": self.post_drain_idle_seconds,
+            "drain_limit_seconds": self.drain_limit_seconds,
+            "hard_limit_seconds": self.hard_limit_seconds,
+            "safety_caps": {
+                "max_messages": MAX_LOAD_MESSAGES,
+                "max_targets": MAX_LOAD_TARGETS,
+                "max_http_concurrency": MAX_LOAD_HTTP_CONCURRENCY,
+                "max_rate_per_second": MAX_LOAD_RATE_PER_SECOND,
+                "max_runtime_seconds": MAX_LOAD_DURATION_SECONDS,
+                "max_run_directory_bytes": MAX_RUN_DIRECTORY_BYTES,
+                "max_process_rss_kib": MAX_PROCESS_RSS_KIB,
+                "max_pending_targets": MAX_PENDING_TARGETS
+            },
+            "stages": self.stages.iter().map(|stage| json!({
+                "name": stage.name.name(),
+                "messages": stage.messages,
+                "rate_per_second": stage.rate_per_second
+            })).collect::<Vec<_>>()
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RunMode {
     Formal,
     Preflight,
-    DeliveryLoad,
+    DeliveryLoad(LoadPlan),
 }
 impl RunMode {
     fn from_environment() -> Self {
         match std::env::var("C13_RUN_MODE") {
             Ok(value) if value == "formal" => Self::Formal,
             Ok(value) if value == "preflight" => Self::Preflight,
-            Ok(value) if value == "delivery-load" => Self::DeliveryLoad,
+            Ok(value) if value == "delivery-load" => {
+                Self::DeliveryLoad(LoadPlan::from_environment())
+            }
             Ok(other) => {
                 panic!("unsupported C13_RUN_MODE {other:?}; use formal, preflight or delivery-load")
             }
@@ -52,28 +399,52 @@ impl RunMode {
         match self {
             Self::Formal => "formal",
             Self::Preflight => "preflight",
-            Self::DeliveryLoad => "delivery-load",
+            Self::DeliveryLoad(_) => "delivery-load",
+        }
+    }
+    fn is_delivery_load(self) -> bool {
+        matches!(self, Self::DeliveryLoad(_))
+    }
+    fn load_plan(self) -> Option<LoadPlan> {
+        match self {
+            Self::DeliveryLoad(plan) => Some(plan),
+            Self::Formal | Self::Preflight => None,
         }
     }
     fn messages(self) -> usize {
         match self {
-            Self::Formal | Self::DeliveryLoad => MESSAGES,
+            Self::Formal => MESSAGES,
             Self::Preflight => 3,
+            Self::DeliveryLoad(plan) => plan.messages(),
+        }
+    }
+    fn targets_per_message(self) -> usize {
+        match self {
+            Self::Formal | Self::Preflight => 2,
+            Self::DeliveryLoad(plan) => plan.target_devices,
         }
     }
     fn targets(self) -> usize {
-        self.messages() * 2
+        self.messages() * self.targets_per_message()
+    }
+    fn target_devices(self) -> usize {
+        self.targets_per_message()
+    }
+    fn http_concurrency(self) -> usize {
+        self.load_plan().map_or(8, |plan| plan.http_concurrency)
     }
     fn hard_limit(self) -> Duration {
         match self {
             Self::Formal => HARD_LIMIT,
             Self::Preflight => Duration::from_secs(45),
-            Self::DeliveryLoad => Duration::from_secs(420),
+            Self::DeliveryLoad(plan) => Duration::from_secs(plan.hard_limit_seconds),
         }
     }
     fn drain_limit(self) -> Duration {
         match self {
-            Self::Formal | Self::DeliveryLoad => DRAIN_LIMIT,
+            Self::Formal | Self::DeliveryLoad(_) => self.load_plan().map_or(DRAIN_LIMIT, |plan| {
+                Duration::from_secs(plan.drain_limit_seconds)
+            }),
             Self::Preflight => Duration::from_secs(15),
         }
     }
@@ -81,28 +452,28 @@ impl RunMode {
         match self {
             Self::Formal => Duration::from_secs(10),
             Self::Preflight => Duration::from_secs(1),
-            Self::DeliveryLoad => Duration::from_secs(15),
+            Self::DeliveryLoad(plan) => Duration::from_secs(plan.warm_idle_seconds),
         }
     }
     fn post_drain_idle(self) -> Duration {
         match self {
             Self::Formal => Duration::from_secs(35),
             Self::Preflight => Duration::from_secs(2),
-            Self::DeliveryLoad => Duration::from_secs(330),
+            Self::DeliveryLoad(plan) => Duration::from_secs(plan.post_drain_idle_seconds),
         }
     }
     fn hold_delay(self) -> Duration {
         match self {
             Self::Formal => Duration::from_secs(6),
             Self::Preflight => Duration::ZERO,
-            Self::DeliveryLoad => Duration::from_secs(8),
+            Self::DeliveryLoad(plan) => plan.disconnect_offset(),
         }
     }
     fn hold_duration(self) -> Duration {
         match self {
             Self::Formal => Duration::from_secs(5),
             Self::Preflight => Duration::from_millis(500),
-            Self::DeliveryLoad => Duration::from_secs(6),
+            Self::DeliveryLoad(plan) => Duration::from_secs(plan.disconnect_seconds),
         }
     }
     fn planned_offset(self, index: usize) -> Duration {
@@ -111,14 +482,7 @@ impl RunMode {
             Self::Formal if index < 24 => Duration::from_millis(4000 + (index as u64 - 8) * 125),
             Self::Formal => Duration::from_millis(6000 + (index as u64 - 24) * 10),
             Self::Preflight => Duration::from_millis(index as u64 * 250),
-            Self::DeliveryLoad if index < 8 => Duration::from_secs(index as u64),
-            Self::DeliveryLoad if index < 40 => {
-                Duration::from_millis(8000 + (index as u64 - 8) * 10)
-            }
-            Self::DeliveryLoad if index < 104 => {
-                Duration::from_millis(9000 + (index as u64 - 40) * 125)
-            }
-            Self::DeliveryLoad => Duration::from_millis(17000 + (index as u64 - 104) * 125),
+            Self::DeliveryLoad(plan) => plan.planned_offset(index),
         }
     }
     fn stage(self, index: usize) -> &'static str {
@@ -127,27 +491,17 @@ impl RunMode {
             Self::Formal if index < 24 => "ramp",
             Self::Formal => "burst",
             Self::Preflight => "preflight",
-            Self::DeliveryLoad if index < 8 => "low",
-            Self::DeliveryLoad if index < 40 => "burst",
-            Self::DeliveryLoad if index < 104 => "sustained",
-            Self::DeliveryLoad => "recovery",
+            Self::DeliveryLoad(plan) => plan.stage_name(index),
         }
     }
-
     fn phase_offsets(self) -> Vec<(Duration, &'static str)> {
-        if self == Self::DeliveryLoad {
-            vec![
-                (Duration::from_secs(8), "disconnect_and_burst_started"),
-                (Duration::from_secs(9), "sustained_started"),
-                (Duration::from_secs(14), "reconnect_started"),
-                (Duration::from_secs(17), "recovery_started"),
-            ]
-        } else {
-            vec![
+        match self {
+            Self::DeliveryLoad(plan) => plan.phase_offsets(),
+            _ => vec![
                 (Duration::from_secs(4), "ramp_started"),
                 (self.hold_delay(), "burst_started"),
                 (self.hold_delay() + self.hold_duration(), "held_ack_release"),
-            ]
+            ],
         }
     }
 }
@@ -232,25 +586,50 @@ mod harness_preflight_tests {
     }
 
     #[test]
-    fn delivery_load_has_fixed_bounded_schedule_and_a_real_maintenance_window() {
-        let mode = RunMode::DeliveryLoad;
-        assert_eq!(mode.messages(), 136);
-        assert_eq!(mode.targets(), 272);
-        let schedule: Vec<_> = (0..mode.messages())
-            .map(|i| mode.planned_offset(i))
-            .collect();
-        assert!(schedule.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(schedule[7], Duration::from_secs(7));
-        assert_eq!(schedule[8], Duration::from_secs(8));
-        assert_eq!(schedule[40], Duration::from_secs(9));
-        assert_eq!(schedule[104], Duration::from_secs(17));
-        assert_eq!(schedule[135], Duration::from_millis(20875));
-        assert_eq!(mode.post_drain_idle(), Duration::from_secs(330));
-        assert!(
-            mode.hard_limit()
-                > mode.warm_idle() + schedule[135] + mode.drain_limit() + mode.post_drain_idle()
+    fn delivery_load_plan_is_bounded_and_uses_absolute_offer_times() {
+        let plan = LoadPlan::representative();
+        plan.validate().unwrap();
+        let mode = RunMode::DeliveryLoad(plan);
+        assert_eq!(mode.messages(), 10_230);
+        assert_eq!(mode.targets(), 40_920);
+        assert_eq!(mode.target_devices(), 4);
+        assert_eq!(mode.http_concurrency(), 64);
+        assert_eq!(mode.planned_offset(30), Duration::from_secs(30));
+        assert_eq!(mode.planned_offset(1_230), Duration::from_secs(90));
+        assert_eq!(mode.planned_offset(3_630), Duration::from_secs(150));
+        assert_eq!(mode.planned_offset(8_430), Duration::from_secs(210));
+        assert_eq!(mode.planned_offset(9_430), Duration::from_secs(215));
+        assert_eq!(
+            mode.planned_offset(10_229),
+            Duration::from_micros(224_987_500)
         );
-        assert_eq!(mode.phase_offsets().len(), 4);
+        assert_eq!(plan.disconnect_offset(), Duration::from_secs(215));
+        assert_eq!(mode.phase_offsets().len(), 6);
+        assert_eq!(plan.to_value()["safety_caps"]["max_messages"], 12_000);
+    }
+
+    #[test]
+    fn delivery_load_plan_rejects_unsafe_limits_and_invalid_stage_order() {
+        let plan = LoadPlan::representative();
+        let mut value = plan.to_value();
+        value["target_devices"] = json!(5);
+        assert!(LoadPlan::from_value(&value).is_err());
+
+        let mut value = plan.to_value();
+        value["http_concurrency"] = json!(65);
+        assert!(LoadPlan::from_value(&value).is_err());
+
+        let mut value = plan.to_value();
+        value["stages"][0]["messages"] = json!(12_001);
+        assert!(LoadPlan::from_value(&value).is_err());
+
+        let mut value = plan.to_value();
+        value["stages"][1]["name"] = json!("recovery_80");
+        assert!(LoadPlan::from_value(&value).is_err());
+
+        let mut value = plan.to_value();
+        value["hard_limit_seconds"] = json!(721);
+        assert!(LoadPlan::from_value(&value).is_err());
     }
 }
 
@@ -355,7 +734,7 @@ impl Shared {
         self.evidence.record("ack_sent",json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"semantics":"PUBACK write completed; not durable proof"}));
     }
 }
-struct BackgroundGuard(Arc<Shared>, &'static str);
+struct BackgroundGuard(Arc<Shared>, String);
 impl Drop for BackgroundGuard {
     fn drop(&mut self) {
         if !self.0.stop.load(Ordering::Relaxed) {
@@ -468,14 +847,17 @@ impl Product {
             "mode": mode.name(),
             "oracle": backend,
             "runtime_profile": "small",
-            "private_transports": "TCP MQTT5 only, two real loopback peers",
+            "private_transports": "TCP MQTT5 loopback peers",
             "provider": "none; Token Service unused at loopback port 1",
             "qa": false,
             "database": database,
             "http_bind": format!("127.0.0.1:{http_port}"),
             "mqtt_bind": format!("127.0.0.1:{mqtt_port}"),
             "messages": mode.messages(),
+            "target_devices": mode.target_devices(),
             "targets": mode.targets(),
+            "http_concurrency_max": mode.http_concurrency(),
+            "load_plan": mode.load_plan().map(LoadPlan::to_value),
         });
         let mut config_file = private_file(&config_path);
         serde_json::to_writer_pretty(&mut config_file, &config).unwrap();
@@ -524,12 +906,7 @@ impl Product {
             mqtt_port,
             backend,
         };
-        let schedule = if mode == RunMode::DeliveryLoad {
-            json!({"active_mode":"delivery-load","stages":["low","burst","sustained","recovery"],"messages":[8,32,64,32],"message_rates_per_second":[1,100,8,8],"disconnect_peer":"mqtt-held","disconnect_from_load_seconds":8,"reconnect_from_load_seconds":14})
-        } else {
-            json!({"messages":[8,16,112],"rates_per_second":[2,8,100]})
-        };
-        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":"TCP MQTT5 only, two real loopback peers","provider":"none; Token Service unused at loopback port 1","qa":false,"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":8,"formal_schedule":schedule,"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; old requires actual acked outbox rows"}));
+        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":"TCP MQTT5 loopback peers","target_devices":mode.target_devices(),"provider":"none; Token Service unused at loopback port 1","qa":false,"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":mode.http_concurrency(),"test_owned_background_tokio_tasks":mode.target_devices()+2,"test_owned_http_offer_futures_max":mode.http_concurrency(),"gateway_tokio_task_count":"not instrumented; process thread count is sampled instead","load_plan":mode.load_plan().map(LoadPlan::to_value),"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; old requires actual acked outbox rows"}));
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             assert!(
@@ -614,7 +991,7 @@ impl Product {
     }
     async fn verify_connected_targets(
         &self,
-        devices: &[Device; 2],
+        devices: &[Device],
         channel: &str,
         evidence: &Evidence,
     ) {
@@ -633,8 +1010,8 @@ impl Product {
         let rows=sqlx::query("SELECT d.device_key,d.device_id,d.platform,d.channel_type FROM channel_subscriptions s JOIN devices d ON d.device_id=s.device_id WHERE s.channel_id=? AND s.status='active' AND d.channel_type='private' AND d.route_updated_at IS NOT NULL AND s.created_at<=? ORDER BY d.device_key").bind(&channel_id[..]).bind(now).fetch_all(&mut connection).await.unwrap();
         assert_eq!(
             rows.len(),
-            2,
-            "two actual canonical selected recipients after CONNECT"
+            devices.len(),
+            "actual canonical selected recipients after CONNECT"
         );
         for device in devices {
             let row = rows
@@ -656,16 +1033,17 @@ impl Product {
         .fetch_one(&mut connection)
         .await
         .unwrap();
-        assert_eq!(active, 2);
+        assert_eq!(active, devices.len() as i64);
         if self.backend == "ordinary" {
             let selected:i64=sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=lower(hex(?)) AND s.created_at<=? AND d.retired_at IS NULL AND d.channel_type='private' AND d.platform='mqtt'").bind(&channel_id[..]).bind(now).fetch_one(&mut connection).await.unwrap();
             assert_eq!(
-                selected, 2,
-                "two recipients in C's canonical control projection"
+                selected,
+                devices.len() as i64,
+                "all recipients in C's canonical control projection"
             );
         }
         connection.close().await.unwrap();
-        evidence.record("control_preflight",json!({"passed":true,"platform":"mqtt","original_device_keys_preserved":2,"original_device_ids_preserved":2,"canonical_active_subscriptions":active,"selected_targets":rows.len(),"scope":"before any measured offer; admission success is never treated as delivery completion"}));
+        evidence.record("control_preflight",json!({"passed":true,"platform":"mqtt","original_device_keys_preserved":devices.len(),"original_device_ids_preserved":devices.len(),"canonical_active_subscriptions":active,"selected_targets":rows.len(),"scope":"before any measured offer; admission success is never treated as delivery completion"}));
     }
     async fn shutdown(&mut self, evidence: &Evidence) {
         evidence.record("shutdown_started", json!({}));
@@ -701,7 +1079,7 @@ impl Drop for Product {
 async fn peer(
     product: &Product,
     device: String,
-    label: &'static str,
+    label: String,
     held: bool,
     shared: Arc<Shared>,
 ) -> JoinHandle<()> {
@@ -713,7 +1091,7 @@ async fn peer(
         .evidence
         .record("peer_connected", json!({"peer":label,"device_key":device}));
     tokio::spawn(async move {
-        let _guard = BackgroundGuard(shared.clone(), label);
+        let _guard = BackgroundGuard(shared.clone(), label.clone());
         let mut pending = BTreeMap::<u16, (String, String)>::new();
         let mut last_ping = Instant::now();
         let mut disconnected_once = false;
@@ -721,7 +1099,7 @@ async fn peer(
             let now = shared.evidence.us();
             let from = shared.hold_from_us.load(Ordering::Relaxed);
             let until = shared.hold_until_us.load(Ordering::Relaxed);
-            if shared.mode == RunMode::DeliveryLoad
+            if shared.mode.is_delivery_load()
                 && held
                 && !disconnected_once
                 && from > 0
@@ -757,7 +1135,7 @@ async fn peer(
             if !holding {
                 for (packet, (op, delivery)) in std::mem::take(&mut pending) {
                     mqtt.acknowledge(packet).await;
-                    shared.ack(label, &device, &op, &delivery);
+                    shared.ack(&label, &device, &op, &delivery);
                 }
             }
             let Some(packet) = mqtt.receive(Duration::from_millis(50)).await else {
@@ -767,7 +1145,7 @@ async fn peer(
                 mqttbytes::v5::Packet::Publish(publish) => {
                     let envelope: Value = serde_json::from_slice(&publish.payload).unwrap();
                     let delivery = envelope["delivery_id"].as_str().unwrap().to_owned();
-                    let op = shared.verify(label, &device, &envelope["data"], &delivery);
+                    let op = shared.verify(&label, &device, &envelope["data"], &delivery);
                     pending.insert(publish.pkid, (op, delivery));
                     assert!(
                         pending.len() <= shared.mode.messages(),
@@ -779,7 +1157,7 @@ async fn peer(
                 other => panic!("unexpected MQTT packet: {other:?}"),
             }
         }
-        if shared.mode == RunMode::DeliveryLoad && held {
+        if shared.mode.is_delivery_load() && held {
             assert!(
                 disconnected_once,
                 "delivery-load must actually disconnect with an unacknowledged packet"
@@ -802,7 +1180,36 @@ fn process_usage(pid: u32) -> Value {
         .enumerate()
         .map(|(i, v)| v.parse::<f64>().unwrap() * 60_f64.powi(i as i32))
         .sum::<f64>();
-    json!({"pid":pid,"cpu_seconds":cpu,"rss_kib":parts[1].parse::<u64>().unwrap()})
+    let os_thread_count = Command::new("ps")
+        .args(["-M", "-p", &pid.to_string(), "-o", "pid="])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count()
+        });
+    let rss_kib = parts[1].parse::<u64>().unwrap();
+    assert!(
+        rss_kib <= MAX_PROCESS_RSS_KIB,
+        "resource STOP: process {pid} RSS {rss_kib}KiB exceeds {MAX_PROCESS_RSS_KIB}KiB"
+    );
+    json!({"pid":pid,"cpu_seconds":cpu,"rss_kib":rss_kib,"os_thread_count":os_thread_count})
+}
+
+fn run_directory_bytes(path: &Path) -> u64 {
+    std::fs::read_dir(path)
+        .unwrap_or_else(|error| panic!("run-directory size check failed: {error}"))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("run-directory entry check failed: {error}"))
+                .metadata()
+                .unwrap_or_else(|error| panic!("run-directory metadata check failed: {error}"))
+                .len()
+        })
+        .sum()
 }
 fn resource_boundary(pid: u32, evidence: &Evidence, phase: &str, sockets: bool) {
     let mut data = json!({"phase":phase,"gateway":process_usage(pid),"harness_including_peers_and_observer":process_usage(std::process::id())});
@@ -835,14 +1242,14 @@ fn resource_boundary(pid: u32, evidence: &Evidence, phase: &str, sockets: bool) 
     }
     evidence.record("phase_resources", data);
 }
-fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> JoinHandle<()> {
+fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinHandle<()> {
     let database = product.directory.join("gateway.sqlite");
     let backend = product.backend.clone();
     let pid = product.child.id();
-    let keys = devices.each_ref().map(|d| d.key.clone());
-    let ids = devices.each_ref().map(|d| d.id.clone());
+    let keys = devices.iter().map(|d| d.key.clone()).collect::<Vec<_>>();
+    let ids = devices.iter().map(|d| d.id.clone()).collect::<Vec<_>>();
     tokio::spawn(async move {
-        let _guard = BackgroundGuard(shared.clone(), "database observer");
+        let _guard = BackgroundGuard(shared.clone(), "database observer".to_string());
         let selected = if backend == "main" {
             database.with_file_name("gateway.delivery.sqlite")
         } else {
@@ -887,7 +1294,7 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
             if backend == "main" {
                 // Old MQTT PUBACK writes an actual acked row. Empty/nonexistent
                 // outboxes cannot make a target complete in this oracle.
-                let rows=sqlx::query("SELECT device_id,delivery_id,status,created_at,acked_at FROM private_outbox ORDER BY delivery_id,device_id LIMIT 273").fetch_all(&mut connection).await.unwrap();
+                let rows=sqlx::query("SELECT device_id,delivery_id,status,created_at,acked_at FROM private_outbox ORDER BY delivery_id,device_id LIMIT ?").bind(shared.mode.targets() as i64 + 1).fetch_all(&mut connection).await.unwrap();
                 assert!(
                     rows.len() <= shared.mode.targets(),
                     "fresh cohort outbox bound"
@@ -944,7 +1351,8 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                     }
                 }
                 let rows =
-                    sqlx::query("SELECT delivery_id,expires_at FROM private_payloads LIMIT 137")
+                    sqlx::query("SELECT delivery_id,expires_at FROM private_payloads LIMIT ?")
+                        .bind(shared.mode.messages() as i64 + 1)
                         .fetch_all(&mut connection)
                         .await
                         .unwrap();
@@ -965,7 +1373,8 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                 for (op, item) in &expected {
                     if let Some(delivery) = &item.delivery_id
                         && !body_ids.contains(delivery)
-                        && terminal.iter().filter(|(id, _)| id == op).count() == 2
+                        && terminal.iter().filter(|(id, _)| id == op).count()
+                            == shared.mode.targets_per_message()
                         && shared.body_released.lock().unwrap().insert(op.clone())
                     {
                         shared.evidence.record(
@@ -977,7 +1386,7 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
             } else {
                 // Identity must exist, both peers must have received and sent
                 // successful PUBACK, then a target's absence is terminal proof.
-                let messages=sqlx::query("SELECT op_id,message_id,delivery_id,payload_bytes,expires_at FROM ordinary_messages LIMIT 137").fetch_all(&mut connection).await.unwrap();
+                let messages=sqlx::query("SELECT op_id,message_id,delivery_id,payload_bytes,expires_at FROM ordinary_messages LIMIT ?").bind(shared.mode.messages() as i64 + 1).fetch_all(&mut connection).await.unwrap();
                 assert!(messages.len() <= shared.mode.messages());
                 let mut message_ids = BTreeSet::new();
                 let mut message_ops = BTreeSet::new();
@@ -1004,7 +1413,7 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                         if accepted.contains(&op) {
                             message_ids.insert(op.clone());
                             if shared.persisted.lock().unwrap().insert(op.clone())
-                                && shared.mode == RunMode::DeliveryLoad
+                                && shared.mode.is_delivery_load()
                             {
                                 shared.evidence.record("persist_commit_visible_upper_bound", json!({"op_id":op,"semantics":"100ms observer after successful HTTP response; not exact COMMIT timestamp"}));
                             }
@@ -1020,7 +1429,7 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                         "all accepted messages must be persisted with matching identities"
                     );
                 }
-                let rows=sqlx::query("SELECT m.op_id,t.device_key,t.state,t.accepted_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id LIMIT 273").fetch_all(&mut connection).await.unwrap();
+                let rows=sqlx::query("SELECT m.op_id,t.device_key,t.state,t.accepted_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id LIMIT ?").bind(shared.mode.targets() as i64 + 1).fetch_all(&mut connection).await.unwrap();
                 assert!(rows.len() <= shared.mode.targets());
                 let mut existing = BTreeSet::new();
                 for row in rows {
@@ -1055,7 +1464,8 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                         if row.get::<i64, _>("expires_at") <= now {
                             expired_payloads += 1;
                         }
-                    } else if terminal.iter().filter(|(id, _)| id == &op).count() == 2
+                    } else if terminal.iter().filter(|(id, _)| id == &op).count()
+                        == shared.mode.targets_per_message()
                         && shared.body_released.lock().unwrap().insert(op.clone())
                     {
                         shared.evidence.record(
@@ -1077,14 +1487,27 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                 .filter(|(state, _)| state.as_str() != "acked")
                 .map(|(_, count)| *count)
                 .sum();
+            if pending > MAX_PENDING_TARGETS {
+                shared.fail(format!(
+                    "resource STOP: persisted backlog {pending} exceeds {MAX_PENDING_TARGETS} target records"
+                ));
+                break;
+            }
             shared
                 .residual_targets
                 .store(pending as u64, Ordering::Relaxed);
             shared.evidence.record("database_sample",json!({"states":state_counts,"pending_targets":pending,"payload_count":payloads,"expired_payload_count":expired,"oldest_pending_age_ms":oldest.map(|ts|(now-ts).max(0)),"durable_targets_observed":shared.committed.lock().unwrap().len()}));
             if tick.is_multiple_of(10) {
                 guard_disk(database.parent().unwrap());
+                let directory_bytes = run_directory_bytes(database.parent().unwrap());
+                assert!(
+                    directory_bytes <= MAX_RUN_DIRECTORY_BYTES,
+                    "resource STOP: run directory is {directory_bytes} bytes, above {MAX_RUN_DIRECTORY_BYTES}"
+                );
+                let gateway = process_usage(pid);
+                let harness_usage = process_usage(std::process::id());
                 let files:Vec<_>=std::fs::read_dir(database.parent().unwrap()).unwrap().map(|entry|entry.unwrap()).filter(|entry|entry.file_name().to_string_lossy().contains(".sqlite")).map(|entry|json!({"name":entry.file_name(),"logical_bytes":entry.metadata().unwrap().len()})).collect();
-                shared.evidence.record("resources",json!({"gateway":process_usage(pid),"harness_including_peers_and_observer":process_usage(std::process::id()),"database":"embedded; included in Gateway CPU/RSS","database_files":files}));
+                shared.evidence.record("resources",json!({"gateway":gateway,"harness_including_peers_and_observer":harness_usage,"run_directory_bytes":directory_bytes,"run_directory_cap_bytes":MAX_RUN_DIRECTORY_BYTES,"database":"embedded; included in Gateway CPU/RSS","database_files":files,"process_threads":"OS thread count from ps -M when available; does not expose async task count"}));
             }
             tick += 1;
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1150,7 +1573,7 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
                 shared.accepted.lock().unwrap().insert(op.clone()),
                 "duplicate HTTP acceptance for {op}"
             );
-            shared.evidence.record("http_accepted",json!({"op_id":op,"message_id":message,"planned_offer_us":planned_us,"status":status.as_u16(),"expected_targets":2,"delivery_complete":false,"semantics":"successful normal product admission response only; completion separately requires two positive MQTT durable ACK oracles"}));
+            shared.evidence.record("http_accepted",json!({"op_id":op,"message_id":message,"planned_offer_us":planned_us,"status":status.as_u16(),"expected_targets":shared.mode.targets_per_message(),"delivery_complete":false,"semantics":"successful normal product admission response only; completion separately requires one positive MQTT durable ACK per configured target"}));
         }
         Err(error) => {
             shared.evidence.record(
@@ -1163,27 +1586,43 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
 }
 async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     let _stop_on_exit = StopGuard(shared.clone());
-    let one = product.device().await;
-    let two = product.device().await;
-    let channel = product.subscribe(&one.key, None).await;
-    assert_eq!(channel, product.subscribe(&two.key, Some(&channel)).await);
-    let devices = [one, two];
-    let peer_one = peer(
-        product,
-        devices[0].key.clone(),
-        "mqtt-immediate",
-        false,
-        shared.clone(),
-    )
-    .await;
-    let peer_two = peer(
-        product,
-        devices[1].key.clone(),
-        "mqtt-held",
-        true,
-        shared.clone(),
-    )
-    .await;
+    let mut devices = Vec::with_capacity(mode.target_devices());
+    for _ in 0..mode.target_devices() {
+        devices.push(product.device().await);
+    }
+    let channel = product.subscribe(&devices[0].key, None).await;
+    for device in devices.iter().skip(1) {
+        assert_eq!(
+            channel,
+            product.subscribe(&device.key, Some(&channel)).await
+        );
+    }
+    let held_device = mode.load_plan().map_or(1, |plan| plan.disconnect_device);
+    let mut peers = Vec::with_capacity(devices.len());
+    for (index, device) in devices.iter().enumerate() {
+        let label = if mode.load_plan().is_none() {
+            (if index == held_device {
+                "mqtt-held"
+            } else {
+                "mqtt-immediate"
+            })
+            .to_string()
+        } else if index == held_device {
+            format!("mqtt-held-{index}")
+        } else {
+            format!("mqtt-immediate-{index}")
+        };
+        peers.push(
+            peer(
+                product,
+                device.key.clone(),
+                label,
+                index == held_device,
+                shared.clone(),
+            )
+            .await,
+        );
+    }
     product
         .verify_connected_targets(&devices, &channel, &shared.evidence)
         .await;
@@ -1236,14 +1675,14 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     );
     let load_start = Instant::now();
     let load_start_us = shared.evidence.us();
-    let burst_us = load_start_us + mode.hold_delay().as_micros() as u64;
-    shared.hold_from_us.store(burst_us, Ordering::Relaxed);
+    let disconnect_us = load_start_us + mode.hold_delay().as_micros() as u64;
+    shared.hold_from_us.store(disconnect_us, Ordering::Relaxed);
     shared.hold_until_us.store(
-        burst_us + mode.hold_duration().as_micros() as u64,
+        disconnect_us + mode.hold_duration().as_micros() as u64,
         Ordering::Relaxed,
     );
-    let hold_until_us = burst_us + mode.hold_duration().as_micros() as u64;
-    shared.evidence.record("load_started",json!({"mode":mode.name(),"planned_offer_start_us":load_start_us,"burst_start_us":burst_us,"held_ack_release_us":hold_until_us}));
+    let reconnect_us = disconnect_us + mode.hold_duration().as_micros() as u64;
+    shared.evidence.record("load_started",json!({"mode":mode.name(),"planned_offer_start_us":load_start_us,"planned_disconnect_start_us":disconnect_us,"planned_reconnect_us":reconnect_us,"disconnect_device_index":mode.load_plan().map(|plan|plan.disconnect_device)}));
     resource_boundary(product.child.id(), &shared.evidence, "low_started", false);
     let phase_clock = {
         let shared = shared.clone();
@@ -1265,7 +1704,7 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
             let op = match mode {
                 RunMode::Formal => format!("c12-pair-{index:03}"),
                 RunMode::Preflight => format!("c13-preflight-{index:03}"),
-                RunMode::DeliveryLoad => format!("delivery-load-{index:03}"),
+                RunMode::DeliveryLoad(_) => format!("delivery-load-{index:05}"),
             };
             let input = request(product, &channel, &op, ttl);
             let body = input["body"].as_str().unwrap();
@@ -1315,7 +1754,7 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
                 submit(product_ref, &shared, input, planned).await;
             }
         })
-        .buffer_unordered(8)
+        .buffer_unordered(mode.http_concurrency())
         .collect::<Vec<_>>()
         .await;
     shared.check();
@@ -1378,8 +1817,8 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
         false,
     );
     wait(product, &shared, mode.post_drain_idle()).await;
-    let idle_scope = if mode == RunMode::DeliveryLoad {
-        "330s after drain spans product 300s maintenance and30s pool idle; two active pinging protocol peers and10Hz observer remain; no real Provider pool"
+    let idle_scope = if mode.is_delivery_load() {
+        "60s after drain; active loopback MQTT peers and 10Hz observer remain; no real Provider pool or 300s maintenance observation"
     } else {
         "formal mode covers 30s pool idle setting; not 300s maintenance or all network-client pools"
     };
@@ -1387,8 +1826,9 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     resource_boundary(product.child.id(), &shared.evidence, "idle_complete", true);
     shared.stop.store(true, Ordering::Relaxed);
     phase_clock.await.unwrap();
-    peer_one.await.unwrap();
-    peer_two.await.unwrap();
+    for peer in peers {
+        peer.await.unwrap();
+    }
     observer.await.unwrap();
     shared.check();
     validate_terminal_counts(

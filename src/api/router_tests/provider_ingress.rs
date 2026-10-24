@@ -510,6 +510,92 @@ async fn messages_pull_v2_pages_207_items_without_loss() {
 }
 
 #[tokio::test]
+async fn messages_pull_v2_repeats_unacked_full_page_and_strands_later_valid_item() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let device_key = "router-provider-device-v2-unacked-page";
+    let later_healthy_delivery = "delivery-unacked-page-200";
+
+    // Model a receiver that cannot commit any valid item in the first page:
+    // it intentionally sends no ACK, so every row remains durable and retryable.
+    for index in 0..201 {
+        let delivery_id = format!("delivery-unacked-page-{index:03}");
+        enqueue_provider_pull_item(&state, device_key, &delivery_id, "valid retained item").await;
+    }
+
+    let (first_status, first_body) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({ "device_key": device_key }),
+    )
+    .await;
+    assert_eq!(first_status, StatusCode::OK, "first page: {first_body:?}");
+    let first_data = response_data(&first_body);
+    let first_items = first_data
+        .get("items")
+        .and_then(Value::as_array)
+        .expect("first page items");
+    assert_eq!(first_items.len(), 200);
+    assert_eq!(
+        first_data.get("has_more").and_then(Value::as_bool),
+        Some(true)
+    );
+    let first_ids = first_items
+        .iter()
+        .map(|item| {
+            item.get("delivery_id")
+                .and_then(Value::as_str)
+                .expect("delivery id")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(!first_ids.iter().any(|id| id == later_healthy_delivery));
+
+    // No cursor or per-row progress signal exists. Since the first page was not
+    // ACKed, a later Pull repeats it and the 201st valid item remains unreachable.
+    let (second_status, second_body) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({ "device_key": device_key }),
+    )
+    .await;
+    assert_eq!(second_status, StatusCode::OK, "retry page: {second_body:?}");
+    let second_data = response_data(&second_body);
+    let second_items = second_data
+        .get("items")
+        .and_then(Value::as_array)
+        .expect("retry page items");
+    let second_ids = second_items
+        .iter()
+        .map(|item| {
+            item.get("delivery_id")
+                .and_then(Value::as_str)
+                .expect("delivery id")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(second_ids, first_ids);
+    assert_eq!(
+        second_data.get("has_more").and_then(Value::as_bool),
+        Some(true)
+    );
+
+    assert!(
+        state
+            .store
+            .peek_provider_item(
+                derive_private_device_id(device_key),
+                later_healthy_delivery,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+            .expect("later healthy durable item lookup")
+            .is_some(),
+        "the later item remains stored even though the no-cursor client cannot reach it"
+    );
+}
+
+#[tokio::test]
 async fn messages_pull_v2_corrupt_full_page_does_not_hide_later_valid_item() {
     let state = build_test_state().await;
     let app = super::super::build_router(state.clone(), "<html>docs</html>");
