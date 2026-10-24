@@ -359,6 +359,26 @@ impl Storage {
         Ok(item)
     }
 
+    pub(crate) async fn peek_provider_scan_ceiling(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullPosition>> {
+        self.db.peek_provider_scan_ceiling(device_id, now).await
+    }
+    pub(crate) async fn peek_provider_scan_page(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        after: Option<&ProviderPullPosition>,
+        ceiling: &ProviderPullPosition,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullScanItem>> {
+        // The bounded HTTP page owner records activity once after all its reads.
+        self.db
+            .peek_provider_scan_page(device_id, now, after, ceiling, limit)
+            .await
+    }
     pub async fn peek_provider_candidates(
         &self,
         device_id: DeviceId,

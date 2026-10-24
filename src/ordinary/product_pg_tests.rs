@@ -530,3 +530,188 @@ async fn postgres_product_private_waiting_preserves_provider_and_global_executio
     storage.close_ordinary_storage().await.unwrap();
     owner.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires fresh loopback c10_synthetic_scan_* DB in PUSHGO_PROVIDER_SCAN_PG_URL_FILE"]
+async fn postgres_provider_scan_native_seek_ceiling_and_scope_contract() {
+    let path = std::env::var_os("PUSHGO_PROVIDER_SCAN_PG_URL_FILE").expect("isolated QA URL file");
+    let url = std::fs::read_to_string(path).unwrap();
+    let url = url.trim();
+    let parsed = reqwest::Url::parse(url).unwrap();
+    assert!(matches!(parsed.scheme(), "postgres" | "postgresql"));
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1") | Some("localhost")
+    ));
+    assert!(
+        parsed
+            .path()
+            .trim_start_matches('/')
+            .starts_with("c10_synthetic_scan_")
+    );
+    let mut inspect = PgConnection::connect(url).await.expect("fresh isolated PG");
+    let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')").fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(existing, 0, "refuse every existing or reused database");
+    let health = Arc::new(Health::default());
+    let owner = ProductOwner::acquire(Some(url), health.clone())
+        .await
+        .unwrap();
+    let storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(url.into()),
+        managed_upgrade: false,
+        mcp_enabled: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .unwrap();
+    let ordinary = storage
+        .initialize_ordinary(
+            Config {
+                max_messages: i64::MAX,
+                ..Config::default()
+            },
+            health,
+        )
+        .await
+        .unwrap();
+    let password = crate::util::generate_hex_id_128();
+    let channel = storage
+        .upsert_private_channel(None, Some("PG native scan QA"), &password)
+        .await
+        .unwrap()
+        .channel_id;
+    let device = "c10-pg-provider-scan";
+    let mut route = subscribe(&storage, channel, device, "fcm", Some("c10-pg-scan-token")).await;
+    let epoch = ordinary.pull_route_epoch(device).await.unwrap();
+    assert!(epoch.is_some());
+    let mut accepted = Vec::new();
+    for index in 0..5 {
+        accepted.push(
+            ordinary
+                .accept(request(channel, &format!("native-scan-{index}")))
+                .await
+                .unwrap()
+                .delivery_id,
+        );
+    }
+    // Explicit equal-time fixture over normally accepted rows tests both seek keys.
+    let tied = now() - 10_000;
+    let changed = sqlx::query("UPDATE ordinary_targets SET accepted_at=$1")
+        .bind(tied)
+        .execute(&mut inspect)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(changed, 5);
+    accepted.sort();
+    let ceiling = ordinary.pull_scan_ceiling(device).await.unwrap().unwrap();
+    assert_eq!(ceiling.at, tied);
+    assert_eq!(ceiling.delivery_id, *accepted.last().unwrap());
+    ordinary
+        .accept(request(channel, "native-scan-appended-after-ceiling"))
+        .await
+        .unwrap();
+    let mut cursor = None;
+    let mut actual = Vec::new();
+    let mut reads = 0;
+    while cursor.as_ref().is_none_or(|key| key != &ceiling) {
+        reads += 1;
+        assert!(reads <= 3);
+        let rows = ordinary
+            .pull_scan_page(device, cursor.as_ref(), &ceiling, 2)
+            .await
+            .unwrap();
+        assert!(!rows.is_empty() && rows.len() <= 2);
+        for row in rows {
+            cursor = Some(row.position.clone());
+            actual.push(row.position.delivery_id);
+        }
+    }
+    assert_eq!(actual, accepted);
+    assert_eq!(reads, 3);
+    let derived = crate::routing::derive_private_device_id(device);
+    for index in 0..5 {
+        let id = format!("pg-retained-scan-{index}");
+        let fields = hashbrown::HashMap::from_iter([
+            ("entity_type".into(), "event".into()),
+            ("delivery_id".into(), id.clone()),
+            ("title".into(), "retained".into()),
+        ]);
+        let bytes = postcard::to_allocvec(&crate::private::protocol::PrivatePayloadEnvelope {
+            payload_version: 1,
+            data: fields,
+        })
+        .unwrap();
+        storage
+            .enqueue_provider_pull_item(
+                derived,
+                &id,
+                &crate::storage::PrivateMessage {
+                    size: bytes.len(),
+                    payload: bytes.into(),
+                    sent_at: now(),
+                    expires_at: now() + 300_000,
+                },
+                Platform::ANDROID,
+                "c10-pg-scan-token",
+            )
+            .await
+            .unwrap();
+    }
+    sqlx::query("UPDATE provider_pull_queue SET created_at=$1")
+        .bind(tied)
+        .execute(&mut inspect)
+        .await
+        .unwrap();
+    let ceiling = storage
+        .peek_provider_scan_ceiling(derived, now())
+        .await
+        .unwrap()
+        .unwrap();
+    let first = storage
+        .peek_provider_scan_page(derived, now(), None, &ceiling, 2)
+        .await
+        .unwrap();
+    let second = storage
+        .peek_provider_scan_page(derived, now(), Some(&first[1].position), &ceiling, 2)
+        .await
+        .unwrap();
+    let third = storage
+        .peek_provider_scan_page(derived, now(), Some(&second[1].position), &ceiling, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        [first, second, third]
+            .into_iter()
+            .flatten()
+            .map(|row| row.position.delivery_id)
+            .collect::<Vec<_>>(),
+        (0..5)
+            .map(|index| format!("pg-retained-scan-{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        storage
+            .peek_provider_candidates(derived, now(), 10)
+            .await
+            .unwrap()
+            .len(),
+        5,
+        "scan never consumes a retained responsibility"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM ordinary_targets WHERE acked_at IS NULL"
+        )
+        .fetch_one(&mut inspect)
+        .await
+        .unwrap(),
+        6
+    );
+    route.provider_token = Some("c10-pg-scan-token-rotated".into());
+    storage.upsert_device_route(&route).await.unwrap();
+    assert_ne!(ordinary.pull_route_epoch(device).await.unwrap(), epoch);
+    inspect.close().await.unwrap();
+    storage.close_ordinary_storage().await.unwrap();
+    owner.shutdown().await.unwrap();
+}

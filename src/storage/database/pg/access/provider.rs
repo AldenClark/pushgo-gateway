@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use super::outbox::mark_provider_delivery_consumed_pg_tx;
 
+const PROVIDER_SCAN_FIRST_SQL: &str = "SELECT q.created_at,q.delivery_id,q.payload_blob AS queue_payload_blob,p.payload_blob AS shared_payload_blob FROM provider_pull_queue q LEFT JOIN private_payloads p ON p.delivery_id=q.delivery_id WHERE q.device_id=$1 AND q.expires_at>$2 AND (q.created_at,q.delivery_id)<=($3,$4) ORDER BY q.created_at,q.delivery_id LIMIT $5";
+const PROVIDER_SCAN_SQL: &str = "SELECT q.created_at,q.delivery_id,q.payload_blob AS queue_payload_blob,p.payload_blob AS shared_payload_blob FROM provider_pull_queue q LEFT JOIN private_payloads p ON p.delivery_id=q.delivery_id WHERE q.device_id=$1 AND q.expires_at>$2 AND (q.created_at,q.delivery_id)>($3,$4) AND (q.created_at,q.delivery_id)<=($5,$6) ORDER BY q.created_at,q.delivery_id LIMIT $7";
+
 impl PostgresDb {
     pub(super) async fn load_private_message(
         &self,
@@ -304,6 +307,61 @@ impl PostgresDb {
             delivery_id: delivery_id.to_string(),
             payload: provider_payload_from_row(&row),
         }))
+    }
+
+    pub(super) async fn peek_provider_scan_ceiling(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullPosition>> {
+        let row = sqlx::query("SELECT created_at,delivery_id FROM provider_pull_queue WHERE device_id=$1 AND expires_at>$2 ORDER BY created_at DESC,delivery_id DESC LIMIT 1").bind(device_id.as_slice()).bind(now)
+            .fetch_optional(&self.pool).await?;
+        row.map(|row| {
+            Ok(ProviderPullPosition {
+                at: row.try_get("created_at")?,
+                delivery_id: row.try_get("delivery_id")?,
+            })
+        })
+        .transpose()
+    }
+    pub(super) async fn peek_provider_scan_page(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        after: Option<&ProviderPullPosition>,
+        ceiling: &ProviderPullPosition,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullScanItem>> {
+        debug_assert!((1..=201).contains(&limit));
+        let query = if let Some(after) = after {
+            sqlx::query(PROVIDER_SCAN_SQL)
+                .bind(device_id.as_slice())
+                .bind(now)
+                .bind(after.at)
+                .bind(&after.delivery_id)
+                .bind(ceiling.at)
+                .bind(&ceiling.delivery_id)
+                .bind(limit as i64)
+        } else {
+            sqlx::query(PROVIDER_SCAN_FIRST_SQL)
+                .bind(device_id.as_slice())
+                .bind(now)
+                .bind(ceiling.at)
+                .bind(&ceiling.delivery_id)
+                .bind(limit as i64)
+        };
+        let rows = query.fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ProviderPullScanItem {
+                    position: ProviderPullPosition {
+                        at: row.try_get("created_at")?,
+                        delivery_id: row.try_get("delivery_id")?,
+                    },
+                    payload: provider_payload_from_row(&row),
+                })
+            })
+            .collect()
     }
 
     pub(super) async fn peek_provider_candidates(

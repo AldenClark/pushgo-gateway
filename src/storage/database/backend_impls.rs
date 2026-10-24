@@ -606,6 +606,24 @@ macro_rules! impl_backend_provider_pull_access {
                 <$backend>::peek_provider_candidate(self, device_id, delivery_id, now).await
             }
 
+            async fn peek_provider_scan_ceiling(
+                &self,
+                device_id: DeviceId,
+                now: i64,
+            ) -> StoreResult<Option<ProviderPullPosition>> {
+                <$backend>::peek_provider_scan_ceiling(self, device_id, now).await
+            }
+            async fn peek_provider_scan_page(
+                &self,
+                device_id: DeviceId,
+                now: i64,
+                after: Option<&ProviderPullPosition>,
+                ceiling: &ProviderPullPosition,
+                limit: usize,
+            ) -> StoreResult<Vec<ProviderPullScanItem>> {
+                <$backend>::peek_provider_scan_page(self, device_id, now, after, ceiling, limit)
+                    .await
+            }
             async fn peek_provider_candidates(
                 &self,
                 device_id: DeviceId,

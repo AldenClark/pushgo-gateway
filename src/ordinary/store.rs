@@ -303,6 +303,9 @@ pub(crate) struct ClaimBatch {
     pub has_more: bool,
 }
 pub(super) const PULL_BATCH_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='provider' AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='provider' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=sibling.platform AND r.provider_token=sibling.provider_token AND sibling.control_epoch<r.control_epoch)) ORDER BY t.accepted_at,t.delivery_id LIMIT ?";
+const PULL_SCAN_CEILING_SQL: &str = "SELECT t.accepted_at,t.delivery_id FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='provider' AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='provider' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=sibling.platform AND r.provider_token=sibling.provider_token AND sibling.control_epoch<r.control_epoch)) ORDER BY t.accepted_at DESC,t.delivery_id DESC LIMIT 1";
+const PULL_SCAN_FIRST_SQL: &str = "SELECT t.accepted_at,t.delivery_id,m.payload_blob FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='provider' AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='provider' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=sibling.platform AND r.provider_token=sibling.provider_token AND sibling.control_epoch<r.control_epoch)) AND (t.accepted_at,t.delivery_id)<=(?,?) ORDER BY t.accepted_at,t.delivery_id LIMIT ?";
+const PULL_SCAN_SQL: &str = "SELECT t.accepted_at,t.delivery_id,m.payload_blob FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='provider' AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='provider' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=sibling.platform AND r.provider_token=sibling.provider_token AND sibling.control_epoch<r.control_epoch)) AND (t.accepted_at,t.delivery_id)>(?,?) AND (t.accepted_at,t.delivery_id)<=(?,?) ORDER BY t.accepted_at,t.delivery_id LIMIT ?";
 pub(super) const PULL_EXACT_SQL: &str = "SELECT t.delivery_id,m.payload_blob FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_id=? AND t.delivery_mode='provider' AND t.acked_at IS NULL AND d.retired_at IS NULL AND m.expires_at>? AND NOT EXISTS(SELECT 1 FROM ordinary_retired_provider_tokens r WHERE r.platform=t.platform AND r.provider_token=t.provider_token AND t.control_epoch<r.control_epoch) LIMIT 1";
 pub(super) const RECOVER_RUNNING_SQL: &str = "UPDATE ordinary_targets SET state=CASE WHEN delivery_mode='private' THEN 'superseded_route' ELSE 'retry_wait' END,next_attempt_at=? WHERE provider=? AND state='running'";
 // Markers are normally empty. Keep them outside the join so idle maintenance
@@ -1023,6 +1026,81 @@ impl DeliveryStore {
         let removed=self.counters.profile.sql(Path::Maintenance, Statement::MaintenanceRetention, sqlx::query("DELETE FROM ordinary_messages WHERE op_id IN (SELECT op_id FROM ordinary_messages WHERE dedupe_until<=? AND payload_bytes=0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets WHERE ordinary_targets.delivery_id=ordinary_messages.delivery_id AND state='running') ORDER BY dedupe_until,op_id LIMIT 256)").bind(at).execute(&mut **tx)).await?.rows_affected();
         Ok(removed as usize)
     }
+
+    pub(crate) async fn pull_route_epoch(&self, device: &str) -> Result<Option<i64>> {
+        self.health.ensure()?;
+        self.counters.sql(1);
+        let mut connection = self.pool.acquire().await?;
+        Ok(sqlx::query_scalar("SELECT route_generation FROM ordinary_device_routes WHERE device_key=? AND retired_at IS NULL").bind(device)
+            .fetch_optional(&mut *connection).await?)
+    }
+
+    pub(crate) async fn pull_scan_ceiling(
+        &self,
+        device: &str,
+    ) -> Result<Option<crate::storage::ProviderPullPosition>> {
+        self.health.ensure()?;
+        self.counters.sql(1);
+        let mut connection = self.pool.acquire().await?;
+        let row = sqlx::query(PULL_SCAN_CEILING_SQL)
+            .bind(device)
+            .bind(now())
+            .fetch_optional(&mut *connection)
+            .await?;
+        row.map(|row| {
+            Ok(crate::storage::ProviderPullPosition {
+                at: row.try_get("accepted_at")?,
+                delivery_id: row.try_get("delivery_id")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub(crate) async fn pull_scan_page(
+        &self,
+        device: &str,
+        after: Option<&crate::storage::ProviderPullPosition>,
+        ceiling: &crate::storage::ProviderPullPosition,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::ProviderPullScanItem>> {
+        self.health.ensure()?;
+        self.counters.sql(1);
+        if !(1..=201).contains(&limit) {
+            return Err(KernelError::Invalid("provider scan page limit".into()));
+        }
+        let mut connection = self.pool.acquire().await?;
+        // Separate native plans keep the index lower range visible on deep pages.
+        let query = if let Some(after) = after {
+            sqlx::query(PULL_SCAN_SQL)
+                .bind(device)
+                .bind(now())
+                .bind(after.at)
+                .bind(&after.delivery_id)
+                .bind(ceiling.at)
+                .bind(&ceiling.delivery_id)
+                .bind(limit as i64)
+        } else {
+            sqlx::query(PULL_SCAN_FIRST_SQL)
+                .bind(device)
+                .bind(now())
+                .bind(ceiling.at)
+                .bind(&ceiling.delivery_id)
+                .bind(limit as i64)
+        };
+        let rows = query.fetch_all(&mut *connection).await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(crate::storage::ProviderPullScanItem {
+                    position: crate::storage::ProviderPullPosition {
+                        at: row.try_get("accepted_at")?,
+                        delivery_id: row.try_get("delivery_id")?,
+                    },
+                    payload: row.try_get::<Vec<u8>, _>("payload_blob")?.into(),
+                })
+            })
+            .collect()
+    }
+
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
         self.health.ensure()?;
         self.counters.sql(1);

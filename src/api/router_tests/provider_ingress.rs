@@ -332,7 +332,7 @@ async fn messages_pull_v2_keeps_items_until_batch_ack() {
 }
 
 #[tokio::test]
-async fn messages_pull_v2_discards_invalid_payload_without_returning_it() {
+async fn messages_pull_v2_filters_invalid_payload_without_releasing_responsibility() {
     let state = build_test_state().await;
     let app = super::super::build_router(state.clone(), "<html>docs</html>");
     let device_key = "router-provider-device-v2-invalid";
@@ -399,8 +399,8 @@ async fn messages_pull_v2_discards_invalid_payload_without_returning_it() {
             )
             .await
             .expect("provider queue should remain queryable")
-            .is_none(),
-        "invalid payload must be deleted, not merely hidden from the v2 response"
+            .is_some(),
+        "filtered invalid payload remains durable; scan is not deletion permission"
     );
     assert!(
         state
@@ -412,8 +412,8 @@ async fn messages_pull_v2_discards_invalid_payload_without_returning_it() {
             )
             .await
             .expect("unsupported provider queue should remain queryable")
-            .is_none(),
-        "unsupported payload versions must be silently deleted"
+            .is_some(),
+        "unsupported payload version remains durable and is not acknowledged by a scan"
     );
 }
 
@@ -510,7 +510,7 @@ async fn messages_pull_v2_pages_207_items_without_loss() {
 }
 
 #[tokio::test]
-async fn messages_pull_v2_repeats_unacked_full_page_and_strands_later_valid_item() {
+async fn messages_pull_v2_without_page_token_repeats_unacked_full_page() {
     let state = build_test_state().await;
     let app = super::super::build_router(state.clone(), "<html>docs</html>");
     let device_key = "router-provider-device-v2-unacked-page";
@@ -551,8 +551,8 @@ async fn messages_pull_v2_repeats_unacked_full_page_and_strands_later_valid_item
         .collect::<Vec<_>>();
     assert!(!first_ids.iter().any(|id| id == later_healthy_delivery));
 
-    // No cursor or per-row progress signal exists. Since the first page was not
-    // ACKed, a later Pull repeats it and the 201st valid item remains unreachable.
+    // A client that does not use the new page token repeats the unACKed head.
+    // The additive traversal extension does not silently ACK or skip it.
     let (second_status, second_body) = post_json(
         app.clone(),
         "/v2/messages/pull",
@@ -636,13 +636,13 @@ async fn messages_pull_v2_corrupt_full_page_does_not_hide_later_valid_item() {
     let (second_status, second_body) = post_json(
         app,
         "/v2/messages/pull",
-        json!({ "device_key": device_key }),
+        json!({ "device_key": device_key, "page_token": first_data["next_page_token"] }),
     )
     .await;
     assert_eq!(
         second_status,
         StatusCode::OK,
-        "post-discard page: {second_body:?}"
+        "continuation after filtered head: {second_body:?}"
     );
     let second_data = response_data(&second_body);
     let second_items = second_data
@@ -661,7 +661,7 @@ async fn messages_pull_v2_corrupt_full_page_does_not_hide_later_valid_item() {
 }
 
 #[tokio::test]
-async fn messages_pull_v2_discards_missing_and_mismatched_inner_ids_by_outer_id_only() {
+async fn messages_pull_v2_preserves_missing_and_mismatched_inner_ids_by_outer_id() {
     let state = build_test_state().await;
     let app = super::super::build_router(state.clone(), "<html>docs</html>");
     let device_key = "router-provider-device-v2-id-authority";
@@ -732,8 +732,8 @@ async fn messages_pull_v2_discards_missing_and_mismatched_inner_ids_by_outer_id_
                 .peek_provider_item(device_id, invalid, chrono::Utc::now().timestamp_millis())
                 .await
                 .expect("invalid outer row lookup")
-                .is_none(),
-            "invalid row {invalid} should be silently deleted by its outer id"
+                .is_some(),
+            "filtered row {invalid} must retain its outer delivery responsibility"
         );
     }
     assert!(
@@ -1100,4 +1100,384 @@ async fn ordinary_http_accept_pull_ack_and_replay_use_only_c_authority() {
         StatusCode::CONFLICT,
         "ordinary conflict: {response:?}"
     );
+}
+
+#[tokio::test]
+async fn provider_scan_token_crosses_unacked_head_without_ack_and_freezes_append_ceiling() {
+    let (state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let device = "scan-retained-unacked-head";
+    for index in 0..205 {
+        enqueue_provider_pull_item(&state, device, &format!("scan-{index:03}"), "retained").await;
+    }
+    // Explicit equal-created_at fixture verifies the delivery-id tie breaker.
+    let inspect = sqlx::SqlitePool::connect(&db_url).await.unwrap();
+    sqlx::query("UPDATE provider_pull_queue SET created_at=?")
+        .bind(chrono::Utc::now().timestamp_millis() - 10_000)
+        .execute(&inspect)
+        .await
+        .unwrap();
+    let (status, first) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first = response_data(&first);
+    assert_eq!(first["items"].as_array().unwrap().len(), 200);
+    assert_eq!(first["scan_complete"], false);
+    let token = first["next_page_token"].as_str().unwrap().to_owned();
+    // A later append remains durable, but does not extend this captured pass.
+    enqueue_provider_pull_item(&state, device, "zz-late-append", "new pass").await;
+    let (status, wrong) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":"other-scan-device","page_token":token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(wrong["error_code"], "page_token_scope_changed");
+    let (status, mixed) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device,"delivery_id":"scan-000","page_token":token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(mixed["error_code"], "page_token_delivery_id_conflict");
+    let (status, invalid) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device,"page_token":"x".repeat(2049)}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid["error_code"], "page_token_invalid");
+    let (status, tail) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device,"page_token":token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let tail = response_data(&tail);
+    let ids = tail["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["delivery_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        ["scan-200", "scan-201", "scan-202", "scan-203", "scan-204"]
+    );
+    assert_eq!(tail["scan_complete"], true);
+    assert!(tail["next_page_token"].is_null());
+    assert_eq!(
+        state
+            .store
+            .peek_provider_candidates(
+                derive_private_device_id(device),
+                chrono::Utc::now().timestamp_millis(),
+                300
+            )
+            .await
+            .unwrap()
+            .len(),
+        206,
+        "read traversal never ACKs or deletes the failed head or later rows"
+    );
+    let (status, restarted) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let next = response_data(&restarted)["next_page_token"]
+        .as_str()
+        .unwrap();
+    let (status, new_tail) = post_json(
+        app,
+        "/v2/messages/pull",
+        json!({"device_key":device,"page_token":next}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        response_data(&new_tail)["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["delivery_id"] == "zz-late-append")
+    );
+    inspect.close().await;
+}
+
+#[tokio::test]
+async fn provider_scan_filters_but_preserves_corrupt_rows_and_reaches_healthy_tail() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let device = "scan-corrupt-retained-head";
+    for index in 0..200 {
+        enqueue_raw_provider_pull_item(&state, device, &format!("corrupt-{index:03}"), vec![0xff])
+            .await;
+    }
+    enqueue_provider_pull_item(&state, device, "healthy-tail", "healthy").await;
+    let (status, first) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first = response_data(&first);
+    assert!(first["items"].as_array().unwrap().is_empty());
+    assert_eq!(first["scan_complete"], false);
+    let (status, tail) = post_json(
+        app,
+        "/v2/messages/pull",
+        json!({"device_key":device,"page_token":first["next_page_token"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        response_data(&tail)["items"][0]["delivery_id"],
+        "healthy-tail"
+    );
+    assert_eq!(response_data(&tail)["scan_complete"], true);
+    assert_eq!(
+        state
+            .store
+            .peek_provider_candidates(
+                derive_private_device_id(device),
+                chrono::Utc::now().timestamp_millis(),
+                300
+            )
+            .await
+            .unwrap()
+            .len(),
+        201,
+        "malformed obligations remain durable; traversal is not discard permission"
+    );
+}
+
+#[tokio::test]
+async fn provider_scan_rotates_ordinary_and_retained_and_does_not_hide_independent_json_failure() {
+    let (state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
+    let device = "scan-mixed-sources";
+    // Synthetic per-test credentials only; no Provider is invoked by this state.
+    let password = crate::util::generate_hex_id_128();
+    let channel = seed_provider_channel_for_router_test(
+        &state,
+        device,
+        "scan mixed",
+        &password,
+        "scan-test-provider-token",
+        Platform::ANDROID,
+    )
+    .await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    for index in 0..201 {
+        let (status, response) = post_json(app.clone(), "/message", json!({"channel_id":channel,"password":password,"op_id":format!("scan-ordinary-{index:03}"),"title":"ordinary","body":"unchanged"})).await;
+        assert_eq!(status, StatusCode::OK, "{response:?}");
+    }
+    // Explicit fault injection into a normally accepted item, not old-version data.
+    let db = sqlx::SqlitePool::connect(&db_url).await.unwrap();
+    sqlx::query("UPDATE ordinary_messages SET payload_blob=X'ff',payload_bytes=1 WHERE op_id='scan-ordinary-000'").execute(&db).await.unwrap();
+    for index in 0..5 {
+        enqueue_provider_pull_item(&state, device, &format!("mixed-event-{index}"), "event").await;
+    }
+    let (status, first) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first = response_data(&first);
+    assert_eq!(first["items"].as_array().unwrap().len(), 199);
+    assert!(
+        first["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["payload"]["entity_type"] == "message")
+    );
+    let token = first["next_page_token"].as_str().unwrap();
+    let (status, tail) = post_json(
+        app.clone(),
+        "/v2/messages/pull",
+        json!({"device_key":device,"page_token":token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let tail = response_data(&tail);
+    assert_eq!(tail["items"].as_array().unwrap().len(), 6);
+    assert_eq!(
+        tail["items"][0]["payload"]["entity_type"], "event",
+        "continuation gives retained source its turn before more ordinary work"
+    );
+    assert_eq!(tail["scan_complete"], true);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM ordinary_targets WHERE acked_at IS NULL"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap(),
+        201
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT length(payload_blob) FROM ordinary_messages WHERE op_id='scan-ordinary-000'"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap(),
+        1
+    );
+    // Actual canonical route change invalidates an earlier token without reassigning it.
+    let route = DeviceRouteRecord {
+        platform: Platform::ANDROID,
+        channel_type: crate::routing::DeviceChannelType::parse(Platform::ANDROID.channel_type())
+            .unwrap(),
+        provider_token: Some("scan-new-provider-token".into()),
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    state
+        .store
+        .upsert_device_route(&crate::storage::DeviceRouteRecordRow::from_registry_record(
+            device, &route,
+        ))
+        .await
+        .unwrap();
+    let (status, changed) = post_json(
+        app,
+        "/v2/messages/pull",
+        json!({"device_key":device,"page_token":token}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(changed["error_code"], "page_token_scope_changed");
+    db.close().await;
+}
+
+#[tokio::test]
+async fn provider_scan_soft_page_preserves_oversized_item_and_all_batch_boundaries() {
+    let state = build_test_state().await;
+    let app = super::super::build_router(state.clone(), "<html>docs</html>");
+    let device = "scan-soft-response";
+    // Explicit synthetic retained rows exercise serialization, not public-message acceptance.
+    for index in 0..35 {
+        let delivery = format!("soft-{index:03}");
+        let mut data = hashbrown::HashMap::from_iter([
+            ("entity_type".into(), "event".into()),
+            ("delivery_id".into(), delivery.clone()),
+            ("title".into(), "soft page".into()),
+            (
+                "body".into(),
+                "x".repeat(if index == 20 {
+                    1024 * 1024 + 1
+                } else {
+                    48 * 1024
+                }),
+            ),
+        ]);
+        data.insert(
+            "test_kind".into(),
+            "synthetic-retained-byte-boundary".into(),
+        );
+        enqueue_raw_provider_pull_item(
+            &state,
+            device,
+            &delivery,
+            postcard::to_allocvec(&PrivatePayloadEnvelope {
+                payload_version: PrivatePayloadEnvelope::CURRENT_VERSION,
+                data,
+            })
+            .unwrap(),
+        )
+        .await;
+    }
+    let mut token = None::<String>;
+    let mut received = Vec::new();
+    let mut pages = 0;
+    loop {
+        pages += 1;
+        assert!(pages <= 6);
+        let request = if let Some(value) = &token {
+            json!({"device_key":device,"page_token":value})
+        } else {
+            json!({"device_key":device})
+        };
+        let (status, response) = post_json(app.clone(), "/v2/messages/pull", request).await;
+        assert_eq!(status, StatusCode::OK);
+        let encoded_bytes = serde_json::to_vec(&response).unwrap().len();
+        let data = response_data(&response);
+        let items = data["items"].as_array().unwrap();
+        if encoded_bytes > 1024 * 1024 {
+            assert_eq!(
+                items.len(),
+                1,
+                "only a single item may exceed the soft aggregate target"
+            );
+        }
+        for item in items {
+            received.push(item["delivery_id"].as_str().unwrap().to_owned());
+        }
+        if data["scan_complete"] == true {
+            assert!(data["next_page_token"].is_null());
+            break;
+        }
+        token = Some(data["next_page_token"].as_str().unwrap().to_owned());
+    }
+    assert!(pages >= 3);
+    assert_eq!(
+        received,
+        (0..35)
+            .map(|index| format!("soft-{index:03}"))
+            .collect::<Vec<_>>(),
+        "byte-limited item and32-row read boundaries cannot skip or repeat an item"
+    );
+    assert_eq!(
+        state
+            .store
+            .peek_provider_candidates(
+                derive_private_device_id(device),
+                chrono::Utc::now().timestamp_millis(),
+                100
+            )
+            .await
+            .unwrap()
+            .len(),
+        35
+    );
+}
+
+#[tokio::test]
+async fn provider_scan_authority_unavailable_cannot_return_success_or_a_frontier() {
+    let (state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
+    let device = "scan-unavailable-authority";
+    enqueue_provider_pull_item(&state, device, "durable-before-failstop", "intact").await;
+    state
+        .store
+        .ordinary_handle()
+        .unwrap()
+        .fail("synthetic authority fail-stop");
+    let app = super::super::build_router(state, "<html>docs</html>");
+    let (status, body) = post_json(app, "/v2/messages/pull", json!({"device_key":device})).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_ne!(body.get("success"), Some(&json!(true)));
+    assert!(body.get("data").is_none_or(Value::is_null));
+    let inspect = sqlx::SqlitePool::connect(&db_url).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM provider_pull_queue")
+            .fetch_one(&inspect)
+            .await
+            .unwrap(),
+        1
+    );
+    inspect.close().await;
 }

@@ -239,6 +239,42 @@ impl OrdinaryStore {
         }
         self.checked(result)
     }
+    pub(crate) async fn pull_route_epoch(&self, device: &str) -> Result<Option<i64>> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.pull_route_epoch(device).await,
+            Backend::Postgres(s) => s.pull_route_epoch(device).await,
+            Backend::MySql(s) => s.pull_route_epoch(device).await,
+        };
+        self.checked(result)
+    }
+    pub(crate) async fn pull_scan_ceiling(
+        &self,
+        device: &str,
+    ) -> Result<Option<crate::storage::ProviderPullPosition>> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.pull_scan_ceiling(device).await,
+            Backend::Postgres(s) => s.pull_scan_ceiling(device).await,
+            Backend::MySql(s) => s.pull_scan_ceiling(device).await,
+        };
+        self.checked(result)
+    }
+    pub(crate) async fn pull_scan_page(
+        &self,
+        device: &str,
+        after: Option<&crate::storage::ProviderPullPosition>,
+        ceiling: &crate::storage::ProviderPullPosition,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::ProviderPullScanItem>> {
+        self.health.ensure()?;
+        let result = match &self.backend {
+            Backend::Sqlite(s) => s.pull_scan_page(device, after, ceiling, limit).await,
+            Backend::Postgres(s) => s.pull_scan_page(device, after, ceiling, limit).await,
+            Backend::MySql(s) => s.pull_scan_page(device, after, ceiling, limit).await,
+        };
+        self.checked(result)
+    }
     pub async fn pull(&self, device: &str, delivery: Option<&str>) -> Result<Value> {
         self.health.ensure()?;
         let result = match &self.backend {

@@ -317,6 +317,19 @@ pub trait ProviderPullDatabaseAccess: Send + Sync {
         delivery_id: &str,
         now: i64,
     ) -> StoreResult<Option<ProviderPullCandidate>>;
+    async fn peek_provider_scan_ceiling(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullPosition>>;
+    async fn peek_provider_scan_page(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        after: Option<&ProviderPullPosition>,
+        ceiling: &ProviderPullPosition,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullScanItem>>;
     async fn peek_provider_candidates(
         &self,
         device_id: DeviceId,

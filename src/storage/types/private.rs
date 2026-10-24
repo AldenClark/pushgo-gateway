@@ -140,6 +140,20 @@ pub struct ProviderPullCandidate {
     pub payload: Arc<[u8]>,
 }
 
+/// A read traversal position, never an acknowledgement or delivery receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderPullPosition {
+    pub at: i64,
+    pub delivery_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderPullScanItem {
+    pub position: ProviderPullPosition,
+    pub payload: Arc<[u8]>,
+}
+
 #[derive(Debug, Deserialize)]
 struct PrivatePayloadEnvelopeOwned {
     payload_version: u8,

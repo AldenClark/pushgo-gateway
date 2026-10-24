@@ -62,6 +62,26 @@ impl ProviderPullDatabaseAccess for DatabaseDriver {
         delegate_db_async!(self, peek_provider_candidate(device_id, delivery_id, now))
     }
 
+    async fn peek_provider_scan_ceiling(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+    ) -> StoreResult<Option<ProviderPullPosition>> {
+        delegate_db_async!(self, peek_provider_scan_ceiling(device_id, now))
+    }
+    async fn peek_provider_scan_page(
+        &self,
+        device_id: DeviceId,
+        now: i64,
+        after: Option<&ProviderPullPosition>,
+        ceiling: &ProviderPullPosition,
+        limit: usize,
+    ) -> StoreResult<Vec<ProviderPullScanItem>> {
+        delegate_db_async!(
+            self,
+            peek_provider_scan_page(device_id, now, after, ceiling, limit)
+        )
+    }
     async fn peek_provider_candidates(
         &self,
         device_id: DeviceId,

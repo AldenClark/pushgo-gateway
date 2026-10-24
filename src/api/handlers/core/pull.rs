@@ -11,6 +11,9 @@ use crate::{
     value::DeviceKeyRef,
 };
 
+#[path = "pull_scan.rs"]
+mod scan;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LegacyPullRequest {
@@ -22,6 +25,7 @@ pub(crate) struct LegacyPullRequest {
 pub(crate) struct V2PullRequest {
     pub device_key: String,
     pub delivery_id: Option<String>,
+    pub page_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,6 +44,10 @@ pub(super) struct V2PullResponse {
     pub items: Vec<PullItem>,
     #[serde(default)]
     pub has_more: bool,
+    #[serde(default)]
+    pub next_page_token: Option<String>,
+    #[serde(default)]
+    pub scan_complete: bool,
 }
 
 const V2_PULL_LIMIT: usize = 200;
@@ -76,15 +84,26 @@ pub(crate) async fn messages_pull_v2(
         has_delivery_id = payload.delivery_id.is_some()
     );
     async move {
-        Ok(crate::api::ok(
-            pull_sources(
+        if payload.page_token.is_some() && payload.delivery_id.is_some() {
+            return Err(Error::validation_code(
+                "page_token cannot be combined with delivery_id",
+                "page_token_delivery_id_conflict",
+            ));
+        }
+        let page = if payload.delivery_id.is_some() {
+            let mut page = pull_sources(
                 &state,
                 &payload.device_key,
                 payload.delivery_id.as_deref(),
                 false,
             )
-            .await?,
-        ))
+            .await?;
+            page.scan_complete = true;
+            page
+        } else {
+            scan::pull_page(&state, &payload.device_key, payload.page_token.as_deref()).await?
+        };
+        Ok(crate::api::ok(page))
     }
     .instrument(span)
     .await
