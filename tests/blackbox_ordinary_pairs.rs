@@ -33,13 +33,17 @@ const DRAIN_LIMIT: Duration = Duration::from_secs(30);
 enum RunMode {
     Formal,
     Preflight,
+    DeliveryLoad,
 }
 impl RunMode {
     fn from_environment() -> Self {
         match std::env::var("C13_RUN_MODE") {
             Ok(value) if value == "formal" => Self::Formal,
             Ok(value) if value == "preflight" => Self::Preflight,
-            Ok(other) => panic!("unsupported C13_RUN_MODE {other:?}; use formal or preflight"),
+            Ok(value) if value == "delivery-load" => Self::DeliveryLoad,
+            Ok(other) => {
+                panic!("unsupported C13_RUN_MODE {other:?}; use formal, preflight or delivery-load")
+            }
             Err(std::env::VarError::NotPresent) => Self::Formal,
             Err(error) => panic!("cannot read C13_RUN_MODE: {error}"),
         }
@@ -48,11 +52,12 @@ impl RunMode {
         match self {
             Self::Formal => "formal",
             Self::Preflight => "preflight",
+            Self::DeliveryLoad => "delivery-load",
         }
     }
     fn messages(self) -> usize {
         match self {
-            Self::Formal => MESSAGES,
+            Self::Formal | Self::DeliveryLoad => MESSAGES,
             Self::Preflight => 3,
         }
     }
@@ -63,11 +68,12 @@ impl RunMode {
         match self {
             Self::Formal => HARD_LIMIT,
             Self::Preflight => Duration::from_secs(45),
+            Self::DeliveryLoad => Duration::from_secs(420),
         }
     }
     fn drain_limit(self) -> Duration {
         match self {
-            Self::Formal => DRAIN_LIMIT,
+            Self::Formal | Self::DeliveryLoad => DRAIN_LIMIT,
             Self::Preflight => Duration::from_secs(15),
         }
     }
@@ -75,24 +81,28 @@ impl RunMode {
         match self {
             Self::Formal => Duration::from_secs(10),
             Self::Preflight => Duration::from_secs(1),
+            Self::DeliveryLoad => Duration::from_secs(15),
         }
     }
     fn post_drain_idle(self) -> Duration {
         match self {
             Self::Formal => Duration::from_secs(35),
             Self::Preflight => Duration::from_secs(2),
+            Self::DeliveryLoad => Duration::from_secs(330),
         }
     }
     fn hold_delay(self) -> Duration {
         match self {
             Self::Formal => Duration::from_secs(6),
             Self::Preflight => Duration::ZERO,
+            Self::DeliveryLoad => Duration::from_secs(8),
         }
     }
     fn hold_duration(self) -> Duration {
         match self {
             Self::Formal => Duration::from_secs(5),
             Self::Preflight => Duration::from_millis(500),
+            Self::DeliveryLoad => Duration::from_secs(6),
         }
     }
     fn planned_offset(self, index: usize) -> Duration {
@@ -101,6 +111,14 @@ impl RunMode {
             Self::Formal if index < 24 => Duration::from_millis(4000 + (index as u64 - 8) * 125),
             Self::Formal => Duration::from_millis(6000 + (index as u64 - 24) * 10),
             Self::Preflight => Duration::from_millis(index as u64 * 250),
+            Self::DeliveryLoad if index < 8 => Duration::from_secs(index as u64),
+            Self::DeliveryLoad if index < 40 => {
+                Duration::from_millis(8000 + (index as u64 - 8) * 10)
+            }
+            Self::DeliveryLoad if index < 104 => {
+                Duration::from_millis(9000 + (index as u64 - 40) * 125)
+            }
+            Self::DeliveryLoad => Duration::from_millis(17000 + (index as u64 - 104) * 125),
         }
     }
     fn stage(self, index: usize) -> &'static str {
@@ -109,6 +127,27 @@ impl RunMode {
             Self::Formal if index < 24 => "ramp",
             Self::Formal => "burst",
             Self::Preflight => "preflight",
+            Self::DeliveryLoad if index < 8 => "low",
+            Self::DeliveryLoad if index < 40 => "burst",
+            Self::DeliveryLoad if index < 104 => "sustained",
+            Self::DeliveryLoad => "recovery",
+        }
+    }
+
+    fn phase_offsets(self) -> Vec<(Duration, &'static str)> {
+        if self == Self::DeliveryLoad {
+            vec![
+                (Duration::from_secs(8), "disconnect_and_burst_started"),
+                (Duration::from_secs(9), "sustained_started"),
+                (Duration::from_secs(14), "reconnect_started"),
+                (Duration::from_secs(17), "recovery_started"),
+            ]
+        } else {
+            vec![
+                (Duration::from_secs(4), "ramp_started"),
+                (self.hold_delay(), "burst_started"),
+                (self.hold_delay() + self.hold_duration(), "held_ack_release"),
+            ]
         }
     }
 }
@@ -191,6 +230,28 @@ mod harness_preflight_tests {
         assert!(validate_terminal_counts(RunMode::Preflight, 3, 6, 5, 5, 3, 0).is_err());
         assert!(validate_terminal_counts(RunMode::Preflight, 3, 6, 6, 6, 3, 1).is_err());
     }
+
+    #[test]
+    fn delivery_load_has_fixed_bounded_schedule_and_a_real_maintenance_window() {
+        let mode = RunMode::DeliveryLoad;
+        assert_eq!(mode.messages(), 136);
+        assert_eq!(mode.targets(), 272);
+        let schedule: Vec<_> = (0..mode.messages())
+            .map(|i| mode.planned_offset(i))
+            .collect();
+        assert!(schedule.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(schedule[7], Duration::from_secs(7));
+        assert_eq!(schedule[8], Duration::from_secs(8));
+        assert_eq!(schedule[40], Duration::from_secs(9));
+        assert_eq!(schedule[104], Duration::from_secs(17));
+        assert_eq!(schedule[135], Duration::from_millis(20875));
+        assert_eq!(mode.post_drain_idle(), Duration::from_secs(330));
+        assert!(
+            mode.hard_limit()
+                > mode.warm_idle() + schedule[135] + mode.drain_limit() + mode.post_drain_idle()
+        );
+        assert_eq!(mode.phase_offsets().len(), 4);
+    }
 }
 
 struct Evidence {
@@ -272,9 +333,9 @@ impl Shared {
                 "duplicate_peer_receive",
                 json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery}),
             );
-            assert_eq!(
+            assert_ne!(
                 self.mode,
-                RunMode::Formal,
+                RunMode::Preflight,
                 "unexpected duplicate MQTT receive in tiny preflight for {op} on {device}"
             );
         }
@@ -288,7 +349,7 @@ impl Shared {
             .unwrap()
             .insert((op.into(), device.into()));
         assert!(
-            first || self.mode == RunMode::Formal,
+            first || self.mode != RunMode::Preflight,
             "unexpected duplicate PUBACK in tiny preflight"
         );
         self.evidence.record("ack_sent",json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"semantics":"PUBACK write completed; not durable proof"}));
@@ -463,7 +524,12 @@ impl Product {
             mqtt_port,
             backend,
         };
-        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":"TCP MQTT5 only, two real loopback peers","provider":"none; Token Service unused at loopback port 1","qa":false,"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":8,"formal_schedule":{"messages":[8,16,112],"rates_per_second":[2,8,100]},"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; old requires actual acked outbox rows"}));
+        let schedule = if mode == RunMode::DeliveryLoad {
+            json!({"active_mode":"delivery-load","stages":["low","burst","sustained","recovery"],"messages":[8,32,64,32],"message_rates_per_second":[1,100,8,8],"disconnect_peer":"mqtt-held","disconnect_from_load_seconds":8,"reconnect_from_load_seconds":14})
+        } else {
+            json!({"messages":[8,16,112],"rates_per_second":[2,8,100]})
+        };
+        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":"TCP MQTT5 only, two real loopback peers","provider":"none; Token Service unused at loopback port 1","qa":false,"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":8,"formal_schedule":schedule,"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; old requires actual acked outbox rows"}));
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             assert!(
@@ -639,6 +705,8 @@ async fn peer(
     held: bool,
     shared: Arc<Shared>,
 ) -> JoinHandle<()> {
+    let port = product.mqtt_port;
+    let credential = product.synthetic_credential.clone();
     let mut mqtt =
         ProductMqttClient::connect(product.mqtt_port, &device, &product.synthetic_credential).await;
     shared
@@ -648,7 +716,36 @@ async fn peer(
         let _guard = BackgroundGuard(shared.clone(), label);
         let mut pending = BTreeMap::<u16, (String, String)>::new();
         let mut last_ping = Instant::now();
+        let mut disconnected_once = false;
         while !shared.stop.load(Ordering::Relaxed) {
+            let now = shared.evidence.us();
+            let from = shared.hold_from_us.load(Ordering::Relaxed);
+            let until = shared.hold_until_us.load(Ordering::Relaxed);
+            if shared.mode == RunMode::DeliveryLoad
+                && held
+                && !disconnected_once
+                && from > 0
+                && now >= from
+                && now < until
+                && !pending.is_empty()
+            {
+                shared.evidence.record("peer_disconnected", json!({"peer":label,"device_key":device,"unacknowledged_local_packets":pending.len(),"semantics":"drop actual MQTT socket; no PUBACK for pending packets, durable Gateway responsibility remains"}));
+                drop(mqtt);
+                pending.clear();
+                while shared.evidence.us() < until && !shared.stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                if shared.stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                mqtt = ProductMqttClient::connect(port, &device, &credential).await;
+                shared.evidence.record(
+                    "peer_reconnected",
+                    json!({"peer":label,"device_key":device,"same_identity":true}),
+                );
+                disconnected_once = true;
+                last_ping = Instant::now();
+            }
             if last_ping.elapsed() >= Duration::from_secs(5) {
                 mqtt.ping().await;
                 last_ping = Instant::now();
@@ -681,6 +778,12 @@ async fn peer(
                 mqttbytes::v5::Packet::PingResp => {}
                 other => panic!("unexpected MQTT packet: {other:?}"),
             }
+        }
+        if shared.mode == RunMode::DeliveryLoad && held {
+            assert!(
+                disconnected_once,
+                "delivery-load must actually disconnect with an unacknowledged packet"
+            );
         }
     })
 }
@@ -900,7 +1003,11 @@ fn observer(product: &Product, devices: &[Device; 2], shared: Arc<Shared>) -> Jo
                         );
                         if accepted.contains(&op) {
                             message_ids.insert(op.clone());
-                            shared.persisted.lock().unwrap().insert(op);
+                            if shared.persisted.lock().unwrap().insert(op.clone())
+                                && shared.mode == RunMode::DeliveryLoad
+                            {
+                                shared.evidence.record("persist_commit_visible_upper_bound", json!({"op_id":op,"semantics":"100ms observer after successful HTTP response; not exact COMMIT timestamp"}));
+                            }
                         }
                     }
                 }
@@ -1142,11 +1249,7 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
         let shared = shared.clone();
         let pid = product.child.id();
         tokio::spawn(async move {
-            for (offset, phase) in [
-                (Duration::from_secs(4), "ramp_started"),
-                (mode.hold_delay(), "burst_started"),
-                (mode.hold_delay() + mode.hold_duration(), "held_ack_release"),
-            ] {
+            for (offset, phase) in mode.phase_offsets() {
                 tokio::time::sleep_until((load_start + offset).into()).await;
                 if shared.stop.load(Ordering::Relaxed) {
                     break;
@@ -1162,6 +1265,7 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
             let op = match mode {
                 RunMode::Formal => format!("c12-pair-{index:03}"),
                 RunMode::Preflight => format!("c13-preflight-{index:03}"),
+                RunMode::DeliveryLoad => format!("delivery-load-{index:03}"),
             };
             let input = request(product, &channel, &op, ttl);
             let body = input["body"].as_str().unwrap();
@@ -1274,7 +1378,12 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
         false,
     );
     wait(product, &shared, mode.post_drain_idle()).await;
-    shared.evidence.record("idle_complete",json!({"mode":mode.name(),"seconds":mode.post_drain_idle().as_secs(),"residual_targets":shared.residual_targets.load(Ordering::Relaxed),"covers":"formal mode covers 30s pool idle setting; not 300s maintenance or all network-client pools"}));
+    let idle_scope = if mode == RunMode::DeliveryLoad {
+        "330s after drain spans product 300s maintenance and30s pool idle; two active pinging protocol peers and10Hz observer remain; no real Provider pool"
+    } else {
+        "formal mode covers 30s pool idle setting; not 300s maintenance or all network-client pools"
+    };
+    shared.evidence.record("idle_complete",json!({"mode":mode.name(),"seconds":mode.post_drain_idle().as_secs(),"residual_targets":shared.residual_targets.load(Ordering::Relaxed),"covers":idle_scope}));
     resource_boundary(product.child.id(), &shared.evidence, "idle_complete", true);
     shared.stop.store(true, Ordering::Relaxed);
     phase_clock.await.unwrap();
