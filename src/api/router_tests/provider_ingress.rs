@@ -1102,6 +1102,16 @@ async fn ordinary_http_accept_pull_ack_and_replay_use_only_c_authority() {
     );
 }
 
+// This fixture builder creates a .db core plus the real delivery sidecar.
+// mode=rw refuses to fabricate a missing oracle database.
+fn router_fixture_delivery_url(core_url: &str) -> String {
+    assert!(core_url.starts_with("sqlite:///tmp/pushgo-router-test-"));
+    format!(
+        "{}.delivery.db?mode=rw",
+        core_url.strip_suffix(".db").unwrap()
+    )
+}
+
 #[tokio::test]
 async fn provider_scan_token_crosses_unacked_head_without_ack_and_freezes_append_ceiling() {
     let (state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
@@ -1111,12 +1121,19 @@ async fn provider_scan_token_crosses_unacked_head_without_ack_and_freezes_append
         enqueue_provider_pull_item(&state, device, &format!("scan-{index:03}"), "retained").await;
     }
     // Explicit equal-created_at fixture verifies the delivery-id tie breaker.
-    let inspect = sqlx::SqlitePool::connect(&db_url).await.unwrap();
-    sqlx::query("UPDATE provider_pull_queue SET created_at=?")
+    let inspect = sqlx::SqlitePool::connect(&router_fixture_delivery_url(&db_url))
+        .await
+        .unwrap();
+    let changed = sqlx::query("UPDATE provider_pull_queue SET created_at=?")
         .bind(chrono::Utc::now().timestamp_millis() - 10_000)
         .execute(&inspect)
         .await
-        .unwrap();
+        .unwrap()
+        .rows_affected();
+    assert_eq!(
+        changed, 205,
+        "tie injection must touch the actual delivery authority"
+    );
     let (status, first) = post_json(
         app.clone(),
         "/v2/messages/pull",
@@ -1461,6 +1478,17 @@ async fn provider_scan_authority_unavailable_cannot_return_success_or_a_frontier
     let (state, _receivers, db_url) = build_test_state_with_receivers_and_db_url().await;
     let device = "scan-unavailable-authority";
     enqueue_provider_pull_item(&state, device, "durable-before-failstop", "intact").await;
+    let inspect = sqlx::SqlitePool::connect(&router_fixture_delivery_url(&db_url))
+        .await
+        .unwrap();
+    let count = || {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM provider_pull_queue").fetch_one(&inspect)
+    };
+    assert_eq!(
+        count().await.unwrap(),
+        1,
+        "establish actual durable responsibility before fail-stop"
+    );
     state
         .store
         .ordinary_handle()
@@ -1471,7 +1499,6 @@ async fn provider_scan_authority_unavailable_cannot_return_success_or_a_frontier
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_ne!(body.get("success"), Some(&json!(true)));
     assert!(body.get("data").is_none_or(Value::is_null));
-    let inspect = sqlx::SqlitePool::connect(&db_url).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM provider_pull_queue")
             .fetch_one(&inspect)
