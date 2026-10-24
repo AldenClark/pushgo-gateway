@@ -689,6 +689,32 @@ mod harness_preflight_tests {
             &other, &known, &received, &written, &empty
         ));
     }
+
+    #[test]
+    fn directory_accounting_keeps_live_files_and_accepts_removed_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let transient = directory.path().join("gateway.sqlite-journal");
+        std::fs::write(&transient, [0_u8; 17]).unwrap();
+        std::fs::write(directory.path().join("gateway.sqlite"), [0_u8; 23]).unwrap();
+        let removed_entry = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| entry.path() == transient)
+            .unwrap();
+        assert_eq!(metadata_bytes_or_gone(removed_entry.metadata()), Some(17));
+        assert_eq!(run_directory_bytes(directory.path()), 40);
+        std::fs::remove_file(transient).unwrap();
+        assert_eq!(metadata_bytes_or_gone(removed_entry.metadata()), None);
+        assert_eq!(run_directory_bytes(directory.path()), 23);
+        assert!(
+            std::panic::catch_unwind(|| {
+                metadata_bytes_or_gone(Err(std::io::Error::from(
+                    std::io::ErrorKind::PermissionDenied,
+                )))
+            })
+            .is_err()
+        );
+    }
 }
 
 struct Evidence {
@@ -1257,15 +1283,23 @@ fn process_usage(pid: u32) -> Value {
     json!({"pid":pid,"cpu_seconds":cpu,"rss_kib":rss_kib,"os_thread_count":os_thread_count})
 }
 
+fn metadata_bytes_or_gone(metadata: std::io::Result<std::fs::Metadata>) -> Option<u64> {
+    match metadata {
+        Ok(metadata) => Some(metadata.len()),
+        // SQLite can remove its short-lived journal after read_dir enumerated
+        // it. It no longer consumes space; all other I/O failures remain fatal.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("run-directory metadata check failed: {error}"),
+    }
+}
+
 fn run_directory_bytes(path: &Path) -> u64 {
     std::fs::read_dir(path)
         .unwrap_or_else(|error| panic!("run-directory size check failed: {error}"))
-        .map(|entry| {
-            entry
-                .unwrap_or_else(|error| panic!("run-directory entry check failed: {error}"))
-                .metadata()
-                .unwrap_or_else(|error| panic!("run-directory metadata check failed: {error}"))
-                .len()
+        .filter_map(|entry| {
+            let entry =
+                entry.unwrap_or_else(|error| panic!("run-directory entry check failed: {error}"));
+            metadata_bytes_or_gone(entry.metadata())
         })
         .sum()
 }
@@ -1610,7 +1644,15 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                 );
                 let gateway = process_usage(pid);
                 let harness_usage = process_usage(std::process::id());
-                let files:Vec<_>=std::fs::read_dir(database.parent().unwrap()).unwrap().map(|entry|entry.unwrap()).filter(|entry|entry.file_name().to_string_lossy().contains(".sqlite")).map(|entry|json!({"name":entry.file_name(),"logical_bytes":entry.metadata().unwrap().len()})).collect();
+                let files: Vec<_> = std::fs::read_dir(database.parent().unwrap())
+                    .unwrap()
+                    .map(|entry| entry.unwrap())
+                    .filter(|entry| entry.file_name().to_string_lossy().contains(".sqlite"))
+                    .filter_map(|entry| {
+                        metadata_bytes_or_gone(entry.metadata())
+                            .map(|bytes| json!({"name":entry.file_name(),"logical_bytes":bytes}))
+                    })
+                    .collect();
                 shared.evidence.record("resources",json!({"gateway":gateway,"harness_including_peers_and_observer":harness_usage,"run_directory_bytes":directory_bytes,"run_directory_cap_bytes":MAX_RUN_DIRECTORY_BYTES,"database":"embedded; included in Gateway CPU/RSS","database_files":files,"process_threads":"OS thread count from ps -M when available; does not expose async task count"}));
             }
             tick += 1;
