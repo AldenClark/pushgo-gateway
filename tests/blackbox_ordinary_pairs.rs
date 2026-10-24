@@ -631,6 +631,64 @@ mod harness_preflight_tests {
         value["hard_limit_seconds"] = json!(721);
         assert!(LoadPlan::from_value(&value).is_err());
     }
+
+    #[test]
+    fn terminal_aggregation_preserves_complete_and_partial_message_evidence() {
+        let mut terminal = BTreeSet::new();
+        for operation in 0..100 {
+            for device in 0..if operation % 5 == 0 { 3 } else { 4 } {
+                terminal.insert((format!("operation-{operation}"), format!("device-{device}")));
+            }
+        }
+        assert!(!terminal.insert(("operation-1".into(), "device-0".into())));
+        let counts = terminal_counts_by_operation(&terminal);
+        for operation in 0..100 {
+            let key = format!("operation-{operation}");
+            let previous = terminal.iter().filter(|(id, _)| id == &key).count();
+            assert_eq!(counts.get(key.as_str()).copied().unwrap_or(0), previous);
+            assert_eq!(previous == 4, operation % 5 != 0);
+        }
+        assert_eq!(counts.get("not-received"), None);
+    }
+
+    #[test]
+    fn terminal_oracle_requires_matching_identity_receive_ack_and_committed_absence() {
+        let target = (
+            "accepted-operation".to_string(),
+            "actual-device".to_string(),
+        );
+        let other = (target.0.clone(), "other-device".to_string());
+        let known = BTreeSet::from([target.0.clone()]);
+        let received = BTreeSet::from([target.clone()]);
+        let written = BTreeSet::from([target.clone()]);
+        let empty = BTreeSet::new();
+        assert!(has_positive_terminal_evidence(
+            &target, &known, &received, &written, &empty
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &target,
+            &BTreeSet::new(),
+            &received,
+            &written,
+            &empty
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &target, &known, &empty, &written, &empty
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &target, &known, &received, &empty, &empty
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &target,
+            &known,
+            &received,
+            &written,
+            &BTreeSet::from([target.clone()])
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &other, &known, &received, &written, &empty
+        ));
+    }
 }
 
 struct Evidence {
@@ -1242,6 +1300,31 @@ fn resource_boundary(pid: u32, evidence: &Evidence, phase: &str, sockets: bool) 
     }
     evidence.record("phase_resources", data);
 }
+
+// The positive terminal set is established below from actual receive/PUBACK
+// evidence and committed SQL state. Count it once, not once per message: an
+// O(messages * completed_targets) observer can otherwise throttle its own peers.
+fn terminal_counts_by_operation(terminal: &BTreeSet<(String, String)>) -> BTreeMap<&str, usize> {
+    let mut counts = BTreeMap::new();
+    for (operation, _) in terminal {
+        *counts.entry(operation.as_str()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn has_positive_terminal_evidence(
+    target: &(String, String),
+    known_messages: &BTreeSet<String>,
+    received: &BTreeSet<(String, String)>,
+    ack_written: &BTreeSet<(String, String)>,
+    existing_targets: &BTreeSet<(String, String)>,
+) -> bool {
+    known_messages.contains(&target.0)
+        && received.contains(target)
+        && ack_written.contains(target)
+        && !existing_targets.contains(target)
+}
+
 fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinHandle<()> {
     let database = product.directory.join("gateway.sqlite");
     let backend = product.backend.clone();
@@ -1280,11 +1363,18 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
             metadata.close().await.unwrap();
         }
         let mut tick = 0u64;
+        let mut previous_cycle_started = None;
         while !shared.stop.load(Ordering::Relaxed) {
+            let cycle_started = Instant::now();
+            let cycle_start_interval_us = previous_cycle_started
+                .replace(cycle_started)
+                .map(|previous| cycle_started.duration_since(previous).as_micros() as u64);
             let expected = shared.expected.lock().unwrap().clone();
             let ack_sent = shared.ack_sent.lock().unwrap().clone();
             let received = shared.received.lock().unwrap().clone();
             let accepted = shared.accepted.lock().unwrap().clone();
+            let snapshot_us = cycle_started.elapsed().as_micros() as u64;
+            let mut ro_query_elapsed_us = 0u64;
             let mut terminal = BTreeSet::new();
             let mut state_counts = BTreeMap::<String, usize>::new();
             let mut oldest: Option<i64> = None;
@@ -1294,7 +1384,9 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
             if backend == "main" {
                 // Old MQTT PUBACK writes an actual acked row. Empty/nonexistent
                 // outboxes cannot make a target complete in this oracle.
+                let query_started = Instant::now();
                 let rows=sqlx::query("SELECT device_id,delivery_id,status,created_at,acked_at FROM private_outbox ORDER BY delivery_id,device_id LIMIT ?").bind(shared.mode.targets() as i64 + 1).fetch_all(&mut connection).await.unwrap();
+                ro_query_elapsed_us += query_started.elapsed().as_micros() as u64;
                 assert!(
                     rows.len() <= shared.mode.targets(),
                     "fresh cohort outbox bound"
@@ -1350,12 +1442,14 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                         terminal.insert(pair);
                     }
                 }
+                let query_started = Instant::now();
                 let rows =
                     sqlx::query("SELECT delivery_id,expires_at FROM private_payloads LIMIT ?")
                         .bind(shared.mode.messages() as i64 + 1)
                         .fetch_all(&mut connection)
                         .await
                         .unwrap();
+                ro_query_elapsed_us += query_started.elapsed().as_micros() as u64;
                 assert!(rows.len() <= shared.mode.messages());
                 payloads = rows.len();
                 let body_ids: BTreeSet<String> =
@@ -1370,10 +1464,11 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                     .iter()
                     .filter(|r| r.get::<i64, _>("expires_at") <= now)
                     .count();
+                let completed_per_message = terminal_counts_by_operation(&terminal);
                 for (op, item) in &expected {
                     if let Some(delivery) = &item.delivery_id
                         && !body_ids.contains(delivery)
-                        && terminal.iter().filter(|(id, _)| id == op).count()
+                        && completed_per_message.get(op.as_str()).copied().unwrap_or(0)
                             == shared.mode.targets_per_message()
                         && shared.body_released.lock().unwrap().insert(op.clone())
                     {
@@ -1386,7 +1481,9 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
             } else {
                 // Identity must exist, both peers must have received and sent
                 // successful PUBACK, then a target's absence is terminal proof.
+                let query_started = Instant::now();
                 let messages=sqlx::query("SELECT op_id,message_id,delivery_id,payload_bytes,expires_at FROM ordinary_messages LIMIT ?").bind(shared.mode.messages() as i64 + 1).fetch_all(&mut connection).await.unwrap();
+                ro_query_elapsed_us += query_started.elapsed().as_micros() as u64;
                 assert!(messages.len() <= shared.mode.messages());
                 let mut message_ids = BTreeSet::new();
                 let mut message_ops = BTreeSet::new();
@@ -1429,7 +1526,9 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                         "all accepted messages must be persisted with matching identities"
                     );
                 }
+                let query_started = Instant::now();
                 let rows=sqlx::query("SELECT m.op_id,t.device_key,t.state,t.accepted_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id LIMIT ?").bind(shared.mode.targets() as i64 + 1).fetch_all(&mut connection).await.unwrap();
+                ro_query_elapsed_us += query_started.elapsed().as_micros() as u64;
                 assert!(rows.len() <= shared.mode.targets());
                 let mut existing = BTreeSet::new();
                 for row in rows {
@@ -1447,13 +1546,17 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                     oldest = Some(oldest.map_or(accepted, |old| old.min(accepted)));
                 }
                 for pair in &ack_sent {
-                    if message_ids.contains(&pair.0)
-                        && received.contains(pair)
-                        && !existing.contains(pair)
-                    {
+                    if has_positive_terminal_evidence(
+                        pair,
+                        &message_ids,
+                        &received,
+                        &ack_sent,
+                        &existing,
+                    ) {
                         terminal.insert(pair.clone());
                     }
                 }
+                let completed_per_message = terminal_counts_by_operation(&terminal);
                 let mut live_payloads = 0usize;
                 let mut expired_payloads = 0usize;
                 for row in messages {
@@ -1464,7 +1567,7 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                         if row.get::<i64, _>("expires_at") <= now {
                             expired_payloads += 1;
                         }
-                    } else if terminal.iter().filter(|(id, _)| id == &op).count()
+                    } else if completed_per_message.get(op.as_str()).copied().unwrap_or(0)
                         == shared.mode.targets_per_message()
                         && shared.body_released.lock().unwrap().insert(op.clone())
                     {
@@ -1496,7 +1599,8 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
             shared
                 .residual_targets
                 .store(pending as u64, Ordering::Relaxed);
-            shared.evidence.record("database_sample",json!({"states":state_counts,"pending_targets":pending,"payload_count":payloads,"expired_payload_count":expired,"oldest_pending_age_ms":oldest.map(|ts|(now-ts).max(0)),"durable_targets_observed":shared.committed.lock().unwrap().len()}));
+            let active_before_sample_us = cycle_started.elapsed().as_micros() as u64;
+            shared.evidence.record("database_sample",json!({"states":state_counts,"pending_targets":pending,"payload_count":payloads,"expired_payload_count":expired,"oldest_pending_age_ms":oldest.map(|ts|(now-ts).max(0)),"durable_targets_observed":shared.committed.lock().unwrap().len(),"observer_start_interval_us":cycle_start_interval_us,"observer_phase_us":{"snapshot":snapshot_us,"ro_query_elapsed":ro_query_elapsed_us,"correlation_and_evidence":active_before_sample_us.saturating_sub(snapshot_us+ro_query_elapsed_us),"active_before_sample":active_before_sample_us},"observer_timing_scope":"RO query elapsed includes harness decode/scheduling, not product SQL/COMMIT timing; resource-process sampling and100ms sleep follow this event"}));
             if tick.is_multiple_of(10) {
                 guard_disk(database.parent().unwrap());
                 let directory_bytes = run_directory_bytes(database.parent().unwrap());
