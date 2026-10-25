@@ -76,6 +76,7 @@ struct DriverTiming {
     submit_expected_wait: Histogram,
     submit_expected_hold: Histogram,
     response_json_complete_to_accepted_record: Histogram,
+    evidence_encode: Histogram,
     evidence_file_wait: Histogram,
     evidence_file_hold: Histogram,
     http_journal_save_transaction: Histogram,
@@ -93,6 +94,7 @@ impl DriverTiming {
             submit_expected_wait: Histogram::default(),
             submit_expected_hold: Histogram::default(),
             response_json_complete_to_accepted_record: Histogram::default(),
+            evidence_encode: Histogram::default(),
             evidence_file_wait: Histogram::default(),
             evidence_file_hold: Histogram::default(),
             http_journal_save_transaction: Histogram::default(),
@@ -130,13 +132,15 @@ impl DriverTiming {
     fn snapshot(&self) -> Option<Value> {
         self.enabled.then(|| json!({
             "scope": "caller wall time; phases can be nested and must not be added; log2 microsecond bucket quantiles are upper bounds; cumulative snapshots are not exact atomic cuts",
-            "expected_guard_hold_scope": "original guard scope retained, including existing evidence writes and submit Notify; ends immediately before the original scope exits",
+            "expected_guard_hold_scope": "identity binding, received/accepted facts and event-data preparation; released before evidence encoding/writes and submit Notify",
+            "evidence_file_hold_scope": "synchronous write_all and flush while holding the original file mutex; encoding is outside this mutex and measured separately; no physical write count is inferred",
             "mqtt_packet_ready_scope": "after the test MQTT decoder returns a PUBLISH, not kernel socket arrival or server send time",
             "verify_expected_wait": self.verify_expected_wait.snapshot(),
             "verify_expected_hold": self.verify_expected_hold.snapshot(),
             "submit_expected_wait": self.submit_expected_wait.snapshot(),
             "submit_expected_hold": self.submit_expected_hold.snapshot(),
             "response_json_complete_to_accepted_record": self.response_json_complete_to_accepted_record.snapshot(),
+            "evidence_encode": self.evidence_encode.snapshot(),
             "evidence_file_wait": self.evidence_file_wait.snapshot(),
             "evidence_file_hold": self.evidence_file_hold.snapshot(),
             "http_journal_save_transaction": self.http_journal_save_transaction.snapshot(),
@@ -1058,6 +1062,130 @@ mod harness_preflight_tests {
                 >= 41
         );
     }
+
+    fn unbound_expected() -> Arc<Expected> {
+        Arc::new(Expected {
+            body_hash: "fixed-body-hash".into(),
+            body_bytes: 17,
+            metadata: json!({"nested":{"values":[-42,0.125,"中文🙂"]}}),
+            message_id: None,
+            delivery_id: None,
+        })
+    }
+
+    #[test]
+    fn expected_cow_binding_preserves_older_observer_snapshots_and_same_value_identity() {
+        let mut current = unbound_expected();
+        let before_http = current.clone();
+        bind_expected_identity(&mut current, "message", None);
+        assert!(before_http.message_id.is_none());
+        assert!(before_http.delivery_id.is_none());
+        assert_eq!(current.message_id.as_deref(), Some("message"));
+        assert!(current.delivery_id.is_none());
+        assert!(!Arc::ptr_eq(&before_http, &current));
+
+        let before_peer = current.clone();
+        bind_expected_identity(&mut current, "message", Some("delivery"));
+        assert_eq!(before_peer.message_id.as_deref(), Some("message"));
+        assert!(before_peer.delivery_id.is_none());
+        assert_eq!(current.delivery_id.as_deref(), Some("delivery"));
+        assert!(!Arc::ptr_eq(&before_peer, &current));
+        assert_eq!(current.body_hash, before_http.body_hash);
+        assert_eq!(current.body_bytes, before_http.body_bytes);
+        assert_eq!(current.metadata, before_http.metadata);
+
+        let bound_snapshot = current.clone();
+        bind_expected_identity(&mut current, "message", Some("delivery"));
+        bind_expected_identity(&mut current, "message", None);
+        assert!(Arc::ptr_eq(&bound_snapshot, &current));
+    }
+
+    #[test]
+    fn expected_binding_accepts_both_arrival_orders_and_rejects_changed_ids_without_overwrite() {
+        for peer_first in [false, true] {
+            let mut current = unbound_expected();
+            if peer_first {
+                bind_expected_identity(&mut current, "message", Some("delivery"));
+                bind_expected_identity(&mut current, "message", None);
+            } else {
+                bind_expected_identity(&mut current, "message", None);
+                bind_expected_identity(&mut current, "message", Some("delivery"));
+            }
+            let saved = current.clone();
+            for (message, delivery) in [
+                ("other-message", None),
+                ("other-message", Some("delivery")),
+                ("message", Some("other-delivery")),
+            ] {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        bind_expected_identity(&mut current, message, delivery);
+                    }))
+                    .is_err()
+                );
+                assert!(Arc::ptr_eq(&saved, &current));
+                assert_eq!(current.message_id.as_deref(), Some("message"));
+                assert_eq!(current.delivery_id.as_deref(), Some("delivery"));
+            }
+        }
+    }
+
+    #[test]
+    fn evidence_keeps_unicode_and_newlines_intact_for_concurrent_writers() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("evidence.jsonl");
+        let evidence = Arc::new(Evidence {
+            start: Instant::now(),
+            file: Mutex::new(private_file(&path)),
+            timing: DriverTiming::new(false),
+        });
+        let writers: Vec<_> = (0..4)
+            .map(|writer| {
+                let evidence = evidence.clone();
+                std::thread::spawn(move || {
+                    for sequence in 0..16 {
+                        evidence.record("encoding-test", json!({"writer":writer,"sequence":sequence,"text":"中文🙂\nquoted \"value\"\\suffix"}));
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.ends_with('\n'));
+        let mut identities = BTreeSet::new();
+        for line in text.lines() {
+            let row: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(row["kind"], "encoding-test");
+            assert!(row["elapsed_us"].is_u64());
+            assert_eq!(row["data"]["text"], "中文🙂\nquoted \"value\"\\suffix");
+            assert!(identities.insert((
+                row["data"]["writer"].as_u64().unwrap(),
+                row["data"]["sequence"].as_u64().unwrap()
+            )));
+        }
+        assert_eq!(identities.len(), 64);
+    }
+
+    #[test]
+    fn evidence_write_failure_remains_fatal_and_does_not_report_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("read-only-evidence.jsonl");
+        std::fs::write(&path, b"original\n").unwrap();
+        let evidence = Evidence {
+            start: Instant::now(),
+            file: Mutex::new(File::open(&path).unwrap()),
+            timing: DriverTiming::new(false),
+        };
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                evidence.record("must-fail", json!({"success":true}));
+            }))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), b"original\n");
+    }
 }
 
 struct Evidence {
@@ -1071,13 +1199,16 @@ impl Evidence {
     }
     fn record(&self, kind: &str, data: Value) {
         let row = json!({"elapsed_us":self.us(),"kind":kind,"data":data});
+        let encoding = self.timing.start();
+        let mut encoded = serde_json::to_vec(&row).unwrap();
+        encoded.push(b'\n');
+        self.timing.finish(&self.timing.evidence_encode, encoding);
         let waiting = self.timing.start();
         let mut file = self.file.lock().unwrap();
         let holding = self.timing.start();
         self.timing
             .record_between(&self.timing.evidence_file_wait, waiting, holding);
-        serde_json::to_writer(&mut *file, &row).unwrap();
-        file.write_all(b"\n").unwrap();
+        file.write_all(&encoded).unwrap();
         file.flush().unwrap();
         self.timing.finish(&self.timing.evidence_file_hold, holding);
     }
@@ -1094,6 +1225,29 @@ struct Expected {
     message_id: Option<String>,
     delivery_id: Option<String>,
 }
+
+fn bind_expected_identity(item: &mut Arc<Expected>, message: &str, delivery: Option<&str>) {
+    if let Some(id) = &item.message_id {
+        assert_eq!(id, message);
+    }
+    if let (Some(id), Some(delivery)) = (&item.delivery_id, delivery) {
+        assert_eq!(id, delivery);
+    }
+    // Only first binding changes the value. An observer may retain an earlier
+    // Arc snapshot across SQL awaits; COW preserves that snapshot's identities.
+    if item.message_id.is_none() || (delivery.is_some() && item.delivery_id.is_none()) {
+        let item = Arc::make_mut(item);
+        if item.message_id.is_none() {
+            item.message_id = Some(message.into());
+        }
+        if let Some(delivery) = delivery
+            && item.delivery_id.is_none()
+        {
+            item.delivery_id = Some(delivery.into());
+        }
+    }
+}
+
 struct Shared {
     evidence: Arc<Evidence>,
     mode: RunMode,
@@ -1104,7 +1258,7 @@ struct Shared {
     hold_from_us: AtomicU64,
     hold_until_us: AtomicU64,
     failure: Mutex<Option<String>>,
-    expected: Mutex<BTreeMap<String, Expected>>,
+    expected: Mutex<BTreeMap<String, Arc<Expected>>>,
     received: Mutex<BTreeSet<(String, String)>>,
     ack_sent: Mutex<BTreeSet<(String, String)>>,
     committed: Mutex<BTreeSet<(String, String)>>,
@@ -1152,30 +1306,14 @@ impl Shared {
         );
         assert_eq!(&data["metadata"], &item.metadata);
         let message = data["message_id"].as_str().expect("stable message id");
-        if let Some(id) = &item.message_id {
-            assert_eq!(id, message);
-        }
-        if let Some(id) = &item.delivery_id {
-            assert_eq!(id, delivery);
-        }
-        item.message_id = Some(message.into());
-        item.delivery_id = Some(delivery.into());
-        if !self
+        bind_expected_identity(item, message, Some(delivery));
+        let duplicate = !self
             .received
             .lock()
             .unwrap()
-            .insert((op.clone(), device.into()))
-        {
-            self.evidence.record(
-                "duplicate_peer_receive",
-                json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery}),
-            );
-            assert_ne!(
-                self.mode,
-                RunMode::Preflight,
-                "unexpected duplicate MQTT receive in tiny preflight for {op} on {device}"
-            );
-        }
+            .insert((op.clone(), device.into()));
+        let duplicate_event = duplicate
+            .then(|| json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery}));
         let mut event = json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"message_id":message,"body_bytes":body.len(),"body_hash":item.body_hash,"metadata":item.metadata});
         if let Some(record_ready) = self.evidence.timing.start() {
             let mut timing = json!({
@@ -1192,11 +1330,22 @@ impl Shared {
             }
             event["driver_timing"] = timing;
         }
-        self.evidence.record("peer_receive", event);
-        // Retain the original expected guard through the existing evidence I/O.
         self.evidence
             .timing
             .finish(&self.evidence.timing.verify_expected_hold, holding);
+        drop(expected);
+        // Identity/facts and all event data are ready before releasing the
+        // expected lock. Preserve duplicate evidence before its original error.
+        if let Some(duplicate_event) = duplicate_event {
+            self.evidence
+                .record("duplicate_peer_receive", duplicate_event);
+            assert_ne!(
+                self.mode,
+                RunMode::Preflight,
+                "unexpected duplicate MQTT receive in tiny preflight for {op} on {device}"
+            );
+        }
+        self.evidence.record("peer_receive", event);
         op
     }
     fn ack(&self, peer: &str, device: &str, op: &str, delivery: &str, protocol: &str) {
@@ -2438,10 +2587,7 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
                 holding,
             );
             let item = expected.get_mut(&op).unwrap();
-            if let Some(previous) = &item.message_id {
-                assert_eq!(previous, &message);
-            }
-            item.message_id = Some(message.clone());
+            bind_expected_identity(item, &message, None);
             assert!(
                 shared.accepted.lock().unwrap().insert(op.clone()),
                 "duplicate HTTP acceptance for {op}"
@@ -2467,15 +2613,15 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
                     "scope":"response JSON complete to accepted-record construction; client processing and expected-lock wait, not additional server latency or this record's file I/O"
                 });
             }
-            shared.evidence.record("http_accepted", event);
-            if shared.http_pull_peer {
-                shared.http_wake.notify_one();
-            }
-            // Keep the original guard through accepted evidence and Notify.
             shared
                 .evidence
                 .timing
                 .finish(&shared.evidence.timing.submit_expected_hold, holding);
+            drop(expected);
+            shared.evidence.record("http_accepted", event);
+            if shared.http_pull_peer {
+                shared.http_wake.notify_one();
+            }
         }
         Err(error) => {
             shared.evidence.record(
@@ -2622,13 +2768,13 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
                     .unwrap()
                     .insert(
                         op.clone(),
-                        Expected {
+                        Arc::new(Expected {
                             body_hash: blake3::hash(body.as_bytes()).to_hex().to_string(),
                             body_bytes: body.len(),
                             metadata: input["metadata"].clone(),
                             message_id: None,
                             delivery_id: None
-                        }
+                        })
                     )
                     .is_none(),
                 "duplicate planned operation id"
