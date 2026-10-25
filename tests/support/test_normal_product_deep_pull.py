@@ -90,6 +90,41 @@ class FrozenScopeFixtureTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.choose(rows)
 
+    def test_actual_pull_payloads_preserve_every_wire_field_across_pages(self):
+        rejected,healthy = self.choose()
+        ordered = rejected+healthy
+        maps = {row['delivery_id']:json.loads(row['payload_blob']) for row in self.rows}
+        for delivery,payload in maps.items():
+            payload.update({'delivery_id':delivery,'unknown_future_field':'preserved'})
+        def page(index):
+            item=ordered[index]
+            wire=dict(maps[item['delivery_id']]);wire.pop('delivery_id')
+            return {'items':[{'delivery_id':item['delivery_id'],'payload':wire}],
+                'scan_complete':index==1,'has_more':index==0,
+                'next_page_token':'opaque-next' if index==0 else None}
+        requests=[]
+        def next_page(token):
+            requests.append(token);return page(1)
+        self.assertEqual(fixture.attach_actual_pull_payloads(page(0),ordered,next_page,maps),2)
+        self.assertEqual(requests,['opaque-next'])
+        self.assertEqual(rejected[0]['payload']['unknown_future_field'],'preserved')
+        self.assertNotIn('delivery_id',rejected[0]['payload'])
+        self.assertEqual(healthy[0]['payload']['body'],'body-a')
+
+    def test_actual_pull_payloads_reject_incomplete_or_changed_wire(self):
+        for mode in ['missing','changed','repeated','wrongtype','half-envelope']:
+            rejected,healthy=self.choose();ordered=rejected+healthy
+            maps={row['delivery_id']:json.loads(row['payload_blob']) for row in self.rows}
+            items=[{'delivery_id':r['delivery_id'],'payload':dict(maps[r['delivery_id']])}for r in ordered]
+            head={'items':items,'scan_complete':True,'has_more':False,'next_page_token':None}
+            if mode=='missing':head['items']=items[:1]
+            if mode=='changed':items[0]['payload']['body']='not-canonical'
+            if mode=='repeated':head['items']=[items[0],items[0]]
+            if mode=='wrongtype':items[0]['payload']['body']=42
+            if mode=='half-envelope':head.pop('next_page_token')
+            with self.subTest(mode=mode),self.assertRaises((AssertionError,KeyError)):
+                fixture.attach_actual_pull_payloads(head,ordered,lambda _:None,maps)
+
 
 class ExactRequestBoundaryTests(unittest.TestCase):
     def test_counted_bytes_are_the_bytes_transmitted(self):

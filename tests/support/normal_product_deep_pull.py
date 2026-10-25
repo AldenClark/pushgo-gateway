@@ -111,6 +111,40 @@ def verify_initial_head(head, ordered_rows):
         item['delivery_id'] for item in ordered_rows[:200]]
 
 
+def attach_actual_pull_payloads(head, ordered_rows, post_page, stored_payloads):
+    """Copy wire maps, never reconstruct them from selected business fields."""
+    expected = {item['delivery_id']:item for item in ordered_rows}
+    assert len(expected) == len(ordered_rows)
+    seen = set()
+    tokens = set()
+    # The owned fixture is finite, unfiltered, and at most2000 small records
+    # with one49KiB record. Keep a separate bound if the server contract changes.
+    for _ in range(20):
+        assert type(head.get('scan_complete')) is bool and type(head.get('has_more')) is bool
+        complete = head['scan_complete']
+        token = head['next_page_token']
+        assert head['has_more'] is not complete
+        assert (token is None) if complete else (isinstance(token,str) and bool(token))
+        for item in head['items']:
+            delivery = item['delivery_id']
+            assert delivery in expected and delivery not in seen
+            payload = item['payload']
+            assert isinstance(payload,dict) and all(isinstance(k,str) and isinstance(v,str)
+                                                    for k,v in payload.items())
+            canonical = dict(stored_payloads[delivery])
+            canonical.pop('delivery_id',None) # The normal V2 encoder removes this inner key.
+            assert payload == canonical, 'actual Pull wire must match its saved canonical payload'
+            expected[delivery]['payload'] = dict(payload)
+            seen.add(delivery)
+        if complete:
+            assert seen == set(expected), 'actual traversal cannot omit fixture rows'
+            return len(tokens)+1
+        assert token not in tokens, 'continuation must advance'
+        tokens.add(token)
+        head = post_page(token)
+    raise AssertionError('owned fixture traversal exceeded20pages')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', type=Path, required=True)
@@ -119,6 +153,7 @@ def main():
     parser.add_argument('--healthy', type=int, required=True)
     parser.add_argument('--concurrency', type=int, default=8)
     parser.add_argument('--severity', choices=('normal','low'))
+    parser.add_argument('--include-pull-payloads', action='store_true')
     args = parser.parse_args()
     assert (args.rejected == 0 or 200 <= args.rejected <= 1800) and 1 <= args.healthy <= 1800
     assert 2 <= args.rejected + args.healthy <= 2000 and 1 <= args.concurrency <= 8
@@ -205,6 +240,12 @@ def main():
     head = driver.post(context['base_url'],context['token'],'/v2/messages/pull',
         {'device_key':context['device_key']})
     verify_initial_head(head,rejected+healthy)
+    payload_pages = 0
+    if args.include_pull_payloads:
+        payload_pages = attach_actual_pull_payloads(head,rejected+healthy,
+            lambda token: driver.post(context['base_url'],context['token'],'/v2/messages/pull',
+                {'device_key':context['device_key'],'page_token':token}),
+            {row['delivery_id']:json.loads(row['payload_blob']) for row in rows})
     value = dict(context)
     value.update({'rejected':rejected,'healthy':healthy,
         'rejected_delivery_ids':[item['delivery_id'] for item in rejected],
@@ -214,6 +255,7 @@ def main():
         'requested_severity':args.severity,
         'ordering':'actual ordinary_targets(accepted_at,delivery_id); roles chosen after all durable acceptance',
         'server_fault_injection':False,'expected_total_messages':len(rows),
+        'actual_pull_payload_pages':payload_pages,
         'generated_epoch':time.time()})
     driver.private_json(args.output,value)
     receipt = {'status':'PASS','context':str(args.output),'consumer':context['consumer'],
@@ -223,6 +265,7 @@ def main():
         'requested_severity':args.severity,
         'population_is_not_a_load_or_capacity_measurement':True,'direct_server_sql_writes':0,
         'server_ack_calls':0,'boundary':boundary,'source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        'actual_pull_payload_pages':payload_pages,
         'observations':observations}
     driver.private_json(args.output.with_suffix('.receipt.json'),receipt)
     print(json.dumps({'ready':True,'context':str(args.output),'rejected':len(rejected),'healthy':len(healthy)}))
