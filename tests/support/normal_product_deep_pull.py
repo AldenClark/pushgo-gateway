@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Populate one real normal Gateway scope for client-side conflict/recovery tests.
+
+All records enter through /message. Only the client fixture chooses which of the
+actual first identities to seed as a local historical conflict; this tool never
+changes the Gateway's payload, target, ACK, or configuration tables.
+"""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sqlite3
+import time
+import uuid
+import urllib.request
+import urllib.error
+from urllib.parse import urlsplit
+
+
+def message_bytes(context, namespace, index, target_bytes=None):
+    item = {'op_id':str(uuid.uuid4()), 'title':f'Deep fixture {namespace[:8]} #{index:04}',
+        'body':f'Synthetic durable content {namespace} #{index:04}'}
+    request = {'channel_id':context['channel_id'], 'password':context['channel_password'], **item}
+    if target_bytes is not None:
+        request['body'] = ''
+        overhead = len(json.dumps(request,separators=(',',':'),ensure_ascii=False).encode())
+        assert target_bytes > overhead
+        request['body'] = 'x'*(target_bytes-overhead)
+        item['body'] = request['body']
+    encoded = json.dumps(request,separators=(',',':'),ensure_ascii=False).encode()
+    if target_bytes is not None:
+        assert len(encoded) == target_bytes
+    item['request_bytes'] = len(encoded)
+    return item,encoded
+
+
+def post_message_bytes(context, encoded):
+    request = urllib.request.Request(context['base_url']+'/message', method='POST', data=encoded,
+        headers={'Authorization':'Bearer '+context['token'],'Content-Type':'application/json'})
+    try:
+        response = urllib.request.urlopen(request,timeout=15)
+    except urllib.error.HTTPError as error:
+        response = error
+    with response:
+        status = response.status
+        value = json.load(response)
+    return status,value
+
+
+def next_acceptance_millisecond(after):
+    # Source and caller are the same host. This is an observed-clock phase
+    # condition, not a fixed sleep or retry of business actions. Native ordering
+    # is still verified afterwards; a clock rollback fails setup rather than
+    # publishing a large message in the rejected prefix.
+    started = time.monotonic()
+    deadline = started+2
+    while time.time_ns()//1_000_000 <= after:
+        assert time.monotonic() < deadline, 'owned normal Gateway clock phase did not advance'
+        time.sleep(.001)
+    return (time.monotonic()-started)*1000
+
+
+def choose_rows(rows, expected, rejected_count, device):
+    """Validate real frozen ownership and preserve the database's native order."""
+    assert len(rows) == len(expected), 'each accepted message needs exactly one frozen target'
+    assert 0 <= rejected_count < len(rows)
+    message_ids = set()
+    delivery_ids = set()
+    result = []
+    for row in rows:
+        message_id = row['message_id']
+        assert message_id in expected and message_id not in message_ids
+        assert row['delivery_id'] not in delivery_ids
+        assert row['pull_owner'] == device and row['delivery_mode'] == 'provider'
+        assert row['acked_at'] is None, 'fixture must not pre-ACK a delivery'
+        payload = json.loads(row['payload_blob'])
+        item = expected[message_id]
+        assert row['op_id'] == item['op_id']
+        assert payload['entity_type'] == 'message'
+        assert payload['body'] == item['body'] and payload['title'] == item['title']
+        assert payload.get('delivery_id', row['delivery_id']) == row['delivery_id']
+        assert payload.get('message_id', message_id) == message_id
+        result.append({'delivery_id':row['delivery_id'], 'message_id':message_id,
+            'op_id':row['op_id'], 'body':item['body'], 'title':item['title'],
+            'body_sha256':hashlib.sha256(item['body'].encode()).hexdigest(),
+            'accepted_at':row['accepted_at'], 'request_bytes':item.get('request_bytes')})
+        message_ids.add(message_id)
+        delivery_ids.add(row['delivery_id'])
+    assert message_ids == set(expected)
+    return result[:rejected_count], result[rejected_count:]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--context', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--rejected', type=int, required=True)
+    parser.add_argument('--healthy', type=int, required=True)
+    parser.add_argument('--concurrency', type=int, default=8)
+    args = parser.parse_args()
+    assert 200 <= args.rejected <= 1800 and 1 <= args.healthy <= 1800
+    assert args.rejected + args.healthy <= 2000 and 1 <= args.concurrency <= 8
+    assert args.context.is_absolute() and args.context.is_file() and not args.context.is_symlink()
+    assert args.context.stat().st_mode & 0o077 == 0
+    owner = args.context.parent.resolve()
+    assert args.context.parent == owner and owner.stat().st_mode & 0o077 == 0
+    assert args.output.is_absolute() and not args.output.exists() and args.output.parent == owner
+    context = json.loads(args.context.read_text())
+    assert context['synthetic_only'] is True and context['normal_product'] is True
+    origin = urlsplit(context['base_url'])
+    assert origin.scheme=='http' and origin.hostname=='127.0.0.1' and origin.port is not None
+    assert origin.username is None and origin.password is None
+    assert origin.path=='' and not origin.query and not origin.fragment
+    assert context['consumer'] in ('android','windows','apple')
+    assert Path(context['database']).is_file() and Path(context['database']).resolve()==owner/'gateway.sqlite'
+    ready = json.loads((owner/'ready.json').read_text())
+    assert ready['normal_qa_feature'] is False and ready['external_provider'] is False
+    assert ready['base_url']==context['base_url'] and ready['sqlite']==context['database']
+    driver_path = Path(__file__).with_name('normal_product_serve.py')
+    spec = importlib.util.spec_from_file_location('normal_product_serve', driver_path)
+    driver = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(driver)
+    started = time.time()
+    observations = []
+    namespace = uuid.uuid4().hex
+
+    def submit(index, target_bytes=None):
+        item,encoded = message_bytes(context,namespace,index,target_bytes)
+        before = time.monotonic()
+        status,value = post_message_bytes(context,encoded)
+        assert status==200 and value['success'] is True, (status,value.get('error_code'))
+        message_id = value['data']['message_id']
+        assert isinstance(message_id,str) and message_id
+        return message_id,item,{'index':index,'message_id':message_id,
+            'request_bytes':len(encoded),'elapsed_seconds':time.monotonic()-before}
+
+    # Only one legal large message; the remaining setup cohort stays small.
+    with ThreadPoolExecutor(max_workers=args.concurrency) as workers:
+        submitted = list(workers.map(submit, range(args.rejected+args.healthy-1)))
+    phase = sqlite3.connect('file:'+context['database']+'?mode=ro',uri=True)
+    max_accepted = phase.execute('SELECT MAX(t.accepted_at) FROM ordinary_targets t '
+        'JOIN ordinary_messages m ON m.delivery_id=t.delivery_id '
+        'WHERE m.channel_id=? AND t.pull_owner=?',
+        (context['channel_id'],context['device_key'])).fetchone()[0]
+    phase.close()
+    assert max_accepted is not None
+    clock_fence_ms = next_acceptance_millisecond(max_accepted)
+    large = submit(args.rejected+args.healthy-1,49152)
+    submitted.append(large)
+    too_large,too_large_bytes = message_bytes(context,namespace,args.rejected+args.healthy,49153)
+    rejected_status,rejected_response = post_message_bytes(context,too_large_bytes)
+    assert rejected_status==400 and rejected_response.get('error_code')=='invalid_request_body'
+    expected = {}
+    for message_id,item,observation in submitted:
+        assert message_id not in expected
+        expected[message_id] = item
+        observations.append(observation)
+    connection = sqlite3.connect('file:'+context['database']+'?mode=ro', uri=True)
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute('SELECT m.message_id,m.delivery_id,m.op_id,m.payload_blob, '
+        't.accepted_at,t.pull_owner,t.delivery_mode,t.acked_at FROM ordinary_messages m '
+        'JOIN ordinary_targets t ON t.delivery_id=m.delivery_id '
+        'WHERE m.channel_id=? AND t.pull_owner=? ORDER BY t.accepted_at,t.delivery_id',
+        (context['channel_id'],context['device_key'])).fetchall()
+    rejected,healthy = choose_rows(rows, expected, args.rejected, context['device_key'])
+    large_row = next(item for item in healthy if item['message_id']==large[0])
+    assert large_row['request_bytes']==49152 and len(large_row['body'].encode())<49152
+    absent = connection.execute('SELECT COUNT(*),(SELECT COUNT(*) FROM ordinary_targets t '
+        'JOIN ordinary_messages m2 ON m2.delivery_id=t.delivery_id WHERE m2.op_id=?) '
+        'FROM ordinary_messages WHERE op_id=?',
+        (too_large['op_id'],too_large['op_id'])).fetchone()
+    assert tuple(absent)==(0,0), 'oversized rejection cannot leave an identity or target'
+    connection.close()
+    boundary={'accepted_request_bytes':49152,'large_delivery_id':large_row['delivery_id'],
+        'large_message_id':large_row['message_id'],'large_op_id':large_row['op_id'],
+        'large_body_sha256':large_row['body_sha256'],'large_body_bytes':len(large_row['body'].encode()),
+        'rejected_request_bytes':49153,'rejected_op_id':too_large['op_id'],
+        'status':rejected_status,'error_code':rejected_response['error_code'],
+        'identity_rows':0,'target_rows':0,'clock_fence_wait_ms':clock_fence_ms}
+
+    # This read never ACKs and does not create a server cursor. It proves actual
+    # native API ordering rather than guessing from producer call order or sleep.
+    head = driver.post(context['base_url'],context['token'],'/v2/messages/pull',
+        {'device_key':context['device_key']})
+    assert head['scan_complete'] is False and isinstance(head['next_page_token'],str)
+    assert [item['delivery_id'] for item in head['items']] == [item['delivery_id'] for item in rejected[:200]]
+    value = dict(context)
+    value.update({'rejected':rejected,'healthy':healthy,
+        'rejected_delivery_ids':[item['delivery_id'] for item in rejected],
+        'fixture_kind':'normal API valid records; historical/foreign-owner conflicts injected ONLY in client local test store',
+        'population_concurrency':args.concurrency,'boundary':boundary,
+        'ordering':'actual ordinary_targets(accepted_at,delivery_id); roles chosen after all durable acceptance',
+        'server_fault_injection':False,'expected_total_messages':len(rows),
+        'generated_epoch':time.time()})
+    driver.private_json(args.output,value)
+    receipt = {'status':'PASS','context':str(args.output),'consumer':context['consumer'],
+        'normal_product_binary_sha256':json.loads((Path(context['database']).parent/'ready.json').read_text())['binary_sha256'],
+        'rejected':len(rejected),'healthy':len(healthy),'actual_head_count':len(head['items']),
+        'population_seconds':time.time()-started,'http_setup_concurrency':args.concurrency,
+        'population_is_not_a_load_or_capacity_measurement':True,'direct_server_sql_writes':0,
+        'server_ack_calls':0,'boundary':boundary,'source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        'observations':observations}
+    driver.private_json(args.output.with_suffix('.receipt.json'),receipt)
+    print(json.dumps({'ready':True,'context':str(args.output),'rejected':len(rejected),'healthy':len(healthy)}))
+
+
+if __name__ == '__main__':
+    main()

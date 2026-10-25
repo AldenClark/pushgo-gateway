@@ -829,12 +829,16 @@
           <strong>POST</strong> <code>/messages/pull</code> is the beta-compatible destructive pull route: returned rows are removed immediately and require no ACK.
         </p>
         <p>
-          <strong>POST</strong> <code>/v2/messages/pull</code> 是非破坏性 Pull。响应中的 <code>items</code> 最多包含 200 条有效数据，并返回 <code>has_more</code>；客户端必须在 <code>has_more=true</code> 时继续拉取。损坏或不支持的数据会被静默删除，因此空页仍可能返回 <code>has_more=true</code>。<br />
-          <strong>POST</strong> <code>/v2/messages/pull</code> is non-destructive. A response contains at most 200 valid <code>items</code> plus <code>has_more</code>; clients must continue while <code>has_more=true</code>. Corrupt or unsupported rows are silently deleted, so an empty page can still report <code>has_more=true</code>.
+          <strong>POST</strong> <code>/v2/messages/pull</code> 的常规扫描请求为 <code>{device_key, page_token?}</code>。每页最多处理 200 个候选，返回 <code>items</code>、<code>has_more</code>、<code>next_page_token</code> 和 <code>scan_complete</code>。使用返回的 opaque token 继续同一次有限扫描；空页也可带 token。<code>scan_complete=true</code> 时 token 为 null，应结束本次扫描，不立即从头忙循环。独立损坏或不支持项会被过滤，但保留原责任，不因扫描而删除或 ACK。<br />
+          A general <strong>POST</strong> <code>/v2/messages/pull</code> scan takes <code>{device_key, page_token?}</code>. Each page considers at most 200 candidates and returns <code>items</code>, <code>has_more</code>, <code>next_page_token</code>, and <code>scan_complete</code>. Continue the finite pass with its opaque token, including after an empty page. A complete pass has a null token and must stop rather than immediately spin from the head. Independently malformed or unsupported items are filtered but remain durable and unACKed.
         </p>
         <p>
-          <code>items[].delivery_id</code> 外层字段是 ACK/删除的唯一权威 ID。缺失或冲突的内层 ID 视为损坏数据，只按外层 ID 删除。<br />
-          The outer <code>items[].delivery_id</code> is the only authoritative ACK/delete ID. Missing or conflicting embedded IDs are corrupt and are deleted only by the outer ID.
+          <code>items[].delivery_id</code> 外层字段是 ACK 的权威 ID，不能用不一致的内层 ID ACK 另一条记录。<code>{device_key, delivery_id}</code> 为定点读取，不得与 <code>page_token</code> 混用；旧定点/legacy 路径的异常清理行为不属于新常规扫描合同。token 最多 2048 UTF-8 字节，须绑定当前 Gateway/账户/设备与请求代际；进度不授予 ACK 权限。<br />
+          The outer <code>items[].delivery_id</code> is the authoritative ACK identity; a conflicting embedded ID must not ACK another record. Targeted <code>{device_key, delivery_id}</code> reads cannot include a page token. Existing targeted/legacy error cleanup is distinct from the general-scan contract. Tokens are at most 2048 UTF-8 bytes and must stay bound to the current Gateway/account/device and request generation; progress grants no ACK permission.
+        </p>
+        <p>
+          聚合响应 JSON 采用 1 MiB 软目标，首个合法单项可超过；不会截断或跳过该项。此限额不同于 48 KiB 完整消息请求 JSON 和 128 KiB 完整 Private 帧。<code>400 page_token_invalid</code> 或 <code>409 page_token_scope_changed</code> 应仅清除匹配作用域/代际的进度并结束当前 turn；后续正常恢复可从头开始。旧服务器若缺少两项新进度字段，仍只有原有头页能力，不能据此声称深页推进。<br />
+          Aggregate response JSON targets a soft 1 MiB; a legal first singleton may exceed it without truncation or skipping. This differs from the 48 KiB complete message-request JSON and 128 KiB whole Private frame. On <code>400 page_token_invalid</code> or <code>409 page_token_scope_changed</code>, clear only matching scoped/generation progress and end the turn; a later normal recovery may start fresh. Servers missing both new progress fields retain only their old head-page behavior.
         </p>
         <table>
           <thead>
@@ -849,7 +853,7 @@
             <tr>
               <td><code>POST /v2/messages/ack</code></td>
               <td><code>{device_key, delivery_ids}</code>，最多 200 个去重 ID。<br />At most 200 unique IDs.</td>
-              <td>返回 <code>requested_count</code> 与 <code>removed_count</code>；客户端必须核对删除数量。<br />Returns <code>requested_count</code> and <code>removed_count</code>; clients must verify removal counts.</td>
+              <td>返回去重后的 <code>requested_count</code> 与本次新移除的 <code>removed_count</code>。服务器 ACK 幂等：可证明已完成的重复 ACK 可能成功返回 0；首次 ACK 与重试/恢复不能统一要求两数相等，仍须核对原设备/身份和本地持久责任。<br />Returns the unique <code>requested_count</code> and the number newly removed by this call. Server ACK is idempotent: a retry for already-completed items may succeed with zero removals. Validate the original device/identity and durable local responsibility; fresh ACK and recovery retries do not share a universal count-equality rule.</td>
             </tr>
           </tbody>
         </table>
@@ -904,13 +908,13 @@
             <tr>
               <td><code>accepted_at/updated_at/expires_at</code></td>
               <td>integer</td>
-              <td>毫秒时间戳。<br />Millisecond timestamps.</td>
+              <td>毫秒时间戳；此处 <code>expires_at</code> 是操作/状态查询记录的保留期限，不是正文投递 TTL。<br />Millisecond timestamps; <code>expires_at</code> here is the operation/status record retention deadline, not the message delivery TTL.</td>
             </tr>
           </tbody>
         </table>
         <p class="note">
-          <code>provider_queued</code> 只表示任务已进入当前进程的 Provider worker 内存队列，不代表 Provider 成功；真实发送完成后才持久化 <code>provider_success</code> 或 <code>provider_failed</code> 对应的最终状态。<br />
-          <code>provider_queued</code> means only in-memory Provider worker-queue admission in this process, not Provider success; after the actual send result, the worker persists the final state corresponding to <code>provider_success</code> or <code>provider_failed</code>.<br />
+          <code>provider_queued</code> 表示已持久接纳并等待或正在进行 Provider 派发，不是仅存于当前进程内存的工作。普通消息的冻结目标与恢复责任由单一 ordinary 账本持有。Provider 结果会更新粗粒度状态，但不等同于客户端已持久化或已显式 ACK；应另按对应目标的 ACK 事实判断。<br />
+          <code>provider_queued</code> is durable admission/dispatch progress, not an in-memory-only job. The single ordinary ledger owns ordinary frozen targets and recovery. Coarse Provider results do not establish client persistence or explicit ACK; use the corresponding target ACK facts for that conclusion.<br />
           状态记录会按维护清理策略自动过期；过期或不存在时返回
           <code>404 send_status_not_found</code>。<br />
           Status records expire through maintenance cleanup; expired or missing
