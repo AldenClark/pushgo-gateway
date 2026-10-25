@@ -52,6 +52,22 @@ def backlog_sample_at_or_after(rows, boundary_us):
     }
 
 
+def peer_receive_counts(rows):
+    """Keep old all-MQTT input equivalent without misnaming a mixed cohort."""
+    http = sum(row["data"]["peer"].startswith("http-v2-") for row in rows)
+    return {"all": len(rows), "mqtt": len(rows) - http, "http_v2": http}
+
+
+def latency_quantiles(start_map, end_map, keys, begin, denominator=None):
+    values = [
+        (end_map[key] - begin(key, start_map)) / 1000
+        for key in keys if key in start_map and key in end_map
+    ]
+    if any(value < 0 for value in values):
+        raise ValueError("negative latency sample")
+    return quantiles(values, len(keys) if denominator is None else denominator)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_directory", type=Path)
@@ -85,12 +101,17 @@ def main():
     received = target_times("peer_receive")
     ack_sent = target_times("ack_sent")
     committed = target_times("ack_commit_visible_upper_bound")
+    journaled = target_times("http_peer_journal_commit")
+    receive_counts = peer_receive_counts(events["peer_receive"])
     expected_ops = [f"delivery-load-{i:05}" for i in range(config["messages"])]
+    expected_target_count = config["messages"] * config["target_devices"]
+    expected_http_count = config["messages"] if config.get("http_pull_peer", False) else 0
     target_keys = list(devices)
     expected_targets = {(op, key) for op in expected_ops for key in target_keys}
     fully_completed = [
         op for op in expected_ops
-        if all((op, key) in committed for key in target_keys)
+        if len(target_keys) == config["target_devices"]
+        and all((op, key) in committed for key in target_keys)
     ]
     identities = {}
     conflicts = []
@@ -105,14 +126,7 @@ def main():
                         conflicts.append({"op_id": op, "field": key})
                     old[key] = data[key]
 
-    def latency(start_map, end_map, keys, begin):
-        values = [
-            (end_map[key] - begin(key, start_map)) / 1000
-            for key in keys if key in start_map and key in end_map
-        ]
-        if any(value < 0 for value in values):
-            raise ValueError("negative latency sample")
-        return quantiles(values, len(keys))
+    latency = latency_quantiles
 
     stages = []
     stage_latency = {}
@@ -150,9 +164,9 @@ def main():
         key: planned[key[0]]["planned_offer_us"] for key in ack_keys
     }
     offer_to_commit = latency(
-        planned_target_offers, committed, ack_keys, lambda key, m: m[key]
+        planned_target_offers, committed, ack_keys, lambda key, m: m[key], expected_target_count
     )
-    ack_to_commit = latency(ack_sent, committed, ack_keys, lambda key, m: m[key])
+    ack_to_commit = latency(ack_sent, committed, ack_keys, lambda key, m: m[key], expected_target_count)
     load_end = max((r["elapsed_us"] for r in events["all_http_complete"]), default=None)
     db_rows = events["database_sample"]
     end_backlog = None
@@ -162,6 +176,35 @@ def main():
             end_backlog = end_sample["data"]["pending_targets"]
     drained_elapsed = events["drained"][0]["elapsed_us"] if events.get("drained") else None
     after_drain_sample = backlog_sample_at_or_after(db_rows, drained_elapsed)
+    http_keys = sorted(key for key in expected_targets if devices[key[1]].startswith("http-v2-"))
+    http_pages = events["http_peer_pull_page"]
+    http_summary = {
+        "enabled": bool(config.get("http_pull_peer", False)),
+        "expected_target_denominator": expected_http_count,
+        "observed_http_devices": sum(peer.startswith("http-v2-") for peer in devices.values()),
+        "unique_received_targets": sum(key in received for key in http_keys),
+        "unique_journal_commit_targets": sum(key in journaled for key in http_keys),
+        "unique_positive_ack_targets": sum(key in ack_sent for key in http_keys),
+        "unique_server_terminal_targets": sum(key in committed for key in http_keys),
+        "offer_to_peer_journal_commit_ms": latency(
+            planned_target_offers, journaled, http_keys, lambda key, mapping: mapping[key], expected_http_count
+        ),
+        "offer_to_server_terminal_visibility_upper_bound_ms": latency(
+            planned_target_offers, committed, http_keys, lambda key, mapping: mapping[key], expected_http_count
+        ),
+        "pull_requests": len(http_pages),
+        "continuation_requests": sum(row["data"]["request_token_present"] for row in http_pages),
+        "empty_pages": sum(row["data"]["items"] == 0 for row in http_pages),
+        "completed_passes": sum(row["data"]["scan_complete"] for row in http_pages),
+        "returned_items_including_replays": sum(row["data"]["items"] for row in http_pages),
+        "requests_started_after_drain": sum(
+            row["data"]["request_started_elapsed_us"] >= drained_elapsed
+            for row in http_pages
+            if drained_elapsed is not None and "request_started_elapsed_us" in row["data"]
+        ) if drained_elapsed is not None and all("request_started_elapsed_us" in row["data"] for row in http_pages) else None,
+        "product_scan_query_count": "NOT RECORDED at normal info log level",
+        "scope": "controlled benchmark peer; own SQLite COMMIT before real HTTP ACK. Notify substitutes Provider hints; no App persistence/UI, actual Provider-wake latency or HTTP restart fault claim",
+    }
     resource_rows = events["resources"]
     gateway_samples = [r["data"]["gateway"] for r in resource_rows]
     harness_samples = [r["data"]["harness_including_peers_and_observer"] for r in resource_rows]
@@ -187,7 +230,15 @@ def main():
             }
 
     report = {
-        "status": "PASS" if result.get("passed") is True and not conflicts and len(committed) == len(expected_targets) else "INCOMPLETE_OR_FAILED",
+        "status": "PASS" if result.get("passed") is True and not conflicts
+            and len(planned) == config["messages"]
+            and len(devices) == config["target_devices"]
+            and len(expected_targets) == expected_target_count
+            and len(http_keys) == expected_http_count
+            and len(received) == expected_target_count
+            and len(ack_sent) == expected_target_count
+            and sum(key in journaled for key in http_keys) == expected_http_count
+            and len(committed) == expected_target_count else "INCOMPLETE_OR_FAILED",
         "run_directory": str(run_dir),
         "journey_sha256": digest(journey),
         "product_binary": config["binary"],
@@ -200,10 +251,14 @@ def main():
         "terminal_result": result,
         "counts": {
             "planned_offers": len(planned),
+            "expected_target_denominator": expected_target_count,
+            "observed_connected_target_devices": len(devices),
             "actual_http_starts": len(starts),
             "accepted": len(accepted),
             "persisted_visibility_samples": len(persisted),
-            "raw_mqtt_receives": len(events["peer_receive"]),
+            "raw_peer_receives": receive_counts["all"],
+            "raw_mqtt_receives": receive_counts["mqtt"],
+            "raw_http_v2_receives": receive_counts["http_v2"],
             "unique_received_targets": len(received),
             "raw_ack_writes": len(events["ack_sent"]),
             "unique_ack_written_targets": len(ack_sent),
@@ -221,8 +276,9 @@ def main():
             "fully_acknowledged_target_records_per_second_from_load_start": len(committed) / completed_seconds if completed_seconds and completed_seconds > 0 else None,
             "planned_offer_window_seconds": plan_seconds,
             "load_to_final_durable_ack_seconds": completed_seconds,
-            "definitions": "offers are absolute scheduled starts; completion requires each target's MQTT PUBACK plus durable ledger terminal state; no per-request sequential self-throttle",
+            "definitions": "offers are absolute scheduled starts; completion requires actual per-protocol ACK evidence plus durable ledger terminal state (HTTP peer additionally requires its local journal COMMIT); no per-request sequential self-throttle",
         },
+        "http_v2_peer": http_summary,
         "latency": {
             "all_offer_to_http_accept_ms": latency(planned, accepted, expected_ops, lambda op, m: m[op]["planned_offer_us"]),
             "all_http_start_to_accept_ms": latency(starts, accepted, expected_ops, lambda op, m: m[op]),
@@ -254,7 +310,7 @@ def main():
         },
         "limitations": [
             "One optimized normal-product build and one SQLite ordinary-ledger configuration; no before/after product-code comparison.",
-            "Four synthetic loopback MQTT targets; no real provider service, mobile app, Windows UI, Android device, iOS, or watchOS.",
+            ("Three synthetic loopback MQTT targets plus one controlled HTTP V2/journal peer; Notify replaces Provider hints; no real Provider, App persistence or platform UI." if config.get("http_pull_peer", False) else "Four synthetic loopback MQTT targets; no real provider service, mobile app, Windows UI, Android device, iOS, or watchOS."),
             "Small synthetic message bodies; this is not the 48 KiB message or 128 KiB frame ceiling test.",
             "OS threads are a proxy; async Gateway task count and energy are not measured.",
         ],

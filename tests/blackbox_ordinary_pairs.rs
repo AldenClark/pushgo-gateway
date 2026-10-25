@@ -1,4 +1,6 @@
 //! Bounded comparison of unchanged normal Gateway binaries over HTTP/TCP MQTT5.
+//! Delivery-load can opt into one V2 HTTP peer with a test-owned durable journal;
+//! it is a benchmark peer, not an Android/Apple/Windows product client.
 //! No QA mode, fixture server or Provider substitution is involved. Database
 //! reads every 100ms provide visibility upper bounds, not COMMIT timestamps.
 use futures_util::{StreamExt, stream};
@@ -19,7 +21,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::Notify, task::JoinHandle};
 
 #[path = "support/product_mqtt.rs"]
 mod product_mqtt;
@@ -36,6 +38,67 @@ const MAX_LOAD_DURATION_SECONDS: u64 = 720;
 const MAX_RUN_DIRECTORY_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PROCESS_RSS_KIB: u64 = 1_048_576;
 const MAX_PENDING_TARGETS: usize = 16_384;
+const HTTP_PULL_PAGE_LIMIT: usize = 200;
+
+fn http_pull_peer_enabled(
+    mode: RunMode,
+    backend: &str,
+    setting: Option<&str>,
+) -> Result<bool, String> {
+    match setting {
+        None | Some("0") => Ok(false),
+        Some("1") if mode.is_delivery_load() && backend == "ordinary" => {
+            if mode.target_devices() != 4 {
+                return Err("HTTP mixed load requires exactly1 HTTP and3 MQTT targets".into());
+            }
+            if mode.load_plan().unwrap().disconnect_device == 0 {
+                return Err("HTTP peer0 cannot be the MQTT disconnect target".into());
+            }
+            Ok(true)
+        }
+        Some("1") => Err("C13_HTTP_PULL_PEER=1 requires delivery-load ordinary mode".into()),
+        Some(_) => Err("C13_HTTP_PULL_PEER must be absent,0 or1".into()),
+    }
+}
+
+fn pull_payload_data(payload: &Value) -> Result<Value, String> {
+    let fields = payload
+        .as_object()
+        .ok_or_else(|| "V2 Pull payload must be a string map".to_string())?;
+    if fields.values().any(|field| !field.is_string()) {
+        return Err("V2 Pull payload contains a non-string field".into());
+    }
+    for required in ["title", "body", "message_id", "metadata"] {
+        if !fields.contains_key(required) {
+            return Err(format!("V2 Pull payload missing {required}"));
+        }
+    }
+    let mut normalized = fields.clone();
+    let metadata = serde_json::from_str(fields["metadata"].as_str().unwrap())
+        .map_err(|_| "V2 Pull metadata is not valid JSON".to_string())?;
+    normalized.insert("metadata".into(), metadata);
+    Ok(Value::Object(normalized))
+}
+
+fn pull_scan_progress(page: &Value) -> Result<(bool, bool, Option<String>), String> {
+    let complete = page["scan_complete"]
+        .as_bool()
+        .ok_or("HTTP peer scan_complete absent or invalid")?;
+    let more = page["has_more"]
+        .as_bool()
+        .ok_or("HTTP peer has_more absent or invalid")?;
+    let next = match page.get("next_page_token") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) if !value.is_empty() && value.len() <= 2048 => {
+            Some(value.clone())
+        }
+        _ => return Err("HTTP peer next_page_token absent or invalid".into()),
+    };
+    if more == complete || (complete && next.is_some()) || (!complete && next.is_none()) {
+        return Err("HTTP peer invalid finite-scan continuation".into());
+    }
+    Ok((complete, more, next))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoadStageName {
@@ -551,7 +614,7 @@ fn validate_terminal_counts(
     for (name, actual, expected) in [
         ("persisted messages", persisted, mode.messages()),
         ("peer receives", received, mode.targets()),
-        ("PUBACKs", pubacks, mode.targets()),
+        ("positive ACK evidence", pubacks, mode.targets()),
         ("positive terminal targets", terminal, mode.targets()),
         ("released bodies", released, mode.messages()),
     ] {
@@ -661,33 +724,135 @@ mod harness_preflight_tests {
         let known = BTreeSet::from([target.0.clone()]);
         let received = BTreeSet::from([target.clone()]);
         let written = BTreeSet::from([target.clone()]);
+        let row = BTreeSet::from([target.clone()]);
         let empty = BTreeSet::new();
         assert!(has_positive_terminal_evidence(
-            &target, &known, &received, &written, &empty
+            &target, &known, &received, &written, &empty, &empty, None
         ));
-        assert!(!has_positive_terminal_evidence(
+        // A running Provider row may remain after client ACK until receipt
+        // COMMIT. Its actual acked_at is positive, unlike its state string.
+        assert!(has_positive_terminal_evidence(
             &target,
-            &BTreeSet::new(),
+            &known,
             &received,
             &written,
-            &empty
-        ));
-        assert!(!has_positive_terminal_evidence(
-            &target, &known, &empty, &written, &empty
-        ));
-        assert!(!has_positive_terminal_evidence(
-            &target, &known, &received, &empty, &empty
+            &row,
+            &row,
+            Some(&received)
         ));
         assert!(!has_positive_terminal_evidence(
             &target,
             &known,
             &received,
             &written,
-            &BTreeSet::from([target.clone()])
+            &row,
+            &empty,
+            Some(&received)
         ));
         assert!(!has_positive_terminal_evidence(
-            &other, &known, &received, &written, &empty
+            &target,
+            &known,
+            &received,
+            &written,
+            &row,
+            &row,
+            Some(&empty)
         ));
+        assert!(!has_positive_terminal_evidence(
+            &target,
+            &BTreeSet::new(),
+            &received,
+            &written,
+            &empty,
+            &empty,
+            None
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &target, &known, &empty, &written, &empty, &empty, None
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &target, &known, &received, &empty, &empty, &empty, None
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &target, &known, &received, &written, &row, &empty, None
+        ));
+        assert!(!has_positive_terminal_evidence(
+            &other, &known, &received, &written, &empty, &empty, None
+        ));
+    }
+
+    #[test]
+    fn mixed_http_peer_is_explicit_and_cannot_replace_the_disconnect_target() {
+        let mode = RunMode::DeliveryLoad(LoadPlan::representative());
+        assert_eq!(http_pull_peer_enabled(mode, "ordinary", None), Ok(false));
+        assert_eq!(
+            http_pull_peer_enabled(mode, "ordinary", Some("1")),
+            Ok(true)
+        );
+        assert!(http_pull_peer_enabled(RunMode::Formal, "ordinary", Some("1")).is_err());
+        assert!(http_pull_peer_enabled(RunMode::Preflight, "ordinary", Some("1")).is_err());
+        assert!(http_pull_peer_enabled(mode, "main", Some("1")).is_err());
+        assert!(http_pull_peer_enabled(mode, "ordinary", Some("unexpected")).is_err());
+        let mut plan = LoadPlan::representative();
+        plan.disconnect_device = 0;
+        assert!(
+            http_pull_peer_enabled(RunMode::DeliveryLoad(plan), "ordinary", Some("1")).is_err()
+        );
+    }
+
+    #[test]
+    fn http_payload_coercion_preserves_strings_and_parses_only_metadata() {
+        let value = json!({"title":"operation","body":r#"中文🙂\""#,"message_id":"identity", "metadata":r#"{"negative":-42,"fraction":0.125}"#});
+        let parsed = pull_payload_data(&value).unwrap();
+        assert_eq!(parsed["body"], value["body"]);
+        assert_eq!(parsed["message_id"], value["message_id"]);
+        assert_eq!(parsed["metadata"], json!({"negative":-42,"fraction":0.125}));
+        let mut invalid = value.clone();
+        invalid["metadata"] = json!({"negative":-42});
+        assert!(pull_payload_data(&invalid).is_err());
+        invalid["metadata"] = json!("not JSON");
+        assert!(pull_payload_data(&invalid).is_err());
+        let mut missing = value;
+        missing.as_object_mut().unwrap().remove("message_id");
+        assert!(pull_payload_data(&missing).is_err());
+    }
+
+    #[test]
+    fn http_scan_progress_requires_the_complete_explicit_envelope() {
+        let complete = json!({"scan_complete":true,"has_more":false,"next_page_token":null});
+        let more =
+            json!({"scan_complete":false,"has_more":true,"next_page_token":"opaque-test-value"});
+        assert_eq!(pull_scan_progress(&complete).unwrap(), (true, false, None));
+        assert_eq!(
+            pull_scan_progress(&more).unwrap(),
+            (false, true, Some("opaque-test-value".into()))
+        );
+        for field in ["scan_complete", "has_more", "next_page_token"] {
+            let mut missing = complete.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(pull_scan_progress(&missing).is_err());
+        }
+        for invalid in [
+            json!(1),
+            json!(false),
+            json!({}),
+            json!([]),
+            json!(""),
+            json!("x".repeat(2049)),
+        ] {
+            let mut value = complete.clone();
+            value["next_page_token"] = invalid;
+            assert!(pull_scan_progress(&value).is_err());
+        }
+        let mut missing_continuation = more.clone();
+        missing_continuation["next_page_token"] = Value::Null;
+        assert!(pull_scan_progress(&missing_continuation).is_err());
+        let mut unexpected_continuation = complete.clone();
+        unexpected_continuation["next_page_token"] = json!("opaque-test-value");
+        assert!(pull_scan_progress(&unexpected_continuation).is_err());
+        let mut inconsistent = complete;
+        inconsistent["has_more"] = json!(true);
+        assert!(pull_scan_progress(&inconsistent).is_err());
     }
 
     #[test]
@@ -744,6 +909,9 @@ struct Expected {
 struct Shared {
     evidence: Arc<Evidence>,
     mode: RunMode,
+    http_pull_peer: bool,
+    http_wake: Notify,
+    journaled: Mutex<BTreeSet<(String, String)>>,
     stop: AtomicBool,
     hold_from_us: AtomicU64,
     hold_until_us: AtomicU64,
@@ -758,6 +926,10 @@ struct Shared {
     residual_targets: AtomicU64,
 }
 impl Shared {
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.http_wake.notify_one();
+    }
     fn check(&self) {
         let failure = self.failure.lock().unwrap().clone();
         assert!(failure.is_none(), "background failure: {failure:?}");
@@ -805,7 +977,7 @@ impl Shared {
         self.evidence.record("peer_receive",json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"message_id":message,"body_bytes":body.len(),"body_hash":item.body_hash,"metadata":item.metadata}));
         op
     }
-    fn ack(&self, peer: &str, device: &str, op: &str, delivery: &str) {
+    fn ack(&self, peer: &str, device: &str, op: &str, delivery: &str, protocol: &str) {
         let first = self
             .ack_sent
             .lock()
@@ -813,9 +985,9 @@ impl Shared {
             .insert((op.into(), device.into()));
         assert!(
             first || self.mode != RunMode::Preflight,
-            "unexpected duplicate PUBACK in tiny preflight"
+            "unexpected duplicate ACK in tiny preflight"
         );
-        self.evidence.record("ack_sent",json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"semantics":"PUBACK write completed; not durable proof"}));
+        self.evidence.record("ack_sent",json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"protocol":protocol,"semantics":if protocol=="http-v2" {"HTTP V2 ACK success after test peer journal COMMIT; server terminal proof observed separately"} else {"PUBACK write completed; not durable proof"}}));
     }
 }
 struct BackgroundGuard(Arc<Shared>, String);
@@ -830,12 +1002,13 @@ impl Drop for BackgroundGuard {
 struct StopGuard(Arc<Shared>);
 impl Drop for StopGuard {
     fn drop(&mut self) {
-        self.0.stop.store(true, Ordering::Relaxed);
+        self.0.request_stop();
     }
 }
 struct Device {
     key: String,
     id: Vec<u8>,
+    http_pull: bool,
 }
 struct Product {
     child: Child,
@@ -919,6 +1092,18 @@ impl Product {
         }
         let backend = std::env::var("C12_LEDGER_KIND").expect("main or ordinary oracle required");
         assert!(matches!(backend.as_str(), "main" | "ordinary"));
+        let setting = std::env::var("C13_HTTP_PULL_PEER").ok();
+        let mixed = http_pull_peer_enabled(mode, &backend, setting.as_deref()).unwrap();
+        let peer_description = if mixed {
+            "three TCP MQTT5 peers and one normal V2 HTTP Pull/ACK peer"
+        } else {
+            "TCP MQTT5 loopback peers"
+        };
+        let provider_description = if mixed {
+            "synthetic FCM route only; Token Service unavailable at loopback port1; no external Provider"
+        } else {
+            "none; Token Service unused at loopback port1"
+        };
         let synthetic_credential =
             std::env::var("C12_TEST_SECRET").expect("process-local synthetic credential required");
         assert!(synthetic_credential.len() >= 24);
@@ -931,8 +1116,10 @@ impl Product {
             "mode": mode.name(),
             "oracle": backend,
             "runtime_profile": "small",
-            "private_transports": "TCP MQTT5 loopback peers",
-            "provider": "none; Token Service unused at loopback port 1",
+            "private_transports": peer_description,
+            "provider": provider_description,
+            "http_pull_peer": mixed,
+            "http_wake": if mixed {"controlled submit-success Notify, not external Provider wake latency"} else {"not used"},
             "qa": false,
             "database": database,
             "http_bind": format!("127.0.0.1:{http_port}"),
@@ -990,7 +1177,7 @@ impl Product {
             mqtt_port,
             backend,
         };
-        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":"TCP MQTT5 loopback peers","target_devices":mode.target_devices(),"provider":"none; Token Service unused at loopback port 1","qa":false,"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":mode.http_concurrency(),"test_owned_background_tokio_tasks":mode.target_devices()+2,"test_owned_http_offer_futures_max":mode.http_concurrency(),"gateway_tokio_task_count":"not instrumented; process thread count is sampled instead","load_plan":mode.load_plan().map(LoadPlan::to_value),"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; old requires actual acked outbox rows"}));
+        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":peer_description,"http_pull_peer":mixed,"http_wake":if mixed {"controlled submit-success Notify, not external Provider wake latency"} else {"not used"},"target_devices":mode.target_devices(),"provider":provider_description,"qa":false,"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":mode.http_concurrency(),"test_owned_background_tokio_tasks":mode.target_devices()+2,"test_owned_http_offer_futures_max":mode.http_concurrency(),"gateway_tokio_task_count":"not instrumented; process thread count is sampled instead","load_plan":mode.load_plan().map(LoadPlan::to_value),"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; HTTP requires local journal COMMIT and actual successful ACK plus server acked_at/target absence; not exact COMMIT timing","product_query_counts":"NOT RECORDED at normal info log level; no debug trace enabled"}));
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             assert!(
@@ -1031,21 +1218,23 @@ impl Product {
         );
         value
     }
-    async fn device(&self) -> Device {
+    async fn device(&self, http_pull: bool) -> Device {
+        let platform = if http_pull { "android" } else { "mqtt" };
         let key = self
-            .post("/device/register", json!({"platform":"mqtt"}))
+            .post("/device/register", json!({"platform":platform}))
             .await["data"]["device_key"]
             .as_str()
             .unwrap()
             .to_owned();
-        let route = self
-            .post(
-                "/channel/device",
-                json!({"device_key":key,"platform":"mqtt","channel_type":"private"}),
-            )
-            .await;
+        let channel_type = if http_pull { "fcm" } else { "private" };
+        let mut input = json!({"device_key":key,"platform":platform,"channel_type":channel_type});
+        if http_pull {
+            input["provider_token"] =
+                json!(format!("synthetic-load-{:032x}", rand::random::<u128>()));
+        }
+        let route = self.post("/channel/device", input).await;
         assert_eq!(route["data"]["device_key"].as_str(), Some(key.as_str()));
-        assert_eq!(route["data"]["channel_type"], "private");
+        assert_eq!(route["data"]["channel_type"], channel_type);
         let mut connection = SqliteConnection::connect(&format!(
             "sqlite://{}?mode=ro",
             self.directory.join("gateway.sqlite").display()
@@ -1058,7 +1247,7 @@ impl Product {
             .await
             .unwrap();
         connection.close().await.unwrap();
-        Device { key, id }
+        Device { key, id, http_pull }
     }
     async fn subscribe(&self, device: &str, channel: Option<&str>) -> String {
         let input = match channel {
@@ -1091,7 +1280,7 @@ impl Product {
         // Main's actual private subscriber selector uses these canonical rows
         // and predicates (access/subscriptions.rs:list_private_subscribers).
         // C's ordinary_subscriptions/device_routes are views of the same rows.
-        let rows=sqlx::query("SELECT d.device_key,d.device_id,d.platform,d.channel_type FROM channel_subscriptions s JOIN devices d ON d.device_id=s.device_id WHERE s.channel_id=? AND s.status='active' AND d.channel_type='private' AND d.route_updated_at IS NOT NULL AND s.created_at<=? ORDER BY d.device_key").bind(&channel_id[..]).bind(now).fetch_all(&mut connection).await.unwrap();
+        let rows=sqlx::query("SELECT d.device_key,d.device_id,d.platform,d.channel_type FROM channel_subscriptions s JOIN devices d ON d.device_id=s.device_id WHERE s.channel_id=? AND s.status='active' AND d.route_updated_at IS NOT NULL AND s.created_at<=? ORDER BY d.device_key").bind(&channel_id[..]).bind(now).fetch_all(&mut connection).await.unwrap();
         assert_eq!(
             rows.len(),
             devices.len(),
@@ -1107,8 +1296,14 @@ impl Product {
                 device.id,
                 "CONNECT must preserve device identity"
             );
-            assert_eq!(row.get::<String, _>("platform"), "mqtt");
-            assert_eq!(row.get::<String, _>("channel_type"), "private");
+            assert_eq!(
+                row.get::<String, _>("platform"),
+                if device.http_pull { "android" } else { "mqtt" }
+            );
+            assert_eq!(
+                row.get::<String, _>("channel_type"),
+                if device.http_pull { "fcm" } else { "private" }
+            );
         }
         let active: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM channel_subscriptions WHERE channel_id=? AND status='active'",
@@ -1119,7 +1314,7 @@ impl Product {
         .unwrap();
         assert_eq!(active, devices.len() as i64);
         if self.backend == "ordinary" {
-            let selected:i64=sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=lower(hex(?)) AND s.created_at<=? AND d.retired_at IS NULL AND d.channel_type='private' AND d.platform='mqtt'").bind(&channel_id[..]).bind(now).fetch_one(&mut connection).await.unwrap();
+            let selected:i64=sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_subscriptions s JOIN ordinary_device_routes d ON d.device_key=s.device_key WHERE s.channel_id=lower(hex(?)) AND s.created_at<=? AND d.retired_at IS NULL AND ((d.channel_type='private' AND d.platform='mqtt') OR (d.channel_type='fcm' AND d.platform='android' AND d.provider='FCM' AND d.provider_token IS NOT NULL))").bind(&channel_id[..]).bind(now).fetch_one(&mut connection).await.unwrap();
             assert_eq!(
                 selected,
                 devices.len() as i64,
@@ -1127,7 +1322,7 @@ impl Product {
             );
         }
         connection.close().await.unwrap();
-        evidence.record("control_preflight",json!({"passed":true,"platform":"mqtt","original_device_keys_preserved":devices.len(),"original_device_ids_preserved":devices.len(),"canonical_active_subscriptions":active,"selected_targets":rows.len(),"scope":"before any measured offer; admission success is never treated as delivery completion"}));
+        evidence.record("control_preflight",json!({"passed":true,"mqtt_devices":devices.iter().filter(|d|!d.http_pull).count(),"http_v2_devices":devices.iter().filter(|d|d.http_pull).count(),"original_device_keys_preserved":devices.len(),"original_device_ids_preserved":devices.len(),"canonical_active_subscriptions":active,"selected_targets":rows.len(),"scope":"actual canonical control selectors before measured offers; frozen target identities also checked against SQL throughout; admission success is never delivery completion"}));
     }
     async fn shutdown(&mut self, evidence: &Evidence) {
         evidence.record("shutdown_started", json!({}));
@@ -1219,7 +1414,7 @@ async fn peer(
             if !holding {
                 for (packet, (op, delivery)) in std::mem::take(&mut pending) {
                     mqtt.acknowledge(packet).await;
-                    shared.ack(&label, &device, &op, &delivery);
+                    shared.ack(&label, &device, &op, &delivery, "mqtt");
                 }
             }
             let Some(packet) = mqtt.receive(Duration::from_millis(50)).await else {
@@ -1246,6 +1441,209 @@ async fn peer(
                 disconnected_once,
                 "delivery-load must actually disconnect with an unacknowledged packet"
             );
+        }
+    })
+}
+
+async fn peer_http_post(
+    client: &Client,
+    base: &str,
+    credential: &str,
+    path: &str,
+    input: Value,
+) -> Result<Value, String> {
+    let response = client
+        .post(format!("{base}{path}"))
+        .bearer_auth(credential)
+        .json(&input)
+        .send()
+        .await
+        .map_err(|_| format!("HTTP peer transport failure at {path}; pending journal retained"))?;
+    let status = response.status();
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|_| format!("HTTP peer invalid JSON at {path}"))?;
+    if !status.is_success() || value["success"] != true {
+        return Err(format!("HTTP peer rejected at {path}: status{status}"));
+    }
+    Ok(value["data"].clone())
+}
+
+async fn drain_http_peer_journal(
+    client: &Client,
+    base: &str,
+    credential: &str,
+    device: &str,
+    journal: &mut SqliteConnection,
+    shared: &Shared,
+) -> Result<(), String> {
+    // A failed/unknown ACK leaves the same pending rows durable. Reopening this
+    // test-owned journal resumes those IDs; this is not a product ACK outbox.
+    for _ in 0..=shared.mode.messages().div_ceil(HTTP_PULL_PAGE_LIMIT) {
+        let rows = sqlx::query("SELECT delivery_id,op_id,payload FROM http_peer_journal WHERE device_key=? AND acked=0 ORDER BY rowid LIMIT ?")
+            .bind(device).bind(HTTP_PULL_PAGE_LIMIT as i64)
+            .fetch_all(&mut *journal).await.map_err(|_| "HTTP peer pending journal read failed")?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut acknowledged = Vec::with_capacity(rows.len());
+        for row in rows {
+            let delivery: String = row.get("delivery_id");
+            let operation: String = row.get("op_id");
+            let pair = (operation.clone(), device.to_string());
+            if !shared.journaled.lock().unwrap().contains(&pair) {
+                let payload: Value = serde_json::from_str(&row.get::<String, _>("payload"))
+                    .map_err(|_| "HTTP peer stored payload invalid")?;
+                let data = pull_payload_data(&payload)?;
+                let observed = shared.verify("http-v2-0", device, &data, &delivery);
+                if observed != operation {
+                    return Err("HTTP peer journal identity mismatch".into());
+                }
+                shared.journaled.lock().unwrap().insert(pair);
+            }
+            acknowledged.push((operation, delivery));
+        }
+        let ids: Vec<_> = acknowledged.iter().map(|(_, id)| id.clone()).collect();
+        let ack_started = Instant::now();
+        let result = peer_http_post(
+            client,
+            base,
+            credential,
+            "/v2/messages/ack",
+            json!({"device_key":device,"delivery_ids":ids}),
+        )
+        .await?;
+        let http_elapsed_us = ack_started.elapsed().as_micros() as u64;
+        let requested = result["requested_count"]
+            .as_u64()
+            .ok_or("HTTP peer ACK requested_count absent")?;
+        let removed = result["removed_count"]
+            .as_u64()
+            .ok_or("HTTP peer ACK removed_count absent")?;
+        if requested != acknowledged.len() as u64 || removed > requested {
+            return Err("HTTP peer ACK count mismatch".into());
+        }
+        let mut tx = journal
+            .begin()
+            .await
+            .map_err(|_| "HTTP peer ACK journal begin failed")?;
+        for (_, delivery) in &acknowledged {
+            sqlx::query("UPDATE http_peer_journal SET acked=1 WHERE device_key=? AND delivery_id=? AND acked=0")
+                .bind(device).bind(delivery).execute(&mut *tx).await.map_err(|_| "HTTP peer ACK journal update failed")?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| "HTTP peer ACK journal COMMIT failed")?;
+        for (operation, delivery) in acknowledged {
+            shared.ack("http-v2-0", device, &operation, &delivery, "http-v2");
+        }
+        shared.evidence.record("http_peer_ack_batch", json!({"requested":requested,"removed":removed,"http_elapsed_us":http_elapsed_us,"journal_committed_before_ack":true,"semantics":"HTTP success, including idempotent zero removal; server acked_at/absence checked independently; event follows local ACK-marker COMMIT"}));
+    }
+    Err("HTTP peer pending journal drain exceeded finite cohort bound".into())
+}
+
+async fn http_pull_peer(product: &Product, device: String, shared: Arc<Shared>) -> JoinHandle<()> {
+    let client = product.http.clone();
+    let base = product.base.clone();
+    let credential = product.synthetic_credential.clone();
+    let journal_path = product.directory.join("http-peer-journal.sqlite");
+    tokio::spawn(async move {
+        let _guard = BackgroundGuard(shared.clone(), "http-v2-0".into());
+        let result: Result<(), String> = async {
+            if !journal_path.exists() {
+                drop(private_file(&journal_path));
+            }
+            let mut journal = SqliteConnection::connect(&format!("sqlite://{}?mode=rwc", journal_path.display()))
+                .await.map_err(|_| "HTTP peer journal open failed")?;
+            sqlx::query("PRAGMA synchronous=FULL").execute(&mut journal).await.map_err(|_| "HTTP peer journal durability setup failed")?;
+            sqlx::query("CREATE TABLE IF NOT EXISTS http_peer_journal(device_key TEXT NOT NULL,delivery_id TEXT NOT NULL,op_id TEXT NOT NULL,payload TEXT NOT NULL,acked INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(device_key,delivery_id))")
+                .execute(&mut journal).await.map_err(|_| "HTTP peer journal schema failed")?;
+            sqlx::query("CREATE INDEX IF NOT EXISTS http_peer_pending ON http_peer_journal(device_key) WHERE acked=0")
+                .execute(&mut journal).await.map_err(|_| "HTTP peer journal pending index failed")?;
+            shared.evidence.record("peer_connected", json!({"peer":"http-v2-0","device_key":device,"transport":"normal V2 HTTP Pull/ACK","journal":journal_path,"wake":"test-controlled submit-success Notify; not actual Provider wake latency"}));
+            while !shared.stop.load(Ordering::Relaxed) {
+                drain_http_peer_journal(&client, &base, &credential, &device, &mut journal, &shared).await?;
+                let mut token: Option<String> = None;
+                let mut token_hashes = BTreeSet::new();
+                let mut complete = false;
+                for page_index in 0..=shared.mode.messages() {
+                    if shared.stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let started = Instant::now();
+                    let request_started_elapsed_us = shared.evidence.us();
+                    let mut input = json!({"device_key":device});
+                    if let Some(value) = &token {
+                        input["page_token"] = json!(value);
+                    }
+                    let page = peer_http_post(&client, &base, &credential, "/v2/messages/pull", input).await?;
+                    let pull_elapsed_us = started.elapsed().as_micros() as u64;
+                    let items = page["items"].as_array().ok_or("HTTP peer Pull items absent")?;
+                    if items.len() > HTTP_PULL_PAGE_LIMIT {
+                        return Err("HTTP peer Pull exceeded200item bound".into());
+                    }
+                    let (page_complete, more, next) = pull_scan_progress(&page)?;
+                    complete = page_complete;
+                    if let Some(value) = &next
+                        && !token_hashes.insert(*blake3::hash(value.as_bytes()).as_bytes()) {
+                        return Err("HTTP peer repeated opaque page token".into());
+                    }
+                    let mut saved = Vec::with_capacity(items.len());
+                    let mut page_ids = BTreeSet::new();
+                    let mut tx = journal.begin().await.map_err(|_| "HTTP peer save journal begin failed")?;
+                    for item in items {
+                        let delivery = item["delivery_id"].as_str().filter(|id| !id.is_empty()).ok_or("HTTP peer empty delivery identity")?;
+                        if !page_ids.insert(delivery) {
+                            return Err("HTTP peer repeated identity within page".into());
+                        }
+                        let data = pull_payload_data(&item["payload"])?;
+                        let operation = shared.verify("http-v2-0", &device, &data, delivery);
+                        let payload = serde_json::to_string(&item["payload"]).map_err(|_| "HTTP peer journal payload encode failed")?;
+                        if let Some(old) = sqlx::query("SELECT op_id,payload FROM http_peer_journal WHERE device_key=? AND delivery_id=?")
+                            .bind(&device).bind(delivery).fetch_optional(&mut *tx).await.map_err(|_| "HTTP peer duplicate lookup failed")? {
+                            let old_payload: Value = serde_json::from_str(&old.get::<String,_>("payload"))
+                                .map_err(|_| "HTTP peer stored replay payload invalid")?;
+                            if old.get::<String,_>("op_id") != operation || old_payload != item["payload"] {
+                                return Err("HTTP peer replay changed persisted content".into());
+                            }
+                            sqlx::query("UPDATE http_peer_journal SET acked=0 WHERE device_key=? AND delivery_id=?")
+                                .bind(&device).bind(delivery).execute(&mut *tx).await.map_err(|_| "HTTP peer replay ACK responsibility failed")?;
+                        } else {
+                            sqlx::query("INSERT INTO http_peer_journal(device_key,delivery_id,op_id,payload) VALUES(?,?,?,?)")
+                                .bind(&device).bind(delivery).bind(&operation).bind(payload).execute(&mut *tx).await.map_err(|_| "HTTP peer save failed")?;
+                        }
+                        saved.push((operation, delivery.to_string()));
+                    }
+                    tx.commit().await.map_err(|_| "HTTP peer save journal COMMIT failed")?;
+                    for (operation, delivery) in &saved {
+                        shared.journaled.lock().unwrap().insert((operation.clone(), device.clone()));
+                        shared.evidence.record("http_peer_journal_commit", json!({"peer":"http-v2-0","op_id":operation,"device_key":device,"delivery_id":delivery,"semantics":"test-owned peer SQLite COMMIT completed before HTTP ACK; not an App product-store measurement"}));
+                    }
+                    if !saved.is_empty() {
+                        shared.evidence.record("peer_durable_save_commit", json!({"peer":"http-v2-0","items":saved.len(),"storage":"test-owned SQLite journal; not a product-client persistence result"}));
+                    }
+                    shared.evidence.record("http_peer_pull_page", json!({"page_index":page_index,"request_started_elapsed_us":request_started_elapsed_us,"request_token_present":token.is_some(),"next_token_present":next.is_some(),"scan_complete":complete,"has_more":more,"items":items.len(),"elapsed_us":pull_elapsed_us,"through_journal_commit_us":started.elapsed().as_micros() as u64,"opaque_tokens_logged":false}));
+                    drain_http_peer_journal(&client, &base, &credential, &device, &mut journal, &shared).await?;
+                    if complete {
+                        break;
+                    }
+                    token = next;
+                }
+                if !complete && !shared.stop.load(Ordering::Relaxed) {
+                    return Err("HTTP peer scan exceeded finite cohort page bound".into());
+                }
+                if !shared.stop.load(Ordering::Relaxed) {
+                    // notify_one retains one permit when admission races this
+                    // wait or another page. No empty polling during final idle.
+                    shared.http_wake.notified().await;
+                }
+            }
+            journal.close().await.map_err(|_| "HTTP peer journal close failed")?;
+            Ok(())
+        }.await;
+        if let Err(error) = result {
+            shared.fail(error);
         }
     })
 }
@@ -1352,11 +1750,14 @@ fn has_positive_terminal_evidence(
     received: &BTreeSet<(String, String)>,
     ack_written: &BTreeSet<(String, String)>,
     existing_targets: &BTreeSet<(String, String)>,
+    server_acked: &BTreeSet<(String, String)>,
+    durable_journal: Option<&BTreeSet<(String, String)>>,
 ) -> bool {
     known_messages.contains(&target.0)
         && received.contains(target)
         && ack_written.contains(target)
-        && !existing_targets.contains(target)
+        && (!existing_targets.contains(target) || server_acked.contains(target))
+        && durable_journal.is_none_or(|journal| journal.contains(target))
 }
 
 fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinHandle<()> {
@@ -1365,6 +1766,7 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
     let pid = product.child.id();
     let keys = devices.iter().map(|d| d.key.clone()).collect::<Vec<_>>();
     let ids = devices.iter().map(|d| d.id.clone()).collect::<Vec<_>>();
+    let http_device = devices.iter().find(|d| d.http_pull).map(|d| d.key.clone());
     tokio::spawn(async move {
         let _guard = BackgroundGuard(shared.clone(), "database observer".to_string());
         let selected = if backend == "main" {
@@ -1407,11 +1809,13 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
             let ack_sent = shared.ack_sent.lock().unwrap().clone();
             let received = shared.received.lock().unwrap().clone();
             let accepted = shared.accepted.lock().unwrap().clone();
+            let journaled = shared.journaled.lock().unwrap().clone();
             let snapshot_us = cycle_started.elapsed().as_micros() as u64;
             let mut ro_query_elapsed_us = 0u64;
             let mut terminal = BTreeSet::new();
             let mut state_counts = BTreeMap::<String, usize>::new();
             let mut oldest: Option<i64> = None;
+            let mut ordinary_pending = None;
             let payloads;
             let expired;
             let now = chrono::Utc::now().timestamp_millis();
@@ -1561,10 +1965,12 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                     );
                 }
                 let query_started = Instant::now();
-                let rows=sqlx::query("SELECT m.op_id,t.device_key,t.state,t.accepted_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id LIMIT ?").bind(shared.mode.targets() as i64 + 1).fetch_all(&mut connection).await.unwrap();
+                let rows=sqlx::query("SELECT m.op_id,t.device_key,t.state,t.accepted_at,t.acked_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id LIMIT ?").bind(shared.mode.targets() as i64 + 1).fetch_all(&mut connection).await.unwrap();
                 ro_query_elapsed_us += query_started.elapsed().as_micros() as u64;
                 assert!(rows.len() <= shared.mode.targets());
                 let mut existing = BTreeSet::new();
+                let mut server_acked = BTreeSet::new();
+                let mut unacked = 0usize;
                 for row in rows {
                     let op: String = row.get("op_id");
                     let key: String = row.get("device_key");
@@ -1575,10 +1981,20 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                         "unexpected persisted target outside accepted cohort"
                     );
                     assert!(keys.contains(&key), "unexpected persisted target device");
-                    assert!(existing.insert((op, key)), "duplicate persisted target row");
-                    let accepted: i64 = row.get("accepted_at");
-                    oldest = Some(oldest.map_or(accepted, |old| old.min(accepted)));
+                    let pair = (op, key);
+                    assert!(
+                        existing.insert(pair.clone()),
+                        "duplicate persisted target row"
+                    );
+                    if row.get::<Option<i64>, _>("acked_at").is_some() {
+                        server_acked.insert(pair);
+                    } else {
+                        unacked += 1;
+                        let accepted: i64 = row.get("accepted_at");
+                        oldest = Some(oldest.map_or(accepted, |old| old.min(accepted)));
+                    }
                 }
+                ordinary_pending = Some(unacked);
                 for pair in &ack_sent {
                     if has_positive_terminal_evidence(
                         pair,
@@ -1586,6 +2002,8 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
                         &received,
                         &ack_sent,
                         &existing,
+                        &server_acked,
+                        (http_device.as_ref() == Some(&pair.1)).then_some(&journaled),
                     ) {
                         terminal.insert(pair.clone());
                     }
@@ -1616,14 +2034,16 @@ fn observer(product: &Product, devices: &[Device], shared: Arc<Shared>) -> JoinH
             }
             for pair in terminal {
                 if shared.committed.lock().unwrap().insert(pair.clone()) {
-                    shared.evidence.record("ack_commit_visible_upper_bound",json!({"op_id":pair.0,"device_key":pair.1,"oracle":backend,"semantics":"100ms polling plus scheduling/query delay; actual PUBACK plus durable backend terminal state"}));
+                    shared.evidence.record("ack_commit_visible_upper_bound",json!({"op_id":pair.0,"device_key":pair.1,"oracle":backend,"semantics":"100ms polling plus scheduling/query delay; actual MQTT PUBACK or journal-backed successful HTTP ACK plus durable backend terminal state"}));
                 }
             }
-            let pending: usize = state_counts
-                .iter()
-                .filter(|(state, _)| state.as_str() != "acked")
-                .map(|(_, count)| *count)
-                .sum();
+            let pending: usize = ordinary_pending.unwrap_or_else(|| {
+                state_counts
+                    .iter()
+                    .filter(|(state, _)| state.as_str() != "acked")
+                    .map(|(_, count)| *count)
+                    .sum()
+            });
             if pending > MAX_PENDING_TARGETS {
                 shared.fail(format!(
                     "resource STOP: persisted backlog {pending} exceeds {MAX_PENDING_TARGETS} target records"
@@ -1719,7 +2139,10 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
                 shared.accepted.lock().unwrap().insert(op.clone()),
                 "duplicate HTTP acceptance for {op}"
             );
-            shared.evidence.record("http_accepted",json!({"op_id":op,"message_id":message,"planned_offer_us":planned_us,"status":status.as_u16(),"expected_targets":shared.mode.targets_per_message(),"delivery_complete":false,"semantics":"successful normal product admission response only; completion separately requires one positive MQTT durable ACK per configured target"}));
+            shared.evidence.record("http_accepted",json!({"op_id":op,"message_id":message,"planned_offer_us":planned_us,"status":status.as_u16(),"expected_targets":shared.mode.targets_per_message(),"delivery_complete":false,"semantics":"successful normal product admission response only; completion separately requires positive per-target durable ACK evidence"}));
+            if shared.http_pull_peer {
+                shared.http_wake.notify_one();
+            }
         }
         Err(error) => {
             shared.evidence.record(
@@ -1733,8 +2156,8 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
 async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     let _stop_on_exit = StopGuard(shared.clone());
     let mut devices = Vec::with_capacity(mode.target_devices());
-    for _ in 0..mode.target_devices() {
-        devices.push(product.device().await);
+    for index in 0..mode.target_devices() {
+        devices.push(product.device(shared.http_pull_peer && index == 0).await);
     }
     let channel = product.subscribe(&devices[0].key, None).await;
     for device in devices.iter().skip(1) {
@@ -1746,6 +2169,10 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     let held_device = mode.load_plan().map_or(1, |plan| plan.disconnect_device);
     let mut peers = Vec::with_capacity(devices.len());
     for (index, device) in devices.iter().enumerate() {
+        if device.http_pull {
+            peers.push(http_pull_peer(product, device.key.clone(), shared.clone()).await);
+            continue;
+        }
         let label = if mode.load_plan().is_none() {
             (if index == held_device {
                 "mqtt-held"
@@ -1943,7 +2370,8 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     // already completed after the fixed deadline bypass the drain loop.
     assert!(
         Instant::now() < drain_deadline,
-        "completed cohort observed after fixed last-offer+30s deadline"
+        "completed cohort observed after fixed last-offer+{:?} deadline",
+        mode.drain_limit()
     );
     assert_eq!(
         shared.received.lock().unwrap().len(),
@@ -1964,13 +2392,17 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     );
     wait(product, &shared, mode.post_drain_idle()).await;
     let idle_scope = if mode.is_delivery_load() {
-        "60s after drain; active loopback MQTT peers and 10Hz observer remain; no real Provider pool or 300s maintenance observation"
+        format!(
+            "{}s after drain; active loopback MQTT peers and10Hz observer remain; HTTP peer has no idle polling; normal maintenance can run, but no real Provider pool or energy measurement is established",
+            mode.post_drain_idle().as_secs()
+        )
     } else {
-        "formal mode covers 30s pool idle setting; not 300s maintenance or all network-client pools"
+        "formal mode covers30s pool idle setting; not300s maintenance or all network-client pools"
+            .to_string()
     };
     shared.evidence.record("idle_complete",json!({"mode":mode.name(),"seconds":mode.post_drain_idle().as_secs(),"residual_targets":shared.residual_targets.load(Ordering::Relaxed),"covers":idle_scope}));
     resource_boundary(product.child.id(), &shared.evidence, "idle_complete", true);
-    shared.stop.store(true, Ordering::Relaxed);
+    shared.request_stop();
     phase_clock.await.unwrap();
     for peer in peers {
         peer.await.unwrap();
@@ -1988,13 +2420,22 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
     )
     .unwrap_or_else(|error| panic!("incomplete run evidence: {error}"));
     product.shutdown(&shared.evidence).await;
-    shared.evidence.record("result",json!({"passed":true,"mode":mode.name(),"messages":mode.messages(),"targets":mode.targets(),"persisted_messages":shared.persisted.lock().unwrap().len(),"received_targets":shared.received.lock().unwrap().len(),"puback_targets":shared.ack_sent.lock().unwrap().len(),"positive_terminal_targets":shared.committed.lock().unwrap().len(),"body_released":shared.body_released.lock().unwrap().len(),"residual_targets":shared.residual_targets.load(Ordering::Relaxed),"unfinished":0,"failed":0,"late_callback_definition":"all raw receives and PUBACK sends recorded; same-identity QoS1 retry allowed during formal ACK hold, strict no duplicates in tiny preflight"}));
+    let http_targets = if shared.http_pull_peer {
+        mode.messages()
+    } else {
+        0
+    };
+    shared.evidence.record("result",json!({"passed":true,"mode":mode.name(),"messages":mode.messages(),"targets":mode.targets(),"persisted_messages":shared.persisted.lock().unwrap().len(),"received_targets":shared.received.lock().unwrap().len(),"ack_targets":shared.ack_sent.lock().unwrap().len(),"puback_targets":shared.ack_sent.lock().unwrap().len()-http_targets,"http_v2_ack_targets":http_targets,"http_peer_journaled_targets":shared.journaled.lock().unwrap().len(),"positive_terminal_targets":shared.committed.lock().unwrap().len(),"body_released":shared.body_released.lock().unwrap().len(),"residual_targets":shared.residual_targets.load(Ordering::Relaxed),"unfinished":0,"failed":0,"late_callback_definition":"all raw receives and per-protocol ACK evidence recorded; same-identity QoS1 retry allowed during MQTT disconnect; strict no duplicates in tiny preflight"}));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "isolated paired evidence; explicit frozen normal binary and fresh directory required"]
 async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     let mode = RunMode::from_environment();
+    let setting = std::env::var("C13_HTTP_PULL_PEER").ok();
+    let backend = std::env::var("C12_LEDGER_KIND").expect("main or ordinary oracle required");
+    let http_pull_peer = http_pull_peer_enabled(mode, &backend, setting.as_deref())
+        .unwrap_or_else(|error| panic!("{error}"));
     let directory = PathBuf::from(
         std::env::var_os("C12_PAIR_DIRECTORY").expect("fresh absolute C12_PAIR_DIRECTORY required"),
     );
@@ -2029,6 +2470,9 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     let shared = Arc::new(Shared {
         evidence: evidence.clone(),
         mode,
+        http_pull_peer,
+        http_wake: Notify::new(),
+        journaled: Mutex::new(BTreeSet::new()),
         stop: AtomicBool::new(false),
         hold_from_us: AtomicU64::new(0),
         hold_until_us: AtomicU64::new(0),
@@ -2048,7 +2492,7 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     })
     .await;
     if outcome.is_err() {
-        shared.stop.store(true, Ordering::Relaxed);
+        shared.request_stop();
         let committed = shared.committed.lock().unwrap().len();
         evidence.record("result",json!({"passed":false,"reason":"fixed mode hard deadline","mode":mode.name(),"accepted":shared.accepted.lock().unwrap().len(),"durable_terminal_targets":committed,"unfinished":mode.targets().saturating_sub(committed)}));
     }
