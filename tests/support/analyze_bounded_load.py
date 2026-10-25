@@ -167,6 +167,22 @@ def main():
         planned_target_offers, committed, ack_keys, lambda key, m: m[key], expected_target_count
     )
     ack_to_commit = latency(ack_sent, committed, ack_keys, lambda key, m: m[key], expected_target_count)
+    by_peer = {}
+    for device, label in devices.items():
+        keys = [(op, device) for op in expected_ops]
+        by_peer[label] = {
+            "device_key": device,
+            "expected_target_denominator": config["messages"],
+            "offer_to_receive_ms": latency(
+                planned_target_offers, received, keys, lambda key, mapping: mapping[key], config["messages"]
+            ),
+            "offer_to_ack_evidence_ms": latency(
+                planned_target_offers, ack_sent, keys, lambda key, mapping: mapping[key], config["messages"]
+            ),
+            "offer_to_terminal_visibility_upper_bound_ms": latency(
+                planned_target_offers, committed, keys, lambda key, mapping: mapping[key], config["messages"]
+            ),
+        }
     load_end = max((r["elapsed_us"] for r in events["all_http_complete"]), default=None)
     db_rows = events["database_sample"]
     end_backlog = None
@@ -285,6 +301,7 @@ def main():
             "offer_to_persistence_visibility_upper_bound_ms": latency(planned, persisted, expected_ops, lambda op, m: m[op]["planned_offer_us"]),
             "offer_to_durable_ack_visibility_upper_bound_ms": offer_to_commit,
             "ack_write_to_durable_ack_visibility_upper_bound_ms": ack_to_commit,
+            "by_peer": by_peer,
             "by_stage": stage_latency,
             "timing_limits": "SQLite observer polling interval is 100ms; persistence and durable ACK samples are upper bounds, not commit timestamps",
         },
