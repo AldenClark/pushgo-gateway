@@ -4,6 +4,7 @@
 //! No QA mode, fixture server or Provider substitution is involved. Database
 //! reads every 100ms provide visibility upper bounds, not COMMIT timestamps.
 use futures_util::{StreamExt, stream};
+use pushgo_gateway::ordinary::metrics::Histogram;
 use reqwest::Client;
 use serde_json::{Value, json};
 use sqlx::{Connection, Row, SqliteConnection};
@@ -39,6 +40,127 @@ const MAX_RUN_DIRECTORY_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PROCESS_RSS_KIB: u64 = 1_048_576;
 const MAX_PENDING_TARGETS: usize = 16_384;
 const HTTP_PULL_PAGE_LIMIT: usize = 200;
+
+fn driver_timing_enabled(setting: Option<&str>) -> Result<bool, String> {
+    match setting {
+        None | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(_) => Err("C13_DRIVER_TIMING must be absent,0 or1".into()),
+    }
+}
+
+#[derive(Default)]
+struct MqttDriverTiming {
+    packet_ready_to_json_complete: Histogram,
+    packet_ready_to_verify_return: Histogram,
+    verify_return_to_puback_write_complete: Histogram,
+    packet_ready_to_puback_write_complete: Histogram,
+    puback_write: Histogram,
+}
+impl MqttDriverTiming {
+    fn snapshot(&self) -> Value {
+        json!({
+            "packet_ready_to_json_complete": self.packet_ready_to_json_complete.snapshot(),
+            "packet_ready_to_verify_return": self.packet_ready_to_verify_return.snapshot(),
+            "verify_return_to_puback_write_complete": self.verify_return_to_puback_write_complete.snapshot(),
+            "packet_ready_to_puback_write_complete": self.packet_ready_to_puback_write_complete.snapshot(),
+            "puback_write": self.puback_write.snapshot()
+        })
+    }
+}
+
+struct DriverTiming {
+    enabled: bool,
+    verify_expected_wait: Histogram,
+    verify_expected_hold: Histogram,
+    submit_expected_wait: Histogram,
+    submit_expected_hold: Histogram,
+    response_json_complete_to_accepted_record: Histogram,
+    evidence_file_wait: Histogram,
+    evidence_file_hold: Histogram,
+    http_journal_save_transaction: Histogram,
+    http_journal_save_commit: Histogram,
+    http_journal_ack_marker_transaction: Histogram,
+    http_journal_ack_marker_commit: Histogram,
+    mqtt: [MqttDriverTiming; MAX_LOAD_TARGETS],
+}
+impl DriverTiming {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            verify_expected_wait: Histogram::default(),
+            verify_expected_hold: Histogram::default(),
+            submit_expected_wait: Histogram::default(),
+            submit_expected_hold: Histogram::default(),
+            response_json_complete_to_accepted_record: Histogram::default(),
+            evidence_file_wait: Histogram::default(),
+            evidence_file_hold: Histogram::default(),
+            http_journal_save_transaction: Histogram::default(),
+            http_journal_save_commit: Histogram::default(),
+            http_journal_ack_marker_transaction: Histogram::default(),
+            http_journal_ack_marker_commit: Histogram::default(),
+            mqtt: std::array::from_fn(|_| MqttDriverTiming::default()),
+        }
+    }
+
+    fn start(&self) -> Option<Instant> {
+        if self.enabled {
+            Some(Instant::now())
+        } else {
+            None
+        }
+    }
+
+    fn record_between(&self, histogram: &Histogram, start: Option<Instant>, end: Option<Instant>) {
+        if self.enabled
+            && let (Some(start), Some(end)) = (start, end)
+        {
+            histogram.record(end.duration_since(start));
+        }
+    }
+
+    fn finish(&self, histogram: &Histogram, start: Option<Instant>) {
+        if self.enabled
+            && let Some(start) = start
+        {
+            histogram.record(start.elapsed());
+        }
+    }
+
+    fn snapshot(&self) -> Option<Value> {
+        self.enabled.then(|| json!({
+            "scope": "caller wall time; phases can be nested and must not be added; log2 microsecond bucket quantiles are upper bounds; cumulative snapshots are not exact atomic cuts",
+            "expected_guard_hold_scope": "original guard scope retained, including existing evidence writes and submit Notify; ends immediately before the original scope exits",
+            "mqtt_packet_ready_scope": "after the test MQTT decoder returns a PUBLISH, not kernel socket arrival or server send time",
+            "verify_expected_wait": self.verify_expected_wait.snapshot(),
+            "verify_expected_hold": self.verify_expected_hold.snapshot(),
+            "submit_expected_wait": self.submit_expected_wait.snapshot(),
+            "submit_expected_hold": self.submit_expected_hold.snapshot(),
+            "response_json_complete_to_accepted_record": self.response_json_complete_to_accepted_record.snapshot(),
+            "evidence_file_wait": self.evidence_file_wait.snapshot(),
+            "evidence_file_hold": self.evidence_file_hold.snapshot(),
+            "http_journal_save_transaction": self.http_journal_save_transaction.snapshot(),
+            "http_journal_save_commit": self.http_journal_save_commit.snapshot(),
+            "http_journal_ack_marker_transaction": self.http_journal_ack_marker_transaction.snapshot(),
+            "http_journal_ack_marker_commit": self.http_journal_ack_marker_commit.snapshot(),
+            "mqtt_by_device_index": self.mqtt.iter().enumerate().map(|(slot, timing)| json!({"slot":slot,"timings":timing.snapshot()})).collect::<Vec<_>>()
+        }))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MqttPacketTiming {
+    slot: usize,
+    ready: Instant,
+    json_complete: Instant,
+}
+
+#[derive(Clone, Copy)]
+struct MqttPendingTiming {
+    slot: usize,
+    ready: Instant,
+    verify_returned: Instant,
+}
 
 fn http_pull_peer_enabled(
     mode: RunMode,
@@ -880,11 +1002,68 @@ mod harness_preflight_tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn driver_timing_is_strictly_opt_in_and_disabled_samples_stay_empty() {
+        assert_eq!(driver_timing_enabled(None), Ok(false));
+        assert_eq!(driver_timing_enabled(Some("0")), Ok(false));
+        assert_eq!(driver_timing_enabled(Some("1")), Ok(true));
+        assert!(driver_timing_enabled(Some("true")).is_err());
+        let disabled = DriverTiming::new(false);
+        assert!(disabled.start().is_none());
+        let at = Instant::now();
+        disabled.record_between(
+            &disabled.verify_expected_wait,
+            Some(at),
+            Some(at + Duration::from_micros(17)),
+        );
+        assert_eq!(disabled.verify_expected_wait.snapshot()["samples"], 0);
+        assert!(disabled.snapshot().is_none());
+    }
+
+    #[test]
+    fn driver_timing_snapshot_keeps_fixed_peer_slots_and_phase_counts() {
+        let timing = DriverTiming::new(true);
+        let at = Instant::now();
+        timing.record_between(
+            &timing.verify_expected_wait,
+            Some(at),
+            Some(at + Duration::from_micros(17)),
+        );
+        timing.record_between(&timing.verify_expected_wait, None, Some(at));
+        timing.record_between(
+            &timing.mqtt[2].packet_ready_to_verify_return,
+            Some(at),
+            Some(at + Duration::from_micros(41)),
+        );
+        let snapshot = timing.snapshot().unwrap();
+        assert_eq!(snapshot["verify_expected_wait"]["samples"], 1);
+        assert_eq!(snapshot["verify_expected_wait"]["total_us"], 17);
+        assert_eq!(snapshot["evidence_file_hold"]["samples"], 0);
+        let peers = snapshot["mqtt_by_device_index"].as_array().unwrap();
+        assert_eq!(peers.len(), MAX_LOAD_TARGETS);
+        assert_eq!(peers[2]["slot"], 2);
+        assert_eq!(
+            peers[2]["timings"]["packet_ready_to_verify_return"]["samples"],
+            1
+        );
+        assert_eq!(
+            peers[1]["timings"]["packet_ready_to_verify_return"]["samples"],
+            0
+        );
+        assert!(
+            peers[2]["timings"]["packet_ready_to_verify_return"]["p95_upper_us"]
+                .as_u64()
+                .unwrap()
+                >= 41
+        );
+    }
 }
 
 struct Evidence {
     start: Instant,
     file: Mutex<File>,
+    timing: DriverTiming,
 }
 impl Evidence {
     fn us(&self) -> u64 {
@@ -892,10 +1071,19 @@ impl Evidence {
     }
     fn record(&self, kind: &str, data: Value) {
         let row = json!({"elapsed_us":self.us(),"kind":kind,"data":data});
+        let waiting = self.timing.start();
         let mut file = self.file.lock().unwrap();
+        let holding = self.timing.start();
+        self.timing
+            .record_between(&self.timing.evidence_file_wait, waiting, holding);
         serde_json::to_writer(&mut *file, &row).unwrap();
         file.write_all(b"\n").unwrap();
         file.flush().unwrap();
+        self.timing.finish(&self.timing.evidence_file_hold, holding);
+    }
+
+    fn instant_us(&self, instant: Instant) -> u64 {
+        instant.duration_since(self.start).as_micros() as u64
     }
 }
 #[derive(Clone)]
@@ -938,9 +1126,23 @@ impl Shared {
         self.evidence.record("error", json!({"message":message}));
         *self.failure.lock().unwrap() = Some(message);
     }
-    fn verify(&self, peer: &str, device: &str, data: &Value, delivery: &str) -> String {
+    fn verify(
+        &self,
+        peer: &str,
+        device: &str,
+        data: &Value,
+        delivery: &str,
+        packet_timing: Option<MqttPacketTiming>,
+    ) -> String {
         let op = data["title"].as_str().expect("message title").to_owned();
+        let waiting = self.evidence.timing.start();
         let mut expected = self.expected.lock().unwrap();
+        let holding = self.evidence.timing.start();
+        self.evidence.timing.record_between(
+            &self.evidence.timing.verify_expected_wait,
+            waiting,
+            holding,
+        );
         let item = expected.get_mut(&op).expect("fixed offered cohort");
         let body = data["body"].as_str().expect("whole body");
         assert_eq!(body.len(), item.body_bytes);
@@ -974,7 +1176,27 @@ impl Shared {
                 "unexpected duplicate MQTT receive in tiny preflight for {op} on {device}"
             );
         }
-        self.evidence.record("peer_receive",json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"message_id":message,"body_bytes":body.len(),"body_hash":item.body_hash,"metadata":item.metadata}));
+        let mut event = json!({"peer":peer,"device_key":device,"op_id":op,"delivery_id":delivery,"message_id":message,"body_bytes":body.len(),"body_hash":item.body_hash,"metadata":item.metadata});
+        if let Some(record_ready) = self.evidence.timing.start() {
+            let mut timing = json!({
+                "expected_wait_started_elapsed_us": waiting.map(|at| self.evidence.instant_us(at)),
+                "expected_lock_acquired_elapsed_us": holding.map(|at| self.evidence.instant_us(at)),
+                "validation_record_ready_elapsed_us": self.evidence.instant_us(record_ready)
+            });
+            if let Some(packet) = packet_timing {
+                timing["mqtt_device_index"] = json!(packet.slot);
+                timing["mqtt_packet_ready_elapsed_us"] =
+                    json!(self.evidence.instant_us(packet.ready));
+                timing["mqtt_json_complete_elapsed_us"] =
+                    json!(self.evidence.instant_us(packet.json_complete));
+            }
+            event["driver_timing"] = timing;
+        }
+        self.evidence.record("peer_receive", event);
+        // Retain the original expected guard through the existing evidence I/O.
+        self.evidence
+            .timing
+            .finish(&self.evidence.timing.verify_expected_hold, holding);
         op
     }
     fn ack(&self, peer: &str, device: &str, op: &str, delivery: &str, protocol: &str) {
@@ -1359,6 +1581,7 @@ async fn peer(
     product: &Product,
     device: String,
     label: String,
+    device_index: usize,
     held: bool,
     shared: Arc<Shared>,
 ) -> JoinHandle<()> {
@@ -1371,7 +1594,7 @@ async fn peer(
         .record("peer_connected", json!({"peer":label,"device_key":device}));
     tokio::spawn(async move {
         let _guard = BackgroundGuard(shared.clone(), label.clone());
-        let mut pending = BTreeMap::<u16, (String, String)>::new();
+        let mut pending = BTreeMap::<u16, (String, String, Option<MqttPendingTiming>)>::new();
         let mut last_ping = Instant::now();
         let mut disconnected_once = false;
         while !shared.stop.load(Ordering::Relaxed) {
@@ -1412,8 +1635,29 @@ async fn peer(
                 && now >= shared.hold_from_us.load(Ordering::Relaxed)
                 && now < shared.hold_until_us.load(Ordering::Relaxed);
             if !holding {
-                for (packet, (op, delivery)) in std::mem::take(&mut pending) {
+                for (packet, (op, delivery, timing)) in std::mem::take(&mut pending) {
+                    let write_started = shared.evidence.timing.start();
                     mqtt.acknowledge(packet).await;
+                    let write_completed = shared.evidence.timing.start();
+                    let peer_timing = &shared.evidence.timing.mqtt[device_index];
+                    shared.evidence.timing.record_between(
+                        &peer_timing.puback_write,
+                        write_started,
+                        write_completed,
+                    );
+                    if let Some(timing) = timing {
+                        let peer_timing = &shared.evidence.timing.mqtt[timing.slot];
+                        shared.evidence.timing.record_between(
+                            &peer_timing.verify_return_to_puback_write_complete,
+                            Some(timing.verify_returned),
+                            write_completed,
+                        );
+                        shared.evidence.timing.record_between(
+                            &peer_timing.packet_ready_to_puback_write_complete,
+                            Some(timing.ready),
+                            write_completed,
+                        );
+                    }
                     shared.ack(&label, &device, &op, &delivery, "mqtt");
                 }
             }
@@ -1422,10 +1666,41 @@ async fn peer(
             };
             match packet {
                 mqttbytes::v5::Packet::Publish(publish) => {
+                    let packet_ready = shared.evidence.timing.start();
                     let envelope: Value = serde_json::from_slice(&publish.payload).unwrap();
+                    let json_complete = shared.evidence.timing.start();
+                    let peer_timing = &shared.evidence.timing.mqtt[device_index];
+                    shared.evidence.timing.record_between(
+                        &peer_timing.packet_ready_to_json_complete,
+                        packet_ready,
+                        json_complete,
+                    );
                     let delivery = envelope["delivery_id"].as_str().unwrap().to_owned();
-                    let op = shared.verify(&label, &device, &envelope["data"], &delivery);
-                    pending.insert(publish.pkid, (op, delivery));
+                    let packet_timing =
+                        packet_ready
+                            .zip(json_complete)
+                            .map(|(ready, json_complete)| MqttPacketTiming {
+                                slot: device_index,
+                                ready,
+                                json_complete,
+                            });
+                    let op =
+                        shared.verify(&label, &device, &envelope["data"], &delivery, packet_timing);
+                    let verify_returned = shared.evidence.timing.start();
+                    shared.evidence.timing.record_between(
+                        &peer_timing.packet_ready_to_verify_return,
+                        packet_ready,
+                        verify_returned,
+                    );
+                    let pending_timing =
+                        packet_ready
+                            .zip(verify_returned)
+                            .map(|(ready, verify_returned)| MqttPendingTiming {
+                                slot: device_index,
+                                ready,
+                                verify_returned,
+                            });
+                    pending.insert(publish.pkid, (op, delivery, pending_timing));
                     assert!(
                         pending.len() <= shared.mode.messages(),
                         "pending ACK bound for {} mode",
@@ -1496,7 +1771,7 @@ async fn drain_http_peer_journal(
                 let payload: Value = serde_json::from_str(&row.get::<String, _>("payload"))
                     .map_err(|_| "HTTP peer stored payload invalid")?;
                 let data = pull_payload_data(&payload)?;
-                let observed = shared.verify("http-v2-0", device, &data, &delivery);
+                let observed = shared.verify("http-v2-0", device, &data, &delivery, None);
                 if observed != operation {
                     return Err("HTTP peer journal identity mismatch".into());
                 }
@@ -1524,6 +1799,7 @@ async fn drain_http_peer_journal(
         if requested != acknowledged.len() as u64 || removed > requested {
             return Err("HTTP peer ACK count mismatch".into());
         }
+        let transaction_started = shared.evidence.timing.start();
         let mut tx = journal
             .begin()
             .await
@@ -1532,9 +1808,21 @@ async fn drain_http_peer_journal(
             sqlx::query("UPDATE http_peer_journal SET acked=1 WHERE device_key=? AND delivery_id=? AND acked=0")
                 .bind(device).bind(delivery).execute(&mut *tx).await.map_err(|_| "HTTP peer ACK journal update failed")?;
         }
+        let commit_started = shared.evidence.timing.start();
         tx.commit()
             .await
             .map_err(|_| "HTTP peer ACK journal COMMIT failed")?;
+        let commit_completed = shared.evidence.timing.start();
+        shared.evidence.timing.record_between(
+            &shared.evidence.timing.http_journal_ack_marker_commit,
+            commit_started,
+            commit_completed,
+        );
+        shared.evidence.timing.record_between(
+            &shared.evidence.timing.http_journal_ack_marker_transaction,
+            transaction_started,
+            commit_completed,
+        );
         for (operation, delivery) in acknowledged {
             shared.ack("http-v2-0", device, &operation, &delivery, "http-v2");
         }
@@ -1591,6 +1879,7 @@ async fn http_pull_peer(product: &Product, device: String, shared: Arc<Shared>) 
                     }
                     let mut saved = Vec::with_capacity(items.len());
                     let mut page_ids = BTreeSet::new();
+                    let transaction_started = shared.evidence.timing.start();
                     let mut tx = journal.begin().await.map_err(|_| "HTTP peer save journal begin failed")?;
                     for item in items {
                         let delivery = item["delivery_id"].as_str().filter(|id| !id.is_empty()).ok_or("HTTP peer empty delivery identity")?;
@@ -1598,7 +1887,7 @@ async fn http_pull_peer(product: &Product, device: String, shared: Arc<Shared>) 
                             return Err("HTTP peer repeated identity within page".into());
                         }
                         let data = pull_payload_data(&item["payload"])?;
-                        let operation = shared.verify("http-v2-0", &device, &data, delivery);
+                        let operation = shared.verify("http-v2-0", &device, &data, delivery, None);
                         let payload = serde_json::to_string(&item["payload"]).map_err(|_| "HTTP peer journal payload encode failed")?;
                         if let Some(old) = sqlx::query("SELECT op_id,payload FROM http_peer_journal WHERE device_key=? AND delivery_id=?")
                             .bind(&device).bind(delivery).fetch_optional(&mut *tx).await.map_err(|_| "HTTP peer duplicate lookup failed")? {
@@ -1615,7 +1904,11 @@ async fn http_pull_peer(product: &Product, device: String, shared: Arc<Shared>) 
                         }
                         saved.push((operation, delivery.to_string()));
                     }
+                    let commit_started = shared.evidence.timing.start();
                     tx.commit().await.map_err(|_| "HTTP peer save journal COMMIT failed")?;
+                    let commit_completed = shared.evidence.timing.start();
+                    shared.evidence.timing.record_between(&shared.evidence.timing.http_journal_save_commit, commit_started, commit_completed);
+                    shared.evidence.timing.record_between(&shared.evidence.timing.http_journal_save_transaction, transaction_started, commit_completed);
                     for (operation, delivery) in &saved {
                         shared.journaled.lock().unwrap().insert((operation.clone(), device.clone()));
                         shared.evidence.record("http_peer_journal_commit", json!({"peer":"http-v2-0","op_id":operation,"device_key":device,"delivery_id":delivery,"semantics":"test-owned peer SQLite COMMIT completed before HTTP ACK; not an App product-store measurement"}));
@@ -1702,7 +1995,13 @@ fn run_directory_bytes(path: &Path) -> u64 {
         .sum()
 }
 fn resource_boundary(pid: u32, evidence: &Evidence, phase: &str, sockets: bool) {
+    // Capture before this resource sample writes its own evidence. Reading the
+    // fixed histograms must not recursively log or include this event's I/O.
+    let timing = evidence.timing.snapshot();
     let mut data = json!({"phase":phase,"gateway":process_usage(pid),"harness_including_peers_and_observer":process_usage(std::process::id())});
+    if let Some(timing) = timing {
+        data["driver_timing"] = timing;
+    }
     if sockets {
         // Only this synthetic Gateway's TCP endpoint metadata is inspected;
         // process arguments and environment are never requested or recorded.
@@ -2118,6 +2417,7 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
                     return;
                 }
             };
+            let response_json_complete = shared.evidence.timing.start();
             if !status.is_success() || result["success"] != true {
                 shared
                     .evidence
@@ -2129,7 +2429,14 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
                 .as_str()
                 .expect("normal product message id")
                 .to_owned();
+            let waiting = shared.evidence.timing.start();
             let mut expected = shared.expected.lock().unwrap();
+            let holding = shared.evidence.timing.start();
+            shared.evidence.timing.record_between(
+                &shared.evidence.timing.submit_expected_wait,
+                waiting,
+                holding,
+            );
             let item = expected.get_mut(&op).unwrap();
             if let Some(previous) = &item.message_id {
                 assert_eq!(previous, &message);
@@ -2139,10 +2446,36 @@ async fn submit(product: &Product, shared: &Shared, input: Value, planned_us: u6
                 shared.accepted.lock().unwrap().insert(op.clone()),
                 "duplicate HTTP acceptance for {op}"
             );
-            shared.evidence.record("http_accepted",json!({"op_id":op,"message_id":message,"planned_offer_us":planned_us,"status":status.as_u16(),"expected_targets":shared.mode.targets_per_message(),"delivery_complete":false,"semantics":"successful normal product admission response only; completion separately requires positive per-target durable ACK evidence"}));
+            let accepted_record_ready = shared.evidence.timing.start();
+            shared.evidence.timing.record_between(
+                &shared
+                    .evidence
+                    .timing
+                    .response_json_complete_to_accepted_record,
+                response_json_complete,
+                accepted_record_ready,
+            );
+            let mut event = json!({"op_id":op,"message_id":message,"planned_offer_us":planned_us,"status":status.as_u16(),"expected_targets":shared.mode.targets_per_message(),"delivery_complete":false,"semantics":"successful normal product admission response only; completion separately requires positive per-target durable ACK evidence"});
+            if let (Some(json_complete), Some(record_ready)) =
+                (response_json_complete, accepted_record_ready)
+            {
+                event["driver_timing"] = json!({
+                    "response_json_complete_elapsed_us":shared.evidence.instant_us(json_complete),
+                    "accepted_record_ready_elapsed_us":shared.evidence.instant_us(record_ready),
+                    "expected_wait_started_elapsed_us":waiting.map(|at|shared.evidence.instant_us(at)),
+                    "expected_lock_acquired_elapsed_us":holding.map(|at|shared.evidence.instant_us(at)),
+                    "scope":"response JSON complete to accepted-record construction; client processing and expected-lock wait, not additional server latency or this record's file I/O"
+                });
+            }
+            shared.evidence.record("http_accepted", event);
             if shared.http_pull_peer {
                 shared.http_wake.notify_one();
             }
+            // Keep the original guard through accepted evidence and Notify.
+            shared
+                .evidence
+                .timing
+                .finish(&shared.evidence.timing.submit_expected_hold, holding);
         }
         Err(error) => {
             shared.evidence.record(
@@ -2190,6 +2523,7 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
                 product,
                 device.key.clone(),
                 label,
+                index,
                 index == held_device,
                 shared.clone(),
             )
@@ -2432,6 +2766,9 @@ async fn journey(product: &mut Product, shared: Arc<Shared>, mode: RunMode) {
 #[ignore = "isolated paired evidence; explicit frozen normal binary and fresh directory required"]
 async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     let mode = RunMode::from_environment();
+    let timing_setting = std::env::var("C13_DRIVER_TIMING").ok();
+    let driver_timing =
+        driver_timing_enabled(timing_setting.as_deref()).unwrap_or_else(|error| panic!("{error}"));
     let setting = std::env::var("C13_HTTP_PULL_PEER").ok();
     let backend = std::env::var("C12_LEDGER_KIND").expect("main or ordinary oracle required");
     let http_pull_peer = http_pull_peer_enabled(mode, &backend, setting.as_deref())
@@ -2462,10 +2799,11 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     let evidence = Arc::new(Evidence {
         start: Instant::now(),
         file: Mutex::new(private_file(&directory.join("journey.jsonl"))),
+        timing: DriverTiming::new(driver_timing),
     });
     evidence.record(
         "run_mode",
-        json!({"mode":mode.name(),"messages":mode.messages(),"targets":mode.targets(),"formal_schedule_unchanged":true}),
+        json!({"mode":mode.name(),"messages":mode.messages(),"targets":mode.targets(),"formal_schedule_unchanged":true,"driver_timing":driver_timing}),
     );
     let shared = Arc::new(Shared {
         evidence: evidence.clone(),
