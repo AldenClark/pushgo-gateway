@@ -22,9 +22,13 @@ pub enum Path {
     Maintenance,
     Control,
     Read,
+    PrivateClaim,
+    PrivateAuthorize,
+    PrivateAck,
+    MqttAck,
 }
 #[cfg(any(test, feature = "qa"))]
-const PATHS: [&str; 8] = [
+const PATHS: [&str; 12] = [
     "accept",
     "fanout",
     "claim",
@@ -33,6 +37,10 @@ const PATHS: [&str; 8] = [
     "maintenance",
     "control",
     "read",
+    "private_claim",
+    "private_authorize",
+    "private_ack",
+    "mqtt_ack",
 ];
 
 #[derive(Clone, Copy)]
@@ -46,9 +54,13 @@ pub enum Phase {
     Commit,
     Auth,
     Compute,
+    CallerWall,
+    HubWait,
+    HubHold,
+    WireWrite,
 }
 #[cfg(any(test, feature = "qa"))]
-const PHASES: [&str; 8] = [
+const PHASES: [&str; 12] = [
     "gate_wait",
     "gate_hold",
     "pool_acquire",
@@ -57,6 +69,10 @@ const PHASES: [&str; 8] = [
     "commit",
     "auth",
     "compute",
+    "caller_wall",
+    "hub_wait",
+    "hub_hold",
+    "wire_write",
 ];
 
 /// Fixed labels, never SQL text, identities, parameters, or request data.
@@ -233,7 +249,7 @@ impl Profile {
                 json!({"phases": phases, "statements": statements}),
             );
         }
-        json!({"paths": paths, "semantics": "fixed log2 microsecond histograms; unused statement labels omitted from snapshot; samples count observed calls, including error/cancel exits; statement_inclusive includes trigger work and SQLx dispatch/results; pool_acquire is pool queue plus checkout; begin is worker queue plus BEGIN after checkout; commit is worker queue plus COMMIT; gate_hold can contain nested fanout/maintenance timers, never sum nested totals as independent time"})
+        json!({"paths": paths, "semantics": "fixed log2 microsecond histograms; unused statement labels omitted from snapshot; samples count observed calls, including error/cancel exits; statement_inclusive includes trigger work and SQLx dispatch/results; SQLite write pool_acquire includes checkout and busy_timeout setup; begin is worker queue plus BEGIN after checkout; commit is worker queue plus COMMIT and excludes connection-setting restore; hub_wait/hold cover the Private groups lock; private caller_wall includes nested store phases; private_claim store phases include claim release; mqtt_ack caller_wall covers every decoded PUBACK handler when an ordinary store exists, including retained/unknown/non-success ACKs; wire_write covers only ordinary MQTT PUBLISH encoding/write/flush, not client receipt; nested caller/hub/gate/statement totals and quantiles are not independent and must not be summed"})
     }
 
     #[cfg(not(any(test, feature = "qa")))]

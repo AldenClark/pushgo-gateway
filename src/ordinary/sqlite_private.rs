@@ -52,15 +52,18 @@ impl DeliveryStore {
         let _gate = self
             .counters
             .profile
-            .phase(Path::Claim, Phase::GateWait, self.gate.lock())
+            .phase(Path::PrivateClaim, Phase::GateWait, self.gate.lock())
             .await;
         self.health.ensure()?;
-        let _hold = self.counters.profile.timer(Path::Claim, Phase::GateHold);
+        let _hold = self
+            .counters
+            .profile
+            .timer(Path::PrivateClaim, Phase::GateHold);
         let mut connection = self
             .counters
             .profile
             .phase(
-                Path::Claim,
+                Path::PrivateClaim,
                 Phase::PoolAcquire,
                 SqliteWriteConnection::acquire(&self.pool),
             )
@@ -70,7 +73,7 @@ impl DeliveryStore {
             .counters
             .profile
             .phase(
-                Path::Claim,
+                Path::PrivateClaim,
                 Phase::Begin,
                 connection.begin_with("BEGIN IMMEDIATE"),
             )
@@ -103,14 +106,14 @@ impl DeliveryStore {
         // One canonical frozen key represents every coalesced unacknowledged
         // private row for this (consumer, delivery). A logical item is not claimed
         // twice by separate sessions, and only this bounded batch loads payloads.
-        let rows = self.counters.profile.sql(Path::Claim, Statement::ClaimSelect, sqlx::query("SELECT t.delivery_id,t.device_key,t.delivery_epoch,m.payload_blob,m.accepted_at,m.expires_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='private' AND t.acked_at IS NULL AND t.private_claim IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets s WHERE s.pull_owner=t.pull_owner AND s.delivery_id=t.delivery_id AND s.delivery_mode='private' AND s.acked_at IS NULL AND (s.device_key<t.device_key OR s.private_claim IS NOT NULL)) ORDER BY t.accepted_at,t.delivery_id LIMIT ?").bind(&route.device_key).bind(route.route_generation).bind(at).bind(limit as i64).fetch_all(&mut *tx)).await?;
+        let rows = self.counters.profile.sql(Path::PrivateClaim, Statement::ClaimSelect, sqlx::query("SELECT t.delivery_id,t.device_key,t.delivery_epoch,m.payload_blob,m.accepted_at,m.expires_at FROM ordinary_targets t JOIN ordinary_messages m ON m.delivery_id=t.delivery_id JOIN ordinary_device_routes d ON d.device_key=t.pull_owner WHERE t.pull_owner=? AND t.delivery_mode='private' AND t.acked_at IS NULL AND t.private_claim IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets s WHERE s.pull_owner=t.pull_owner AND s.delivery_id=t.delivery_id AND s.delivery_mode='private' AND s.acked_at IS NULL AND (s.device_key<t.device_key OR s.private_claim IS NOT NULL)) ORDER BY t.accepted_at,t.delivery_id LIMIT ?").bind(&route.device_key).bind(route.route_generation).bind(at).bind(limit as i64).fetch_all(&mut *tx)).await?;
         let mut tickets = Vec::with_capacity(rows.len());
         for row in rows {
             let delivery_id: String = row.try_get("delivery_id")?;
             let claim_token = generate_hex_id_128();
             // Claim token and group are shared across all physical siblings;
             // canonical receipt_owner + epoch fences the issued logical grant.
-            self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=?,private_group=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NULL").bind(&claim_token).bind(group).bind(&route.device_key).bind(&delivery_id).execute(&mut *tx)).await?;
+            self.counters.profile.sql(Path::PrivateClaim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=?,private_group=? WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND acked_at IS NULL AND private_claim IS NULL").bind(&claim_token).bind(group).bind(&route.device_key).bind(&delivery_id).execute(&mut *tx)).await?;
             tickets.push(PrivateTicket {
                 delivery_id,
                 receipt_owner: row.try_get("device_key")?,
@@ -127,7 +130,7 @@ impl DeliveryStore {
         self.health.ensure()?;
         self.counters
             .profile
-            .phase(Path::Claim, Phase::Commit, tx.commit())
+            .phase(Path::PrivateClaim, Phase::Commit, tx.commit())
             .await?;
         connection.restore().await?;
         Ok(tickets)
@@ -141,10 +144,14 @@ impl DeliveryStore {
         let mut connection = self
             .counters
             .profile
-            .phase(Path::Claim, Phase::PoolAcquire, self.pool.acquire())
+            .phase(
+                Path::PrivateAuthorize,
+                Phase::PoolAcquire,
+                self.pool.acquire(),
+            )
             .await?;
         self.health.ensure()?;
-        let exists: i64 = self.counters.profile.sql(Path::Claim, Statement::ClaimSelect, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t JOIN ordinary_device_routes d ON d.device_key=t.pull_owner JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.pull_owner=? AND t.delivery_mode='private' AND t.delivery_epoch=? AND t.private_claim=? AND t.private_group=? AND t.acked_at IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='private' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key))").bind(&ticket.delivery_id).bind(&ticket.receipt_owner).bind(&ticket.pull_owner).bind(ticket.delivery_epoch).bind(&ticket.claim_token).bind(&ticket.group_id).bind(ticket.route_generation).bind(now()).fetch_one(&mut *connection)).await?;
+        let exists: i64 = self.counters.profile.sql(Path::PrivateAuthorize, Statement::ClaimSelect, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t JOIN ordinary_device_routes d ON d.device_key=t.pull_owner JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.pull_owner=? AND t.delivery_mode='private' AND t.delivery_epoch=? AND t.private_claim=? AND t.private_group=? AND t.acked_at IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='private' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key))").bind(&ticket.delivery_id).bind(&ticket.receipt_owner).bind(&ticket.pull_owner).bind(ticket.delivery_epoch).bind(&ticket.claim_token).bind(&ticket.group_id).bind(ticket.route_generation).bind(now()).fetch_one(&mut *connection)).await?;
         Ok(exists != 0)
     }
 
@@ -184,15 +191,18 @@ impl DeliveryStore {
         let _gate = self
             .counters
             .profile
-            .phase(Path::Ack, Phase::GateWait, self.gate.lock())
+            .phase(Path::PrivateAck, Phase::GateWait, self.gate.lock())
             .await;
         self.health.ensure()?;
-        let _hold = self.counters.profile.timer(Path::Ack, Phase::GateHold);
+        let _hold = self
+            .counters
+            .profile
+            .timer(Path::PrivateAck, Phase::GateHold);
         let mut connection = self
             .counters
             .profile
             .phase(
-                Path::Ack,
+                Path::PrivateAck,
                 Phase::PoolAcquire,
                 SqliteWriteConnection::acquire(&self.pool),
             )
@@ -202,16 +212,16 @@ impl DeliveryStore {
             .counters
             .profile
             .phase(
-                Path::Ack,
+                Path::PrivateAck,
                 Phase::Begin,
                 connection.begin_with("BEGIN IMMEDIATE"),
             )
             .await?;
         self.health.ensure()?;
         let at = now();
-        let granted: i64 = self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t JOIN ordinary_device_routes d ON d.device_key=t.pull_owner JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.pull_owner=? AND t.delivery_mode='private' AND t.delivery_epoch=? AND t.private_claim=? AND t.private_group=? AND t.acked_at IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='private' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key))").bind(&ticket.delivery_id).bind(&ticket.receipt_owner).bind(&ticket.pull_owner).bind(ticket.delivery_epoch).bind(&ticket.claim_token).bind(&ticket.group_id).bind(ticket.route_generation).bind(at).fetch_one(&mut *tx)).await?;
+        let granted: i64 = self.counters.profile.sql(Path::PrivateAck, Statement::AckUpdate, sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ordinary_targets t JOIN ordinary_device_routes d ON d.device_key=t.pull_owner JOIN ordinary_messages m ON m.delivery_id=t.delivery_id WHERE t.delivery_id=? AND t.device_key=? AND t.pull_owner=? AND t.delivery_mode='private' AND t.delivery_epoch=? AND t.private_claim=? AND t.private_group=? AND t.acked_at IS NULL AND d.provider IS NULL AND d.retired_at IS NULL AND d.coalesced_to IS NULL AND d.route_generation=? AND m.expires_at>? AND m.payload_bytes>0 AND NOT EXISTS(SELECT 1 FROM ordinary_targets sibling WHERE sibling.pull_owner=t.pull_owner AND sibling.delivery_id=t.delivery_id AND sibling.delivery_mode='private' AND sibling.acked_at IS NULL AND sibling.device_key<t.device_key))").bind(&ticket.delivery_id).bind(&ticket.receipt_owner).bind(&ticket.pull_owner).bind(ticket.delivery_epoch).bind(&ticket.claim_token).bind(&ticket.group_id).bind(ticket.route_generation).bind(at).fetch_one(&mut *tx)).await?;
         let removed = if granted != 0 {
-            let changed = self.counters.profile.sql(Path::Ack, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=?,private_claim=NULL,private_group=NULL,state=CASE WHEN state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND private_claim=? AND private_group=? AND acked_at IS NULL").bind(at).bind(&ticket.pull_owner).bind(&ticket.delivery_id).bind(&ticket.claim_token).bind(&ticket.group_id).execute(&mut *tx)).await?.rows_affected() > 0;
+            let changed = self.counters.profile.sql(Path::PrivateAck, Statement::AckUpdate, sqlx::query("UPDATE ordinary_targets SET acked_at=?,private_claim=NULL,private_group=NULL,state=CASE WHEN state IN ('pending','retry_wait') THEN 'superseded_route' ELSE state END WHERE pull_owner=? AND delivery_id=? AND delivery_mode='private' AND private_claim=? AND private_group=? AND acked_at IS NULL").bind(at).bind(&ticket.pull_owner).bind(&ticket.delivery_id).bind(&ticket.claim_token).bind(&ticket.group_id).execute(&mut *tx)).await?.rows_affected() > 0;
             if changed && rejected {
                 // This is a durable negative receipt, never a successful ACK or
                 // provider acceptance. The terminal marker releases the same
@@ -227,7 +237,7 @@ impl DeliveryStore {
                 &mut tx,
                 &ticket.receipt_owner,
                 &ticket.delivery_id,
-                Path::Ack,
+                Path::PrivateAck,
             )
             .await?;
             changed
@@ -237,7 +247,7 @@ impl DeliveryStore {
         self.health.ensure()?;
         self.counters
             .profile
-            .phase(Path::Ack, Phase::Commit, tx.commit())
+            .phase(Path::PrivateAck, Phase::Commit, tx.commit())
             .await?;
         connection.restore().await?;
         if removed {
@@ -263,15 +273,18 @@ impl DeliveryStore {
         let _gate = self
             .counters
             .profile
-            .phase(Path::Claim, Phase::GateWait, self.gate.lock())
+            .phase(Path::PrivateClaim, Phase::GateWait, self.gate.lock())
             .await;
         self.health.ensure()?;
-        let _hold = self.counters.profile.timer(Path::Claim, Phase::GateHold);
+        let _hold = self
+            .counters
+            .profile
+            .timer(Path::PrivateClaim, Phase::GateHold);
         let mut connection = self
             .counters
             .profile
             .phase(
-                Path::Claim,
+                Path::PrivateClaim,
                 Phase::PoolAcquire,
                 SqliteWriteConnection::acquire(&self.pool),
             )
@@ -281,7 +294,7 @@ impl DeliveryStore {
             .counters
             .profile
             .phase(
-                Path::Claim,
+                Path::PrivateClaim,
                 Phase::Begin,
                 connection.begin_with("BEGIN IMMEDIATE"),
             )
@@ -289,13 +302,13 @@ impl DeliveryStore {
         self.health.ensure()?;
         let mut released = 0;
         for token in claim_tokens {
-            let changed = self.counters.profile.sql(Path::Claim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=NULL,private_group=NULL WHERE delivery_mode='private' AND private_group=? AND private_claim=?").bind(group).bind(token).execute(&mut *tx)).await?.rows_affected();
+            let changed = self.counters.profile.sql(Path::PrivateClaim, Statement::ClaimUpdate, sqlx::query("UPDATE ordinary_targets SET private_claim=NULL,private_group=NULL WHERE delivery_mode='private' AND private_group=? AND private_claim=?").bind(group).bind(token).execute(&mut *tx)).await?.rows_affected();
             released += usize::from(changed > 0);
         }
         self.health.ensure()?;
         self.counters
             .profile
-            .phase(Path::Claim, Phase::Commit, tx.commit())
+            .phase(Path::PrivateClaim, Phase::Commit, tx.commit())
             .await?;
         connection.restore().await?;
         Ok(released)

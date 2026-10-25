@@ -1,7 +1,9 @@
-//! Bounded comparison of unchanged normal Gateway binaries over HTTP/TCP MQTT5.
+//! Bounded normal-product comparison and explicit diagnostic profiles over HTTP/TCP MQTT5.
 //! Delivery-load can opt into one V2 HTTP peer with a test-owned durable journal;
 //! it is a benchmark peer, not an Android/Apple/Windows product client.
-//! No QA mode, fixture server or Provider substitution is involved. Database
+//! Default runs use no QA mode, fixture server or Provider substitution. An
+//! explicit ordinary delivery-load flag may request only product QA profiling.
+//! Database
 //! reads every 100ms provide visibility upper bounds, not COMMIT timestamps.
 use futures_util::{StreamExt, stream};
 use pushgo_gateway::ordinary::metrics::Histogram;
@@ -26,7 +28,7 @@ use tokio::{sync::Notify, task::JoinHandle};
 
 #[path = "support/product_mqtt.rs"]
 mod product_mqtt;
-use product_mqtt::ProductMqttClient;
+use product_mqtt::{ProductMqttClient, ProductMqttReceiveStats};
 
 const MESSAGES: usize = 136;
 const HARD_LIMIT: Duration = Duration::from_secs(100);
@@ -49,6 +51,44 @@ fn driver_timing_enabled(setting: Option<&str>) -> Result<bool, String> {
     }
 }
 
+fn gateway_qa_profile_enabled(
+    mode: RunMode,
+    backend: &str,
+    setting: Option<&str>,
+) -> Result<bool, String> {
+    match setting {
+        None | Some("0") => Ok(false),
+        Some("1") if mode.is_delivery_load() && backend == "ordinary" => Ok(true),
+        Some("1") => Err("C13_GATEWAY_QA_PROFILE=1 requires delivery-load ordinary mode".into()),
+        Some(_) => Err("C13_GATEWAY_QA_PROFILE must be absent,0 or1".into()),
+    }
+}
+
+fn gateway_qa_profile_directory(
+    directory: &Path,
+    enabled: bool,
+) -> Result<Option<PathBuf>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    let path = directory.join("gateway-qa-profile");
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Some(path)),
+        Ok(_) => Err("refusing existing gateway-qa-profile output".into()),
+        Err(error) => Err(format!("cannot inspect gateway-qa-profile output: {error}")),
+    }
+}
+
+fn take_puback_to_receive_gap(
+    last_ack: &mut Option<Instant>,
+    receive_started: Option<Instant>,
+) -> Option<Duration> {
+    last_ack
+        .take()
+        .zip(receive_started)
+        .map(|(ack, receive)| receive.duration_since(ack))
+}
+
 #[derive(Default)]
 struct MqttDriverTiming {
     packet_ready_to_json_complete: Histogram,
@@ -56,15 +96,74 @@ struct MqttDriverTiming {
     verify_return_to_puback_write_complete: Histogram,
     packet_ready_to_puback_write_complete: Histogram,
     puback_write: Histogram,
+    last_puback_to_first_receive: Histogram,
+    last_puback_to_first_receive_after_disconnect: Histogram,
+    receive_success: Histogram,
+    receive_timeout: Histogram,
+    socket_drop_to_reconnect_complete: Histogram,
+    receive_calls: AtomicU64,
+    receive_timeouts: AtomicU64,
+    publish_received: AtomicU64,
+    ready_parses: AtomicU64,
+    read_calls: AtomicU64,
+    read_bytes: AtomicU64,
+    buffered_before_total: AtomicU64,
+    buffered_after_total: AtomicU64,
+    buffered_before_max: AtomicU64,
+    buffered_after_max: AtomicU64,
+    buffered_peak: AtomicU64,
 }
 impl MqttDriverTiming {
+    fn record_receive(&self, stats: ProductMqttReceiveStats, received: bool, publish: bool) {
+        self.receive_calls.fetch_add(1, Ordering::Relaxed);
+        self.receive_timeouts
+            .fetch_add(u64::from(!received), Ordering::Relaxed);
+        self.publish_received
+            .fetch_add(u64::from(publish), Ordering::Relaxed);
+        self.ready_parses
+            .fetch_add(stats.ready_parses, Ordering::Relaxed);
+        self.read_calls
+            .fetch_add(stats.read_calls, Ordering::Relaxed);
+        self.read_bytes
+            .fetch_add(stats.read_bytes, Ordering::Relaxed);
+        self.buffered_before_total
+            .fetch_add(stats.buffered_before as u64, Ordering::Relaxed);
+        self.buffered_after_total
+            .fetch_add(stats.buffered_after as u64, Ordering::Relaxed);
+        self.buffered_before_max
+            .fetch_max(stats.buffered_before as u64, Ordering::Relaxed);
+        self.buffered_after_max
+            .fetch_max(stats.buffered_after as u64, Ordering::Relaxed);
+        self.buffered_peak
+            .fetch_max(stats.buffered_peak as u64, Ordering::Relaxed);
+    }
+
     fn snapshot(&self) -> Value {
         json!({
             "packet_ready_to_json_complete": self.packet_ready_to_json_complete.snapshot(),
             "packet_ready_to_verify_return": self.packet_ready_to_verify_return.snapshot(),
             "verify_return_to_puback_write_complete": self.verify_return_to_puback_write_complete.snapshot(),
             "packet_ready_to_puback_write_complete": self.packet_ready_to_puback_write_complete.snapshot(),
-            "puback_write": self.puback_write.snapshot()
+            "puback_write": self.puback_write.snapshot(),
+            "last_puback_to_first_receive": self.last_puback_to_first_receive.snapshot(),
+            "last_puback_to_first_receive_after_disconnect": self.last_puback_to_first_receive_after_disconnect.snapshot(),
+            "receive_success": self.receive_success.snapshot(),
+            "receive_timeout": self.receive_timeout.snapshot(),
+            "socket_drop_to_reconnect_complete": self.socket_drop_to_reconnect_complete.snapshot(),
+            "receive_counts": {
+                "calls":self.receive_calls.load(Ordering::Relaxed),
+                "timeouts":self.receive_timeouts.load(Ordering::Relaxed),
+                "publish_packets":self.publish_received.load(Ordering::Relaxed),
+                "ready_packet_parses":self.ready_parses.load(Ordering::Relaxed),
+                "read_calls_including_timeout":self.read_calls.load(Ordering::Relaxed),
+                "read_bytes":self.read_bytes.load(Ordering::Relaxed),
+                "buffered_before_total_bytes":self.buffered_before_total.load(Ordering::Relaxed),
+                "buffered_after_total_bytes":self.buffered_after_total.load(Ordering::Relaxed),
+                "buffered_before_max_bytes":self.buffered_before_max.load(Ordering::Relaxed),
+                "buffered_after_max_bytes":self.buffered_after_max.load(Ordering::Relaxed),
+                "buffered_peak_bytes":self.buffered_peak.load(Ordering::Relaxed)
+            },
+            "receive_scope":"caller wait/parse/scheduling; kernel readiness is unknown; success includes non-PUBLISH packets; timeout may retain partial bytes; read calls are wrapper attempts, not syscalls; buffer bytes are logical lengths, not allocation capacity; one last-PUBACK gap sample only at the first following receive call; held disconnect gap reported separately"
         })
     }
 }
@@ -1186,6 +1285,113 @@ mod harness_preflight_tests {
         );
         assert_eq!(std::fs::read(path).unwrap(), b"original\n");
     }
+
+    #[test]
+    fn gateway_qa_profile_is_opt_in_mode_limited_and_uses_only_a_fresh_fixed_child() {
+        let mode = RunMode::DeliveryLoad(LoadPlan::representative());
+        assert_eq!(
+            gateway_qa_profile_enabled(mode, "ordinary", None),
+            Ok(false)
+        );
+        assert_eq!(
+            gateway_qa_profile_enabled(mode, "ordinary", Some("0")),
+            Ok(false)
+        );
+        assert_eq!(
+            gateway_qa_profile_enabled(mode, "ordinary", Some("1")),
+            Ok(true)
+        );
+        assert!(gateway_qa_profile_enabled(mode, "main", Some("1")).is_err());
+        assert!(gateway_qa_profile_enabled(RunMode::Formal, "ordinary", Some("1")).is_err());
+        assert!(gateway_qa_profile_enabled(RunMode::Preflight, "ordinary", Some("1")).is_err());
+        assert!(gateway_qa_profile_enabled(mode, "ordinary", Some("true")).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            gateway_qa_profile_directory(directory.path(), false).unwrap(),
+            None
+        );
+        let profile = gateway_qa_profile_directory(directory.path(), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile, directory.path().join("gateway-qa-profile"));
+        assert_eq!(profile.parent(), Some(directory.path()));
+        assert!(!profile.exists());
+        std::fs::create_dir(&profile).unwrap();
+        assert!(gateway_qa_profile_directory(directory.path(), true).is_err());
+        assert_eq!(
+            gateway_qa_profile_directory(directory.path(), false).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn last_puback_gap_is_consumed_by_only_the_first_following_receive() {
+        let at = Instant::now();
+        let mut last = Some(at);
+        assert_eq!(
+            take_puback_to_receive_gap(&mut last, Some(at + Duration::from_millis(3))),
+            Some(Duration::from_millis(3))
+        );
+        assert!(last.is_none());
+        assert_eq!(
+            take_puback_to_receive_gap(&mut last, Some(at + Duration::from_secs(330))),
+            None
+        );
+        let mut disabled = Some(at);
+        assert_eq!(take_puback_to_receive_gap(&mut disabled, None), None);
+        assert!(disabled.is_none());
+    }
+
+    #[test]
+    fn mqtt_receive_counters_distinguish_packets_timeouts_reads_and_buffered_bytes() {
+        let timing = MqttDriverTiming::default();
+        timing.record_receive(
+            ProductMqttReceiveStats {
+                buffered_before: 17,
+                buffered_after: 0,
+                buffered_peak: 17,
+                read_calls: 0,
+                read_bytes: 0,
+                ready_parses: 1,
+            },
+            true,
+            false,
+        );
+        timing.record_receive(
+            ProductMqttReceiveStats {
+                buffered_before: 0,
+                buffered_after: 16,
+                buffered_peak: 16,
+                read_calls: 1,
+                read_bytes: 16,
+                ready_parses: 0,
+            },
+            false,
+            false,
+        );
+        timing.record_receive(
+            ProductMqttReceiveStats {
+                buffered_before: 16,
+                buffered_after: 8,
+                buffered_peak: 64,
+                read_calls: 1,
+                read_bytes: 48,
+                ready_parses: 1,
+            },
+            true,
+            true,
+        );
+        let counts = timing.snapshot()["receive_counts"].clone();
+        assert_eq!(counts["calls"], 3);
+        assert_eq!(counts["timeouts"], 1);
+        assert_eq!(counts["publish_packets"], 1);
+        assert_eq!(counts["ready_packet_parses"], 2);
+        assert_eq!(counts["read_calls_including_timeout"], 2);
+        assert_eq!(counts["read_bytes"], 64);
+        assert_eq!(counts["buffered_before_total_bytes"], 33);
+        assert_eq!(counts["buffered_after_total_bytes"], 24);
+        assert_eq!(counts["buffered_peak_bytes"], 64);
+    }
 }
 
 struct Evidence {
@@ -1439,8 +1645,15 @@ fn file_hash(path: &Path) -> String {
     hash.finalize().to_hex().to_string()
 }
 impl Product {
-    async fn spawn(directory: PathBuf, evidence: &Evidence, mode: RunMode) -> Self {
+    async fn spawn(
+        directory: PathBuf,
+        evidence: &Evidence,
+        mode: RunMode,
+        qa_profile: bool,
+    ) -> Self {
         guard_disk(&directory);
+        let profile_directory = gateway_qa_profile_directory(&directory, qa_profile)
+            .unwrap_or_else(|error| panic!("{error}"));
         let binary = PathBuf::from(
             std::env::var_os("C12_GATEWAY_BINARY")
                 .expect("absolute normal product binary required"),
@@ -1491,7 +1704,9 @@ impl Product {
             "provider": provider_description,
             "http_pull_peer": mixed,
             "http_wake": if mixed {"controlled submit-success Notify, not external Provider wake latency"} else {"not used"},
-            "qa": false,
+            "qa": qa_profile,
+            "gateway_qa_profile_directory":profile_directory,
+            "measurement_scope":if qa_profile {"diagnostic QA-instrumented product; not the sealed normal A/B artifact; Provider substitution remains disabled"} else {"normal product; no Gateway QA profiling requested"},
             "database": database,
             "http_bind": format!("127.0.0.1:{http_port}"),
             "mqtt_bind": format!("127.0.0.1:{mqtt_port}"),
@@ -1510,27 +1725,30 @@ impl Product {
         for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("PUSHGO_")) {
             command.env_remove(key);
         }
+        command.args([
+            "--http-addr",
+            &format!("127.0.0.1:{http_port}"),
+            "--db-url",
+            &format!("sqlite://{}?mode=rwc", database.display()),
+            "--runtime-profile",
+            "small",
+            "--token",
+            &synthetic_credential,
+            "--token-service-url",
+            "http://127.0.0.1:1",
+            "--private-transports",
+            "mqtt",
+            "--mqtt-bind",
+            &format!("127.0.0.1:{mqtt_port}"),
+            "--mqtt-port",
+            &mqtt_port.to_string(),
+            "--observability-log-level",
+            "info",
+        ]);
+        if let Some(directory) = &profile_directory {
+            command.arg("--qa-resource-observation-dir").arg(directory);
+        }
         let child = command
-            .args([
-                "--http-addr",
-                &format!("127.0.0.1:{http_port}"),
-                "--db-url",
-                &format!("sqlite://{}?mode=rwc", database.display()),
-                "--runtime-profile",
-                "small",
-                "--token",
-                &synthetic_credential,
-                "--token-service-url",
-                "http://127.0.0.1:1",
-                "--private-transports",
-                "mqtt",
-                "--mqtt-bind",
-                &format!("127.0.0.1:{mqtt_port}"),
-                "--mqtt-port",
-                &mqtt_port.to_string(),
-                "--observability-log-level",
-                "info",
-            ])
             .stdout(Stdio::from(log.try_clone().unwrap()))
             .stderr(Stdio::from(log))
             .spawn()
@@ -1548,7 +1766,7 @@ impl Product {
             mqtt_port,
             backend,
         };
-        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":peer_description,"http_pull_peer":mixed,"http_wake":if mixed {"controlled submit-success Notify, not external Provider wake latency"} else {"not used"},"target_devices":mode.target_devices(),"provider":provider_description,"qa":false,"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":mode.http_concurrency(),"test_owned_background_tokio_tasks":mode.target_devices()+2,"test_owned_http_offer_futures_max":mode.http_concurrency(),"gateway_tokio_task_count":"not instrumented; process thread count is sampled instead","load_plan":mode.load_plan().map(LoadPlan::to_value),"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; HTTP requires local journal COMMIT and actual successful ACK plus server acked_at/target absence; not exact COMMIT timing","product_query_counts":"NOT RECORDED at normal info log level; no debug trace enabled"}));
+        evidence.record("configuration",json!({"mode":mode.name(),"config_file":config_path,"database_file":database,"log_file":log_path,"binary":product.binary,"binary_blake3":file_hash(&product.binary),"oracle":product.backend,"runtime_profile":"small","private_transports":peer_description,"http_pull_peer":mixed,"http_wake":if mixed {"controlled submit-success Notify, not external Provider wake latency"} else {"not used"},"target_devices":mode.target_devices(),"provider":provider_description,"qa":qa_profile,"gateway_qa_profile_directory":profile_directory,"measurement_scope":if qa_profile {"diagnostic QA-instrumented product; not the sealed normal A/B artifact; Provider substitution remains disabled"} else {"normal product; no Gateway QA profiling requested"},"messages":mode.messages(),"targets":mode.targets(),"warm_connections":8,"warm_idle_seconds":mode.warm_idle().as_secs(),"post_drain_idle_seconds":mode.post_drain_idle().as_secs(),"hard_limit_seconds":mode.hard_limit().as_secs(),"drain_limit_seconds":mode.drain_limit().as_secs(),"ack_hold_seconds":mode.hold_duration().as_secs_f64(),"observer_interval_ms":100,"http_concurrency_max":mode.http_concurrency(),"test_owned_background_tokio_tasks":mode.target_devices()+2,"test_owned_http_offer_futures_max":mode.http_concurrency(),"gateway_tokio_task_count":"not instrumented; process thread count is sampled instead","load_plan":mode.load_plan().map(LoadPlan::to_value),"database_process":"embedded SQLite shares Gateway process CPU/RSS","commit_oracle":"100ms committed reads are visibility upper bounds; HTTP requires local journal COMMIT and actual successful ACK plus server acked_at/target absence; not exact COMMIT timing","product_query_counts":"NOT RECORDED at normal info log level; no debug trace enabled"}));
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             assert!(
@@ -1746,6 +1964,8 @@ async fn peer(
         let mut pending = BTreeMap::<u16, (String, String, Option<MqttPendingTiming>)>::new();
         let mut last_ping = Instant::now();
         let mut disconnected_once = false;
+        let mut last_ack_write_completed = None;
+        let mut last_ack_crossed_disconnect = false;
         while !shared.stop.load(Ordering::Relaxed) {
             let now = shared.evidence.us();
             let from = shared.hold_from_us.load(Ordering::Relaxed);
@@ -1759,6 +1979,8 @@ async fn peer(
                 && !pending.is_empty()
             {
                 shared.evidence.record("peer_disconnected", json!({"peer":label,"device_key":device,"unacknowledged_local_packets":pending.len(),"semantics":"drop actual MQTT socket; no PUBACK for pending packets, durable Gateway responsibility remains"}));
+                let disconnect_started = shared.evidence.timing.start();
+                last_ack_crossed_disconnect = last_ack_write_completed.is_some();
                 drop(mqtt);
                 pending.clear();
                 while shared.evidence.us() < until && !shared.stop.load(Ordering::Relaxed) {
@@ -1768,6 +1990,12 @@ async fn peer(
                     return;
                 }
                 mqtt = ProductMqttClient::connect(port, &device, &credential).await;
+                let reconnected = shared.evidence.timing.start();
+                shared.evidence.timing.record_between(
+                    &shared.evidence.timing.mqtt[device_index].socket_drop_to_reconnect_complete,
+                    disconnect_started,
+                    reconnected,
+                );
                 shared.evidence.record(
                     "peer_reconnected",
                     json!({"peer":label,"device_key":device,"same_identity":true}),
@@ -1788,6 +2016,7 @@ async fn peer(
                     let write_started = shared.evidence.timing.start();
                     mqtt.acknowledge(packet).await;
                     let write_completed = shared.evidence.timing.start();
+                    last_ack_write_completed = write_completed;
                     let peer_timing = &shared.evidence.timing.mqtt[device_index];
                     shared.evidence.timing.record_between(
                         &peer_timing.puback_write,
@@ -1810,12 +2039,47 @@ async fn peer(
                     shared.ack(&label, &device, &op, &delivery, "mqtt");
                 }
             }
-            let Some(packet) = mqtt.receive(Duration::from_millis(50)).await else {
+            let receive_started = shared.evidence.timing.start();
+            if let Some(gap) =
+                take_puback_to_receive_gap(&mut last_ack_write_completed, receive_started)
+            {
+                let peer_timing = &shared.evidence.timing.mqtt[device_index];
+                let histogram = if last_ack_crossed_disconnect {
+                    &peer_timing.last_puback_to_first_receive_after_disconnect
+                } else {
+                    &peer_timing.last_puback_to_first_receive
+                };
+                histogram.record(gap);
+            }
+            last_ack_crossed_disconnect = false;
+            let (packet, stats) = mqtt
+                .receive_with_stats(Duration::from_millis(50), shared.evidence.timing.enabled)
+                .await;
+            let receive_completed = shared.evidence.timing.start();
+            if let Some(stats) = stats {
+                let peer_timing = &shared.evidence.timing.mqtt[device_index];
+                let histogram = if packet.is_some() {
+                    &peer_timing.receive_success
+                } else {
+                    &peer_timing.receive_timeout
+                };
+                shared.evidence.timing.record_between(
+                    histogram,
+                    receive_started,
+                    receive_completed,
+                );
+                peer_timing.record_receive(
+                    stats,
+                    packet.is_some(),
+                    matches!(&packet, Some(mqttbytes::v5::Packet::Publish(_))),
+                );
+            }
+            let Some(packet) = packet else {
                 continue;
             };
             match packet {
                 mqttbytes::v5::Packet::Publish(publish) => {
-                    let packet_ready = shared.evidence.timing.start();
+                    let packet_ready = receive_completed;
                     let envelope: Value = serde_json::from_slice(&publish.payload).unwrap();
                     let json_complete = shared.evidence.timing.start();
                     let peer_timing = &shared.evidence.timing.mqtt[device_index];
@@ -2919,6 +3183,14 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     let backend = std::env::var("C12_LEDGER_KIND").expect("main or ordinary oracle required");
     let http_pull_peer = http_pull_peer_enabled(mode, &backend, setting.as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
+    let profile_setting = std::env::var_os("C13_GATEWAY_QA_PROFILE");
+    let profile_setting = profile_setting.as_ref().map(|setting| {
+        setting
+            .to_str()
+            .expect("C13_GATEWAY_QA_PROFILE must be absent,0 or1")
+    });
+    let qa_profile = gateway_qa_profile_enabled(mode, &backend, profile_setting)
+        .unwrap_or_else(|error| panic!("{error}"));
     let directory = PathBuf::from(
         std::env::var_os("C12_PAIR_DIRECTORY").expect("fresh absolute C12_PAIR_DIRECTORY required"),
     );
@@ -2949,7 +3221,7 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
     });
     evidence.record(
         "run_mode",
-        json!({"mode":mode.name(),"messages":mode.messages(),"targets":mode.targets(),"formal_schedule_unchanged":true,"driver_timing":driver_timing}),
+        json!({"mode":mode.name(),"messages":mode.messages(),"targets":mode.targets(),"formal_schedule_unchanged":true,"driver_timing":driver_timing,"gateway_qa_profile":qa_profile}),
     );
     let shared = Arc::new(Shared {
         evidence: evidence.clone(),
@@ -2971,7 +3243,7 @@ async fn normal_sqlite_two_mqtt_fixed_paired_workload() {
         residual_targets: AtomicU64::new(u64::MAX),
     });
     let outcome = tokio::time::timeout(mode.hard_limit(), async {
-        let mut product = Product::spawn(directory, &evidence, mode).await;
+        let mut product = Product::spawn(directory, &evidence, mode, qa_profile).await;
         journey(&mut product, shared.clone(), mode).await;
     })
     .await;

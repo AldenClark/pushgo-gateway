@@ -1,5 +1,7 @@
 // Ordinary delivery uses this existing Hub's transport/resume owner. It never
 // enters the legacy Private payload table, outbox, cache, or fallback scheduler.
+#[cfg(any(test, feature = "qa"))]
+use crate::ordinary::profiling::{Path as ProfilePath, Phase as ProfilePhase};
 use crate::ordinary::{
     OrdinaryStore,
     private_model::{PrivateRoute, PrivateTicket},
@@ -154,7 +156,6 @@ impl PrivateHub {
         });
     }
 
-
     pub(crate) fn ordinary_notifier(&self) -> Option<Arc<tokio::sync::Notify>> {
         self.store
             .ordinary_handle()
@@ -193,7 +194,24 @@ impl PrivateHub {
         let Some(store) = self.store.ordinary_handle() else {
             return Ok(None);
         };
+        #[cfg(any(test, feature = "qa"))]
+        let _caller = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateClaim, ProfilePhase::CallerWall);
+        #[cfg(any(test, feature = "qa"))]
+        let hub_wait = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateClaim, ProfilePhase::HubWait);
         let mut groups = self.ordinary.groups.lock().await;
+        #[cfg(any(test, feature = "qa"))]
+        drop(hub_wait);
+        #[cfg(any(test, feature = "qa"))]
+        let _hub_hold = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateClaim, ProfilePhase::HubHold);
         if let Some(group) = groups.get(&device)
             && Some(group.route.route_generation) == generation
         {
@@ -333,7 +351,24 @@ impl PrivateHub {
         let Some(store) = self.store.ordinary_handle() else {
             return Ok(false);
         };
+        #[cfg(any(test, feature = "qa"))]
+        let _caller = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateAuthorize, ProfilePhase::CallerWall);
+        #[cfg(any(test, feature = "qa"))]
+        let hub_wait = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateAuthorize, ProfilePhase::HubWait);
         let mut groups = self.ordinary.groups.lock().await;
+        #[cfg(any(test, feature = "qa"))]
+        drop(hub_wait);
+        #[cfg(any(test, feature = "qa"))]
+        let _hub_hold = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateAuthorize, ProfilePhase::HubHold);
         let Some(group) = groups.get_mut(&device) else {
             return Ok(false);
         };
@@ -453,7 +488,24 @@ impl PrivateHub {
         let Some(store) = self.store.ordinary_handle() else {
             return Ok(None);
         };
+        #[cfg(any(test, feature = "qa"))]
+        let _caller = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateAck, ProfilePhase::CallerWall);
+        #[cfg(any(test, feature = "qa"))]
+        let hub_wait = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateAck, ProfilePhase::HubWait);
         let mut groups = self.ordinary.groups.lock().await;
+        #[cfg(any(test, feature = "qa"))]
+        drop(hub_wait);
+        #[cfg(any(test, feature = "qa"))]
+        let _hub_hold = store
+            .counters
+            .profile
+            .timer(ProfilePath::PrivateAck, ProfilePhase::HubHold);
         let Some(group) = groups.get_mut(&device) else {
             return Ok(None);
         };

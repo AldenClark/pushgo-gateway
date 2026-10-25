@@ -12,6 +12,23 @@ pub struct ProductMqttClient {
     buffer: BytesMut,
 }
 
+/// Per-call counters only: no clock, additional socket operation or packet log.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "Shared MQTT client; only the opt-in load driver reads diagnostic counters"
+)]
+pub struct ProductMqttReceiveStats {
+    pub buffered_before: usize,
+    pub buffered_after: usize,
+    pub buffered_peak: usize,
+    /// stream.read attempts, including one whose deadline expires; not syscalls.
+    pub read_calls: u64,
+    pub read_bytes: u64,
+    /// Successful mqttbytes packet parses, including non-PUBLISH packets.
+    pub ready_parses: u64,
+}
+
 impl ProductMqttClient {
     pub async fn connect(port: u16, device_key: &str, gateway_token: &str) -> Self {
         let stream = TcpStream::connect(("127.0.0.1", port))
@@ -55,18 +72,55 @@ impl ProductMqttClient {
     }
 
     pub async fn receive(&mut self, wait: Duration) -> Option<Packet> {
+        self.receive_with_stats(wait, false).await.0
+    }
+
+    pub fn buffered_bytes(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// The original receive loop and deadline, with optional fixed counters.
+    /// A timeout can retain partial bytes; ready_parses is not a PUBLISH count.
+    pub async fn receive_with_stats(
+        &mut self,
+        wait: Duration,
+        observe: bool,
+    ) -> (Option<Packet>, Option<ProductMqttReceiveStats>) {
+        let mut stats = observe.then(|| ProductMqttReceiveStats {
+            buffered_before: self.buffered_bytes(),
+            buffered_peak: self.buffered_bytes(),
+            ..ProductMqttReceiveStats::default()
+        });
         let deadline = Instant::now() + wait;
         loop {
             match v5::read(&mut self.buffer, 131072) {
-                Ok(packet) => return Some(packet),
+                Ok(packet) => {
+                    if let Some(stats) = &mut stats {
+                        stats.ready_parses += 1;
+                        stats.buffered_after = self.buffered_bytes();
+                    }
+                    return (Some(packet), stats);
+                }
                 Err(mqttbytes::Error::InsufficientBytes(_)) => {
                     let mut chunk = [0u8; 4096];
+                    if let Some(stats) = &mut stats {
+                        stats.read_calls += 1;
+                    }
                     let read = match timeout_at(deadline, self.stream.read(&mut chunk)).await {
                         Ok(read) => read.expect("product MQTT read should complete"),
-                        Err(_) => return None,
+                        Err(_) => {
+                            if let Some(stats) = &mut stats {
+                                stats.buffered_after = self.buffered_bytes();
+                            }
+                            return (None, stats);
+                        }
                     };
                     assert!(read > 0, "product MQTT connection closed unexpectedly");
                     self.buffer.extend_from_slice(&chunk[..read]);
+                    if let Some(stats) = &mut stats {
+                        stats.read_bytes += read as u64;
+                        stats.buffered_peak = stats.buffered_peak.max(self.buffered_bytes());
+                    }
                     assert!(
                         self.buffer.len() <= 131072 + 4096,
                         "test parser buffer must remain bounded"

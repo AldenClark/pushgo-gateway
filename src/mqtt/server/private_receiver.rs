@@ -3,6 +3,8 @@ use mqttbytes::{
     v5::{Packet, PubAck, PubAckReason, Publish, PublishProperties},
 };
 
+#[cfg(any(test, feature = "qa"))]
+use crate::ordinary::profiling::{Path as ProfilePath, Phase as ProfilePhase};
 use crate::{mqtt::MqttRole, private::protocol::DeliverEnvelope};
 
 use super::{AuthenticatedMqttClient, MAX_INFLIGHT, MqttInflightDelivery, MqttSession};
@@ -52,6 +54,17 @@ impl MqttSession {
     }
 
     pub(super) async fn handle_puback(&mut self, client: &AuthenticatedMqttClient, puback: PubAck) {
+        // This QA-only caller timer includes retained, unknown and non-success
+        // PUBACKs too. It starts after decode, not when bytes reach the socket.
+        #[cfg(any(test, feature = "qa"))]
+        let profile_store = self.runtime.state.store.ordinary_handle();
+        #[cfg(any(test, feature = "qa"))]
+        let _caller = profile_store.as_ref().map(|store| {
+            store
+                .counters
+                .profile
+                .timer(ProfilePath::MqttAck, ProfilePhase::CallerWall)
+        });
         let Some(device_id) = client.device_id else {
             self.runtime.private.metrics.mark_ack_non_ok();
             return;
@@ -226,7 +239,21 @@ impl MqttSession {
             channel_id = %(crate::util::redact_text(delivery.channel_id.as_str())),
             packet_id = (publish.pkid as u64)
         );
-        if self.write_packet(Packet::Publish(publish)).await.is_err() {
+        let write_result = {
+            #[cfg(any(test, feature = "qa"))]
+            let profile_store = ordinary
+                .then(|| self.runtime.state.store.ordinary_handle())
+                .flatten();
+            #[cfg(any(test, feature = "qa"))]
+            let _wire_write = profile_store.as_ref().map(|store| {
+                store
+                    .counters
+                    .profile
+                    .timer(ProfilePath::PrivateClaim, ProfilePhase::WireWrite)
+            });
+            self.write_packet(Packet::Publish(publish)).await
+        };
+        if write_result.is_err() {
             self.inflight
                 .retain(|_, value| value.delivery_id != delivery.delivery_id);
             self.runtime.private.metrics.mark_deliver_send_failure();
