@@ -20,10 +20,14 @@ import urllib.error
 from urllib.parse import urlsplit
 
 
-def message_bytes(context, namespace, index, target_bytes=None):
+def message_bytes(context, namespace, index, target_bytes=None, severity=None):
     item = {'op_id':str(uuid.uuid4()), 'title':f'Deep fixture {namespace[:8]} #{index:04}',
         'body':f'Synthetic durable content {namespace} #{index:04}'}
     request = {'channel_id':context['channel_id'], 'password':context['channel_password'], **item}
+    if severity is not None:
+        assert severity in ('normal','low')
+        item['severity'] = severity
+        request['severity'] = severity
     if target_bytes is not None:
         request['body'] = ''
         overhead = len(json.dumps(request,separators=(',',':'),ensure_ascii=False).encode())
@@ -81,11 +85,14 @@ def choose_rows(rows, expected, rejected_count, device):
         assert row['op_id'] == item['op_id']
         assert payload['entity_type'] == 'message'
         assert payload['body'] == item['body'] and payload['title'] == item['title']
+        if 'severity' in item:
+            assert payload['severity'] == item['severity']
         assert payload.get('delivery_id', row['delivery_id']) == row['delivery_id']
         assert payload.get('message_id', message_id) == message_id
         result.append({'delivery_id':row['delivery_id'], 'message_id':message_id,
             'op_id':row['op_id'], 'body':item['body'], 'title':item['title'],
             'body_sha256':hashlib.sha256(item['body'].encode()).hexdigest(),
+            'severity':payload.get('severity'),
             'accepted_at':row['accepted_at'], 'request_bytes':item.get('request_bytes')})
         message_ids.add(message_id)
         delivery_ids.add(row['delivery_id'])
@@ -100,6 +107,7 @@ def main():
     parser.add_argument('--rejected', type=int, required=True)
     parser.add_argument('--healthy', type=int, required=True)
     parser.add_argument('--concurrency', type=int, default=8)
+    parser.add_argument('--severity', choices=('normal','low'))
     args = parser.parse_args()
     assert 200 <= args.rejected <= 1800 and 1 <= args.healthy <= 1800
     assert args.rejected + args.healthy <= 2000 and 1 <= args.concurrency <= 8
@@ -128,7 +136,7 @@ def main():
     namespace = uuid.uuid4().hex
 
     def submit(index, target_bytes=None):
-        item,encoded = message_bytes(context,namespace,index,target_bytes)
+        item,encoded = message_bytes(context,namespace,index,target_bytes,args.severity)
         before = time.monotonic()
         status,value = post_message_bytes(context,encoded)
         assert status==200 and value['success'] is True, (status,value.get('error_code'))
@@ -150,7 +158,7 @@ def main():
     clock_fence_ms = next_acceptance_millisecond(max_accepted)
     large = submit(args.rejected+args.healthy-1,49152)
     submitted.append(large)
-    too_large,too_large_bytes = message_bytes(context,namespace,args.rejected+args.healthy,49153)
+    too_large,too_large_bytes = message_bytes(context,namespace,args.rejected+args.healthy,49153,args.severity)
     rejected_status,rejected_response = post_message_bytes(context,too_large_bytes)
     assert rejected_status==400 and rejected_response.get('error_code')=='invalid_request_body'
     expected = {}
@@ -192,6 +200,7 @@ def main():
         'rejected_delivery_ids':[item['delivery_id'] for item in rejected],
         'fixture_kind':'normal API valid records; historical/foreign-owner conflicts injected ONLY in client local test store',
         'population_concurrency':args.concurrency,'boundary':boundary,
+        'requested_severity':args.severity,
         'ordering':'actual ordinary_targets(accepted_at,delivery_id); roles chosen after all durable acceptance',
         'server_fault_injection':False,'expected_total_messages':len(rows),
         'generated_epoch':time.time()})
@@ -200,6 +209,7 @@ def main():
         'normal_product_binary_sha256':json.loads((Path(context['database']).parent/'ready.json').read_text())['binary_sha256'],
         'rejected':len(rejected),'healthy':len(healthy),'actual_head_count':len(head['items']),
         'population_seconds':time.time()-started,'http_setup_concurrency':args.concurrency,
+        'requested_severity':args.severity,
         'population_is_not_a_load_or_capacity_measurement':True,'direct_server_sql_writes':0,
         'server_ack_calls':0,'boundary':boundary,'source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         'observations':observations}

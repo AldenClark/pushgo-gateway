@@ -64,6 +64,21 @@ class FrozenScopeFixtureTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.choose(rows)
 
+    def test_explicit_low_severity_must_match_the_actual_saved_payload(self):
+        rows = copy.deepcopy(self.rows)
+        for row in rows:
+            self.expected[row['message_id']]['severity'] = 'low'
+            payload = json.loads(row['payload_blob'])
+            payload['severity'] = 'low'
+            row['payload_blob'] = json.dumps(payload)
+        rejected,healthy = self.choose(rows)
+        self.assertEqual(rejected[0]['severity'],'low')
+        self.assertEqual(healthy[0]['severity'],'low')
+        payload['severity'] = 'normal'
+        rows[-1]['payload_blob'] = json.dumps(payload)
+        with self.assertRaises(AssertionError):
+            self.choose(rows)
+
 
 class ExactRequestBoundaryTests(unittest.TestCase):
     def test_counted_bytes_are_the_bytes_transmitted(self):
@@ -76,6 +91,10 @@ class ExactRequestBoundaryTests(unittest.TestCase):
             self.assertEqual(item['request_bytes'],size)
             self.assertEqual(json.loads(encoded)['body'],item['body'])
             self.assertLess(len(item['body'].encode()),49152)
+            item,encoded = fixture.message_bytes(context,'synthetic-namespace',7,size,'low')
+            self.assertEqual(len(encoded),size)
+            self.assertEqual(json.loads(encoded)['severity'],'low')
+            self.assertEqual(item['severity'],'low')
 
     def test_elapsed_clock_phase_has_no_fixed_wait(self):
         with patch.object(fixture.time,'time_ns',return_value=2_000_000), \
