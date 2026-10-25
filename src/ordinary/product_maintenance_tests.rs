@@ -466,6 +466,212 @@ async fn sqlite_normal_maintenance_services_bounded_ordinary_and_widget_batches(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sqlite_live_identity_is_reaccepted_only_after_gc_and_running_receipt_is_preserved() {
+    let directory = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory
+            .path()
+            .join("live-identity-retention.db")
+            .display()
+    );
+    let health = Arc::new(Health::default());
+    let owner = ProductOwner::acquire(Some(&url), health.clone())
+        .await
+        .unwrap();
+    let storage = Storage::new_with_config(StorageInitConfig {
+        db_url: Some(url.clone()),
+        mcp_enabled: false,
+        managed_upgrade: false,
+        ..StorageInitConfig::default()
+    })
+    .await
+    .unwrap();
+    let ordinary = storage
+        .initialize_ordinary(Config::default(), health)
+        .await
+        .unwrap();
+    let channel = storage
+        .upsert_private_channel(
+            None,
+            Some("live identity retention"),
+            &crate::util::generate_hex_id_128(),
+        )
+        .await
+        .unwrap()
+        .channel_id;
+    let key = "live-identity-retention-provider";
+    storage
+        .upsert_device_route(&DeviceRouteRecordRow {
+            device_key: key.into(),
+            platform: "android".into(),
+            channel_type: "fcm".into(),
+            provider_token: Some(crate::util::generate_hex_id_128()),
+            updated_at: now(),
+        })
+        .await
+        .unwrap();
+    storage
+        .private_subscribe_channel(channel, PrivateDeviceId::derive(key).into_inner())
+        .await
+        .unwrap();
+    let request = AcceptRequest {
+        authorized_channel: Some(channel),
+        channel_id: crate::value::ChannelId::from(channel).to_string(),
+        op_id: Some("live-identity-retention".into()),
+        title: "same operation before and after identity GC".into(),
+        body: Some("synthetic body".into()),
+        ..AcceptRequest::default()
+    };
+    let mut inspect = SqliteConnection::connect(&url).await.unwrap();
+    let first = ordinary.accept(request.clone()).await.unwrap();
+    let before: (i64, i64, i64) = sqlx::query_as(
+        "SELECT accepted_at,expires_at,dedupe_until FROM ordinary_messages WHERE op_id=?",
+    )
+    .bind(&first.op_id)
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(before.1 - before.0, 7 * 86_400_000);
+    assert_eq!(before.2 - before.0, RETENTION_MS);
+    let replay = ordinary.accept(request.clone()).await.unwrap();
+    assert_eq!(replay.acceptance, "duplicate_completed");
+    assert_eq!(replay.message_id, first.message_id);
+    assert_eq!(replay.delivery_id, first.delivery_id);
+    let after: (i64, i64, i64) = sqlx::query_as(
+        "SELECT accepted_at,expires_at,dedupe_until FROM ordinary_messages WHERE op_id=?",
+    )
+    .bind(&first.op_id)
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(after, before, "replay cannot renew either expiry");
+    let counts: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM ordinary_messages),(SELECT COUNT(*) FROM ordinary_targets)",
+    )
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(counts, (1, 1), "replay cannot create another frozen target");
+    let page = ordinary.pull(key, Some(&first.delivery_id)).await.unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        ordinary
+            .ack(key, vec![first.delivery_id.clone()])
+            .await
+            .unwrap(),
+        1
+    );
+    let released: (i64, i64) = sqlx::query_as(
+        "SELECT payload_bytes,(SELECT COUNT(*) FROM ordinary_targets WHERE delivery_id=m.delivery_id) \
+         FROM ordinary_messages m WHERE op_id=?",
+    )
+    .bind(&first.op_id)
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(released, (0, 0));
+
+    // Explicit test-clock injection, not an elapsed real retention window. Only
+    // the proven completed identity's deadline changes; no payload/target is fabricated.
+    let changed = sqlx::query("UPDATE ordinary_messages SET dedupe_until=? WHERE op_id=?")
+        .bind(now() - 1)
+        .bind(&first.op_id)
+        .execute(&mut inspect)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(changed, 1);
+    assert_eq!(ordinary.maintenance().await.unwrap(), 1);
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ordinary_messages WHERE op_id=?")
+        .bind(&first.op_id)
+        .fetch_one(&mut inspect)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0);
+    let fresh = ordinary.accept(request.clone()).await.unwrap();
+    assert_eq!(fresh.acceptance, "new");
+    assert_ne!(fresh.message_id, first.message_id);
+    assert_ne!(fresh.delivery_id, first.delivery_id);
+    let counts: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM ordinary_messages),(SELECT COUNT(*) FROM ordinary_targets)",
+    )
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(
+        counts,
+        (1, 1),
+        "the expired op can own exactly one new delivery"
+    );
+    assert_eq!(
+        ordinary
+            .ack(key, vec![fresh.delivery_id.clone()])
+            .await
+            .unwrap(),
+        1
+    );
+
+    // A normal claim makes the external result unknown without any actual send.
+    // Client ACK can release its body, but cannot erase an unfinished receipt.
+    let mut unknown_request = request;
+    unknown_request.op_id = Some("live-identity-running-receipt".into());
+    let unknown = ordinary.accept(unknown_request).await.unwrap();
+    let batch = ordinary.claim_reserved("FCM", 1, false).await.unwrap();
+    assert_eq!(batch.tickets.len(), 1);
+    assert_eq!(batch.tickets[0].delivery_id, unknown.delivery_id);
+    assert_eq!(
+        ordinary
+            .ack(key, vec![unknown.delivery_id.clone()])
+            .await
+            .unwrap(),
+        1
+    );
+    let held: (i64, String, bool) = sqlx::query_as(
+        "SELECT m.payload_bytes,t.state,t.acked_at IS NOT NULL \
+         FROM ordinary_messages m JOIN ordinary_targets t ON t.delivery_id=m.delivery_id WHERE m.op_id=?",
+    )
+    .bind(&unknown.op_id)
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(held, (0, "running".into(), true));
+    assert_eq!(
+        sqlx::query("UPDATE ordinary_messages SET dedupe_until=? WHERE op_id=?")
+            .bind(now() - 1)
+            .bind(&unknown.op_id)
+            .execute(&mut inspect)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1
+    );
+    assert_eq!(ordinary.maintenance().await.unwrap(), 0);
+    let retained: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM ordinary_messages WHERE op_id=?),\
+         (SELECT COUNT(*) FROM ordinary_targets WHERE delivery_id=? AND state='running' AND acked_at IS NOT NULL)",
+    )
+    .bind(&unknown.op_id)
+    .bind(&unknown.delivery_id)
+    .fetch_one(&mut inspect)
+    .await
+    .unwrap();
+    assert_eq!(
+        retained,
+        (1, 1),
+        "expired identity must retain the unknown receipt owner"
+    );
+    ordinary
+        .settle(&batch.tickets[0], "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap();
+    assert_eq!(ordinary.maintenance().await.unwrap(), 1);
+    inspect.close().await.unwrap();
+    storage.close_ordinary_storage().await.unwrap();
+    owner.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires an approved fresh C11_PG_TEST_URL on the isolated local PostgreSQL port"]
 async fn postgres_normal_maintenance_services_bounded_ordinary_and_widget_batches() {
     maintenance_contract(native_url(
