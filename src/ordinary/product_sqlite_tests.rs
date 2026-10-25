@@ -248,14 +248,18 @@ async fn sqlite_product_expiry_probe_is_inclusive_indexed_and_keeps_bounded_batc
             .unwrap();
         assert_eq!(matches, expected);
     }
-    let plan = sqlx::query(&format!(
-        "EXPLAIN QUERY PLAN {}",
+    const EXPLAIN_PROBE_SQL: &str = "EXPLAIN QUERY PLAN SELECT EXISTS(SELECT 1 FROM ordinary_messages WHERE expires_at<=? AND payload_bytes>0)";
+    assert_eq!(
+        EXPLAIN_PROBE_SQL
+            .strip_prefix("EXPLAIN QUERY PLAN ")
+            .unwrap(),
         super::store::MAINTENANCE_EXPIRY_PROBE_SQL
-    ))
-    .bind(cutoff)
-    .fetch_all(&mut inspect)
-    .await
-    .unwrap();
+    );
+    let plan = sqlx::query(EXPLAIN_PROBE_SQL)
+        .bind(cutoff)
+        .fetch_all(&mut inspect)
+        .await
+        .unwrap();
     assert!(plan.iter().any(|row| {
         let detail: String = row.get("detail");
         detail.contains("SEARCH ordinary_messages ")
