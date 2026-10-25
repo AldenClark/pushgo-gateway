@@ -132,6 +132,218 @@ fn route(key: &str, platform: &str, kind: &str, token: Option<&str>) -> DeviceRo
     }
 }
 
+fn maintenance_samples(profile: &serde_json::Value, statement: &str) -> u64 {
+    profile["paths"]["maintenance"]["statements"][statement]["samples"]
+        .as_u64()
+        .unwrap_or(0)
+}
+
+fn assert_expiry_profile_delta(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    expiry_statements: u64,
+) {
+    assert_eq!(
+        maintenance_samples(after, "maintenance_expiry_probe")
+            - maintenance_samples(before, "maintenance_expiry_probe"),
+        1
+    );
+    for statement in [
+        "maintenance_expiry_count",
+        "maintenance_expiry_ack",
+        "maintenance_expiry_status",
+        "maintenance_expiry_delete",
+        "maintenance_expiry_payload",
+    ] {
+        assert_eq!(
+            maintenance_samples(after, statement) - maintenance_samples(before, statement),
+            expiry_statements,
+            "{statement}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sqlite_product_empty_expiry_probe_preserves_other_maintenance() {
+    let product = Product::open().await;
+    let channel = product.channel().await;
+    product
+        .route(
+            channel,
+            "expiry-guard-owner",
+            "android",
+            "fcm",
+            Some("synthetic-expiry-guard"),
+        )
+        .await;
+    let mut request = product.request(channel, "expiry-guard-fresh");
+    request.ttl = Some(now() + 600_000);
+    let accepted = product.ordinary.accept(request).await.unwrap();
+    let before = product.ordinary.counters.profile.snapshot();
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 0);
+    assert_expiry_profile_delta(&before, &product.ordinary.counters.profile.snapshot(), 0);
+    let path = product.directory.path().join("product.db");
+    let mut inspect = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    let live: (bool, i64) = sqlx::query_as("SELECT payload_bytes>0,(SELECT COUNT(*) FROM ordinary_targets WHERE delivery_id=?) FROM ordinary_messages WHERE delivery_id=?")
+        .bind(&accepted.delivery_id).bind(&accepted.delivery_id)
+        .fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(live, (true, 1));
+
+    // Explicit synthetic control/metadata injections exercise independent cleanup
+    // in a no-expired-body turn; they are not migration or external-send evidence.
+    let cutoff = now() - 10_000;
+    sqlx::query("INSERT INTO ordinary_retired_provider_tokens(platform,provider_token,control_epoch) SELECT platform,provider_token,control_epoch+1 FROM ordinary_targets WHERE delivery_id=?")
+        .bind(&accepted.delivery_id).execute(&mut inspect).await.unwrap();
+    sqlx::query("INSERT INTO ordinary_widget_refresh(delivery_id,channel_id,coalesce_order,accepted_at,expires_at) VALUES(?,?,1,?,?)")
+        .bind(&accepted.delivery_id).bind(channel.as_slice()).bind(cutoff-1).bind(cutoff)
+        .execute(&mut inspect).await.unwrap();
+    sqlx::query("INSERT INTO ordinary_messages(delivery_id,message_id,op_id,channel_id,fingerprint,payload_blob,payload_bytes,accepted_at,expires_at,dedupe_until,status,updated_at,identity_state) VALUES(NULL,'expiry-guard-history-id','expiry-guard-history',?,NULL,x'',0,?,NULL,?,'historical_unverifiable',?,'legacy_unverifiable')")
+        .bind(crate::value::ChannelId::from(channel).to_string())
+        .bind(cutoff-1).bind(cutoff).bind(cutoff-1).execute(&mut inspect).await.unwrap();
+    let before = product.ordinary.counters.profile.snapshot();
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 1);
+    assert_expiry_profile_delta(&before, &product.ordinary.counters.profile.snapshot(), 0);
+    let remaining: (i64, i64, i64, i64, i64) = sqlx::query_as("SELECT (SELECT COUNT(*) FROM ordinary_targets),(SELECT COUNT(*) FROM ordinary_widget_refresh),(SELECT COUNT(*) FROM ordinary_retired_provider_tokens),(SELECT COUNT(*) FROM ordinary_messages WHERE op_id='expiry-guard-history'),(SELECT payload_bytes FROM ordinary_messages WHERE delivery_id=?)")
+        .bind(&accepted.delivery_id).fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(remaining, (0, 0, 0, 0, 0));
+    inspect.close().await.unwrap();
+    product.stop().await;
+}
+
+#[tokio::test]
+async fn sqlite_product_expiry_probe_is_inclusive_indexed_and_keeps_bounded_batches() {
+    let product = Product::open().await;
+    let channel = product.channel().await;
+    product
+        .route(
+            channel,
+            "expiry-batch-owner",
+            "android",
+            "fcm",
+            Some("synthetic-expiry-batch"),
+        )
+        .await;
+    for index in 0..257 {
+        let mut request = product.request(channel, &format!("expiry-guard-batch-{index}"));
+        request.ttl = Some(now() + 600_000);
+        product.ordinary.accept(request).await.unwrap();
+    }
+    let path = product.directory.path().join("product.db");
+    let mut inspect = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    let cutoff = now() - 10_000;
+    sqlx::query("UPDATE ordinary_messages SET expires_at=?")
+        .bind(cutoff)
+        .execute(&mut inspect)
+        .await
+        .unwrap();
+    for (at, expected) in [(cutoff - 1, false), (cutoff, true)] {
+        let matches: bool = sqlx::query_scalar(super::store::MAINTENANCE_EXPIRY_PROBE_SQL)
+            .bind(at)
+            .fetch_one(&mut inspect)
+            .await
+            .unwrap();
+        assert_eq!(matches, expected);
+    }
+    let plan = sqlx::query(&format!(
+        "EXPLAIN QUERY PLAN {}",
+        super::store::MAINTENANCE_EXPIRY_PROBE_SQL
+    ))
+    .bind(cutoff)
+    .fetch_all(&mut inspect)
+    .await
+    .unwrap();
+    assert!(plan.iter().any(|row| {
+        let detail: String = row.get("detail");
+        detail.contains("SEARCH ordinary_messages ")
+            && detail.contains("INDEX ordinary_messages_expiry")
+    }));
+    assert!(!plan.iter().any(|row| {
+        row.get::<String, _>("detail")
+            .contains("SCAN ordinary_messages")
+    }));
+
+    for (bodies, targets, failed) in [(1, 1, 256), (0, 0, 257)] {
+        let before = product.ordinary.counters.profile.snapshot();
+        assert_eq!(product.ordinary.maintenance().await.unwrap(), 0);
+        assert_expiry_profile_delta(&before, &product.ordinary.counters.profile.snapshot(), 1);
+        let counts: (i64, i64, i64, i64) = sqlx::query_as("SELECT (SELECT COUNT(*) FROM ordinary_messages WHERE payload_bytes>0),(SELECT COUNT(*) FROM ordinary_targets),(SELECT SUM(provider_failed_count) FROM ordinary_messages),(SELECT COUNT(*) FROM ordinary_messages)")
+            .fetch_one(&mut inspect).await.unwrap();
+        assert_eq!(counts, (bodies, targets, failed, 257));
+    }
+    let before = product.ordinary.counters.profile.snapshot();
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 0);
+    assert_expiry_profile_delta(&before, &product.ordinary.counters.profile.snapshot(), 0);
+    inspect.close().await.unwrap();
+    product.stop().await;
+}
+
+#[tokio::test]
+async fn sqlite_product_expiry_probe_preserves_unknown_running_receipt() {
+    let product = Product::open().await;
+    let channel = product.channel().await;
+    product
+        .route(
+            channel,
+            "expiry-running-owner",
+            "android",
+            "fcm",
+            Some("synthetic-expiry-running"),
+        )
+        .await;
+    let mut request = product.request(channel, "expiry-guard-running");
+    request.ttl = Some(now() + 600_000);
+    let accepted = product.ordinary.accept(request).await.unwrap();
+    let batch = product
+        .ordinary
+        .claim_reserved("FCM", 1, false)
+        .await
+        .unwrap();
+    assert_eq!(batch.tickets.len(), 1);
+    let path = product.directory.path().join("product.db");
+    let mut inspect = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    let cutoff = now() - 10_000;
+    sqlx::query("UPDATE ordinary_messages SET expires_at=?,dedupe_until=? WHERE delivery_id=?")
+        .bind(cutoff)
+        .bind(cutoff)
+        .bind(&accepted.delivery_id)
+        .execute(&mut inspect)
+        .await
+        .unwrap();
+    let before = product.ordinary.counters.profile.snapshot();
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 0);
+    assert_expiry_profile_delta(&before, &product.ordinary.counters.profile.snapshot(), 1);
+    let held: (i64, String, bool, i64) = sqlx::query_as("SELECT m.payload_bytes,t.state,t.acked_at IS NOT NULL,m.provider_failed_count FROM ordinary_messages m JOIN ordinary_targets t ON t.delivery_id=m.delivery_id WHERE m.delivery_id=?")
+        .bind(&accepted.delivery_id).fetch_one(&mut inspect).await.unwrap();
+    assert_eq!(held, (0, "running".into(), true, 0));
+    let before = product.ordinary.counters.profile.snapshot();
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 0);
+    assert_expiry_profile_delta(&before, &product.ordinary.counters.profile.snapshot(), 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ordinary_targets WHERE delivery_id=? AND state='running'"
+        )
+        .bind(&accepted.delivery_id)
+        .fetch_one(&mut inspect)
+        .await
+        .unwrap(),
+        1
+    );
+    product
+        .ordinary
+        .settle(&batch.tickets[0], "provider_accepted", 200, "", now(), None)
+        .await
+        .unwrap();
+    assert_eq!(product.ordinary.maintenance().await.unwrap(), 1);
+    inspect.close().await.unwrap();
+    product.stop().await;
+}
+
 // These rows are explicit unit-test injections, not old-main migration evidence.
 #[tokio::test]
 async fn sqlite_product_historical_identity_rejects_aliases_scopes_and_cleans_by_original_deadline()

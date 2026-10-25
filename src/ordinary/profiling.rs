@@ -112,9 +112,10 @@ pub enum Statement {
     ReceiptStatus,
     Control,
     Read,
+    MaintenanceExpiryProbe,
 }
 #[cfg(any(test, feature = "qa"))]
-const STATEMENTS: [&str; 33] = [
+const STATEMENTS: [&str; 34] = [
     "auth",
     "dedupe",
     "usage",
@@ -148,6 +149,7 @@ const STATEMENTS: [&str; 33] = [
     "receipt_status",
     "control",
     "read",
+    "maintenance_expiry_probe",
 ];
 
 #[cfg_attr(not(any(test, feature = "qa")), derive(Default))]
