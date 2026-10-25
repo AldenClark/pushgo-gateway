@@ -554,10 +554,7 @@ impl LoadPlan {
         let phase_seconds: u64 = self
             .stages
             .iter()
-            .map(|stage| {
-                ((stage.messages as u64) + (stage.rate_per_second as u64) - 1)
-                    / stage.rate_per_second as u64
-            })
+            .map(|stage| (stage.messages as u64).div_ceil(stage.rate_per_second as u64))
             .sum();
         let required_seconds = self.warm_idle_seconds
             + phase_seconds
@@ -569,9 +566,8 @@ impl LoadPlan {
             );
         }
         let disconnected_stage = self.stages[self.disconnect_stage];
-        let disconnected_stage_seconds =
-            (disconnected_stage.messages as u64 + disconnected_stage.rate_per_second as u64 - 1)
-                / disconnected_stage.rate_per_second as u64;
+        let disconnected_stage_seconds = (disconnected_stage.messages as u64)
+            .div_ceil(disconnected_stage.rate_per_second as u64);
         if self.disconnect_seconds > disconnected_stage_seconds {
             return Err("disconnect interval must fit inside its configured stage".into());
         }
