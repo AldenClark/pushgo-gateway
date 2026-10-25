@@ -34,6 +34,17 @@ class FrozenScopeFixtureTests(unittest.TestCase):
         self.assertEqual(rejected[0]['body'], 'body-z')
         self.assertEqual(len(rejected[0]['body_sha256']), 64)
 
+    def test_tiny_normal_fixture_has_no_rejected_role_and_completes_its_head(self):
+        rejected,healthy = fixture.choose_rows(self.rows,self.expected,0,'synthetic-device')
+        self.assertEqual(rejected,[])
+        head={'items':[{'delivery_id':r['delivery_id']}for r in healthy],
+              'has_more':False,'scan_complete':True,'next_page_token':None}
+        fixture.verify_initial_head(head,healthy)
+        for changed in [dict(head,items=head['items'][:1]),
+                        dict(head,scan_complete=False),dict(head,next_page_token='unexpected')]:
+            with self.assertRaises(AssertionError):
+                fixture.verify_initial_head(changed,healthy)
+
     def test_missing_frozen_target_is_not_a_successful_fixture(self):
         with self.assertRaises(AssertionError):
             self.choose(self.rows[:1])

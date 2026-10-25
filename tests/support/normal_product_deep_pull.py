@@ -100,6 +100,17 @@ def choose_rows(rows, expected, rejected_count, device):
     return result[:rejected_count], result[rejected_count:]
 
 
+def verify_initial_head(head, ordered_rows):
+    complete = len(ordered_rows) <= 200
+    assert head['scan_complete'] is complete and head['has_more'] is not complete
+    if complete:
+        assert head['next_page_token'] is None
+    else:
+        assert isinstance(head['next_page_token'],str) and head['next_page_token']
+    assert [item['delivery_id'] for item in head['items']] == [
+        item['delivery_id'] for item in ordered_rows[:200]]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', type=Path, required=True)
@@ -109,8 +120,8 @@ def main():
     parser.add_argument('--concurrency', type=int, default=8)
     parser.add_argument('--severity', choices=('normal','low'))
     args = parser.parse_args()
-    assert 200 <= args.rejected <= 1800 and 1 <= args.healthy <= 1800
-    assert args.rejected + args.healthy <= 2000 and 1 <= args.concurrency <= 8
+    assert (args.rejected == 0 or 200 <= args.rejected <= 1800) and 1 <= args.healthy <= 1800
+    assert 2 <= args.rejected + args.healthy <= 2000 and 1 <= args.concurrency <= 8
     assert args.context.is_absolute() and args.context.is_file() and not args.context.is_symlink()
     assert args.context.stat().st_mode & 0o077 == 0
     owner = args.context.parent.resolve()
@@ -193,12 +204,12 @@ def main():
     # native API ordering rather than guessing from producer call order or sleep.
     head = driver.post(context['base_url'],context['token'],'/v2/messages/pull',
         {'device_key':context['device_key']})
-    assert head['scan_complete'] is False and isinstance(head['next_page_token'],str)
-    assert [item['delivery_id'] for item in head['items']] == [item['delivery_id'] for item in rejected[:200]]
+    verify_initial_head(head,rejected+healthy)
     value = dict(context)
     value.update({'rejected':rejected,'healthy':healthy,
         'rejected_delivery_ids':[item['delivery_id'] for item in rejected],
-        'fixture_kind':'normal API valid records; historical/foreign-owner conflicts injected ONLY in client local test store',
+        'fixture_kind':('normal API valid records; historical/foreign-owner conflicts injected ONLY in client local test store'
+                        if args.rejected else 'normal API valid records; no historical-conflict role'),
         'population_concurrency':args.concurrency,'boundary':boundary,
         'requested_severity':args.severity,
         'ordering':'actual ordinary_targets(accepted_at,delivery_id); roles chosen after all durable acceptance',
