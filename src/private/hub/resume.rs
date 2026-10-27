@@ -5,10 +5,18 @@ impl PrivateHub {
         now: Instant,
         f: impl FnOnce(&mut ResumeState) -> R,
     ) -> R {
+        // Check only this device on the send/handshake path. Global expiry is
+        // reclaimed by the existing maintenance owner, not by every delivery.
+        // Read presence before taking a resume shard: registration takes the
+        // presence shard before consulting resume state for its drain window.
+        let online = self.is_online(device_id);
         let mut entry = self
             .resume_state
             .entry(device_id)
             .or_insert_with(|| ResumeState::fresh(now));
+        if !online && now.saturating_duration_since(entry.updated_at) >= self.resume_ttl {
+            entry.reset(now);
+        }
         f(&mut entry)
     }
 
@@ -37,7 +45,6 @@ impl PrivateHub {
         last_acked_seq: u64,
     ) -> ResumeHandshake {
         let now = Instant::now();
-        self.prune_stale_resume_state(now);
         let incoming = client_resume_token
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -76,7 +83,6 @@ impl PrivateHub {
         envelope: protocol::DeliverEnvelope,
     ) -> (u64, protocol::DeliverEnvelope) {
         let now = Instant::now();
-        self.prune_stale_resume_state(now);
         self.ensure_resume_state_mut(device_id, now, |entry| entry.track_outbound(envelope, now))
     }
 
@@ -226,27 +232,36 @@ impl PrivateHub {
         })
         .unwrap_or(0)
     }
-    fn prune_stale_resume_state(&self, now: Instant) {
-        if self.resume_state.len() < 128 {
-            return;
+    fn remove_stale_resume_state(&self, device_id: DeviceId, now: Instant) -> bool {
+        if self.is_online(device_id) {
+            return false;
         }
+        self.resume_state
+            .remove_if(&device_id, |_, state| {
+                now.saturating_duration_since(state.updated_at) >= self.resume_ttl
+            })
+            .is_some()
+    }
+
+    fn prune_stale_resume_state(&self, now: Instant) {
         let stale: Vec<DeviceId> = self
             .resume_state
             .iter()
             .filter_map(|item| {
-                if now.duration_since(item.value().updated_at) >= self.resume_ttl
-                    && !self.is_online(*item.key())
-                {
+                if now.saturating_duration_since(item.value().updated_at) >= self.resume_ttl {
                     Some(*item.key())
                 } else {
                     None
                 }
             })
             .collect();
-        let stale_count = stale.len();
-        for device_id in stale {
-            self.resume_state.remove(&device_id);
-        }
+        // Drop the iteration's resume guards before consulting presence. ACKs,
+        // handshakes and sends may have refreshed a candidate since collection;
+        // the conditional removal must recheck its current timestamp atomically.
+        let stale_count = stale
+            .into_iter()
+            .filter(|device_id| self.remove_stale_resume_state(*device_id, now))
+            .count();
         if stale_count > 0 {
             ::tracing::event!(
                 target: "gateway.trace_event",

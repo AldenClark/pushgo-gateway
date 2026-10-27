@@ -449,6 +449,7 @@ impl PrivateHub {
         now: i64,
         config: MaintenanceCleanupConfig,
     ) -> Result<MaintenanceCleanupStats, crate::Error> {
+        self.prune_stale_resume_state(Instant::now());
         self.store
             .run_maintenance_cleanup(now, config)
             .await
