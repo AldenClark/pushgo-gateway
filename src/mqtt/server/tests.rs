@@ -19,7 +19,7 @@ use crate::{
     api::ChannelId,
     app::{AppState, AuthMode, DeviceOperationGuards, PrivateTransportProfile},
     dispatch::DispatchChannels,
-    mqtt::{MqttConfig, MqttPublishDedupe},
+    mqtt::MqttConfig,
     private::{PrivateConfig, PrivateState},
     routing::{DeviceChannelType, DeviceRegistry, DeviceRouteRecord},
     runtime_config::GatewayRuntimeProfile,
@@ -109,7 +109,6 @@ impl MqttFlowTestContext {
                 tls_cert_path: None,
                 tls_key_path: None,
             },
-            publish_dedupe: MqttPublishDedupe::new(),
         };
         let server = tokio::spawn(async move {
             let _ = listener::serve_mqtt_listener(runtime, listener, addr, None).await;
@@ -1086,7 +1085,7 @@ async fn mqtt_publish_accepts_event_and_thing_payloads() {
 }
 
 #[tokio::test]
-async fn mqtt_qos1_publish_without_op_id_uses_short_window_fallback_dedupe() {
+async fn mqtt_qos1_puback_releases_packet_id_for_a_new_application_message() {
     let ctx = MqttFlowTestContext::new().await;
     let receiver_key = "mqtt-fallback-dedupe-receiver";
     let channel_password = "mqtt-fallback-dedupe-pass";
@@ -1100,58 +1099,51 @@ async fn mqtt_qos1_publish_without_op_id_uses_short_window_fallback_dedupe() {
         "title": "fallback dedupe title",
         "body": "same MQTT QoS1 publish body"
     }));
-    for _ in 0..2 {
+    let mut accepted_operations = std::collections::HashSet::new();
+    let mut accepted_deliveries = std::collections::HashSet::new();
+    for dup in [false, false, true] {
         let mut publish = Publish::new(
             MqttMessageTopic::format(channel_id.as_str()),
             QoS::AtLeastOnce,
             payload.clone(),
         );
         publish.pkid = 42;
+        publish.dup = dup;
         publish.properties = Some(publish_properties(Some(channel_password)));
         write_client_packet(&mut publisher, ClientPacket::Publish(publish)).await;
         match read_server_packet_labeled(&mut publisher, "fallback dedupe PUBACK").await {
             Packet::PubAck(puback) => {
                 assert_eq!(puback.pkid, 42);
                 assert_eq!(puback.reason, PubAckReason::Success);
+                let properties = puback
+                    .properties
+                    .expect("success must include operation identity");
+                let operation = user_property(&properties.user_properties, "pushgo-op-id")
+                    .expect("each new application message must have a durable operation identity");
+                assert!(
+                    accepted_operations.insert(operation.to_string()),
+                    "PUBACK completes QoS1; reused packet ID is new even with DUP set"
+                );
             }
             packet => panic!("expected PUBACK success, got {packet:?}"),
         }
+        let delivered = read_publish_with_title(&mut receiver, "fallback dedupe title").await;
+        let envelope: serde_json::Value = serde_json::from_slice(&delivered.payload).unwrap();
+        assert!(accepted_deliveries.insert(envelope["delivery_id"].as_str().unwrap().to_string()));
+        assert_eq!(
+            ctx.ordinary_identity_count().await,
+            accepted_operations.len() as i64
+        );
+        write_client_packet(
+            &mut receiver,
+            ClientPacket::PubAck(PubAck::new(delivered.pkid)),
+        )
+        .await;
     }
-
-    let first = read_publish_with_title(&mut receiver, "fallback dedupe title").await;
-    write_client_packet(&mut receiver, ClientPacket::PubAck(PubAck::new(first.pkid))).await;
-    assert!(
-        read_server_packet_with_timeout(&mut receiver, Duration::from_millis(250))
-            .await
-            .is_none(),
-        "duplicate QoS1 publish without op_id should not enqueue a second message"
-    );
-
-    let mut changed_packet = Publish::new(
-        MqttMessageTopic::format(channel_id.as_str()),
-        QoS::AtLeastOnce,
-        payload,
-    );
-    changed_packet.pkid = 43;
-    changed_packet.properties = Some(publish_properties(Some(channel_password)));
-    write_client_packet(&mut publisher, ClientPacket::Publish(changed_packet)).await;
-    match read_server_packet_labeled(&mut publisher, "changed packet PUBACK").await {
-        Packet::PubAck(puback) => {
-            assert_eq!(puback.pkid, 43);
-            assert_eq!(puback.reason, PubAckReason::Success);
-        }
-        packet => panic!("expected PUBACK success, got {packet:?}"),
-    }
-    let second = read_publish_with_title(&mut receiver, "fallback dedupe title").await;
-    write_client_packet(
-        &mut receiver,
-        ClientPacket::PubAck(PubAck::new(second.pkid)),
-    )
-    .await;
 }
 
 #[tokio::test]
-async fn mqtt_qos1_fallback_dedupe_clears_failed_publish_for_retry() {
+async fn mqtt_qos1_authorization_failure_does_not_suppress_a_later_valid_publish() {
     let ctx = MqttFlowTestContext::new().await;
     let receiver_key = "mqtt-fallback-dedupe-retry-receiver";
     let channel_password = "mqtt-fallback-dedupe-retry-pass";
@@ -1202,6 +1194,257 @@ async fn mqtt_qos1_fallback_dedupe_clears_failed_publish_for_retry() {
         ClientPacket::PubAck(PubAck::new(publish.pkid)),
     )
     .await;
+}
+
+fn qos1_test_publish(channel_id: &str, authorization: &str, op_id: Option<&str>) -> Publish {
+    let mut data = serde_json::json!({"title": "QoS1 ownership", "body": "same application bytes"});
+    if let Some(op_id) = op_id {
+        data["op_id"] = op_id.into();
+    }
+    let mut publish = Publish::new(
+        MqttMessageTopic::format(channel_id),
+        QoS::AtLeastOnce,
+        message_publish_payload(data),
+    );
+    publish.pkid = 42;
+    publish.properties = Some(publish_properties(Some(authorization)));
+    publish
+}
+
+async fn qos1_test_exchange(stream: &mut TcpStream, publish: Publish) -> PubAck {
+    let pkid = publish.pkid;
+    write_client_packet(stream, ClientPacket::Publish(publish)).await;
+    match read_server_packet_labeled(stream, "QoS1 ownership PUBACK").await {
+        Packet::PubAck(ack) => {
+            assert_eq!(ack.pkid, pkid);
+            ack
+        }
+        other => panic!("expected QoS1 PUBACK, got {other:?}"),
+    }
+}
+
+fn qos1_test_operation(ack: &PubAck) -> &str {
+    assert_eq!(ack.reason, PubAckReason::Success);
+    user_property(
+        &ack.properties
+            .as_ref()
+            .expect("successful PUBACK properties")
+            .user_properties,
+        "pushgo-op-id",
+    )
+    .expect("success must identify a committed business operation")
+}
+
+#[tokio::test]
+async fn mqtt_qos1_independent_connections_do_not_share_packet_identity() {
+    for same_client_id in [false, true] {
+        let (ctx, receiver, owner, channel_id, authorization) = setup_connected_channel().await;
+        drop(receiver);
+        let mut a = connect_publish_client(ctx.addr, "independent-publisher-a").await;
+        let mut b = connect_publish_client(
+            ctx.addr,
+            if same_client_id {
+                "independent-publisher-a"
+            } else {
+                "independent-publisher-b"
+            },
+        )
+        .await;
+        let (first, second) = tokio::join!(
+            qos1_test_exchange(&mut a, qos1_test_publish(&channel_id, &authorization, None)),
+            qos1_test_exchange(&mut b, qos1_test_publish(&channel_id, &authorization, None)),
+        );
+        assert_ne!(qos1_test_operation(&first), qos1_test_operation(&second));
+        assert_eq!(ctx.ordinary_identity_count().await, 2);
+        assert_eq!(ctx.ordinary_pending(&owner).await, 2);
+        ctx.assert_no_legacy_ordinary_outbox(&owner).await;
+        drop((a, b));
+        ctx.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn mqtt_qos1_reconnect_does_not_resume_an_expired_transport_session() {
+    let (ctx, receiver, owner, channel_id, authorization) = setup_connected_channel().await;
+    drop(receiver);
+    let mut first = connect_publish_client(ctx.addr, "reconnecting-publisher").await;
+    let ack = qos1_test_exchange(
+        &mut first,
+        qos1_test_publish(&channel_id, &authorization, None),
+    )
+    .await;
+    let first_operation = qos1_test_operation(&ack).to_string();
+    drop(first);
+
+    let mut reconnected = TcpStream::connect(ctx.addr).await.unwrap();
+    let mut connect = connect_with_device_type("reconnecting-publisher", "publish");
+    connect.clean_session = false;
+    connect.properties.as_mut().unwrap().session_expiry_interval = Some(60);
+    write_client_packet(&mut reconnected, ClientPacket::Connect(connect)).await;
+    match read_server_packet_labeled(&mut reconnected, "non-resumed CONNACK").await {
+        Packet::ConnAck(ack) => {
+            assert_eq!(ack.code, ConnectReturnCode::Success);
+            assert!(!ack.session_present);
+            assert_eq!(ack.properties.unwrap().session_expiry_interval, Some(0));
+        }
+        other => panic!("expected CONNACK, got {other:?}"),
+    }
+    let mut publish = qos1_test_publish(&channel_id, &authorization, None);
+    publish.dup = true;
+    let second = qos1_test_exchange(&mut reconnected, publish).await;
+    assert_ne!(qos1_test_operation(&second), first_operation);
+    assert_eq!(ctx.ordinary_identity_count().await, 2);
+    assert_eq!(ctx.ordinary_pending(&owner).await, 2);
+    drop(reconnected);
+    ctx.shutdown().await;
+}
+
+#[tokio::test]
+async fn mqtt_qos1_puback_loss_uses_business_op_id_not_packet_fingerprints() {
+    for explicit_operation in [None, Some("mqtt-qos1-retained-operation")] {
+        let (ctx, receiver, owner, channel_id, authorization) = setup_connected_channel().await;
+        drop(receiver);
+        // One finite relay drops the actual server PUBACK after commit. It does
+        // not guess that a sender-side read timeout means the database saved.
+        let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let relay_addr = relay.local_addr().unwrap();
+        let upstream_addr = ctx.addr;
+        let dropped_ack = tokio::spawn(async move {
+            let (mut downstream, _) = relay.accept().await.unwrap();
+            let mut upstream = TcpStream::connect(upstream_addr).await.unwrap();
+            let connect = match read_server_packet_labeled(&mut downstream, "relay CONNECT").await {
+                Packet::Connect(connect) => connect,
+                other => panic!("expected CONNECT, got {other:?}"),
+            };
+            write_client_packet(&mut upstream, ClientPacket::Connect(connect)).await;
+            let connack = match read_server_packet_labeled(&mut upstream, "relay CONNACK").await {
+                Packet::ConnAck(ack) => ack,
+                other => panic!("expected CONNACK, got {other:?}"),
+            };
+            let mut bytes = BytesMut::new();
+            connack.write(&mut bytes).unwrap();
+            downstream.write_all(&bytes).await.unwrap();
+            let publish = match read_server_packet_labeled(&mut downstream, "relay PUBLISH").await {
+                Packet::Publish(publish) => publish,
+                other => panic!("expected PUBLISH, got {other:?}"),
+            };
+            write_client_packet(&mut upstream, ClientPacket::Publish(publish)).await;
+            match read_server_packet_labeled(&mut upstream, "PUBACK deliberately not forwarded")
+                .await
+            {
+                Packet::PubAck(ack) => ack,
+                other => panic!("expected committed PUBACK, got {other:?}"),
+            }
+        });
+        let mut publisher = connect_publish_client(relay_addr, "puback-loss-publisher").await;
+        write_client_packet(
+            &mut publisher,
+            ClientPacket::Publish(qos1_test_publish(
+                &channel_id,
+                &authorization,
+                explicit_operation,
+            )),
+        )
+        .await;
+        let first = timeout(Duration::from_secs(2), dropped_ack)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ctx.ordinary_identity_count().await, 1);
+        let first_operation = qos1_test_operation(&first).to_string();
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            timeout(Duration::from_secs(2), publisher.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        drop(publisher);
+        let mut retried = connect_publish_client(ctx.addr, "puback-loss-publisher").await;
+        let mut publish = qos1_test_publish(&channel_id, &authorization, explicit_operation);
+        publish.dup = true;
+        let second = qos1_test_exchange(&mut retried, publish).await;
+        if explicit_operation.is_some() {
+            assert_eq!(qos1_test_operation(&second), first_operation);
+            assert_eq!(ctx.ordinary_identity_count().await, 1);
+            assert_eq!(ctx.ordinary_pending(&owner).await, 1);
+        } else {
+            assert_ne!(qos1_test_operation(&second), first_operation);
+            assert_eq!(ctx.ordinary_identity_count().await, 2);
+            assert_eq!(ctx.ordinary_pending(&owner).await, 2);
+        }
+        drop(retried);
+        ctx.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn mqtt_qos1_storage_failure_never_returns_success_or_reserves_identity() {
+    let (ctx, receiver, owner, channel_id, authorization) = setup_connected_channel().await;
+    drop(receiver);
+    let db_url = format!(
+        "sqlite://{}?mode=rw",
+        ctx._dir.path().join("gateway-mqtt-flow.sqlite").display()
+    );
+    let mut fixture = SqliteConnection::connect(&db_url).await.unwrap();
+    sqlx::query("CREATE TRIGGER mqtt_test_reject_insert BEFORE INSERT ON ordinary_messages BEGIN SELECT RAISE(ABORT, 'synthetic MQTT insert failure'); END")
+        .execute(&mut fixture).await.unwrap();
+    let mut a = connect_publish_client(ctx.addr, "storage-failure-publisher").await;
+    let mut b = connect_publish_client(ctx.addr, "storage-failure-publisher").await;
+    let (first, second) = tokio::join!(
+        qos1_test_exchange(&mut a, qos1_test_publish(&channel_id, &authorization, None)),
+        qos1_test_exchange(&mut b, qos1_test_publish(&channel_id, &authorization, None)),
+    );
+    assert_ne!(first.reason, PubAckReason::Success);
+    assert_ne!(second.reason, PubAckReason::Success);
+    assert_eq!(ctx.ordinary_identity_count().await, 0);
+    assert_eq!(ctx.ordinary_pending(&owner).await, 0);
+    sqlx::query("DROP TRIGGER mqtt_test_reject_insert")
+        .execute(&mut fixture)
+        .await
+        .unwrap();
+    let retry =
+        qos1_test_exchange(&mut a, qos1_test_publish(&channel_id, &authorization, None)).await;
+    let _ = qos1_test_operation(&retry);
+    assert_eq!(ctx.ordinary_identity_count().await, 1);
+    assert_eq!(ctx.ordinary_pending(&owner).await, 1);
+    drop((a, b, fixture));
+    ctx.shutdown().await;
+}
+
+#[tokio::test]
+async fn mqtt_qos1_explicit_operation_remains_idempotent_and_conflict_checked() {
+    let (ctx, receiver, owner, channel_id, authorization) = setup_connected_channel().await;
+    drop(receiver);
+    let mut a = connect_publish_client(ctx.addr, "business-id-publisher-a").await;
+    let mut b = connect_publish_client(ctx.addr, "business-id-publisher-b").await;
+    let (first, second) = tokio::join!(
+        qos1_test_exchange(
+            &mut a,
+            qos1_test_publish(&channel_id, &authorization, Some("mqtt-business-identity"))
+        ),
+        qos1_test_exchange(
+            &mut b,
+            qos1_test_publish(&channel_id, &authorization, Some("mqtt-business-identity"))
+        ),
+    );
+    assert_eq!(qos1_test_operation(&first), qos1_test_operation(&second));
+    assert_eq!(ctx.ordinary_identity_count().await, 1);
+    assert_eq!(ctx.ordinary_pending(&owner).await, 1);
+    let mut conflict =
+        qos1_test_publish(&channel_id, &authorization, Some("mqtt-business-identity"));
+    conflict.payload = message_publish_payload(serde_json::json!({
+        "op_id": "mqtt-business-identity", "title": "conflicting content"
+    }))
+    .into();
+    conflict.dup = true;
+    let refused = qos1_test_exchange(&mut a, conflict).await;
+    assert_ne!(refused.reason, PubAckReason::Success);
+    assert_eq!(ctx.ordinary_identity_count().await, 1);
+    assert_eq!(ctx.ordinary_pending(&owner).await, 1);
+    drop((a, b));
+    ctx.shutdown().await;
 }
 
 #[tokio::test]

@@ -17,10 +17,7 @@ use crate::{
         },
     },
     domain_model::message::MessageInput,
-    mqtt::{
-        MqttMessageTopic, MqttPublishCommand, MqttPublishDedupeDecision, MqttPublishDedupeKey,
-        MqttPublishEnvelope, MqttRole,
-    },
+    mqtt::{MqttMessageTopic, MqttPublishCommand, MqttPublishEnvelope, MqttRole},
     value::ChannelId,
 };
 
@@ -148,11 +145,7 @@ impl MqttSession {
         }
     }
 
-    pub(super) async fn handle_publish(
-        &mut self,
-        client: &AuthenticatedMqttClient,
-        publish: Publish,
-    ) {
+    pub(super) async fn handle_publish(&mut self, publish: Publish) {
         if publish.qos != QoS::AtLeastOnce {
             self.runtime.private.metrics.mark_mqtt_publish_failure();
             let _ = self
@@ -167,7 +160,7 @@ impl MqttSession {
                 .await;
             return;
         }
-        let outcome = self.process_publish(client, publish.clone()).await;
+        let outcome = self.process_publish(publish.clone()).await;
         let mut ack = PubAck::new(publish.pkid);
         match outcome {
             Err(err) => {
@@ -184,10 +177,10 @@ impl MqttSession {
             }
             Ok(op_id) => {
                 self.runtime.private.metrics.mark_mqtt_publish_success();
-                let mut user_properties = vec![("pushgo-qos".to_string(), "1".to_string())];
-                if let Some(op_id) = op_id {
-                    user_properties.push(("pushgo-op-id".to_string(), op_id));
-                }
+                let user_properties = vec![
+                    ("pushgo-qos".to_string(), "1".to_string()),
+                    ("pushgo-op-id".to_string(), op_id),
+                ];
                 ack.properties = Some(PubAckProperties {
                     reason_string: None,
                     user_properties,
@@ -197,11 +190,7 @@ impl MqttSession {
         let _ = self.write_packet(Packet::PubAck(ack)).await;
     }
 
-    async fn process_publish(
-        &self,
-        client: &AuthenticatedMqttClient,
-        publish: Publish,
-    ) -> Result<Option<String>, MqttError> {
+    async fn process_publish(&self, publish: Publish) -> Result<String, MqttError> {
         if publish.qos != QoS::AtLeastOnce {
             return Err(MqttError::new(
                 "only QoS 1 is supported",
@@ -241,55 +230,19 @@ impl MqttSession {
                 )
             })?;
         let payload = MqttPublishEnvelope::decode(&publish.payload).map_err(mqtt_error_from_api)?;
-        if payload.op_id().is_none()
-            && self.reserve_mqtt_publish_fallback_dedupe(client, &publish)
-                == MqttPublishDedupeDecision::Duplicate
-        {
-            ::tracing::event!(
-                target: "gateway.trace_event",
-                ::tracing::Level::INFO,
-                event = "mqtt.publish_duplicate_suppressed",
-                mqtt_role = %(MqttRole::IngressPublish.as_str()),
-                client_id = %(crate::util::redact_text(client.dedupe_client_id.as_str())),
-                topic = %(crate::util::redact_text(publish.topic.as_str())),
-                packet_id = (publish.pkid as u64)
-            );
-            return Ok(None);
-        }
+        // MQTT-4.3.2-5: once PUBACK is sent, reusing a packet identifier is
+        // a new Application Message, even when DUP is set. This connection's
+        // read loop serializes submission and PUBACK before the next PUBLISH.
+        // Only the caller-supplied business op_id may deduplicate in the
+        // durable submit authority; QoS1 transport/payload fingerprints cannot.
         let channel_id = topic.channel_id.to_string();
-        let result = self
-            .submit_publish_command(
-                channel_id.as_str(),
-                password,
-                payload,
-                IngressSource::MqttPublish,
-            )
-            .await;
-        if result.is_err() {
-            self.clear_mqtt_publish_fallback_dedupe(client, &publish);
-        }
-        result
-    }
-
-    fn reserve_mqtt_publish_fallback_dedupe(
-        &self,
-        client: &AuthenticatedMqttClient,
-        publish: &Publish,
-    ) -> MqttPublishDedupeDecision {
-        self.runtime.publish_dedupe.reserve(
-            mqtt_publish_fallback_dedupe_key(client, publish),
-            chrono::Utc::now().timestamp_millis(),
+        self.submit_publish_command(
+            channel_id.as_str(),
+            password,
+            payload,
+            IngressSource::MqttPublish,
         )
-    }
-
-    fn clear_mqtt_publish_fallback_dedupe(
-        &self,
-        client: &AuthenticatedMqttClient,
-        publish: &Publish,
-    ) {
-        self.runtime
-            .publish_dedupe
-            .clear(mqtt_publish_fallback_dedupe_key(client, publish));
+        .await
     }
 
     async fn submit_publish_command(
@@ -298,7 +251,7 @@ impl MqttSession {
         password: &str,
         payload: MqttPublishCommand,
         source: IngressSource,
-    ) -> Result<Option<String>, MqttError> {
+    ) -> Result<String, MqttError> {
         let command = match payload {
             MqttPublishCommand::Message(payload) => {
                 DomainCommandInput::Message(Box::new(MessageInput {
@@ -342,18 +295,6 @@ impl MqttSession {
         .await
         .map_err(core_error_to_api_error)
         .map_err(mqtt_error_from_api)?;
-        Ok(Some(outcome.summary.op_id))
-    }
-}
-
-fn mqtt_publish_fallback_dedupe_key<'a>(
-    client: &'a AuthenticatedMqttClient,
-    publish: &'a Publish,
-) -> MqttPublishDedupeKey<'a> {
-    MqttPublishDedupeKey {
-        client_id: client.dedupe_client_id.as_str(),
-        packet_id: publish.pkid,
-        topic: publish.topic.as_str(),
-        payload: &publish.payload,
+        Ok(outcome.summary.op_id)
     }
 }

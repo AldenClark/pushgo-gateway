@@ -2,13 +2,11 @@ use std::sync::Arc;
 
 use crate::{app::AppState, private::PrivateState};
 
-mod dedupe;
 mod payload;
 mod roles;
 mod server;
 mod topics;
 
-pub(crate) use dedupe::{MqttPublishDedupe, MqttPublishDedupeDecision, MqttPublishDedupeKey};
 pub(crate) use payload::{MqttDeliveryEnvelope, MqttPublishCommand, MqttPublishEnvelope};
 pub(crate) use roles::MqttRole;
 pub use server::{serve_mqtt, serve_mqtt_tls};
@@ -29,7 +27,6 @@ pub(crate) struct MqttRuntime {
     pub state: Arc<AppState>,
     pub private: Arc<PrivateState>,
     pub config: MqttConfig,
-    pub publish_dedupe: Arc<MqttPublishDedupe>,
 }
 
 pub(crate) fn spawn_mqtt(state: Arc<AppState>, private: Arc<PrivateState>, config: MqttConfig) {
@@ -42,7 +39,6 @@ pub(crate) fn spawn_mqtt(state: Arc<AppState>, private: Arc<PrivateState>, confi
                 state: Arc::clone(&state),
                 private: Arc::clone(&private),
                 config: config.clone(),
-                publish_dedupe: MqttPublishDedupe::new(),
             };
             let result = if runtime.config.tls_enabled {
                 match mqtt_tls_acceptor(&runtime.config) {

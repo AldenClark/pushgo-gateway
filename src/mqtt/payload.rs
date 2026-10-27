@@ -59,16 +59,6 @@ pub(crate) enum MqttPublishCommand {
     Thing(ThingCommand<ThingPatch>),
 }
 
-impl MqttPublishCommand {
-    pub(crate) fn op_id(&self) -> Option<&str> {
-        match self {
-            Self::Message(payload) => payload.op_id.as_deref(),
-            Self::Event(command) => command.op_id(),
-            Self::Thing(command) => command.op_id(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MqttMessagePublish {

@@ -1,6 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MqttRole {
-    IngressPublish,
     IngressWill,
     PrivateReceiver,
 }
@@ -8,7 +7,6 @@ pub(crate) enum MqttRole {
 impl MqttRole {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::IngressPublish => "mqtt_ingress_publish",
             Self::IngressWill => "mqtt_ingress_will",
             Self::PrivateReceiver => "mqtt_private_receiver",
         }
@@ -26,7 +24,12 @@ mod tests {
 
     #[test]
     fn mqtt_roles_are_explicit_and_stable() {
-        assert_eq!(MqttRole::IngressPublish.as_str(), "mqtt_ingress_publish");
+        // Publish ingress is classified by the real durable submit source;
+        // the retired fallback-dedupe trace no longer owns a parallel role.
+        assert_eq!(
+            crate::delivery_core::source::IngressSource::MqttPublish.as_str(),
+            "mqtt_publish"
+        );
         assert_eq!(MqttRole::IngressWill.as_str(), "mqtt_ingress_will");
         assert_eq!(MqttRole::PrivateReceiver.as_str(), "mqtt_private_receiver");
         assert_eq!(MQTT_EXTERNAL_BRIDGE_IN_ROLE, "mqtt_external_bridge_in");

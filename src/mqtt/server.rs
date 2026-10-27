@@ -69,7 +69,6 @@ struct MqttInflightDelivery {
 }
 
 struct AuthenticatedMqttClient {
-    dedupe_client_id: String,
     device_key: Option<String>,
     device_id: Option<DeviceId>,
     ordinary_route_generation: Option<i64>,
@@ -241,11 +240,6 @@ impl MqttSession {
         if device_type == MqttDeviceType::Publish {
             return Ok(MqttAuthSuccess {
                 client: AuthenticatedMqttClient {
-                    dedupe_client_id: mqtt_dedupe_client_id(
-                        connect.client_id.as_str(),
-                        None,
-                        self.remote_addr,
-                    ),
                     device_key: None,
                     device_id: None,
                     ordinary_route_generation: None,
@@ -390,11 +384,6 @@ impl MqttSession {
             server_keep_alive: keep_alive.server_property,
             read_timeout: keep_alive.read_timeout,
             client: AuthenticatedMqttClient {
-                dedupe_client_id: mqtt_dedupe_client_id(
-                    connect.client_id.as_str(),
-                    Some(device_key.as_str()),
-                    self.remote_addr,
-                ),
                 device_key: Some(device_key),
                 device_id: Some(device_id),
                 ordinary_route_generation: Some(route.route_generation),
@@ -465,7 +454,7 @@ impl MqttSession {
                 }
                 packet = self.read_packet() => {
                     match packet {
-                        Ok(Packet::Publish(publish)) => self.handle_publish(&client, publish).await,
+                        Ok(Packet::Publish(publish)) => self.handle_publish(publish).await,
                         Ok(Packet::PubAck(puback)) => self.handle_puback(&client, puback).await,
                         Ok(Packet::Subscribe(subscribe)) => self.handle_subscribe(&client, subscribe).await,
                         Ok(Packet::Unsubscribe(unsubscribe)) => self.handle_unsubscribe(&client, unsubscribe).await,
@@ -956,22 +945,6 @@ fn user_property<'a>(properties: &'a [(String, String)], key: &str) -> Option<&'
     properties
         .iter()
         .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
-}
-
-fn mqtt_dedupe_client_id(
-    requested_client_id: &str,
-    assigned_device_key: Option<&str>,
-    remote_addr: SocketAddr,
-) -> String {
-    if let Some(device_key) = assigned_device_key {
-        return device_key.to_string();
-    }
-    let requested = requested_client_id.trim();
-    if requested.is_empty() {
-        format!("anonymous@{remote_addr}")
-    } else {
-        requested.to_string()
-    }
 }
 
 async fn recv_outbound(client: &AuthenticatedMqttClient) -> Option<DeliverEnvelope> {
