@@ -15,7 +15,7 @@ Preparation copies pinned tracked source blobs, applies only test seams, and emi
 Add `--run` with an ordinary populated `CARGO_HOME` and a suitably bounded `CARGO_TARGET_DIR` to resolve **offline**, ensure no Gateway locked package name/version disappears, and run exactly:
 
 ```sh
-cargo test --offline --locked --manifest-path "$NEW_OVERLAY_DIRECTORY/warp/Cargo.toml" \
+cargo +1.97.1 test --offline --locked --manifest-path "$NEW_OVERLAY_DIRECTORY/warp/Cargo.toml" \
   -j1 -p warp-link --lib combined_handoff_tests -- --nocapture --test-threads=1
 ```
 

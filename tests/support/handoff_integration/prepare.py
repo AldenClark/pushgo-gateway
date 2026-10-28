@@ -108,7 +108,7 @@ def main() -> None:
                "scope": "Loopback production modules and synthetic SQLite; not TLS, apps or outer reconnect"}
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     if args.run:
-        command = ["cargo", "metadata", "--offline", "--format-version", "1",
+        command = ["cargo", "+1.97.1", "metadata", "--offline", "--format-version", "1",
                    "--manifest-path", str(manifest)]
         with (output / "metadata.json").open("w") as handle:
             subprocess.run(command, check=True, stdout=handle)
@@ -116,7 +116,7 @@ def main() -> None:
         resolved = {(p["name"], p["version"]) for p in tomllib.loads((warp / "Cargo.lock").read_text())["package"]}
         if original - resolved:
             raise RuntimeError(f"Gateway locked name/versions removed: {sorted(original - resolved)}")
-        command = ["cargo", "test", "--offline", "--locked", "--manifest-path", str(manifest),
+        command = ["cargo", "+1.97.1", "test", "--offline", "--locked", "--manifest-path", str(manifest),
                    "-j1", "-p", "warp-link", "--lib", "combined_handoff_tests", "--",
                    "--nocapture", "--test-threads=1"]
         with (output / "test.log").open("w") as handle:
