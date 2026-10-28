@@ -1,7 +1,7 @@
 {
   "source_gateway": "5eba92c1941cf3e467bdcc80da1c0145b8b1667b",
   "source_warp": "344a0486a69764da2e52441618d481fdcb43fbcf",
-  "evidence": "Prior focused results reused, not rerun during convergence",
+  "evidence": "Prior Private78, MQTT48 and strict Clippy reused; portable combined2 freshly compiled and executed during convergence",
   "scope": "Rust1.97.1 macOS ARM64 loopback/synthetic SQLite; no installed app, TLS connector, full reconnect or Provider claim",
   "results": {
     "private": {
@@ -62,5 +62,39 @@
     "compiled_or_tested": false,
     "seed_lock": "Gateway normal Cargo.lock, intentionally unresolved in preparation"
   },
-  "test_module_sha256": "2c2c6444991e57a49c9491ffe8907c0781fc60da77af0082259b97ebfbac6133"
+  "test_module_sha256": "2c2c6444991e57a49c9491ffe8907c0781fc60da77af0082259b97ebfbac6133",
+  "convergence_portable_run": {
+    "status": "PASS_TWO_TESTS",
+    "toolchain": "1.97.1",
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 62,
+    "launch_seconds": 41.074,
+    "test_seconds": 0.24,
+    "extra_target_bytes": 257875135,
+    "free_after_bytes": 10536267776,
+    "guard_stop": null,
+    "lock_name_versions_removed": [],
+    "receipts": {
+      "gateway-portable-run02/receipt.json": {
+        "sha256": "b99d3175459a11734639bfda678b5b02d53170a738ef4a1db59fb66a96a6b099"
+      },
+      "gateway-portable-run02/test.log": {
+        "sha256": "3c4741e87a741ddd2d104c15531391d5bd0a4ccec85ceb3c1883635c54dbaada"
+      },
+      "gateway-portable-run02-launch.json": {
+        "sha256": "cdae153013428b89648ebe2705e4e0c06faf33142543023c0d6c29ac9c708df1"
+      }
+    }
+  },
+  "convergence_first_invocation": {
+    "tests_executed": 0,
+    "exit": -15,
+    "cause": "Runner selected caller stable1.99.1 instead of1.97.1; root supplied empty target instead of actual shared target",
+    "extra_target_bytes": 479688295,
+    "product_failure": false,
+    "receipt_sha256": "f38899ff0971875ceb412fea948a868dffb03e9bc0f9330f829c676639c98dd0",
+    "correction": "Explicit cargo+1.97.1; use actual prior shared target"
+  }
 }

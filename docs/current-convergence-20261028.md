@@ -15,18 +15,20 @@ Gateway's three direct Warp dependencies and lock use exact revision `344a0486a6
 
 ## Evidence retained from the exact source
 
-Rust 1.97.1, macOS ARM64, offline/locked, jobs1. These are reused prior results, not newly rerun suites:
+Rust 1.97.1, macOS ARM64, offline/locked, jobs1. The first three results are reused prior evidence; the portable combined runner was freshly executed during convergence:
 
 | Check | Result | Bound |
 | --- | --- | --- |
 | `cargo test --offline --locked -j1 --lib private:: -- --nocapture --test-threads=1` | 78 passed, 0 failed/ignored | Includes handoff6 and registry4; synthetic SQLite and loopback production modules |
 | `cargo clippy --offline --locked -j1 --lib --tests -- -D warnings` | passed | Normal product configuration, separate from the overlay |
 | `cargo test --offline --locked -j1 --lib mqtt:: -- --nocapture --test-threads=1` | 48 passed, 0 failed/ignored | MQTT sources unchanged after `d35b42c`; QoS1 seven are a subset |
-| Actual Warp client + Gateway server modules | 2 passed, 0 failed/ignored | Loopback WebSocket framing, actual ordinary SQLite, synthetic client SQLite |
+| Actual Warp client + Gateway server modules, fresh portable runner | 2 passed, 0 failed/ignored, 62 filtered | Loopback WebSocket framing, actual ordinary SQLite, synthetic client SQLite |
 
 The combined cases prove that a blocked seq8 save cannot be overtaken by seq9, callbacks have one active owner, failed save gets no successful ACK, and reconnect/replay preserves business identity. A negative SQL trigger retains both pending targets/bodies; recovery creates nine unique rows. Separate Gateway cases cover a real dropped wire ACK and Storage/session owner close/reopen. Original pre-fix failures are preserved in the local audit, not overwritten by later green results.
 
-The portable [integration fixture](../tests/support/handoff_integration/README.md) retains the exact previously tested two methods, source pinning, fixture-only visibility seam and reproducible staging. The convergence preparation copied 387 exact source/Cargo inputs and produced 389 staged files; every staged byte except the deliberately unresolved lock seed matched the prior passing overlay. No compilation or product test was repeated for this documentation-only addition. Compact receipt identities are in [the evidence index](../tests/support/handoff_integration/evidence.json).
+The portable [integration fixture](../tests/support/handoff_integration/README.md) retains the exact previously tested two methods, source pinning, fixture-only visibility seam and reproducible staging. The convergence preparation copied 387 exact source/Cargo inputs and produced 389 staged files; every staged byte except the deliberately unresolved lock seed matched the prior passing overlay. The corrected committed runner then actually compiled and ran exactly two tests successfully, retaining all original Gateway locked package name/versions. The bounded launch took 41.074 seconds including staging/metadata; tests took 0.24 seconds, target growth was 257,875,135 bytes and free space stayed above 4 GiB. These are execution facts, not performance claims. Compact receipt identities are in [the evidence index](../tests/support/handoff_integration/evidence.json).
+
+The first runner invocation executed zero tests: an unqualified `cargo --manifest-path` selected the caller's stable Rust 1.99.1 rather than the manifest's 1.97.1; the root also initially supplied an empty target directory instead of the prior shared target. The owned compile was stopped with exit -15, preserving its logs and roughly 480 MB growth. The runner now explicitly uses `cargo +1.97.1`; the successful second invocation used the actual prior shared target. No product failure was reclassified or retried away.
 
 This does not prove TLS connectors, the outer client reconnect loop, Android/Windows installed applications, Apple/Watch decoders, real Providers, physical devices, full transport matrices, power loss, long-run performance or production capacity. Older fixed-load failures remain historical failures. No current release matrix is inferred from focused tests.
 
