@@ -11,30 +11,36 @@ mod ordinary_private_tests {
         }
     }
 
-    #[test]
-    fn resume_watermark_keeps_issued_delivery_until_durable_settle() {
-        let now = Instant::now();
-        let mut state = ResumeState::fresh(now);
-        let (seq, envelope) = state.track_outbound(envelope(), now);
+    #[tokio::test]
+    async fn resume_hint_never_erases_an_uncommitted_delivery_capability() {
+        let (_dir, hub) = resume_cleanup_hub().await;
+        let device = [44; 16];
+        let first = hub.start_or_resume_session(device, None, 0).await;
+        let (seq, issued) = hub.track_sent_outbound(device, envelope());
+        for hint in [0, seq, seq + 100] {
+            let resumed = hub
+                .start_or_resume_session(device, Some(&first.resume_token), hint)
+                .await;
+            assert_eq!(resumed.resume_token, first.resume_token);
+            assert!(
+                hub.peek_delivery_by_seq(device, seq, &issued.delivery_id)
+                    .is_some()
+            );
+        }
         assert_eq!(
-            state.ack_up_to(seq, now),
-            vec![envelope.delivery_id.clone()]
+            hub.ack_by_seq(device, seq, Some("another-delivery"))
+                .await
+                .unwrap(),
+            None,
+            "a mismatched explicit ACK cannot consume another delivery"
         );
         assert_eq!(
-            state.inflight_snapshot().len(),
-            1,
-            "client watermark cannot erase an uncommitted ACK capability"
+            hub.ack_by_seq(device, seq, Some(&issued.delivery_id))
+                .await
+                .unwrap(),
+            Some(issued.delivery_id)
         );
-        assert_eq!(
-            state.ack_up_to(seq, now),
-            vec![envelope.delivery_id.clone()],
-            "a failed durable settle must remain retryable"
-        );
-        assert_eq!(
-            state.ack_by_seq(seq, Some(&envelope.delivery_id), now),
-            Some(envelope.delivery_id)
-        );
-        assert!(state.inflight_snapshot().is_empty());
+        assert!(hub.snapshot_inflight(device).is_empty());
     }
 
     #[test]
@@ -163,7 +169,6 @@ mod ordinary_private_tests {
         hub.resume_state.insert(device, previous);
         let resumed = hub.start_or_resume_session(device, Some(&prior), 0).await;
         assert_ne!(resumed.resume_token, prior);
-        assert!(resumed.acked_delivery_ids.is_empty());
         assert!(hub.snapshot_inflight(device).is_empty());
         assert_eq!(hub.track_sent_outbound(device, envelope()).0, 1);
     }

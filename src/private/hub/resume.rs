@@ -1,4 +1,9 @@
 impl PrivateHub {
+    pub(crate) fn resume_token_matches(&self, device_id: DeviceId, token: &str) -> bool {
+        self.with_resume_state(device_id, |state| state.token == token)
+            .unwrap_or(false)
+    }
+
     fn ensure_resume_state_mut<R>(
         &self,
         device_id: DeviceId,
@@ -50,31 +55,28 @@ impl PrivateHub {
             .filter(|v| !v.is_empty())
             .unwrap_or_default();
         let mut reset_applied = false;
-        let (resume_token, acked_delivery_ids) =
-            self.ensure_resume_state_mut(device_id, now, |entry| {
-                let token_mismatch = incoming.is_empty() || incoming != entry.token;
-                let ack_watermark_out_of_range =
-                    !token_mismatch && last_acked_seq > entry.next_seq.saturating_sub(1);
-                if token_mismatch || ack_watermark_out_of_range {
-                    entry.reset(now);
-                    reset_applied = true;
-                }
-                let acked_delivery_ids = entry.ack_up_to(last_acked_seq, now);
-                (entry.token.clone(), acked_delivery_ids)
-            });
+        // This legacy field is a maximum observed transport sequence, not proof
+        // that every lower delivery was persisted. Gaps and concurrent sockets
+        // are valid. Only an explicit per-delivery ACK may terminalize work.
+        let resume_token = self.ensure_resume_state_mut(device_id, now, |entry| {
+            let token_mismatch = incoming.is_empty() || incoming != entry.token;
+            if token_mismatch {
+                entry.reset(now);
+                reset_applied = true;
+            }
+            entry.updated_at = now;
+            entry.token.clone()
+        });
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "private.resume_session_started",
             device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
             reset_applied = (reset_applied),
-            acked_delivery_ids = (acked_delivery_ids.len() as u64)
+            ignored_ack_hint = (last_acked_seq)
         );
 
-        ResumeHandshake {
-            resume_token,
-            acked_delivery_ids,
-        }
+        ResumeHandshake { resume_token }
     }
 
     pub fn track_outbound_delivery(

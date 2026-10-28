@@ -25,6 +25,14 @@ pub struct PushgoServerApp {
 }
 
 impl PushgoServerApp {
+    #[cfg(test)]
+    pub(super) fn runtime_for_handoff_test(
+        &self,
+        session_id: &str,
+    ) -> Option<Arc<super::registry::SessionRuntime>> {
+        self.sessions.get(session_id)
+    }
+
     pub fn new(state: Arc<PrivateState>) -> Self {
         Self {
             state,

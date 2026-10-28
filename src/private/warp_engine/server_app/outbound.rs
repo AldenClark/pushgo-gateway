@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::{
-    super::registry::{PendingOutbound, PreparedOutbound, SessionRuntime},
+    super::registry::{HandoffState, PendingOutbound, PreparedOutbound, SessionRuntime},
     PushgoServerApp,
 };
 
@@ -76,10 +76,29 @@ impl PushgoServerApp {
         session: &SessionCtx,
         max_wait_ms: u64,
     ) -> Option<OutboundMsg> {
+        self.sessions.expire_handoff(&session.session_id);
         let runtime = self.sessions.get(session.session_id.as_str())?.clone();
         if runtime.is_terminating() || self.state.is_shutting_down() {
             runtime.request_termination();
             return pending::<Option<OutboundMsg>>().await;
+        }
+        if !runtime.handoff.lock().can_send() {
+            // A prepared candidate owns no delivery; a frozen primary may still
+            // receive/ACK. The existing session select owns this finite wait.
+            let wake = runtime.outbound_stop.notified();
+            tokio::pin!(wake);
+            wake.as_mut().enable();
+            let deadline = runtime.handoff.lock().binding().map(|value| value.deadline);
+            let wait = deadline
+                .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()))
+                .unwrap_or_default()
+                .min(Duration::from_millis(max_wait_ms.max(1)));
+            tokio::select! {
+                _ = wake => {}
+                _ = tokio::time::sleep(wait.max(Duration::from_millis(1))) => {}
+            }
+            self.sessions.expire_handoff(&session.session_id);
+            return None;
         }
         let context = OutboundContext::new(self.state.clone(), runtime.as_ref());
         let mut pending = runtime.pending_outbound.lock().await;
@@ -153,6 +172,7 @@ struct OutboundContext {
     state: Arc<PrivateState>,
     device_id: DeviceId,
     conn_id: u64,
+    handoff: Arc<parking_lot::Mutex<HandoffState>>,
     ordinary_route_generation: Option<i64>,
     ordinary_first: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
@@ -169,6 +189,7 @@ impl OutboundContext {
             state,
             device_id: runtime.device_id,
             conn_id: runtime.conn_id,
+            handoff: runtime.handoff.clone(),
             ordinary_route_generation: runtime.ordinary_route_generation,
             ordinary_first: runtime.ordinary_first.clone(),
             terminate_requested: runtime.terminate_requested.clone(),
@@ -205,6 +226,9 @@ impl OutboundContext {
                 return None;
             };
             if self.terminate_requested.load(Ordering::SeqCst) || self.state.is_shutting_down() {
+                return None;
+            }
+            if !self.handoff.lock().can_send() {
                 return None;
             }
             // A completed task may have waited behind inbound ACK or control.
@@ -256,6 +280,12 @@ impl OutboundContext {
             let Some(PendingOutbound::Ready(prepared)) = pending.take() else {
                 return None;
             };
+            // Freeze is published synchronously by the same session auth owner
+            // before it joins this slot. No sequence is allocated past it.
+            if !self.handoff.lock().can_send() {
+                *pending = Some(PendingOutbound::Ready(prepared));
+                return None;
+            }
             if matches!(
                 self.state.hub.connection_mode(self.device_id, self.conn_id),
                 ConnectionMode::Stale
@@ -335,6 +365,9 @@ impl OutboundContext {
     async fn take_outbound_ready(&self, ack_timeout: Duration) -> Option<PreparedOutbound> {
         if self.terminate_requested.load(Ordering::SeqCst) || self.state.is_shutting_down() {
             self.request_termination();
+            return None;
+        }
+        if !self.handoff.lock().can_send() {
             return None;
         }
         if !self

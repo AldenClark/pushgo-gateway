@@ -21,14 +21,11 @@ impl PrivateState {
             .hub
             .start_or_resume_session(device_id, client_resume_token, last_acked_seq)
             .await;
-        self.settle_resume_acked_deliveries(device_id, &resume.acked_delivery_ids)
-            .await;
         ::tracing::event!(
             target: "gateway.trace_event",
             ::tracing::Level::INFO,
             event = "private.session_resume_completed",
-            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
-            acked_delivery_ids = (resume.acked_delivery_ids.len() as u64)
+            device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id)))
         );
         resume
     }
@@ -47,29 +44,5 @@ impl PrivateState {
             .build_bootstrap_queues(device_id, self.config.pull_limit)
             .await?;
         Ok(PreparedSessionBootstrap { resume, bootstrap })
-    }
-
-    async fn settle_resume_acked_deliveries(&self, device_id: DeviceId, delivery_ids: &[String]) {
-        if delivery_ids.is_empty() {
-            return;
-        }
-        for delivery_id in delivery_ids {
-            match self
-                .complete_terminal_delivery(device_id, delivery_id.as_str(), None)
-                .await
-            {
-                Ok(true) | Ok(false) => {}
-                Err(err) => {
-                    ::tracing::event!(
-                        target: "gateway.trace_event",
-                        ::tracing::Level::WARN,
-                        event = "private.session_resume_settle_failed",
-                        device_id = %(crate::util::redact_text(crate::util::encode_crockford_base32_128(&device_id))),
-                        delivery_id = %(crate::util::redact_text(delivery_id.as_str())),
-                        error = %(err.to_string())
-                    );
-                }
-            }
-        }
     }
 }

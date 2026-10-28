@@ -82,9 +82,9 @@ rand = "0.10.3"
 sha2 = "0.11.1"
 base64 = "0.23.1"
 async-trait = "0.1.92"
-warp-link = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "ec00654168f85507df29013a70e33872fc2c0094" }
-warp-link-coordination = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "ec00654168f85507df29013a70e33872fc2c0094" }
-pushgo-warp-profile = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "ec00654168f85507df29013a70e33872fc2c0094" }
+warp-link = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "344a0486a69764da2e52441618d481fdcb43fbcf" }
+warp-link-coordination = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "344a0486a69764da2e52441618d481fdcb43fbcf" }
+pushgo-warp-profile = { version = "0.1.0", git = "https://github.com/AldenClark/warp-link", rev = "344a0486a69764da2e52441618d481fdcb43fbcf" }
 futures-util = "0.3.34"
 hyper-util = { version = "0.1.21", features = ["server-auto", "service", "tokio"] }
 parking_lot = "0.12.5"

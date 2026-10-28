@@ -129,6 +129,97 @@ fn test_private_config() -> PrivateConfig {
 }
 
 #[tokio::test]
+async fn resume_maximum_ack_must_not_settle_a_lower_unprocessed_delivery() {
+    // Actual Hub + SQLite terminal settlement, without a client callback mock.
+    // ACK 9 is explicit evidence only for 9, not evidence that 8 was persisted.
+    let ctx = StateTestContext::new().await;
+    let device = derive_private_device_id("handoff-watermark-device");
+    let initial = ctx.state.start_or_resume_session(device, None, 0).await;
+    let now = chrono::Utc::now().timestamp_millis();
+    for seq in 1..=9_u64 {
+        let id = format!("handoff-{seq}");
+        let payload: Arc<[u8]> = Arc::from([seq as u8]);
+        ctx.state
+            .enqueue_private_delivery(device, &id, payload.clone(), now, now + 600_000)
+            .await
+            .unwrap();
+        let (issued, _) = ctx.state.hub.track_sent_outbound(
+            device,
+            crate::private::protocol::DeliverEnvelope {
+                delivery_id: id.clone(),
+                payload,
+                ordinary: false,
+                ordinary_expires_at: None,
+            },
+        );
+        assert_eq!(issued, seq);
+        if seq != 8 {
+            assert!(
+                ctx.state
+                    .complete_terminal_delivery_from_session(device, &id, Some(seq), None)
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+    let store = ctx.state.hub.store();
+    let before = store
+        .load_private_outbox_entry(device, "handoff-8")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.status, crate::storage::OUTBOX_STATUS_PENDING);
+    assert!(
+        store
+            .load_private_message("handoff-8")
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let resumed = ctx
+        .state
+        .start_or_resume_session(device, Some(&initial.resume_token), 9)
+        .await;
+    assert_eq!(resumed.resume_token, initial.resume_token);
+    let after = store
+        .load_private_outbox_entry(device, "handoff-8")
+        .await
+        .unwrap()
+        .unwrap();
+    let body_present = store
+        .load_private_message("handoff-8")
+        .await
+        .unwrap()
+        .is_some();
+    println!(
+        "handoff resume evidence: before={}, after={}, body_present={}",
+        before.status, after.status, body_present
+    );
+    assert_eq!(
+        after.status,
+        crate::storage::OUTBOX_STATUS_PENDING,
+        "the maximum ACK cannot prove persistence of a lower unprocessed delivery"
+    );
+    assert!(
+        body_present,
+        "unprocessed lower-sequence body must remain replayable"
+    );
+    let replay = ctx
+        .state
+        .hub
+        .build_bootstrap_queues(device, 16)
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .inflight
+            .iter()
+            .any(|(seq, item)| *seq == 8 && item.delivery_id == "handoff-8")
+    );
+}
+
+#[tokio::test]
 async fn automation_stats_track_revocation_and_reset() {
     let ctx = StateTestContext::new().await;
     let device_key = "state-test-device";

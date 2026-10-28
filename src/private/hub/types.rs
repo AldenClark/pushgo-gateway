@@ -154,28 +154,6 @@ impl ResumeState {
         *self = Self::fresh(now);
     }
 
-    fn ack_up_to(&mut self, last_acked_seq: u64, now: Instant) -> Vec<String> {
-        if last_acked_seq == 0 {
-            self.updated_at = now;
-            return Vec::new();
-        }
-        let acked: Vec<u64> = self
-            .inflight
-            .keys()
-            .filter_map(|seq| (*seq <= last_acked_seq).then_some(*seq))
-            .collect();
-        let mut acked_delivery_ids = Vec::with_capacity(acked.len());
-        for seq in acked {
-            if let Some(inflight) = self.inflight.get(&seq) {
-                // Resume is client evidence, not a database COMMIT. The caller
-                // settles these IDs durably before forgetting their sequences.
-                acked_delivery_ids.push(inflight.delivery.delivery_id.clone());
-            }
-        }
-        self.updated_at = now;
-        acked_delivery_ids
-    }
-
     fn track_outbound(
         &mut self,
         envelope: protocol::DeliverEnvelope,
@@ -344,7 +322,6 @@ impl ResumeState {
 #[derive(Debug, Clone)]
 pub struct ResumeHandshake {
     pub resume_token: String,
-    pub acked_delivery_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
