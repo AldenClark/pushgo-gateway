@@ -1,0 +1,66 @@
+{
+  "source_gateway": "5eba92c1941cf3e467bdcc80da1c0145b8b1667b",
+  "source_warp": "344a0486a69764da2e52441618d481fdcb43fbcf",
+  "evidence": "Prior focused results reused, not rerun during convergence",
+  "scope": "Rust1.97.1 macOS ARM64 loopback/synthetic SQLite; no installed app, TLS connector, full reconnect or Provider claim",
+  "results": {
+    "private": {
+      "passed": 78,
+      "failed": 0,
+      "ignored": 0
+    },
+    "mqtt": {
+      "passed": 48,
+      "failed": 0,
+      "ignored": 0
+    },
+    "combined": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "strict_clippy": "PASS"
+  },
+  "original_local_receipt_hashes": {
+    "private_summary": {
+      "filename": "summary.json",
+      "sha256": "730e13fb314b269cfb946f5d1f9318d9108f454e5a92ac72905800e39b1756a0"
+    },
+    "private_log": {
+      "filename": "final-private-regression02.log",
+      "sha256": "e87566fa11d704fd243cd29c8d15d7ed70b7a08a6a2d9786e6cbbc20562aa21d"
+    },
+    "strict_clippy_log": {
+      "filename": "final-strict-clippy02.log",
+      "sha256": "76c2f89ce717ac3b16fd594fe0810c77818ff740948f937ae868dee19ae6ec2a"
+    },
+    "combined_summary": {
+      "filename": "final-integration-summary.json",
+      "sha256": "84e97305ecd88904dbe229e4a1e80f949bfe110f75c7f82efd016b60c265ba35"
+    },
+    "combined_log": {
+      "filename": "runtime01.log",
+      "sha256": "4ff4dcd9016e75f8c254433f55f0bfc07469069b66774f4ea71e375f3cc7b938"
+    },
+    "mqtt_summary": {
+      "filename": "summary.json",
+      "sha256": "1de0a61fe233b91f10aa085000882c008728303d70dc4a93fbfe2bbd7a9d075f"
+    },
+    "mqtt_log": {
+      "filename": "mqtt-nearby.log",
+      "sha256": "2e761e8209a367d5ef5c652b295d4c42f4c1480b2ae741bcec7a6a7697665d33"
+    },
+    "private_scan_summary": {
+      "filename": "summary.json",
+      "sha256": "218880dc0e1393c930817daaaa0022f9365d2617a45eb02cd08e7468b1aeeb7c"
+    }
+  },
+  "convergence_preparation": {
+    "source_files": 387,
+    "staged_files": 389,
+    "non_seed_bytes_equal_previous_passed_overlay": true,
+    "compiled_or_tested": false,
+    "seed_lock": "Gateway normal Cargo.lock, intentionally unresolved in preparation"
+  },
+  "test_module_sha256": "2c2c6444991e57a49c9491ffe8907c0781fc60da77af0082259b97ebfbac6133"
+}

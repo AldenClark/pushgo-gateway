@@ -1,5 +1,7 @@
 # PushGo Gateway
 
+Current source contracts, focused evidence and the reproducible Warp/Gateway regression are recorded in [the 2026-10-28 convergence note](docs/current-convergence-20261028.md).
+
 `pushgo-gateway` is the gateway service for PushGo, with three core capability groups:
 
 - Public API: HTTP endpoints for devices, channels, messages, and events

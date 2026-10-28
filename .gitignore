@@ -5,6 +5,7 @@
 /docs/*
 !/docs/gateway-database-upgrade-plan.md
 !/docs/release-smoke.md
+!/docs/current-convergence-20261028.md
 /scripts/*
 !/scripts/preflight_release_audit.sh
 !/scripts/storage_crossdb_parity.sh
